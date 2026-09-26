@@ -18,6 +18,17 @@ test('renderTable redacts registered secrets from cells', () => {
   assert.ok(!out.includes(SECRET));
 });
 
+test('renderTable redacts a registered secret before escaping markdown characters', () => {
+  const secret = 'ab|cd1234efgh';
+  registerSecret(secret);
+
+  const out = renderTable(['value'], [[secret]]);
+
+  assert.match(out, /\*\*\*/);
+  assert.ok(!out.includes(secret));
+  assert.ok(!out.includes('ab\\|cd1234efgh'));
+});
+
 test('renderError prints code and message, redacted, without stack', () => {
   const out = renderError(new ConnectionError('AUTH_FAILED', `bad ${SECRET}`));
   assert.equal(out, '# opc error\nAUTH_FAILED: bad ***\n');

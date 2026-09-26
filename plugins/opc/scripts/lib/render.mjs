@@ -3,7 +3,7 @@ import { OpcError } from './opc-error.mjs';
 import { redactText } from './redact.mjs';
 
 function cell(value) {
-  return String(value ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+  return redactText(String(value ?? '').replace(/\r?\n/g, ' ')).replace(/\|/g, '\\|');
 }
 
 export function renderTable(headers, rows) {
