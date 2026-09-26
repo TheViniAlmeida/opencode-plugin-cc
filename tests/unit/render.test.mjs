@@ -12,6 +12,12 @@ test('renderTable escapes pipes and newlines', () => {
   assert.equal(renderTable(['a', 'b'], [['x|y', 'line1\nline2']]), '| a | b |\n| --- | --- |\n| x\\|y | line1 line2 |\n');
 });
 
+test('renderTable redacts registered secrets from cells', () => {
+  const out = renderTable(['value'], [[SECRET]]);
+  assert.match(out, /\*\*\*/);
+  assert.ok(!out.includes(SECRET));
+});
+
 test('renderError prints code and message, redacted, without stack', () => {
   const out = renderError(new ConnectionError('AUTH_FAILED', `bad ${SECRET}`));
   assert.equal(out, '# opc error\nAUTH_FAILED: bad ***\n');
@@ -41,6 +47,19 @@ test('renderSetup shows checks, server, alias and next steps', () => {
   assert.match(out, /reaproveitado: não/);
   assert.ok(out.includes(baseReport.terminalAlias));
   assert.match(out, /## Próximos passos\n\n- Faça algo/);
+});
+
+test('renderSetup identifies attached servers as external even when not reused', () => {
+  const out = renderSetup({ ...baseReport, server: { ...baseReport.server, status: 'attached', reused: false } });
+  assert.match(out, /modo attach \(servidor externo\)/);
+  assert.match(out, /externo \(attach\)/);
+  assert.doesNotMatch(out, /subiu agora/);
+});
+
+test('renderSetup gives a generic message when server error details are missing', () => {
+  const out = renderSetup({ ...baseReport, server: { status: 'error' } });
+  assert.match(out, /erro: desconhecido/);
+  assert.doesNotMatch(out, /undefined: undefined/);
 });
 
 test('renderSetup shows errors, blocked sessions and config warnings, redacting secrets', () => {

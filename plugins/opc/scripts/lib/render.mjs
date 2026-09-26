@@ -10,7 +10,7 @@ export function renderTable(headers, rows) {
   const head = `| ${headers.map(cell).join(' | ')} |`;
   const sep = `| ${headers.map(() => '---').join(' | ')} |`;
   const body = rows.map((row) => `| ${row.map(cell).join(' | ')} |`);
-  return `${[head, sep, ...body].join('\n')}\n`;
+  return redactText(`${[head, sep, ...body].join('\n')}\n`);
 }
 
 export function renderError(err) {
@@ -33,10 +33,14 @@ function renderServer(server) {
     lines.push(`- url: ${server.url}`);
     if (server.pid) lines.push(`- pid: ${server.pid}`);
     lines.push(`- versão: ${server.version}`);
-    lines.push(`- reaproveitado: ${server.reused ? 'sim' : 'não (subiu agora)'}`);
+    if (server.status === 'attached') {
+      lines.push('- reaproveitado: externo (attach)');
+    } else {
+      lines.push(`- reaproveitado: ${server.reused ? 'sim' : 'não (subiu agora)'}`);
+    }
     lines.push(`- sessões: ${server.sessionsBlocked ? `BLOQUEADAS (${server.sessionsBlocked})` : 'liberadas'}`);
   } else if (server.status === 'error') {
-    lines.push(`- estado: erro — ${server.error?.code}: ${server.error?.message}`);
+    lines.push(`- estado: erro — ${server.error?.code && server.error?.message ? `${server.error.code}: ${server.error.message}` : 'erro: desconhecido'}`);
   } else {
     lines.push(`- estado: ${server.status}`);
   }
