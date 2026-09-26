@@ -6,23 +6,13 @@ import test from 'node:test';
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
 import { clientFor, ensureServer, serverMatcher, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
-import { ensurePrivateDir, workspaceStateDir, writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
+import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
-  deadPid, makeWorkspace, processAlive, readFakeState, readJsonFile, registerStopper, spawnSleeper, testEnv, waitFor,
+  deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, spawnSleeper, waitFor,
 } from '../helpers.mjs';
 
-function serverCtx(t, { scenario = 'ok', extra = {}, config = {} } = {}) {
-  const env = testEnv(t, { scenario, extra });
-  const ws = makeWorkspace(t);
-  ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
-  const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
-  const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
-  registerStopper(t, () => stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }));
-  return { env, ws, ctx, stateDir };
-}
-
 test('ensureServer spawns a detached server, records it (600) and reuses it; stopServer disposes then signals', async (t) => {
-  const { env, ctx, stateDir } = serverCtx(t);
+  const { env, ctx, stateDir } = makeServerCtx(t);
   const first = await ensureServer(ctx);
   assert.equal(first.reused, false);
   assert.equal(first.attached, false);
@@ -55,7 +45,7 @@ test('ensureServer spawns a detached server, records it (600) and reuses it; sto
 });
 
 test('concurrent ensureServer calls in one process produce a single spawn', async (t) => {
-  const { env, ctx } = serverCtx(t);
+  const { env, ctx } = makeServerCtx(t);
   const [a, b] = await Promise.all([ensureServer(ctx), ensureServer(ctx)]);
   assert.equal(a.pid, b.pid);
   assert.deepEqual([a.reused, b.reused].sort(), [false, true]);
@@ -63,11 +53,11 @@ test('concurrent ensureServer calls in one process produce a single spawn', asyn
 });
 
 test('stale-server-pid: a record pointing to a foreign live process is discarded without any signal', async (t) => {
-  const { ctx, stateDir } = serverCtx(t);
+  const { ctx, stateDir } = makeServerCtx(t);
   const sleeper = spawnSleeper(t);
   writeFileAtomic(path.join(stateDir, 'server.json'), {
     schemaVersion: 1, pid: sleeper.pid, startTime: getProcessIdentity(sleeper.pid).startTime, port: 45678,
-    url: 'http://127.0.0.1:45678', version: '1.18.32', password: 'stale-password-0123456789', spawnedBy: 'opc',
+    url: 'http://127.0.0.1:45678', version: '1.18.32', spawnedBy: 'opc',
   });
   const server = await ensureServer(ctx);
   assert.equal(server.reused, false);
@@ -83,8 +73,23 @@ test('stale-server-pid: a record pointing to a foreign live process is discarded
   assert.ok(processAlive(sleeper.pid));
 });
 
+test('record without password: an owned live server is identity-stopped and replaced', async (t) => {
+  const { env, ctx, stateDir } = makeServerCtx(t);
+  const first = await ensureServer(ctx);
+  const record = readJsonFile(path.join(stateDir, 'server.json'));
+  delete record.password;
+  writeFileAtomic(path.join(stateDir, 'server.json'), record);
+
+  const replacement = await ensureServer(ctx);
+  assert.equal(replacement.reused, false);
+  assert.notEqual(replacement.pid, first.pid);
+  assert.notEqual(replacement.port, first.port);
+  await waitFor(() => !processAlive(first.pid), { message: 'unusable owned server terminated' });
+  assert.ok(readFakeState(env).signals.some((signal) => signal.pid === first.pid && signal.signal === 'SIGTERM'));
+});
+
 test('server-killed-externally: after kill -9 the next ensureServer cleans up and respawns without hanging', async (t) => {
-  const { ctx, stateDir } = serverCtx(t);
+  const { ctx, stateDir } = makeServerCtx(t);
   const first = await ensureServer(ctx);
   process.kill(-first.pid, 'SIGKILL');
   await waitFor(() => !processAlive(first.pid), { message: 'killed' });
@@ -98,7 +103,7 @@ test('server-killed-externally: after kill -9 the next ensureServer cleans up an
 });
 
 test('server-killed-externally (client level): clientFor re-ensures the server and retries a GET', async (t) => {
-  const { ctx, stateDir } = serverCtx(t);
+  const { ctx, stateDir } = makeServerCtx(t);
   const server = await ensureServer(ctx);
   const client = clientFor(ctx, server);
   assert.equal((await client.get('/global/health')).healthy, true);
@@ -110,7 +115,7 @@ test('server-killed-externally (client level): clientFor re-ensures the server a
 });
 
 test('hung-server: identity ok but health silent → terminated and replaced', async (t) => {
-  const { env, ctx } = serverCtx(t, { scenario: 'hung-server' });
+  const { env, ctx } = makeServerCtx(t, { scenario: 'hung-server' });
   const first = await ensureServer(ctx);
   fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
   const second = await ensureServer(ctx);
@@ -121,7 +126,7 @@ test('hung-server: identity ok but health silent → terminated and replaced', a
 });
 
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {
-  const { env, ctx, stateDir } = serverCtx(t, { scenario: 'version-changed' });
+  const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'version-changed' });
   const first = await ensureServer(ctx);
   fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.version`, '1.18.40');
   const busy = await ensureServer({ ...ctx, hasActiveJobs: () => true });
@@ -136,7 +141,7 @@ test('version-changed: reused with a warning while jobs are active, replaced whe
 });
 
 test('stopServer: refuses with active jobs, --force requires confirmation, attach mode is never stopped', async (t) => {
-  const { ctx } = serverCtx(t);
+  const { ctx } = makeServerCtx(t);
   const server = await ensureServer(ctx);
   const busyCtx = { ...ctx, hasActiveJobs: () => true };
   assert.deepEqual(await stopServer(busyCtx), { stopped: false, reason: 'active-jobs' });
@@ -147,7 +152,7 @@ test('stopServer: refuses with active jobs, --force requires confirmation, attac
 });
 
 test('ignores-sigterm: stopServer escalates to SIGKILL on the group', async (t) => {
-  const { env, ctx } = serverCtx(t, { scenario: 'ignores-sigterm' });
+  const { env, ctx } = makeServerCtx(t, { scenario: 'ignores-sigterm' });
   const server = await ensureServer(ctx);
   assert.deepEqual(await stopServer(ctx), { stopped: true, reason: 'killed' });
   await waitFor(() => !processAlive(server.pid), { message: 'killed' });
@@ -155,7 +160,7 @@ test('ignores-sigterm: stopServer escalates to SIGKILL on the group', async (t) 
 });
 
 test('stale-lock: an orphan server.lock is broken and ensureServer proceeds', async (t) => {
-  const { ctx, stateDir } = serverCtx(t);
+  const { ctx, stateDir } = makeServerCtx(t);
   fs.writeFileSync(path.join(stateDir, 'server.lock'), JSON.stringify({ pid: await deadPid(), startTime: '1', purpose: 'ghost', token: 'x' }));
   const server = await ensureServer(ctx);
   assert.equal(server.reused, false);
@@ -163,7 +168,7 @@ test('stale-lock: an orphan server.lock is broken and ensureServer proceeds', as
 });
 
 test('the spawned server receives the password, username, override and OPC_INSIDE_SERVER; warm-up hits /agent', async (t) => {
-  const { env, ctx, ws } = serverCtx(t, { config: { server: { configOverride: { share: 'disabled', small_model: 'p/small' } } } });
+  const { env, ctx, ws } = makeServerCtx(t, { config: { server: { configOverride: { share: 'disabled', small_model: 'p/small' } } } });
   await ensureServer(ctx);
   const fake = readFakeState(env);
   const boot = fake.boots[0];

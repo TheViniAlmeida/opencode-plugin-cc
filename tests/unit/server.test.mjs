@@ -53,6 +53,12 @@ test('readServerRecord returns null for missing, invalid or foreign-schema files
   const record = { schemaVersion: 1, pid: 123, port: 4567, url: 'http://127.0.0.1:4567', password: 'abcdefgh12345678', startTime: '9' };
   fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify(record));
   assert.deepEqual(readServerRecord(dir), record);
+  delete record.password;
+  fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify(record));
+  assert.equal(readServerRecord(dir), null, 'a record without a password is invalid');
+  record.password = '';
+  fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify(record));
+  assert.equal(readServerRecord(dir), null, 'an empty password is invalid');
 });
 
 test('assertCanCreateSessions refuses when share is auto (PolicyError, exit 4)', () => {

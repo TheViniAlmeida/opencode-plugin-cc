@@ -7,6 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { mergeConfig } from '../plugins/opc/scripts/lib/config.mjs';
+import { stopServer } from '../plugins/opc/scripts/lib/server.mjs';
+import { ensurePrivateDir, workspaceStateDir } from '../plugins/opc/scripts/lib/state.mjs';
+
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PLUGIN_ROOT = path.join(REPO_ROOT, 'plugins', 'opc');
 export const PLUGIN_BIN_DIR = path.join(PLUGIN_ROOT, 'bin');
@@ -241,4 +245,14 @@ export function deadPid() {
   const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
   const { pid } = child;
   return new Promise((resolve) => child.on('exit', () => resolve(pid)));
+}
+
+export function makeServerCtx(t, { scenario = 'ok', extraEnv = {}, config = {} } = {}) {
+  const env = testEnv(t, { scenario, extra: extraEnv });
+  const ws = makeWorkspace(t);
+  ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
+  const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
+  const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
+  registerStopper(t, () => stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }));
+  return { ctx, env, ws, stateDir };
 }

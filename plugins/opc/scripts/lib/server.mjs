@@ -58,7 +58,7 @@ function serverFile(stateDir) {
   return path.join(stateDir, 'server.json');
 }
 
-export function readServerRecord(stateDir) {
+function readServerRecordData(stateDir) {
   let record;
   try {
     record = readJson(serverFile(stateDir), null);
@@ -67,6 +67,12 @@ export function readServerRecord(stateDir) {
     throw err;
   }
   if (!record || record.schemaVersion !== 1 || !Number.isInteger(record.pid) || !Number.isInteger(record.port)) return null;
+  return record;
+}
+
+export function readServerRecord(stateDir) {
+  const record = readServerRecordData(stateDir);
+  if (!record || typeof record.password !== 'string' || record.password.length === 0) return null;
   if (record.password) registerSecret(record.password);
   return record;
 }
@@ -100,11 +106,13 @@ async function probeHealth(url, password, timeoutMs) {
 }
 
 async function shutdownRecorded(stateDir, record) {
-  const client = createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: DISPOSE_TIMEOUT_MS });
-  try {
-    await client.post('/global/dispose', undefined, { retryOnServerDown: false });
-  } catch {
-    // dispose is best effort; the signals below decide
+  if (typeof record.url === 'string' && typeof record.password === 'string' && record.password.length > 0) {
+    const client = createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: DISPOSE_TIMEOUT_MS });
+    try {
+      await client.post('/global/dispose', undefined, { retryOnServerDown: false });
+    } catch {
+      // dispose is best effort; the signals below decide
+    }
   }
   const result = await terminateProcessGroup({ pid: record.pid, startTime: record.startTime }, serverMatcher(record.port), {
     graceMs: 3000,
@@ -141,8 +149,11 @@ function readFrom(file, offset) {
     } finally {
       fs.closeSync(fd);
     }
-  } catch {
-    return '';
+  } catch (err) {
+    if (err.code === 'ENOENT') return '';
+    throw new ConnectionError('BOOT_FAILED', `Não foi possível ler o log de inicialização do OpenCode (${err.code ?? err.message}).`, {
+      cause: err,
+    });
   }
 }
 
@@ -190,6 +201,8 @@ async function worldCheck(client, config) {
   try {
     oc = await client.get('/config', { retryOnServerDown: false });
   } catch (err) {
+    world.shareBlocked = true;
+    world.shareReason = 'config-unavailable';
     warnings.push(`Não foi possível ler GET /config para as checagens de mundo: ${err.code ?? err.message}`);
     return { world, warnings };
   }
@@ -210,6 +223,9 @@ async function worldCheck(client, config) {
 
 export function assertCanCreateSessions(server) {
   if (server?.world?.shareBlocked) {
+    if (server.world.shareReason === 'config-unavailable') {
+      throw new PolicyError('SHARE_AUTO', 'Criação de sessões bloqueada: não foi possível confirmar a configuração de compartilhamento. Tente novamente e verifique o servidor OpenCode.');
+    }
     throw new PolicyError('SHARE_AUTO', 'Criação de sessões recusada: o OpenCode está com share "auto". Rode /opc:setup para ver como desligar.');
   }
 }
@@ -269,9 +285,15 @@ async function spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, 
   }
   const startTime = proc.startTime ?? getProcessIdentity(proc.pid)?.startTime ?? null;
   const url = `http://127.0.0.1:${port}`;
-  const outcome = await waitForListening({
-    logFile, offset, port, url, password, pid: proc.pid, timeoutMs: settings.bootTimeoutSec * 1000,
-  });
+  let outcome;
+  try {
+    outcome = await waitForListening({
+      logFile, offset, port, url, password, pid: proc.pid, timeoutMs: settings.bootTimeoutSec * 1000,
+    });
+  } catch (err) {
+    await terminateProcessGroup({ pid: proc.pid, startTime }, serverMatcher(port), { graceMs: 3000 });
+    throw err;
+  }
   return { ...outcome, port, url, pid: proc.pid, startTime };
 }
 
@@ -343,8 +365,20 @@ export async function ensureServer(ctx) {
   const lockTimeout = 4 * settings.bootTimeoutSec * 1000;
   return withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
     if (env.OPC_SERVER_URL) return attachServer(env, settings, config);
-    const record = readServerRecord(stateDir);
+    let record = readServerRecord(stateDir);
     const warnings = [];
+    if (!record) {
+      const unusable = readServerRecordData(stateDir);
+      if (unusable && (typeof unusable.password !== 'string' || unusable.password.length === 0)) {
+        if (!recordIdentityOk(unusable)) {
+          removeServerRecord(stateDir);
+          warnings.push(`Registro de servidor antigo descartado (pid ${unusable.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
+        } else {
+          await shutdownRecorded(stateDir, unusable);
+          warnings.push(`Servidor anterior encerrado: registro do servidor sem senha utilizável (pid ${unusable.pid}).`);
+        }
+      }
+    }
     if (record) {
       if (!recordIdentityOk(record)) {
         removeServerRecord(stateDir);
@@ -353,16 +387,22 @@ export async function ensureServer(ctx) {
         const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
         if (health.ok && health.version === record.version) {
+          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+          record.world = checked.world;
+          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
           return {
             url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: record.world ?? { shareBlocked: false, deniedDefaults: [] }, warnings,
+            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
           };
         }
         if (health.ok && hasActiveJobs()) {
           warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
+          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+          record.world = checked.world;
+          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
           return {
             url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: record.world ?? { shareBlocked: false, deniedDefaults: [] }, warnings,
+            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
           };
         }
         const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
