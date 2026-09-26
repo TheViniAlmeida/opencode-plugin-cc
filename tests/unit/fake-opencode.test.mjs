@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 
 import { loadScenario, readStateFile, startFake } from '../fixtures/fake-opencode.mjs';
-import { FAKE_BIN_DIR, makeTempDir, runProcess, trackTempDir, waitFor } from '../helpers.mjs';
+import { FAKE_BIN_DIR, makeTempDir, registerStopper, runProcess, trackTempDir, waitFor } from '../helpers.mjs';
 
 const PASSWORD = 'fake-test-password-0123456789';
 const auth = { authorization: `Basic ${Buffer.from(`opencode:${PASSWORD}`).toString('base64')}` };
@@ -32,6 +35,22 @@ test('fake requires Basic auth and serves the F0 routes', async (t) => {
   assert.equal((await fetch(`${fake.url}/nope`, { headers: auth })).status, 404);
   const state = readStateFile(stateFile);
   assert.ok(state.requests.some((r) => r.path === '/agent' && r.query.directory === '/x'));
+  const wrongAuth = { authorization: `Basic ${Buffer.from('opencode:wrong-password').toString('base64')}` };
+  assert.equal((await fetch(`${fake.url}/private-probe`, { headers: wrongAuth })).status, 401);
+  assert.ok(!readStateFile(stateFile).requests.some((r) => r.path === '/private-probe'));
+  assert.equal(readStateFile(stateFile).unauthorized, 2);
+  assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(stateFile)).mode & 0o777, 0o700);
+});
+
+test('state read distinguishes missing files from corrupt or unreadable files', (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-state-'));
+  const missing = path.join(dir, 'missing.json');
+  assert.equal(readStateFile(missing).bootAttempts, 0);
+  const corrupt = path.join(dir, 'corrupt.json');
+  fs.writeFileSync(corrupt, '{');
+  assert.throws(() => readStateFile(corrupt), new RegExp(corrupt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.throws(() => readStateFile(dir), new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async (t) => {
@@ -41,14 +60,23 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
   const res = await fetch(`${fake.url}/event`, { headers: auth, signal: controller.signal });
   const reader = res.body.getReader();
   let text = '';
-  fake.emit({ type: 'session.idle', properties: { sessionID: 'ses_1' } });
   await waitFor(async () => {
     const { value } = await reader.read();
     text += Buffer.from(value).toString();
-    return text.includes('server.heartbeat') && text.includes('server.connected');
-  }, { message: 'sse frames' });
-  assert.match(text, /^data: \{"id":"evt_/);
+    return text.includes('server.connected');
+  }, { message: 'connected SSE frame' });
+  fake.emit({ type: 'x.test', properties: { n: 1 } });
+  await waitFor(async () => {
+    const { value } = await reader.read();
+    text += Buffer.from(value).toString();
+    return text.includes('server.heartbeat') && text.includes('"type":"x.test","properties":{"n":1}');
+  }, { message: 'emitted SSE event and heartbeat' });
+  assert.match(text, /data: \{"id":"evt_[^\"]+","type":"x\.test","properties":\{"n":1\}\}\n\n/);
   assert.equal(fake.state.sseConnections, 1);
+});
+
+test('scenario setup failure closes its HTTP listener', async () => {
+  await assert.rejects(startFake({ scenario: 'setup-throws' }), /setup failure fixture/);
 });
 
 test('scenarios override routes and setup', async (t) => {
@@ -72,4 +100,26 @@ test('fake binary: --version and serve announce the listening line', async (t) =
   assert.equal(failing.code, 1);
   assert.match(failing.stderr, /EADDRINUSE/);
   assert.equal(readStateFile(path.join(dir, 's.json')).bootAttempts, 1);
+
+  const reservation = http.createServer();
+  await new Promise((resolve, reject) => {
+    reservation.once('error', reject);
+    reservation.listen(0, '127.0.0.1', resolve);
+  });
+  const port = reservation.address().port;
+  await new Promise((resolve) => reservation.close(resolve));
+  const child = spawn(bin, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
+    env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'ok', FAKE_OPENCODE_STATE: path.join(dir, 'success.json'), OPENCODE_SERVER_PASSWORD: PASSWORD },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  registerStopper(t, () => new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve();
+    child.once('exit', resolve);
+    child.kill('SIGTERM');
+  }));
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  await waitFor(() => stdout.includes(`opencode server listening on http://127.0.0.1:${port}`), { message: 'fake binary listening announcement' });
+  assert.match(stdout, new RegExp(`opencode server listening on http://127\\.0\\.0\\.1:${port}`));
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/global/health`, { headers: auth })).json(), { healthy: true, version: '1.18.32' });
 });

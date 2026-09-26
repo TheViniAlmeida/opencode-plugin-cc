@@ -13,6 +13,7 @@ export const DEFAULT_VERSION = '1.18.32';
 export function freshState() {
   return {
     requests: [],
+    unauthorized: 0,
     sessions: {},
     messages: {},
     permissions: {},
@@ -27,15 +28,19 @@ export function freshState() {
 export function readStateFile(stateFile) {
   try {
     return { ...freshState(), ...JSON.parse(fs.readFileSync(stateFile, 'utf8')) };
-  } catch {
-    return freshState();
+  } catch (err) {
+    if (err.code === 'ENOENT') return freshState();
+    throw new Error(`failed to read fake state file ${stateFile}: ${err.message}`, { cause: err });
   }
 }
 
 export function writeStateFile(stateFile, state) {
   if (!stateFile) return;
+  const directory = path.dirname(stateFile);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
   const tmp = `${stateFile}.tmp-${process.pid}-${randomBytes(3).toString('hex')}`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, stateFile);
 }
 
@@ -203,6 +208,13 @@ export async function startFake({
   }
 
   const server = http.createServer(async (req, res) => {
+    if (!authorized(req)) {
+      state.unauthorized = (state.unauthorized ?? 0) + 1;
+      writeStateFile(stateFile, state);
+      res.writeHead(401, { 'content-type': 'text/plain' });
+      res.end('Unauthorized');
+      return;
+    }
     const url = new URL(req.url, 'http://127.0.0.1');
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -218,11 +230,6 @@ export async function startFake({
     const query = Object.fromEntries(url.searchParams.entries());
     state.requests.push({ method: req.method, path: url.pathname, query, body, at: Date.now() });
     writeStateFile(stateFile, state);
-    if (!authorized(req)) {
-      res.writeHead(401, { 'content-type': 'text/plain' });
-      res.end('Unauthorized');
-      return;
-    }
     const scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
     const baseHit = matchRoute(baseRoutes, req.method, url.pathname);
     if (!scenarioHit && !baseHit) {
@@ -258,12 +265,17 @@ export async function startFake({
   fake.port = actualPort;
   fake.url = `http://127.0.0.1:${actualPort}`;
   fake.server = server;
-  if (typeof scn.setup === 'function') await scn.setup(fake);
   fake.close = () =>
     new Promise((resolve) => {
       for (const client of [...sseClients]) client.close();
       server.close(() => resolve());
       server.closeAllConnections?.();
     });
+  try {
+    if (typeof scn.setup === 'function') await scn.setup(fake);
+  } catch (err) {
+    await fake.close();
+    throw err;
+  }
   return fake;
 }
