@@ -58,12 +58,20 @@ function createLockFile(lockPath, purpose) {
   }
   try {
     fs.linkSync(tempPath, lockPath);
-  } finally {
+  } catch (err) {
     try {
       fs.unlinkSync(tempPath);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
+    throw err;
+  }
+  let tempCleaned = false;
+  try {
+    fs.unlinkSync(tempPath);
+    tempCleaned = true;
+  } catch (err) {
+    if (err.code === 'ENOENT') tempCleaned = true;
   }
   const content = Buffer.from(body);
   let released = false;
@@ -93,6 +101,14 @@ function createLockFile(lockPath, purpose) {
       }
       throw err;
     }
+    if (!tempCleaned) {
+      try {
+        fs.unlinkSync(tempPath);
+        tempCleaned = true;
+      } catch (err) {
+        if (err.code === 'ENOENT') tempCleaned = true;
+      }
+    }
   };
 }
 
@@ -105,9 +121,9 @@ function breakStaleLock(lockPath, judged) {
     throw err;
   }
   const moved = readOwner(stale);
-  const sameLock = moved.raw === null
-    ? judged.raw === null
-    : judged.raw !== null && moved.raw.equals(judged.raw);
+  const sameLock = Buffer.isBuffer(moved.raw)
+    && Buffer.isBuffer(judged.raw)
+    && moved.raw.equals(judged.raw);
   if (!sameLock) {
     // We moved a fresh lock taken by someone else between our check and the rename: put it back.
     try {

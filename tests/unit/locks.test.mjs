@@ -119,6 +119,54 @@ test('stale comparison distinguishes different invalid raw bytes and restores th
   assert.deepEqual(fs.readFileSync(lock), Buffer.from([0xfe]));
 });
 
+test('stale comparison restores the lock and declines acquisition when either read is unavailable', (t) => {
+  const { lock, dir } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: 99999999, startTime: 'gone', purpose: 'old', token: 'old' }));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = function (target, ...args) {
+    if (String(target) === lock || String(target).startsWith(`${lock}.stale-`)) {
+      const err = new Error('simulated unreadable lock');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalRead.call(this, target, ...args);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+
+  assert.equal(tryAcquireLock(lock, { purpose: 'new' }), null);
+  assert.equal(fs.existsSync(lock), true);
+  assert.equal(fs.readdirSync(dir).some((name) => name.startsWith('server.lock.stale-')), false);
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).purpose, 'old');
+});
+
+test('temp cleanup failure after publication still returns a working release handle', (t) => {
+  const { lock, dir } = tempLock(t);
+  const originalUnlink = fs.unlinkSync;
+  let tempPath;
+  fs.unlinkSync = function (target) {
+    if (String(target).startsWith(`${lock}.tmp-`)) {
+      tempPath = String(target);
+      const err = new Error('simulated temp cleanup failure');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalUnlink.call(this, target);
+  };
+  t.after(() => { fs.unlinkSync = originalUnlink; });
+
+  const release = tryAcquireLock(lock, { purpose: 'cleanup' });
+  assert.equal(typeof release, 'function');
+  assert.equal(fs.existsSync(lock), true);
+  release();
+  assert.equal(fs.existsSync(lock), false);
+  assert.ok(tempPath);
+  assert.equal(fs.existsSync(tempPath), true);
+  assert.equal(fs.readdirSync(dir).length, 1);
+});
+
 test('identity unavailable on win32 keeps a live owner lock held', (t) => {
   const { lock } = tempLock(t);
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startTime: 'different', purpose: 'live', token: 'old' }));
