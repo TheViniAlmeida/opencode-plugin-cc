@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { PLUGIN_BIN_DIR, makeWorkspace, parseJsonOutput, runCli, testEnv } from '../helpers.mjs';
+import { PLUGIN_BIN_DIR, makeWorkspace, parseJsonOutput, runCli, runProcess, testEnv } from '../helpers.mjs';
 
 test('no subcommand and unknown subcommands exit 2 with a rendered error', async (t) => {
   const env = testEnv(t);
