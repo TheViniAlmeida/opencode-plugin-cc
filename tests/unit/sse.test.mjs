@@ -74,6 +74,76 @@ test('server.instance.disposed as the first frame makes start reconnect before o
   hub.stop();
 });
 
+test('stop during reconnect after an initial disposed frame keeps start stopped', async () => {
+  let fetchCount = 0;
+  let secondSignal;
+  const hub = new EventHub({
+    client,
+    livenessMs: 1000,
+    backoffMs: [1],
+    fetchImpl: async (_url, { signal }) => {
+      fetchCount += 1;
+      if (fetchCount === 1) return responseWithFrames('data: {"type":"server.instance.disposed"}\n\n');
+      secondSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  const started = hub.start();
+  while (fetchCount < 2) await new Promise((resolve) => setImmediate(resolve));
+  hub.stop();
+  await assert.rejects(started, /stopped/i);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(hub.state, 'stopped');
+  assert.equal(fetchCount, 2);
+  assert.equal(secondSignal.aborted, true);
+});
+
+test('disposed connections abort and close their streams before reconnecting', async () => {
+  const signals = [];
+  let openStreams = 0;
+  let maxOpenStreams = 0;
+  const hub = new EventHub({
+    client,
+    livenessMs: 1000,
+    backoffMs: [1, 1],
+    fetchImpl: async (_url, { signal }) => {
+      signals.push(signal);
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => {
+            openStreams += 1;
+            maxOpenStreams = Math.max(maxOpenStreams, openStreams);
+            let yielded = false;
+            let closed = false;
+            const close = () => {
+              if (!closed) {
+                closed = true;
+                openStreams -= 1;
+              }
+            };
+            return {
+              read: async () => {
+                if (yielded) return new Promise(() => {});
+                yielded = true;
+                return { done: false, value: new TextEncoder().encode('data: {"type":"server.instance.disposed"}\n\n') };
+              },
+              cancel: async () => close(),
+              releaseLock: close,
+            };
+          },
+        },
+      };
+    },
+  });
+  await assert.rejects(hub.start());
+  assert.ok(signals.length >= 2);
+  assert.ok(signals.slice(0, -1).every((signal) => signal.aborted));
+  assert.equal(maxOpenStreams, 1);
+  assert.equal(openStreams, 0);
+});
+
 test('a fetch that never returns headers times out during initial start', async () => {
   const hub = new EventHub({
     client,
@@ -175,4 +245,25 @@ test('throwing event handlers emit redacted warnings and do not stop other handl
   assert.equal(warnings[0].options.detail, 'onAny');
   assert.match(warnings[0].err.message, /\*\*\*/);
   assert.doesNotMatch(warnings[0].err.message, /handler-secret-123/);
+});
+
+test('handler warning redacts both error message and error name', () => {
+  const hub = new EventHub({ client });
+  const warnings = [];
+  const originalEmitWarning = process.emitWarning;
+  registerSecret('private-error-name');
+  process.emitWarning = (err) => warnings.push(err);
+  try {
+    hub.onAny(() => {
+      const err = new Error('failed');
+      err.name = 'private-error-name';
+      throw err;
+    });
+    hub._dispatch({ type: 'server.connected' });
+  } finally {
+    process.emitWarning = originalEmitWarning;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].name, /\*\*\*/);
+  assert.doesNotMatch(warnings[0].name, /private-error-name/);
 });

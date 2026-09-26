@@ -45,11 +45,27 @@ function safeCall(kind, fn, ...args) {
     fn(...args);
   } catch (err) {
     const warning = new Error(redactText(err?.message ?? String(err)));
-    warning.name = err?.name ?? 'Error';
+    warning.name = redactText(err?.name ?? 'Error');
     try {
       process.emitWarning(warning, { type: 'OpcEventHubHandlerError', detail: kind });
     } catch {
       // Warning reporting must not let a handler break the hub.
+    }
+  }
+}
+
+async function closeConnection(controller, reader) {
+  controller?.abort();
+  if (!reader) return;
+  try {
+    await reader.cancel();
+  } catch {
+    // The stream may already have errored or been cancelled by its abort signal.
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // A pending read can keep the lock until abort settles.
     }
   }
 }
@@ -122,6 +138,7 @@ export class EventHub {
           }
         }
         if (!first) {
+          if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
           this._state = 'down';
           throw lastError;
         }
@@ -178,6 +195,7 @@ export class EventHub {
       stopReject(new Error('EventHub connection stopped'));
     };
     let res;
+    let reader;
     try {
       const fetchPromise = Promise.resolve().then(() => this.fetchImpl(this.client.buildUrl('/event'), {
         headers: { ...this.client.authHeaders(), accept: 'text/event-stream' },
@@ -185,47 +203,44 @@ export class EventHub {
       }));
       res = await Promise.race([fetchPromise, timeoutPromise, stopped]);
     } catch (err) {
+      this._stopConnection = null;
+      await closeConnection(controller);
       if (this._state === 'stopped') throw new Error('EventHub connection stopped');
       if (err?.code === 'TIMEOUT') throw err;
       throw new ConnectionError('SERVER_DOWN', 'Não foi possível abrir o fluxo de eventos (/event).');
     } finally {
       clearTimeout(timeout);
     }
-    if (res.status === 401) {
+    try {
+      if (res.status === 401) throw new ConnectionError('AUTH_FAILED', 'Fluxo de eventos recusado (401).');
+      if (!res.ok || !res.body) throw new ConnectionError('SERVER_DOWN', `Fluxo de eventos falhou (HTTP ${res.status}).`);
+      reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = createSSEParser();
+      this._armLiveness();
+      // Wait for the first event (server.connected) before declaring the stream open.
+      for (;;) {
+        let chunk;
+        try {
+          chunk = await Promise.race([reader.read(), stopped]);
+        } catch {
+          if (this._state === 'stopped') throw new Error('EventHub connection stopped');
+          throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
+        }
+        if (chunk.done) throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
+        const events = parser.push(decoder.decode(chunk.value, { stream: true }));
+        if (events.some((event) => event?.type === 'server.instance.disposed')) {
+          throw new ConnectionError('SERVER_DOWN', 'Instância do servidor descartada; reconectando o fluxo de eventos.', { details: { disposed: true } });
+        }
+        if (events.length > 0) {
+          this._stopConnection = null;
+          return { reader, decoder, parser, controller, pending: events };
+        }
+      }
+    } catch (err) {
       this._stopConnection = null;
-      throw new ConnectionError('AUTH_FAILED', 'Fluxo de eventos recusado (401).');
-    }
-    if (!res.ok || !res.body) {
-      this._stopConnection = null;
-      throw new ConnectionError('SERVER_DOWN', `Fluxo de eventos falhou (HTTP ${res.status}).`);
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    const parser = createSSEParser();
-    this._armLiveness();
-    // Wait for the first event (server.connected) before declaring the stream open.
-    for (;;) {
-      let chunk;
-      try {
-        chunk = await Promise.race([reader.read(), stopped]);
-      } catch {
-        this._stopConnection = null;
-        if (this._state === 'stopped') throw new Error('EventHub connection stopped');
-        throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
-      }
-      if (chunk.done) {
-        this._stopConnection = null;
-        throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
-      }
-      const events = parser.push(decoder.decode(chunk.value, { stream: true }));
-      if (events.some((event) => event?.type === 'server.instance.disposed')) {
-        this._stopConnection = null;
-        throw new ConnectionError('SERVER_DOWN', 'Instância do servidor descartada; reconectando o fluxo de eventos.', { details: { disposed: true } });
-      }
-      if (events.length > 0) {
-        this._stopConnection = null;
-        return { reader, decoder, parser, controller, pending: events };
-      }
+      await closeConnection(controller, reader);
+      throw err;
     }
   }
 
@@ -256,6 +271,7 @@ export class EventHub {
     let conn = first;
     while (this._state !== 'stopped') {
       await this._read(conn);
+      await closeConnection(conn.controller, conn.reader);
       clearTimeout(this._livenessTimer);
       if (this._state === 'stopped') return;
       this._state = 'reconnecting';
@@ -269,10 +285,12 @@ export class EventHub {
           break;
         } catch (err) {
           lastError = err;
+          if (this._state === 'stopped') return;
           if (err.code === 'AUTH_FAILED') break;
         }
       }
       if (!conn) {
+        if (this._state === 'stopped') return;
         this._state = 'down';
         const err = lastError?.code === 'AUTH_FAILED'
           ? lastError
