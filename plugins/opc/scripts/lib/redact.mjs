@@ -22,7 +22,8 @@ export function registerSecret(value) {
 export function redactText(text) {
   if (typeof text !== 'string' || registered.size === 0) return text;
   let out = text;
-  for (const secret of registered) out = out.split(secret).join(MASK);
+  const secrets = [...registered].sort((a, b) => b.length - a.length);
+  for (const secret of secrets) out = out.split(secret).join(MASK);
   return out;
 }
 
@@ -31,7 +32,11 @@ export function redact(value) {
   if (Array.isArray(value)) return value.map((item) => redact(item));
   if (value && typeof value === 'object') {
     if (value instanceof Error) {
-      return { name: value.name, code: value.code, message: redactText(value.message) };
+      return {
+        name: redactText(value.name),
+        code: typeof value.code === 'string' ? redactText(value.code) : value.code,
+        message: redactText(value.message),
+      };
     }
     const out = {};
     for (const [k, v] of Object.entries(value)) {

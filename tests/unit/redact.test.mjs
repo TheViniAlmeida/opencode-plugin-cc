@@ -44,3 +44,24 @@ test('redact turns Error objects into safe plain objects', () => {
   const err = Object.assign(new Error(`failed with ${secret}`), { code: 'E' });
   assert.deepEqual(redact(err), { name: 'Error', code: 'E', message: 'failed with ***' });
 });
+
+
+test('longer registered secrets are fully masked regardless of registration order', () => {
+  registerSecret('abcdefgh12');
+  registerSecret('abcdefgh12XYZ9876');
+  const redacted = redactText('abcdefgh12XYZ9876');
+  assert.ok(!redacted.includes('XYZ9876'));
+  assert.ok(!redacted.includes('abcdefgh'));
+});
+
+test('redact masks registered secrets in Error code and name', () => {
+  const secret = 'errorcode-secret-123';
+  registerSecret(secret);
+  const err = Object.assign(new Error('safe message'), { code: `E_${secret}` });
+  err.name = `Custom_${secret}`;
+  const out = redact(err);
+  assert.ok(out.code.includes('***'));
+  assert.ok(!out.code.includes(secret));
+  assert.ok(out.name.includes('***'));
+  assert.ok(!out.name.includes(secret));
+});
