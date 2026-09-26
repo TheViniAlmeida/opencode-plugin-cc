@@ -209,7 +209,7 @@ async function probeSearchPatterns(turn) {
 }
 
 async function probeMcpWildcard(turn, callLog, toolId) {
-  if (!toolId) return { item: '§15.4b curinga de nome para MCP', verdict: 'INCONCLUSIVO', reason: 'ferramenta MCP injetada não apareceu' };
+  if (!toolId) return { item: '§15.4b curinga de nome para MCP', verdict: 'INCONCLUSIVO (ferramenta MCP injetada não apareceu)', reason: 'ferramenta MCP injetada não apareceu' };
   const prefix = toolId.split('_')[0];
   const text = `Call the tool ${toolId} with text "hello". Do not use any other tool.`;
   const c0 = countLines(callLog);
@@ -257,7 +257,7 @@ async function probeAlways(turn) {
     sessionAAsked: a.asked.map((x) => ({ patterns: x.patterns, always: x.always })),
     sessionBRanBash: bRan,
     sessionBAsked: b.asked.length,
-    verdict: !approvedInA || !bAttempted ? 'INCONCLUSIVO (approval in A or attempt in B missing)' : (b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed') ? 'ALWAYS_VAZA_E_VENCE_DENY' : 'ALWAYS_NAO_VAZOU'),
+    verdict: !approvedInA || !bAttempted ? 'INCONCLUSIVO (aprovação na sessão A ou tentativa na sessão B ausente)' : (b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed') ? 'ALWAYS_VAZA_E_VENCE_DENY' : 'ALWAYS_NAO_VAZOU'),
   };
 }
 

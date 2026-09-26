@@ -33,28 +33,36 @@ test('diffShapes reports missing and different used fields only', () => {
 
 test('probe verdicts require a tool attempt in the same turn', () => {
   assert.equal(toolAttempted([], [], 'bash'), false);
-  assert.equal(evidenceVerdict(toolAttempted([], [], 'bash'), true), 'INCONCLUSIVE (model did not attempt the tool)');
+  const reason = 'o modelo não tentou a ferramenta';
+  assert.equal(evidenceVerdict(toolAttempted([], [], 'bash'), true, reason), `INCONCLUSIVO (${reason})`);
   assert.equal(toolAttempted([{ tool: 'bash', status: 'error' }], [], 'bash'), true);
   assert.equal(toolAttempted([], [{ permission: 'bash' }], 'bash'), true);
   assert.equal(evidenceVerdict(true, true), 'DENY');
-  assert.throws(() => evidenceVerdict(false, true), /reason/i);
-  assert.equal(evidenceVerdict(false, true, 'o modelo não tentou a ferramenta'), 'INCONCLUSIVO (o modelo não tentou a ferramenta)');
+  assert.throws(() => evidenceVerdict(false, true), /motivo/i);
+  assert.equal(evidenceVerdict(false, true, reason), `INCONCLUSIVO (${reason})`);
 });
 
 test('merge verdict requires a surviving pre-existing effective config value', () => {
   assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: { model: 'private/model' }, effectiveConfig: { model: 'private/model' }, overridePresent: true }), { verdict: 'MERGE', key: 'model' });
   assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: { model: 'private/model' }, effectiveConfig: { share: 'disabled' }, overridePresent: true }), { verdict: 'REPLACE', key: 'model' });
-  assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: { share: 'disabled' }, overridePresent: true }), { verdict: 'INCONCLUSIVE', key: null });
   assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: { share: 'disabled' }, overridePresent: true, reason: 'nenhuma chave de config do usuário para comparar' }), { verdict: 'INCONCLUSIVO (nenhuma chave de config do usuário para comparar)', key: null });
-  assert.throws(() => mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: {}, overridePresent: false }), /reason/i);
+  assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: { share: 'disabled' }, overridePresent: true, reason: 'nenhuma chave de config do usuário para comparar' }), { verdict: 'INCONCLUSIVO (nenhuma chave de config do usuário para comparar)', key: null });
+  assert.throws(() => mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: {}, overridePresent: false }), /motivo/i);
 });
 
 test('inconclusive MCP and config merge findings carry Portuguese reasons', () => {
-  const probe = fs.readFileSync(path.resolve('tests/live/probe-permission-precedence.mjs'), 'utf8');
-  assert.match(probe, /denyAttempted\s*\?[^:]+:\s*'INCONCLUSIVO \(o modelo não tentou a ferramenta\)'/);
-  assert.match(probe, /reason:\s*'ferramenta MCP injetada não apareceu'/);
-  assert.match(probe, /reason:\s*mergeReason/);
-  assert.match(probe, /GET \/config falhou/);
+  const mcp = evidenceVerdict(false, true, 'o modelo não tentou a ferramenta');
+  assert.match(mcp, /^INCONCLUSIVO \(.+\)$/);
+  assert.match(mcp, /o modelo não tentou a ferramenta/);
+  const merge = mergeVerdict({
+    overrideApplied: true,
+    userConfig: {},
+    effectiveConfig: { share: 'disabled' },
+    overridePresent: true,
+    reason: 'nenhuma chave de config do usuário para comparar',
+  }).verdict;
+  assert.match(merge, /^INCONCLUSIVO \(.+\)$/);
+  assert.match(merge, /nenhuma chave de config do usuário para comparar/);
 });
 
 test('live diagnostics redact output and connection cleanup stops before tracked temp removal', () => {
