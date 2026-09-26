@@ -1,5 +1,6 @@
 // SSE /event: parser, liveness, reconnection with backoff and per-session routing incl. children (spec §5.3).
 import { ConnectionError } from './opc-error.mjs';
+import { redactText } from './redact.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -7,7 +8,8 @@ export function createSSEParser() {
   let buffer = '';
   return {
     push(chunkText) {
-      buffer += String(chunkText).replace(/\r\n/g, '\n');
+      buffer += String(chunkText);
+      buffer = buffer.replace(/\r\n/g, '\n');
       const events = [];
       let index = buffer.indexOf('\n\n');
       while (index !== -1) {
@@ -38,11 +40,17 @@ export function eventSessionID(event) {
   return p.sessionID ?? p.info?.sessionID ?? p.part?.sessionID ?? null;
 }
 
-function safeCall(fn, ...args) {
+function safeCall(kind, fn, ...args) {
   try {
     fn(...args);
-  } catch {
-    // a failing handler never breaks the hub
+  } catch (err) {
+    const warning = new Error(redactText(err?.message ?? String(err)));
+    warning.name = err?.name ?? 'Error';
+    try {
+      process.emitWarning(warning, { type: 'OpcEventHubHandlerError', detail: kind });
+    } catch {
+      // Warning reporting must not let a handler break the hub.
+    }
   }
 }
 
@@ -59,6 +67,7 @@ export class EventHub {
     this._down = new Set();
     this._controller = null;
     this._livenessTimer = null;
+    this._stopConnection = null;
   }
 
   get state() {
@@ -96,9 +105,35 @@ export class EventHub {
       first = await this._connect();
     } catch (err) {
       clearTimeout(this._livenessTimer);
+      this._stopConnection = null;
+      if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
+      if (err?.details?.disposed) {
+        this._state = 'reconnecting';
+        let lastError = err;
+        for (const delay of this.backoffMs) {
+          await sleep(delay);
+          if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
+          try {
+            first = await this._connect();
+            break;
+          } catch (reconnectError) {
+            lastError = reconnectError;
+            if (reconnectError.code === 'AUTH_FAILED') break;
+          }
+        }
+        if (!first) {
+          this._state = 'down';
+          throw lastError;
+        }
+        this._state = 'open';
+        for (const h of this._reconnect) safeCall('onReconnect', h);
+        this._loop(first);
+        return;
+      }
       this._state = 'idle';
       throw err;
     }
+    if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
     this._state = 'open';
     this._loop(first);
   }
@@ -107,6 +142,7 @@ export class EventHub {
     this._state = 'stopped';
     clearTimeout(this._livenessTimer);
     if (this._controller) this._controller.abort();
+    this._stopConnection?.();
   }
 
   _armLiveness() {
@@ -120,17 +156,49 @@ export class EventHub {
   async _connect() {
     const controller = new AbortController();
     this._controller = controller;
+    const startedAt = performance.now();
+    const deadline = startedAt + this.livenessMs;
+    let timeout;
+    let stopReject;
+    const stopped = new Promise((resolve, reject) => { stopReject = reject; });
+    const timeoutPromise = new Promise((resolve, reject) => {
+      const checkDeadline = () => {
+        const remaining = deadline - performance.now();
+        if (remaining > 0) {
+          timeout = setTimeout(checkDeadline, remaining);
+          return;
+        }
+        const err = new ConnectionError('TIMEOUT', 'Tempo limite aguardando os headers do fluxo de eventos.');
+        reject(err);
+        controller.abort();
+      };
+      timeout = setTimeout(checkDeadline, this.livenessMs);
+    });
+    this._stopConnection = () => {
+      stopReject(new Error('EventHub connection stopped'));
+    };
     let res;
     try {
-      res = await this.fetchImpl(this.client.buildUrl('/event'), {
+      const fetchPromise = Promise.resolve().then(() => this.fetchImpl(this.client.buildUrl('/event'), {
         headers: { ...this.client.authHeaders(), accept: 'text/event-stream' },
         signal: controller.signal,
-      });
-    } catch {
+      }));
+      res = await Promise.race([fetchPromise, timeoutPromise, stopped]);
+    } catch (err) {
+      if (this._state === 'stopped') throw new Error('EventHub connection stopped');
+      if (err?.code === 'TIMEOUT') throw err;
       throw new ConnectionError('SERVER_DOWN', 'Não foi possível abrir o fluxo de eventos (/event).');
+    } finally {
+      clearTimeout(timeout);
     }
-    if (res.status === 401) throw new ConnectionError('AUTH_FAILED', 'Fluxo de eventos recusado (401).');
-    if (!res.ok || !res.body) throw new ConnectionError('SERVER_DOWN', `Fluxo de eventos falhou (HTTP ${res.status}).`);
+    if (res.status === 401) {
+      this._stopConnection = null;
+      throw new ConnectionError('AUTH_FAILED', 'Fluxo de eventos recusado (401).');
+    }
+    if (!res.ok || !res.body) {
+      this._stopConnection = null;
+      throw new ConnectionError('SERVER_DOWN', `Fluxo de eventos falhou (HTTP ${res.status}).`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const parser = createSSEParser();
@@ -139,13 +207,25 @@ export class EventHub {
     for (;;) {
       let chunk;
       try {
-        chunk = await reader.read();
+        chunk = await Promise.race([reader.read(), stopped]);
       } catch {
+        this._stopConnection = null;
+        if (this._state === 'stopped') throw new Error('EventHub connection stopped');
         throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
       }
-      if (chunk.done) throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
+      if (chunk.done) {
+        this._stopConnection = null;
+        throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
+      }
       const events = parser.push(decoder.decode(chunk.value, { stream: true }));
-      if (events.length > 0) return { reader, decoder, parser, controller, pending: events };
+      if (events.some((event) => event?.type === 'server.instance.disposed')) {
+        this._stopConnection = null;
+        throw new ConnectionError('SERVER_DOWN', 'Instância do servidor descartada; reconectando o fluxo de eventos.', { details: { disposed: true } });
+      }
+      if (events.length > 0) {
+        this._stopConnection = null;
+        return { reader, decoder, parser, controller, pending: events };
+      }
     }
   }
 
@@ -197,16 +277,16 @@ export class EventHub {
         const err = lastError?.code === 'AUTH_FAILED'
           ? lastError
           : new ConnectionError('SERVER_DOWN', `Fluxo de eventos perdido após ${this.backoffMs.length} tentativas de reconexão.`);
-        for (const h of this._down) safeCall(h, err);
+        for (const h of this._down) safeCall('onDown', h, err);
         return;
       }
       this._state = 'open';
-      for (const h of this._reconnect) safeCall(h);
+      for (const h of this._reconnect) safeCall('onReconnect', h);
     }
   }
 
   _dispatch(event) {
-    for (const h of this._any) safeCall(h, event);
+    for (const h of this._any) safeCall('onAny', h, event);
     if (event?.type === 'session.created') {
       const info = event.properties?.info;
       const parent = info?.parentID ? this._routes.get(info.parentID) : null;
@@ -217,6 +297,6 @@ export class EventHub {
     }
     const sid = eventSessionID(event);
     const entry = sid ? this._routes.get(sid) : null;
-    if (entry) safeCall(entry.handler, event);
+    if (entry) safeCall('track', entry.handler, event);
   }
 }
