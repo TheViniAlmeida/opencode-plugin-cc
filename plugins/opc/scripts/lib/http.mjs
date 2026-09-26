@@ -2,12 +2,15 @@
 import { ConnectionError, NotFoundError, RequestError } from './opc-error.mjs';
 import { redact, registerSecret } from './redact.mjs';
 
-const DOWN_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTFOUND', 'EHOSTUNREACH', 'UND_ERR_SOCKET', 'UND_ERR_CLOSED']);
+const DOWN_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTFOUND', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
 
 function isServerDown(err) {
-  const code = err?.cause?.code ?? err?.code;
-  if (DOWN_CODES.has(code)) return true;
-  return err instanceof TypeError && /fetch failed|terminated|socket/i.test(err.message);
+  const seen = new Set();
+  for (let current = err; current && !seen.has(current); current = current.cause) {
+    seen.add(current);
+    if (DOWN_CODES.has(current.code)) return true;
+  }
+  return false;
 }
 
 function parseBody(text) {
@@ -38,7 +41,16 @@ export function createClient({
 }) {
   let currentBase = String(baseUrl).replace(/\/+$/, '');
   let currentPassword = password ?? null;
-  registerSecret(currentPassword);
+
+  function registerAuthSecrets() {
+    registerSecret(currentPassword);
+    if (!currentPassword) return;
+    const token = Buffer.from(`${username}:${currentPassword}`).toString('base64');
+    registerSecret(token);
+    registerSecret(`Basic ${token}`);
+  }
+
+  registerAuthSecrets();
 
   function authHeaders() {
     if (!currentPassword) return {};
@@ -74,7 +86,7 @@ export function createClient({
         throw new ConnectionError('TIMEOUT', `${label}: sem resposta em ${limit} ms.`);
       }
       if (isServerDown(err)) throw new ConnectionError('SERVER_DOWN', `${label}: servidor OpenCode inacessível.`);
-      throw new ConnectionError('SERVER_DOWN', `${label}: falha de conexão com o servidor OpenCode.`);
+      throw new RequestError('CLIENT_ERROR', `${label}: falha interna ao preparar ou executar a requisição.`, { cause: err });
     }
     let text;
     try {
@@ -108,7 +120,7 @@ export function createClient({
         if (next.url) currentBase = String(next.url).replace(/\/+$/, '');
         if (next.password) {
           currentPassword = next.password;
-          registerSecret(currentPassword);
+          registerAuthSecrets();
         }
       }
       return once(method, path, { query, body, timeoutMs });
