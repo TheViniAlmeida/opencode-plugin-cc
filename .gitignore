@@ -1,0 +1,8 @@
+# Local agent memory (never versioned)
+.ai-data/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Node
+node_modules/
