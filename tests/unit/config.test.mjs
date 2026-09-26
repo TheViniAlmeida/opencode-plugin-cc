@@ -152,6 +152,12 @@ test('loadConfig surfaces invalid JSON or shape in global and workspace files', 
   assert.equal(first.global, null);
   assert.equal(first.workspace, null);
   assert.deepEqual(first.config, JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
+  fs.writeFileSync(path.join(ws, '.opc.json'), 'null');
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.exitCode === 2);
+  fs.unlinkSync(path.join(ws, '.opc.json'));
+  fs.writeFileSync(path.join(dataDir, 'config.json'), 'null');
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.exitCode === 2);
+  fs.unlinkSync(path.join(dataDir, 'config.json'));
   fs.writeFileSync(path.join(ws, '.opc.json'), '{broken');
   assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.exitCode === 2);
   fs.writeFileSync(path.join(ws, '.opc.json'), JSON.stringify({ policy: { models: null } }));

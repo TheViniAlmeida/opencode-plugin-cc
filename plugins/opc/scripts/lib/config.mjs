@@ -45,6 +45,7 @@ const WORKSPACE_OVERRIDABLE = Object.freeze([
 ]);
 const POLICY_LIST_KINDS = Object.freeze(['providers', 'models', 'agents']);
 const SECRET_KEY_RE = /token|password|secret|api[-_]?key/i;
+const MISSING = Symbol('missing');
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
@@ -304,15 +305,20 @@ export function workspaceConfigPath(workspaceRoot) {
 export function loadConfig({ dataDir, workspaceRoot }) {
   const warnings = [];
   const gPath = globalConfigPath(dataDir);
-  let global = null;
+  let global = MISSING;
   try {
-    global = readJson(gPath, undefined);
+    global = readJson(gPath, MISSING);
   } catch (err) {
     if (err.code === 'INVALID_JSON') throw new OpcError('CONFIG_INVALID', `A config global ${gPath} não é um JSON válido.`, { exitCode: 2, details: { path: gPath }, cause: err });
     throw err;
   }
-  if (global === undefined) global = null;
-  if (global !== null) {
+  if (global !== MISSING) {
+    if (!isPlainObject(global)) {
+      throw new OpcError('CONFIG_INVALID', `Config global inválida: precisa conter um objeto JSON.`, {
+        exitCode: 2,
+        details: { path: gPath },
+      });
+    }
     const { errors, warnings: w } = validateConfigShape(global, { source: 'global' });
     if (errors.length > 0) {
       throw new OpcError('CONFIG_INVALID', `Config global inválida: ${errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, {
@@ -321,24 +327,23 @@ export function loadConfig({ dataDir, workspaceRoot }) {
       });
     }
     warnings.push(...w.map((x) => ({ ...x, source: 'global' })));
-  }
+  } else global = null;
   let workspace = null;
   const wPath = workspaceConfigPath(workspaceRoot);
   try {
-    workspace = readJson(wPath, undefined);
+    workspace = readJson(wPath, MISSING);
   } catch (err) {
     if (err.code === 'INVALID_JSON') throw new OpcError('CONFIG_INVALID', 'O arquivo .opc.json não contém JSON válido.', { exitCode: 2, details: { path: wPath }, cause: err });
     throw err;
   }
-  if (workspace === undefined) workspace = null;
-  if (workspace !== null) {
+  if (workspace !== MISSING) {
     if (!isPlainObject(workspace)) throw new OpcError('CONFIG_INVALID', 'O arquivo .opc.json precisa conter um objeto JSON.', { exitCode: 2, details: { path: wPath } });
     else {
       const { errors, warnings: w } = validateConfigShape(workspace, { source: 'workspace' });
       if (errors.length) throw new OpcError('CONFIG_INVALID', `Config workspace inválida: ${errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, { exitCode: 2, details: { path: wPath, errors } });
       warnings.push(...w.filter((x) => x.message.startsWith('chave com cara')).map((x) => ({ ...x, source: 'workspace' })));
     }
-  }
+  } else workspace = null;
   const merged = mergeConfig(global, workspace);
   warnings.push(...merged.warnings.map((x) => ({ ...x, source: 'workspace' })));
   return { config: merged.config, global, workspace, hasGlobal: global !== null, warnings };
