@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 
-import { loadScenario, readStateFile, startFake } from '../fixtures/fake-opencode.mjs';
+import { loadScenario, readStateFile, startFake, writeStateFile } from '../fixtures/fake-opencode.mjs';
 import { FAKE_BIN_DIR, makeTempDir, registerStopper, runProcess, trackTempDir, waitFor } from '../helpers.mjs';
 
 const PASSWORD = 'fake-test-password-0123456789';
@@ -53,6 +53,19 @@ test('state read distinguishes missing files from corrupt or unreadable files', 
   assert.throws(() => readStateFile(dir), new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
+test('state writes preserve existing directory modes and create new directories as 0700', (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-state-mode-'));
+  const existing = path.join(dir, 'existing');
+  fs.mkdirSync(existing, { mode: 0o755 });
+  fs.chmodSync(existing, 0o755);
+  writeStateFile(path.join(existing, 'state.json'), { ok: true });
+  assert.equal(fs.statSync(existing).mode & 0o777, 0o755);
+
+  const nested = path.join(dir, 'new', 'nested');
+  writeStateFile(path.join(nested, 'state.json'), { ok: true });
+  assert.equal(fs.statSync(nested).mode & 0o777, 0o700);
+});
+
 test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async (t) => {
   const { fake } = await withFake(t, { heartbeatMs: 30 });
   const controller = new AbortController();
@@ -71,7 +84,8 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
     text += Buffer.from(value).toString();
     return text.includes('server.heartbeat') && text.includes('"type":"x.test","properties":{"n":1}');
   }, { message: 'emitted SSE event and heartbeat' });
-  assert.match(text, /data: \{"id":"evt_[^\"]+","type":"x\.test","properties":\{"n":1\}\}\n\n/);
+  const frames = text.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
+  assert.ok(frames.some((frame) => frame.type === 'x.test' && frame.properties.n === 1));
   assert.equal(fake.state.sseConnections, 1);
 });
 

@@ -37,8 +37,11 @@ export function readStateFile(stateFile) {
 export function writeStateFile(stateFile, state) {
   if (!stateFile) return;
   const directory = path.dirname(stateFile);
+  const directoryExisted = fs.existsSync(directory);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.chmodSync(directory, 0o700);
+  if (!directoryExisted && (fs.statSync(directory).mode & 0o777) !== 0o700) {
+    fs.chmodSync(directory, 0o700);
+  }
   const tmp = `${stateFile}.tmp-${process.pid}-${randomBytes(3).toString('hex')}`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, stateFile);
