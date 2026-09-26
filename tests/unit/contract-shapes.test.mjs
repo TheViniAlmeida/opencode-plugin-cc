@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
-import { diffShapes, lookup, shapeOf } from '../fixtures/contract-shapes.mjs';
+import { diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
 
 test('shapeOf records types, first array element and collapses user-data maps', () => {
   assert.deepEqual(shapeOf({ b: 1, a: 'x', n: null, l: [{ k: true }] }), { a: 'string', b: 'number', l: [{ k: 'boolean' }], n: 'null' });
@@ -27,4 +29,37 @@ test('diffShapes reports missing and different used fields only', () => {
   assert.deepEqual(diffShapes(shapeOf({ share: 'auto' }), shapeOf({}), [], ['share']), []);
   assert.deepEqual(diffShapes(shapeOf({ mcp: { a: { type: 'local' } } }, 'config'), shapeOf({ mcp: {} }, 'config'), [], ['mcp']), []);
   assert.deepEqual(diffShapes(shapeOf({ share: 'auto' }), shapeOf({ share: true }), [], ['share']), [{ field: 'share', real: 'string', fake: 'boolean' }]);
+});
+
+test('probe verdicts require a tool attempt in the same turn', () => {
+  assert.equal(toolAttempted([], [], 'bash'), false);
+  assert.equal(evidenceVerdict(toolAttempted([], [], 'bash'), true), 'INCONCLUSIVE (model did not attempt the tool)');
+  assert.equal(toolAttempted([{ tool: 'bash', status: 'error' }], [], 'bash'), true);
+  assert.equal(toolAttempted([], [{ permission: 'bash' }], 'bash'), true);
+  assert.equal(evidenceVerdict(true, true), 'DENY');
+});
+
+test('merge verdict requires a surviving pre-existing effective config value', () => {
+  assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: { model: 'private/model' }, effectiveConfig: { model: 'private/model' }, overridePresent: true }), { verdict: 'MERGE', key: 'model' });
+  assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: { model: 'private/model' }, effectiveConfig: { share: 'disabled' }, overridePresent: true }), { verdict: 'REPLACE', key: 'model' });
+  assert.deepEqual(mergeVerdict({ overrideApplied: true, userConfig: {}, effectiveConfig: { share: 'disabled' }, overridePresent: true }), { verdict: 'INCONCLUSIVE', key: null });
+});
+
+test('live diagnostics redact output and connection cleanup stops before tracked temp removal', () => {
+  const root = path.resolve('tests/live');
+  const probe = fs.readFileSync(path.join(root, 'probe-permission-precedence.mjs'), 'utf8');
+  const connection = fs.readFileSync(path.join(root, 'f0-connection.mjs'), 'utf8');
+  assert.match(probe, /process\.stderr\.write\(redactText\(/);
+  assert.match(probe, /process\.stdout\.write\(redactText\(/);
+  assert.match(probe, /toolAttempted\(deny\.tools, deny\.asked, toolId\)/);
+  assert.match(probe, /approvedInA[\s\S]*?a\.tools\.some/);
+  assert.match(connection, /trackTempDir\(t, makeTempDir\(/);
+  assert.match(connection, /registerStopper\(t, \(\) => stopServer\(cleanupCtx/);
+});
+
+test('contract collection deadline uses monotonic performance time', () => {
+  const source = fs.readFileSync(path.resolve('tests/live/contract.mjs'), 'utf8');
+  assert.match(source, /const deadline = performance\.now\(\) \+ 15000/);
+  assert.match(source, /while \(performance\.now\(\) < deadline/);
+  assert.doesNotMatch(source, /const deadline = Date\.now\(\)/);
 });

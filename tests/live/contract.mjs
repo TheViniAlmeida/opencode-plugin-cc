@@ -33,8 +33,8 @@ async function collect(client, sseClient) {
     if (EVENT_TYPES.includes(e.type) && !seen[e.type]) seen[e.type] = shapeOf(e, `event.${e.type}`);
   });
   await hub.start();
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline && EVENT_TYPES.some((t) => !seen[t])) await new Promise((r) => setTimeout(r, 200));
+  const deadline = performance.now() + 15000;
+  while (performance.now() < deadline && EVENT_TYPES.some((t) => !seen[t])) await new Promise((r) => setTimeout(r, 200));
   hub.stop();
   for (const type of EVENT_TYPES) shapes[`event:${type}`] = seen[type] ?? 'não recebido';
   return shapes;

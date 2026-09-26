@@ -19,6 +19,23 @@ export const MAP_PATHS = new Set([
   'config.permission', 'session.status',
 ]);
 
+export function toolAttempted(tools, asked, tool) {
+  return tools.some((part) => part.tool === tool && ['error', 'completed'].includes(part.status))
+    || asked.some((event) => event.permission === tool);
+}
+
+export function evidenceVerdict(attempted, blocked) {
+  return attempted ? (blocked ? 'DENY' : 'ALLOW') : 'INCONCLUSIVE (model did not attempt the tool)';
+}
+
+export function mergeVerdict({ overrideApplied, userConfig, effectiveConfig, overridePresent }) {
+  const key = ['model', 'agent', 'provider'].find((candidate) => Object.hasOwn(userConfig ?? {}, candidate));
+  if (!overrideApplied || !overridePresent || !key) return { verdict: 'INCONCLUSIVE', key: key ?? null };
+  const survived = Object.hasOwn(effectiveConfig ?? {}, key)
+    && JSON.stringify(effectiveConfig[key]) === JSON.stringify(userConfig[key]);
+  return { verdict: survived ? 'MERGE' : 'REPLACE', key };
+}
+
 export function shapeOf(value, at = '') {
   if (value === null) return 'null';
   if (Array.isArray(value)) return value.length === 0 ? ['empty'] : [shapeOf(value[0], `${at}[]`)];

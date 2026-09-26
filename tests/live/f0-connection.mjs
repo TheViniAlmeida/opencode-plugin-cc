@@ -8,7 +8,10 @@ import test from 'node:test';
 
 import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
-import { COMPANION, makeTempDir, parseJsonOutput, removeTempDir, runProcess } from '../helpers.mjs';
+import { COMPANION, makeTempDir, parseJsonOutput, registerStopper, runProcess, trackTempDir } from '../helpers.mjs';
+import { stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
+import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
+import { workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 
 const LIVE = process.env.OPC_LIVE === '1';
 const LINUX = process.platform === 'linux';
@@ -55,12 +58,13 @@ if (!LIVE) {
   test('F0 live checklist (set OPC_LIVE=1 to run)', { skip: 'OPC_LIVE != 1' }, () => {});
 } else {
   test('F0 live: real setup, port != 4096, reuse, stop without orphans, user servers untouched', { skip: !LINUX && 'Linux only', timeout: 600000 }, async (t) => {
-    const base = makeTempDir('opc-live-f0-');
-    t.after(() => removeTempDir(base));
+    const base = trackTempDir(t, makeTempDir('opc-live-f0-'));
     const ws = path.join(base, 'workspace live');
     fs.mkdirSync(ws);
     execFileSync('git', ['init', '-q'], { cwd: ws });
     const env = liveEnv(path.join(base, 'data'));
+    const cleanupCtx = { stateDir: workspaceStateDir(path.join(base, 'data'), ws), workspaceRoot: ws, config: mergeConfig({}, null).config, env };
+    registerStopper(t, () => stopServer(cleanupCtx, { force: true, confirmedByUser: true }));
     const userServersBefore = listOpencodeServe();
     console.log(`[live] opencode serve preexistentes: ${userServersBefore.length}`);
 

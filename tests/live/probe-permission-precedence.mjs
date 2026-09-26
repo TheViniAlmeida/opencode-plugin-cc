@@ -7,11 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
-import { redact } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { redact, redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { clientFor, ensureServer, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { EventHub } from '../../plugins/opc/scripts/lib/sse.mjs';
 import { ensurePrivateDir, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import { makeTempDir, removeTempDir } from '../helpers.mjs';
+import { evidenceVerdict, mergeVerdict, toolAttempted } from '../fixtures/contract-shapes.mjs';
 
 if (process.env.OPC_LIVE !== '1') {
   console.log('probe-permission-precedence: skipped (set OPC_LIVE=1)');
@@ -26,7 +27,7 @@ const TURN_TIMEOUT_MS = 240000;
 const ENV_MARKER = 'OPC_PROBE_DUMMY_VALUE_7731';
 const GREP_MARKER = 'OPC_PROBE_GREP_MARKER_42';
 const SENSITIVE = ['*.env', '*.env.*'];
-const log = (line) => process.stderr.write(`[probe] ${line}\n`);
+const log = (line) => process.stderr.write(redactText(`[probe] ${line}\n`));
 
 const READ_ONLY_RULES = [
   { permission: '*', pattern: '*', action: 'deny' },
@@ -119,7 +120,7 @@ function makeTurnRunner(client, hub) {
   };
 }
 
-async function probeConfigMerge(client, userHasModel) {
+async function probeConfigMerge(client, userConfig) {
   const cfg = await client.get('/config');
   const toolIds = await client.get('/experimental/tool/ids').catch(() => null);
   const probeTool = Array.isArray(toolIds) ? toolIds.find((id) => id.includes('echo_marker')) ?? null : null;
@@ -128,10 +129,9 @@ async function probeConfigMerge(client, userHasModel) {
     shareDisabled: cfg?.share === 'disabled',
     mcpInjected: Boolean(cfg?.mcp && 'opcprobe' in cfg.mcp),
     userMcpCount: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe').length,
-    userModelStillPresent: typeof cfg?.model === 'string',
-    userHasModelInGlobalConfig: userHasModel,
+    userConfigKey: mergeVerdict({ overrideApplied: true, userConfig, effectiveConfig: cfg, overridePresent: cfg?.share === 'disabled' && Boolean(probeTool) }).key,
     probeToolId: probeTool,
-    verdict: cfg?.share === 'disabled' && probeTool ? 'MERGE' : 'NAO_CONFIRMADO',
+    verdict: mergeVerdict({ overrideApplied: true, userConfig, effectiveConfig: cfg, overridePresent: cfg?.share === 'disabled' && Boolean(probeTool) }).verdict,
     userMcpNames: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe'),
   };
 }
@@ -154,15 +154,21 @@ async function probePrecedence(turn, ws) {
   });
   const editBlocked = !fs.existsSync(path.join(ws, 'probe-edit.txt'));
   const bashBlocked = !fs.existsSync(path.join(ws, 'probe-bash.txt'));
+  const envAttempted = toolAttempted(env.tools, env.asked, 'read');
+  const editAttempted = ['write', 'edit'].some((name) => toolAttempted(edit.tools, edit.asked, name));
+  const bashAttempted = toolAttempted(bash.tools, bash.asked, 'bash');
   const envBlocked = !env.finalText.includes(ENV_MARKER);
   return {
     item: '§15.1 precedência (sessão vs agente/config do usuário)',
     editBlocked,
     bashBlocked,
     envBlocked,
+    evidence: { edit: editAttempted ? evidenceVerdict(true, editBlocked) : 'INCONCLUSIVE (model did not attempt the tool)', bash: evidenceVerdict(bashAttempted, bashBlocked), env: evidenceVerdict(envAttempted, envBlocked) },
     askedAnything: [edit, bash, env].some((r) => r.asked.length > 0),
     tools: { edit: edit.tools, bash: bash.tools, env: env.tools },
-    verdict: editBlocked && bashBlocked && envBlocked ? 'SESSAO_VENCE' : 'SESSAO_NAO_VENCE',
+    verdict: [editAttempted, bashAttempted, envAttempted].every(Boolean)
+      ? ([editBlocked, bashBlocked, envBlocked].every(Boolean) ? 'SESSAO_VENCE' : 'SESSAO_NAO_VENCE')
+      : 'INCONCLUSIVO (model did not attempt the tool)',
   };
 }
 
@@ -201,20 +207,22 @@ async function probeMcpWildcard(turn, callLog, toolId) {
     onAsk: 'reject',
   });
   const c1 = countLines(callLog);
-  await turn({
+  const deny = await turn({
     title: 'mcp deny',
     rules: [{ permission: '*', pattern: '*', action: 'allow' }, { permission: `${prefix}_*`, pattern: '*', action: 'deny' }],
     text,
   });
   const deniedCallHappened = countLines(callLog) > c1;
+  const denyAttempted = toolAttempted(deny.tools, deny.asked, toolId);
   let verdict = 'INCONCLUSIVO';
-  if (controlCalled) verdict = deniedCallHappened ? 'CURINGA_NAO_FUNCIONA' : 'CURINGA_FUNCIONA';
+  if (denyAttempted) verdict = deniedCallHappened ? 'CURINGA_NAO_FUNCIONA' : 'CURINGA_FUNCIONA';
   return {
     item: '§15.4b curinga de nome para MCP',
     toolId,
     controlCalled,
     askPermissionNames: ask.asked.map((a) => a.permission),
     deniedCallHappened,
+    denyAttempted,
     verdict,
   };
 }
@@ -224,13 +232,16 @@ async function probeAlways(turn) {
   const text = `Use the bash tool to run exactly: ${cmd} . Then report the output.`;
   const a = await turn({ title: 'always session A', rules: [{ permission: 'bash', pattern: '*', action: 'ask' }], text, onAsk: 'always' });
   const b = await turn({ title: 'always session B', rules: [{ permission: 'bash', pattern: '*', action: 'deny' }], text, onAsk: 'reject' });
+  const approvedInA = a.asked.some((x) => x.permission === 'bash' && x.reply === 'always')
+    && a.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed');
+  const bAttempted = toolAttempted(b.tools, b.asked, 'bash');
   const bRan = b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed');
   return {
     item: '§15.2 escopo do always',
     sessionAAsked: a.asked.map((x) => ({ patterns: x.patterns, always: x.always })),
     sessionBRanBash: bRan,
     sessionBAsked: b.asked.length,
-    verdict: bRan ? 'ALWAYS_VAZA_E_VENCE_DENY' : 'ALWAYS_NAO_VAZOU',
+    verdict: !approvedInA || !bAttempted ? 'INCONCLUSIVO (approval in A or attempt in B missing)' : (b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed') ? 'ALWAYS_VAZA_E_VENCE_DENY' : 'ALWAYS_NAO_VAZOU'),
   };
 }
 
@@ -250,19 +261,6 @@ async function probeDisableUserMcp(dataDir, ws, env, userMcpNames) {
   } finally {
     await stopServer(ctx, { force: true, confirmedByUser: true }).catch(() => {});
   }
-}
-
-function userGlobalHasModel(env) {
-  const home = env.HOME ?? '';
-  const candidates = [path.join(home, '.config', 'opencode', 'opencode.json'), path.join(home, '.config', 'opencode', 'opencode.jsonc')];
-  for (const file of candidates) {
-    try {
-      return /"model"\s*:/.test(fs.readFileSync(file, 'utf8'));
-    } catch {
-      // not present
-    }
-  }
-  return false;
 }
 
 function renderMarkdown(results) {
@@ -287,13 +285,24 @@ const results = [];
 let hub = null;
 let exitCode = 0;
 try {
+  const baselineCtx = { ...ctx, config: mergeConfig({}, null).config };
+  const baselineServer = await ensureServer(baselineCtx);
+  let userConfig;
+  try {
+    const baselineClient = clientFor(baselineCtx, baselineServer);
+    const effectiveUserConfig = await baselineClient.get('/config');
+    const key = ['model', 'agent', 'provider'].find((candidate) => Object.hasOwn(effectiveUserConfig ?? {}, candidate));
+    if (key) userConfig = { [key]: effectiveUserConfig[key] };
+  } finally {
+    await stopServer(baselineCtx, { force: true, confirmedByUser: true });
+  }
   log(`subindo servidor dedicado em ${ws}`);
   const server = await ensureServer(ctx);
   const client = clientFor(ctx, server);
   hub = new EventHub({ client });
   await hub.start();
   const turn = makeTurnRunner(client, hub);
-  const merge = await probeConfigMerge(client, userGlobalHasModel(env));
+  const merge = await probeConfigMerge(client, userConfig);
   results.push(merge);
   results.push(await probePrecedence(turn, ws));
   results.push(await probeSearchPatterns(turn));
@@ -305,12 +314,12 @@ try {
   results.push(await probeDisableUserMcp(dataDir, ws, env, merge.userMcpNames));
 } catch (err) {
   exitCode = 1;
-  results.push({ item: 'erro do probe', verdict: 'ERRO', code: err.code, message: err.message });
+  results.push({ item: 'erro do probe', verdict: 'ERRO', code: redactText(err.code ?? ''), message: redactText(err.message) });
 } finally {
   if (hub) hub.stop();
   await stopServer(ctx, { force: true, confirmedByUser: true }).catch(() => {});
   removeTempDir(base);
 }
 for (const r of results) delete r.userMcpNames;
-process.stdout.write(WANT_JSON ? `${JSON.stringify(redact(results), null, 2)}\n` : `${renderMarkdown(results)}\n`);
+process.stdout.write(redactText(WANT_JSON ? `${JSON.stringify(redact(results), null, 2)}\n` : `${renderMarkdown(results)}\n`));
 process.exit(exitCode);
