@@ -28,14 +28,20 @@ export function resolveDataDir(env = process.env, { home = os.homedir(), pluginD
   );
 }
 
-export function resolveWorkspaceRoot(cwd) {
+export function resolveWorkspaceRoot(cwd, { runner = spawnSync, env = process.env } = {}) {
   let real;
   try {
     real = fs.realpathSync.native(cwd);
   } catch {
     throw new UsageError('USAGE', `Diretório não encontrado: ${cwd}`);
   }
-  const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: real, encoding: 'utf8', shell: false });
+  let res;
+  try {
+    res = runner('git', ['rev-parse', '--show-toplevel'], { cwd: real, encoding: 'utf8', shell: false, env });
+  } catch (cause) {
+    if (cause.code === 'ENOENT') return real;
+    throw new OpcError('WORKSPACE_UNRESOLVED', 'Não foi possível resolver o workspace.', { exitCode: 2, details: { path: real }, cause });
+  }
   if (res.status === 0 && res.stdout.trim()) {
     try {
       return fs.realpathSync.native(res.stdout.trim());
@@ -43,7 +49,11 @@ export function resolveWorkspaceRoot(cwd) {
       return real;
     }
   }
-  return real;
+  if (res.error?.code === 'ENOENT' || (res.status === 128 && /not a git repository/i.test(res.stderr ?? ''))) return real;
+  throw new OpcError('WORKSPACE_UNRESOLVED', 'Não foi possível resolver o workspace.', {
+    exitCode: 2,
+    details: { path: real, status: res.status, error: res.error?.code },
+  });
 }
 
 function slugFor(dir) {
@@ -113,15 +123,27 @@ function rebuildJobs(stateDir) {
   let names = [];
   try {
     names = fs.readdirSync(jobsDir).filter((n) => n.endsWith('.json'));
-  } catch {
-    return [];
+  } catch (cause) {
+    if (cause.code === 'ENOENT') return { jobs: [], warnings: [] };
+    throw new OpcError('STATE_UNREADABLE', 'Não foi possível ler o estado do workspace.', { exitCode: 5, details: { path: jobsDir }, cause });
   }
   const jobs = [];
+  const warnings = [];
   for (const name of names.sort()) {
-    const job = readJson(path.join(jobsDir, name), null);
+    const jobPath = path.join(jobsDir, name);
+    let job;
+    try {
+      job = JSON.parse(fs.readFileSync(jobPath, 'utf8'));
+    } catch (cause) {
+      if (cause instanceof SyntaxError) {
+        warnings.push(name);
+        continue;
+      }
+      throw new OpcError('STATE_UNREADABLE', 'Não foi possível ler o estado do workspace.', { exitCode: 5, details: { path: jobPath }, cause });
+    }
     if (job && typeof job.id === 'string') jobs.push(job);
   }
-  return jobs;
+  return { jobs, warnings };
 }
 
 export function loadState(stateDir) {
@@ -136,8 +158,11 @@ export function loadState(stateDir) {
   try {
     return normalizeState(JSON.parse(raw));
   } catch {
-    fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`);
-    const rebuilt = { ...defaultState(), jobs: rebuildJobs(stateDir) };
+    const backup = `${file}.corrupt-${Date.now()}`;
+    fs.copyFileSync(file, backup);
+    if (process.platform !== 'win32') fs.chmodSync(backup, 0o600);
+    const result = rebuildJobs(stateDir);
+    const rebuilt = { ...defaultState(), jobs: result.jobs, rebuildWarnings: result.warnings };
     writeFileAtomic(file, rebuilt);
     return rebuilt;
   }

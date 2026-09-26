@@ -34,6 +34,9 @@ test('resolveWorkspaceRoot uses the git toplevel, or realpath(cwd) outside git',
   const plain = temp(t);
   assert.equal(resolveWorkspaceRoot(plain), fs.realpathSync(plain));
   assert.throws(() => resolveWorkspaceRoot(path.join(plain, 'missing')), { code: 'USAGE' });
+  assert.equal(resolveWorkspaceRoot(plain, { env: { PATH: '' } }), fs.realpathSync(plain));
+  assert.throws(() => resolveWorkspaceRoot(ws, { runner: () => ({ status: 2, stdout: '', stderr: 'fatal: injected failure' }) }),
+    (err) => err.code === 'WORKSPACE_UNRESOLVED' && err.exitCode === 2 && /workspace/i.test(err.message));
 });
 
 test('workspace-with-spaces: slug is sanitized, hash uses the realpath, symlinks map to the same dir', (t) => {
@@ -92,8 +95,32 @@ test('loadState backs up a corrupted state.json and rebuilds jobs from jobs/*.js
   fs.writeFileSync(path.join(dir, 'state.json'), 'not json');
   const state = loadState(dir);
   assert.deepEqual(state.jobs.map((j) => j.id), ['task-1']);
+  assert.deepEqual(state.rebuildWarnings, ['broken.json']);
   assert.equal(fs.readdirSync(dir).filter((n) => n.startsWith('state.json.corrupt-')).length, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).jobs.map((j) => j.id), ['task-1']);
+});
+
+test('loadState throws STATE_UNREADABLE for a jobs directory that cannot be listed', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
+  const dir = temp(t);
+  const jobsDir = path.join(dir, 'jobs');
+  fs.mkdirSync(jobsDir);
+  fs.writeFileSync(path.join(dir, 'state.json'), 'invalid');
+  fs.chmodSync(jobsDir, 0o000);
+  try {
+    assert.throws(() => loadState(dir), (err) => err.code === 'STATE_UNREADABLE' && err.exitCode === 5 && err.details.path === jobsDir);
+  } finally {
+    fs.chmodSync(jobsDir, 0o700);
+  }
+});
+
+test('corrupt state backup is mode 600 even when source is mode 644', posixOnly, (t) => {
+  const dir = temp(t);
+  const file = path.join(dir, 'state.json');
+  fs.writeFileSync(file, 'invalid', { mode: 0o644 });
+  fs.chmodSync(file, 0o644);
+  loadState(dir);
+  const backup = fs.readdirSync(dir).find((name) => name.startsWith('state.json.corrupt-'));
+  assert.equal(fs.statSync(path.join(dir, backup)).mode & 0o777, 0o600);
 });
 
 test('updateState serializes concurrent mutations under state.lock', async (t) => {
