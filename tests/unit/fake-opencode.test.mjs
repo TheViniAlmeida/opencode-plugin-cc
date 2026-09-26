@@ -82,7 +82,14 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
   await waitFor(async () => {
     const { value } = await reader.read();
     text += Buffer.from(value).toString();
-    return text.includes('server.heartbeat') && text.includes('"type":"x.test","properties":{"n":1}');
+    const frames = text.split('\n').filter((line) => line.startsWith('data: ')).flatMap((line) => {
+      try {
+        return [JSON.parse(line.slice(6))];
+      } catch {
+        return [];
+      }
+    });
+    return text.includes('server.heartbeat') && frames.some((frame) => frame.type === 'x.test' && frame.properties?.n === 1);
   }, { message: 'emitted SSE event and heartbeat' });
   const frames = text.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
   assert.ok(frames.some((frame) => frame.type === 'x.test' && frame.properties.n === 1));
