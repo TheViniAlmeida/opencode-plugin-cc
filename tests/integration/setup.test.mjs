@@ -1,14 +1,33 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
 import { startFake } from '../fixtures/fake-opencode.mjs';
+import { terminalAlias } from '../../plugins/opc/scripts/commands/setup.mjs';
 import {
   FAKE_BIN_DIR, makeTempDir, makeWorkspace, parseJsonOutput, readFakeState, readJsonFile, runCli, testEnv, trackTempDir,
 } from '../helpers.mjs';
 
 const posixOnly = { skip: process.platform === 'win32' && 'POSIX modes' };
+
+test('terminal alias treats shell metacharacters in dataDir literally', async (t) => {
+  const temp = trackTempDir(t, makeTempDir('opc-alias-'));
+  const dataDir = path.join(temp, "$HOME `touch pwned` $(echo x) space's");
+  const aliasLine = terminalAlias(dataDir, path.join(temp, 'plugin root'));
+  assert.doesNotMatch(aliasLine, /OPC_DATA_DIR="/);
+  assert.match(aliasLine, /\\'\\''/);
+  const res = spawnSync('bash', ['-c', `${aliasLine}; alias opc`], { cwd: temp, env: process.env, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.error?.message);
+  assert.match(res.stdout, /\$HOME/);
+  assert.match(res.stdout, /`touch pwned`/);
+  assert.match(res.stdout, /\$\(echo x\)/);
+  assert.match(res.stdout, /space.*\\'\\''.*s/);
+  const companion = path.join(temp, 'plugin root', 'scripts', 'opc-companion.mjs');
+  assert.ok(aliasLine.includes(`'\\''${companion}'\\''`), 'companion path must be shell quoted');
+  assert.equal(fs.existsSync(path.join(temp, 'pwned')), false);
+});
 
 async function setupJson(env, ws, extra = []) {
   const res = await runCli(['setup', '--json', ...extra], { env, cwd: ws });
@@ -30,7 +49,7 @@ test('diagnostic JSON: node, opencode, dirs, config and a running server on a po
   assert.notEqual(report.server.port, 4096);
   assert.equal(report.server.url, `http://127.0.0.1:${report.server.port}`);
   assert.equal(report.server.sessionsBlocked, null);
-  assert.match(report.terminalAlias, /^alias opc='OPC_DATA_DIR=".*" node ".*opc-companion\.mjs"'$/);
+  assert.match(report.terminalAlias, /^alias opc=/);
   const fake = readFakeState(env);
   assert.equal(fake.boots[0].insideServer, '1');
   assert.equal(fake.boots[0].hasPassword, true);

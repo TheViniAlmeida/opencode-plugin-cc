@@ -51,3 +51,14 @@ test('main: unknown or invalid subcommand exits 2, calls onError before renderin
     assert.equal(JSON.parse(stdout.text()).error.code, 'USAGE');
   }
 });
+
+test('main: JSON mode survives --cwd usage errors during argument extraction', async () => {
+  const stdout = sink();
+  const stderr = sink();
+  const code = await main(['setup', '--json', '--cwd'], {
+    stdin: Readable.from([]), stdout, stderr, env: {}, cwd: '/nonexistent',
+  });
+  assert.equal(code, 2);
+  assert.equal(JSON.parse(stdout.text()).error.code, 'USAGE');
+  assert.match(JSON.parse(stdout.text()).error.message, /--cwd/);
+});

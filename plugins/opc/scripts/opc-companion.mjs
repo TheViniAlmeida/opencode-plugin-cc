@@ -54,12 +54,12 @@ export async function main(rawArgv, io = {}) {
   const { UsageError, toExitCode } = await import('./lib/opc-error.mjs');
   const { renderError } = await import('./lib/render.mjs');
   const { redact } = await import('./lib/redact.mjs');
-  let wantsJson = false;
+  let wantsJson = Array.isArray(rawArgv) && rawArgv.includes('--json');
   try {
     const resolved = await resolveArgv(rawArgv, { stdin });
     const { cwd, argv } = extractCwd(resolved);
     const [sub, ...rest] = argv;
-    wantsJson = rest.includes('--json');
+    wantsJson ||= rest.includes('--json');
     if (!sub) throw new UsageError('USAGE', `Uso: opc <subcomando> [flags]. Subcomandos: ${listSubcommands().join(', ')}.`);
     const mod = await loadCommand(sub);
     const { createContext } = await import('./lib/context.mjs');

@@ -9,9 +9,9 @@ edite, reordene nem interprete os argumentos, e mantenha o delimitador entre asp
 o shell não expanda nada:
 
 ```bash
-opc setup --args-stdin <<'OPC_ARGS'
+opc setup --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
+OPC_ARGS_5f1d0c7a_EOF
 ```
 
 Se os argumentos contiverem `--force` (sempre junto com `--stop-server`):
@@ -21,9 +21,9 @@ Se os argumentos contiverem `--force` (sempre junto com `--stop-server`):
 - Só se o usuário escolher encerrar, rode com `--confirmed-by-user` **fora** do heredoc:
 
 ```bash
-opc setup --confirmed-by-user --args-stdin <<'OPC_ARGS'
+opc setup --confirmed-by-user --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
+OPC_ARGS_5f1d0c7a_EOF
 ```
 
 - Se o usuário cancelar, não rode nada e diga que o servidor continua ativo.

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { PLUGIN_BIN_DIR, makeWorkspace, parseJsonOutput, runCli, runProcess, testEnv } from '../helpers.mjs';
+import { PLUGIN_BIN_DIR, makeWorkspace, parseJsonOutput, runCli, testEnv } from '../helpers.mjs';
 
 test('no subcommand and unknown subcommands exit 2 with a rendered error', async (t) => {
   const env = testEnv(t);
@@ -38,15 +39,20 @@ test('bin/opc runs the companion through sh', async (t) => {
 test('heredoc --args-stdin never expands $() or backticks (slash command invocation)', async (t) => {
   const env = testEnv(t);
   const ws = makeWorkspace(t);
+  const commandDoc = fs.readFileSync(new URL('../../plugins/opc/commands/setup.md', import.meta.url), 'utf8');
+  const delimiter = commandDoc.match(/<<'([^']+)'/)?.[1];
+  assert.ok(delimiter, 'setup command must quote its heredoc delimiter');
   const script = [
-    "opc setup --json --args-stdin <<'OPC_ARGS'",
-    '$(touch pwned-dollar) `touch pwned-backtick` "$(touch pwned-quoted)"',
+    `opc setup --json --args-stdin <<'${delimiter}'`,
     'OPC_ARGS',
+    'touch pwned',
+    '$(touch pwned-dollar) `touch pwned-backtick` "$(touch pwned-quoted)"',
+    delimiter,
   ].join('\n');
-  const res = await runProcess('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws });
-  assert.equal(res.code, 2);
-  assert.match(res.stderr, /Argumento inesperado: \$\(touch/);
-  for (const f of ['pwned-dollar', 'pwned-backtick', 'pwned-quoted']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
+  const res = spawnSync('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws, stdio: 'ignore' });
+  assert.equal(res.status, 2, res.error?.message);
+  for (const f of ['pwned', 'pwned-dollar', 'pwned-backtick', 'pwned-quoted']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
+  assert.equal((commandDoc.match(/<<'OPC_ARGS_5f1d0c7a_EOF'/g) ?? []).length, 2);
 });
 
 test('--args-stdin feeds flags from stdin and --cwd selects the workspace', async (t) => {

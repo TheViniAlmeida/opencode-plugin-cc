@@ -25,7 +25,8 @@ function shellSingleQuote(text) {
 }
 
 export function terminalAlias(dataDir, pluginRoot = PLUGIN_ROOT) {
-  const inner = `OPC_DATA_DIR="${dataDir}" node "${path.join(pluginRoot, 'scripts', 'opc-companion.mjs')}"`;
+  const companion = path.join(pluginRoot, 'scripts', 'opc-companion.mjs');
+  const inner = `OPC_DATA_DIR=${shellSingleQuote(dataDir)} node ${shellSingleQuote(companion)}`;
   return `alias opc=${shellSingleQuote(inner)}`;
 }
 
