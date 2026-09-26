@@ -97,10 +97,25 @@ export function writeFileAtomic(filePath, data, { mode = 0o600 } = {}) {
 }
 
 export function readJson(filePath, fallback) {
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return fallback;
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(filePath).mode & 0o444;
+      if (mode === 0) {
+        const cause = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+        throw new OpcError('READ_FAILED', `Não foi possível ler o arquivo ${filePath}.`, { exitCode: 5, details: { path: filePath }, cause });
+      }
+    }
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (cause) {
+    if (cause instanceof OpcError) throw cause;
+    if (cause.code === 'ENOENT') return fallback;
+    throw new OpcError('READ_FAILED', `Não foi possível ler o arquivo ${filePath}.`, { exitCode: 5, details: { path: filePath }, cause });
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (cause) {
+    throw new OpcError('INVALID_JSON', `O arquivo ${filePath} não contém JSON válido.`, { exitCode: 2, details: { path: filePath }, cause });
   }
 }
 

@@ -114,6 +114,10 @@ const SHAPE = {
   'project.scope': [isStrList, 'lista de texto'],
   'project.taskTypes': [isStrList, 'lista de texto'],
   policy: [isPlainObject, 'objeto'],
+  'policy.providers': [isPlainObject, 'objeto'],
+  'policy.models': [isPlainObject, 'objeto'],
+  'policy.agents': [isPlainObject, 'objeto'],
+  'policy.tools': [isPlainObject, 'objeto'],
   'policy.providers.allow': [isStrList, 'lista de texto'],
   'policy.providers.deny': [isStrList, 'lista de texto'],
   'policy.models.allow': [isStrList, 'lista de texto'],
@@ -125,7 +129,7 @@ const SHAPE = {
   'policy.destructiveBash': [isStrList, 'lista de texto'],
   'policy.approver': [(v) => v === 'user' || v === 'claude', '"user" ou "claude"'],
   'policy.permissionTimeoutSec': [isPosNum, 'número > 0'],
-  permissionProfiles: [(v) => isPlainObject(v) && Object.values(v).every(isRuleList), 'mapa de listas de regras'],
+  permissionProfiles: [isPlainObject, 'objeto'],
   routing: [isPlainObject, 'objeto'],
   'routing.tasks': [isListMap, 'mapa de listas'],
   'routing.tiers': [isListMap, 'mapa de listas'],
@@ -178,6 +182,11 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
     const value = getPath(obj, dotted);
     if (value !== undefined && !check(value)) errors.push({ path: dotted, message: `valor inválido: esperado ${expected}` });
   }
+  if (isPlainObject(obj.permissionProfiles)) {
+    for (const [name, rules] of Object.entries(obj.permissionProfiles)) {
+      if (!isRuleList(rules)) errors.push({ path: `permissionProfiles.${name}`, message: 'valor inválido: esperado lista de regras' });
+    }
+  }
   const secretLike = [];
   collectSecretLikeKeys(obj, '', secretLike);
   for (const p of secretLike) warnings.push({ path: p, message: 'chave com cara de segredo: não guarde segredos na config do opc' });
@@ -221,7 +230,7 @@ function mergeWorkspacePolicy(effective, wsPolicy, warnings) {
         } else {
           const res = intersectAllow(policy[key].allow, list);
           policy[key].allow = res.allow;
-          for (const d of res.dropped) warnings.push({ path: p, message: `"${d}" amplia o allow global (ignorado)` });
+          for (const _d of res.dropped) warnings.push({ path: p, message: 'entrada amplia o allow global (ignorada)' });
           if (res.empty) {
             policy[key].deny = [...new Set([...policy[key].deny, '*'])];
             warnings.push({ path: p, message: 'interseção vazia com o allow global: nada fica permitido' });
@@ -296,11 +305,14 @@ export function loadConfig({ dataDir, workspaceRoot }) {
   const warnings = [];
   const gPath = globalConfigPath(dataDir);
   let global = null;
-  if (fs.existsSync(gPath)) {
+  try {
     global = readJson(gPath, undefined);
-    if (global === undefined) {
-      throw new OpcError('CONFIG_INVALID', `A config global ${gPath} não é um JSON válido.`, { exitCode: 2 });
-    }
+  } catch (err) {
+    if (err.code === 'INVALID_JSON') throw new OpcError('CONFIG_INVALID', `A config global ${gPath} não é um JSON válido.`, { exitCode: 2, details: { path: gPath }, cause: err });
+    throw err;
+  }
+  if (global === undefined) global = null;
+  if (global !== null) {
     const { errors, warnings: w } = validateConfigShape(global, { source: 'global' });
     if (errors.length > 0) {
       throw new OpcError('CONFIG_INVALID', `Config global inválida: ${errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, {
@@ -312,13 +324,18 @@ export function loadConfig({ dataDir, workspaceRoot }) {
   }
   let workspace = null;
   const wPath = workspaceConfigPath(workspaceRoot);
-  if (fs.existsSync(wPath)) {
+  try {
     workspace = readJson(wPath, undefined);
-    if (workspace === undefined || !isPlainObject(workspace)) {
-      warnings.push({ path: '.opc.json', message: 'arquivo não é um objeto JSON válido (ignorado)', source: 'workspace' });
-      workspace = null;
-    } else {
-      const { warnings: w } = validateConfigShape(workspace, { source: 'workspace' });
+  } catch (err) {
+    if (err.code === 'INVALID_JSON') throw new OpcError('CONFIG_INVALID', 'O arquivo .opc.json não contém JSON válido.', { exitCode: 2, details: { path: wPath }, cause: err });
+    throw err;
+  }
+  if (workspace === undefined) workspace = null;
+  if (workspace !== null) {
+    if (!isPlainObject(workspace)) throw new OpcError('CONFIG_INVALID', 'O arquivo .opc.json precisa conter um objeto JSON.', { exitCode: 2, details: { path: wPath } });
+    else {
+      const { errors, warnings: w } = validateConfigShape(workspace, { source: 'workspace' });
+      if (errors.length) throw new OpcError('CONFIG_INVALID', `Config workspace inválida: ${errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, { exitCode: 2, details: { path: wPath, errors } });
       warnings.push(...w.filter((x) => x.message.startsWith('chave com cara')).map((x) => ({ ...x, source: 'workspace' })));
     }
   }

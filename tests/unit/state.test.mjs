@@ -76,11 +76,12 @@ test('writeFileAtomic writes JSON or text with mode 600 and leaves no temp files
   assert.deepEqual(fs.readdirSync(base), ['x.json']);
 });
 
-test('readJson returns the fallback for missing or invalid files', (t) => {
+test('readJson returns fallback only for missing files and reports invalid JSON or I/O failures', (t) => {
   const base = temp(t);
   assert.equal(readJson(path.join(base, 'none.json'), 'fb'), 'fb');
   fs.writeFileSync(path.join(base, 'bad.json'), '{oops');
-  assert.equal(readJson(path.join(base, 'bad.json'), null), null);
+  assert.throws(() => readJson(path.join(base, 'bad.json'), null), (e) => e.code === 'INVALID_JSON' && e.exitCode === 2 && e.details.path.endsWith('bad.json'));
+  assert.throws(() => readJson(base, null), (e) => e.code === 'READ_FAILED' && e.exitCode === 5 && e.details.path === base);
 });
 
 test('loadState returns the default shape when state.json is missing', (t) => {

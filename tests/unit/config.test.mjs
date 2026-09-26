@@ -58,6 +58,11 @@ test('validateConfigShape reports type errors, unknown keys and secret-looking k
   assert.deepEqual(validateConfigShape([], {}).errors.map((e) => e.path), ['']);
 });
 
+test('validateConfigShape rejects non-object policy sections', () => {
+  assert.ok(validateConfigShape({ policy: { models: null } }).errors.some((e) => e.path === 'policy.models'));
+  assert.ok(validateConfigShape({ policy: { agents: 'x' } }).errors.some((e) => e.path === 'policy.agents'));
+});
+
 test('validateConfigShape warns about locked keys only for the workspace source', () => {
   const cfg = { permissionProfiles: {}, server: { configOverride: {} } };
   assert.deepEqual(paths(validateConfigShape(cfg, { source: 'workspace' }).warnings).sort(), ['permissionProfiles', 'server.configOverride']);
@@ -88,6 +93,7 @@ test('workspace allow is intersected with the global allow', () => {
   const widen = mergeConfig(g, { policy: { models: { allow: ['prov-b/*'] } } });
   assert.deepEqual(widen.config.policy.models.deny, ['*']);
   assert.ok(widen.warnings.some((w) => w.path === 'policy.models.allow' && /amplia/.test(w.message)));
+  assert.ok(widen.warnings.every((w) => !w.message.includes('prov-b/*')));
   assert.ok(widen.warnings.some((w) => /interseção vazia/.test(w.message)));
   const openGlobal = mergeConfig({}, { policy: { models: { allow: ['prov-a/*'] } } });
   assert.deepEqual(openGlobal.config.policy.models.allow, ['prov-a/*']);
@@ -138,7 +144,7 @@ test('invalid workspace values are dropped with a warning', () => {
   assert.ok(paths(warnings).includes('defaultModel'));
 });
 
-test('loadConfig: first run without files works; invalid global fails; invalid .opc.json is ignored', (t) => {
+test('loadConfig surfaces invalid JSON or shape in global and workspace files', (t) => {
   const dataDir = temp(t);
   const ws = temp(t);
   const first = loadConfig({ dataDir, workspaceRoot: ws });
@@ -147,11 +153,25 @@ test('loadConfig: first run without files works; invalid global fails; invalid .
   assert.equal(first.workspace, null);
   assert.deepEqual(first.config, JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
   fs.writeFileSync(path.join(ws, '.opc.json'), '{broken');
-  assert.ok(loadConfig({ dataDir, workspaceRoot: ws }).warnings.some((w) => w.path === '.opc.json'));
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.exitCode === 2);
+  fs.writeFileSync(path.join(ws, '.opc.json'), JSON.stringify({ policy: { models: null } }));
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.details.errors.some((x) => x.path === 'policy.models'));
+  fs.writeFileSync(path.join(ws, '.opc.json'), '{}');
   fs.writeFileSync(path.join(dataDir, 'config.json'), '{broken');
   assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.exitCode === 2);
   fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ jobs: { maxActive: -1 } }));
   assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && /jobs\.maxActive/.test(e.message));
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ policy: { models: null } }));
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.details.errors.some((x) => x.path === 'policy.models'));
+});
+
+test('loadConfig rejects unreadable .opc.json with READ_FAILED', { skip: process.platform === 'win32' }, (t) => {
+  const dataDir = temp(t);
+  const ws = temp(t);
+  const file = path.join(ws, '.opc.json');
+  fs.writeFileSync(file, '{}');
+  fs.chmodSync(file, 0);
+  assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'READ_FAILED' && e.exitCode === 5 && e.details.path === file);
 });
 
 test('saveGlobalConfig (600) and saveWorkspaceConfig (644) round-trip through loadConfig', { skip: process.platform === 'win32' }, (t) => {
