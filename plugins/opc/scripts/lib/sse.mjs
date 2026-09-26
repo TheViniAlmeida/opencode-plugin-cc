@@ -171,6 +171,7 @@ export class EventHub {
   }
 
   async _connect() {
+    if (this._state === 'stopped') throw new Error('EventHub connection stopped');
     const controller = new AbortController();
     this._controller = controller;
     const startedAt = performance.now();
@@ -197,10 +198,13 @@ export class EventHub {
     let res;
     let reader;
     try {
-      const fetchPromise = Promise.resolve().then(() => this.fetchImpl(this.client.buildUrl('/event'), {
-        headers: { ...this.client.authHeaders(), accept: 'text/event-stream' },
-        signal: controller.signal,
-      }));
+      const fetchPromise = Promise.resolve().then(() => {
+        if (this._state === 'stopped') throw new Error('EventHub connection stopped');
+        return this.fetchImpl(this.client.buildUrl('/event'), {
+          headers: { ...this.client.authHeaders(), accept: 'text/event-stream' },
+          signal: controller.signal,
+        });
+      });
       res = await Promise.race([fetchPromise, timeoutPromise, stopped]);
     } catch (err) {
       this._stopConnection = null;

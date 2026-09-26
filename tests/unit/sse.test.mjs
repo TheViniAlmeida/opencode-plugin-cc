@@ -206,6 +206,22 @@ test('stop while connecting rejects start and does not reconnect', async () => {
   assert.equal(fetchCount, 1);
 });
 
+test('stop immediately after start rejects as stopped without invoking fetch', async () => {
+  let fetchCount = 0;
+  const hub = new EventHub({
+    client,
+    fetchImpl: () => {
+      fetchCount += 1;
+      return new Promise(() => {});
+    },
+  });
+  const started = hub.start();
+  hub.stop();
+  await assert.rejects(started, /stopped/i);
+  assert.equal(fetchCount, 0);
+  assert.equal(hub.state, 'stopped');
+});
+
 test('stop while waiting for the first frame rejects start and does not reconnect', async () => {
   let fetchCount = 0;
   const hub = new EventHub({
