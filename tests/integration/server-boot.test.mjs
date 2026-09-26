@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { assertCanCreateSessions, ensureServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { startFake } from '../fixtures/fake-opencode.mjs';
 import {
