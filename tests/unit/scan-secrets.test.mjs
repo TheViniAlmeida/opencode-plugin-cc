@@ -86,7 +86,11 @@ test('CLI exits 2 and names invalid or unreadable server.json without printing i
   const result = await runProcess(process.execPath, [SCRIPT, clean, '--server-json', invalid], { env: { PATH: process.env.PATH } });
   assert.equal(result.code, 2);
   assert.ok(result.stderr.includes(`scan-secrets: erro:`) && result.stderr.includes(invalid));
-  assert.ok(!result.stderr.includes(privateContent));
-  assert.ok(!result.stderr.includes('zzqq'));
-  assert.ok(!result.stderr.includes('SECRET'));
+  for (let start = 0; start < privateContent.length; start += 1) {
+    for (let end = start + 4; end <= privateContent.length; end += 1) {
+      const substring = privateContent.slice(start, end);
+      assert.ok(!result.stderr.includes(substring), `stderr leaked invalid server.json substring: ${substring}`);
+      assert.ok(!result.stdout.includes(substring), `stdout leaked invalid server.json substring: ${substring}`);
+    }
+  }
 });
