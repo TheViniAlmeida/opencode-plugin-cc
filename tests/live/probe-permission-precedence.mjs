@@ -121,17 +121,32 @@ function makeTurnRunner(client, hub) {
 }
 
 async function probeConfigMerge(client, userConfig) {
-  const cfg = await client.get('/config');
+  let cfg;
+  let configError;
+  try {
+    cfg = await client.get('/config');
+  } catch (err) {
+    configError = err;
+  }
   const toolIds = await client.get('/experimental/tool/ids').catch(() => null);
   const probeTool = Array.isArray(toolIds) ? toolIds.find((id) => id.includes('echo_marker')) ?? null : null;
+  const mergeReason = configError
+    ? 'GET /config falhou'
+    : !userConfig || !['model', 'agent', 'provider'].some((candidate) => Object.hasOwn(userConfig, candidate))
+      ? 'nenhuma chave de config do usuário para comparar'
+      : !cfg || cfg.share !== 'disabled' || !probeTool
+        ? 'override de config não confirmado'
+        : 'configuração efetiva indisponível';
+  const merge = mergeVerdict({ overrideApplied: true, userConfig, effectiveConfig: cfg, overridePresent: cfg?.share === 'disabled' && Boolean(probeTool), reason: mergeReason });
   return {
     item: '§15.5 OPENCODE_CONFIG_CONTENT',
     shareDisabled: cfg?.share === 'disabled',
     mcpInjected: Boolean(cfg?.mcp && 'opcprobe' in cfg.mcp),
     userMcpCount: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe').length,
-    userConfigKey: mergeVerdict({ overrideApplied: true, userConfig, effectiveConfig: cfg, overridePresent: cfg?.share === 'disabled' && Boolean(probeTool) }).key,
+    userConfigKey: merge.key,
     probeToolId: probeTool,
-    verdict: mergeVerdict({ overrideApplied: true, userConfig, effectiveConfig: cfg, overridePresent: cfg?.share === 'disabled' && Boolean(probeTool) }).verdict,
+    verdict: merge.verdict,
+    ...(merge.verdict.startsWith('INCONCLUSIVO') ? { reason: merge.verdict.slice('INCONCLUSIVO ('.length, -1) } : {}),
     userMcpNames: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe'),
   };
 }
@@ -163,12 +178,12 @@ async function probePrecedence(turn, ws) {
     editBlocked,
     bashBlocked,
     envBlocked,
-    evidence: { edit: editAttempted ? evidenceVerdict(true, editBlocked) : 'INCONCLUSIVE (model did not attempt the tool)', bash: evidenceVerdict(bashAttempted, bashBlocked), env: evidenceVerdict(envAttempted, envBlocked) },
+    evidence: { edit: evidenceVerdict(editAttempted, editBlocked, 'o modelo não tentou a ferramenta'), bash: evidenceVerdict(bashAttempted, bashBlocked, 'o modelo não tentou a ferramenta'), env: evidenceVerdict(envAttempted, envBlocked, 'o modelo não tentou a ferramenta') },
     askedAnything: [edit, bash, env].some((r) => r.asked.length > 0),
     tools: { edit: edit.tools, bash: bash.tools, env: env.tools },
     verdict: [editAttempted, bashAttempted, envAttempted].every(Boolean)
       ? ([editBlocked, bashBlocked, envBlocked].every(Boolean) ? 'SESSAO_VENCE' : 'SESSAO_NAO_VENCE')
-      : 'INCONCLUSIVO (model did not attempt the tool)',
+      : 'INCONCLUSIVO (o modelo não tentou a ferramenta)',
   };
 }
 
@@ -214,7 +229,7 @@ async function probeMcpWildcard(turn, callLog, toolId) {
   });
   const deniedCallHappened = countLines(callLog) > c1;
   const denyAttempted = toolAttempted(deny.tools, deny.asked, toolId);
-  let verdict = 'INCONCLUSIVO';
+  let verdict = 'INCONCLUSIVO (o modelo não tentou a ferramenta)';
   if (denyAttempted) verdict = deniedCallHappened ? 'CURINGA_NAO_FUNCIONA' : 'CURINGA_FUNCIONA';
   return {
     item: '§15.4b curinga de nome para MCP',
@@ -224,6 +239,7 @@ async function probeMcpWildcard(turn, callLog, toolId) {
     deniedCallHappened,
     denyAttempted,
     verdict,
+    ...(denyAttempted ? {} : { reason: 'o modelo não tentou a ferramenta' }),
   };
 }
 

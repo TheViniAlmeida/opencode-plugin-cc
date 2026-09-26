@@ -24,13 +24,18 @@ export function toolAttempted(tools, asked, tool) {
     || asked.some((event) => event.permission === tool);
 }
 
-export function evidenceVerdict(attempted, blocked) {
-  return attempted ? (blocked ? 'DENY' : 'ALLOW') : 'INCONCLUSIVE (model did not attempt the tool)';
+function inconclusiveReason(reason) {
+  if (typeof reason !== 'string' || reason.trim() === '') throw new TypeError('INCONCLUSIVO exige um motivo em PT-BR');
+  return `INCONCLUSIVO (${reason.trim()})`;
 }
 
-export function mergeVerdict({ overrideApplied, userConfig, effectiveConfig, overridePresent }) {
+export function evidenceVerdict(attempted, blocked, reason) {
+  return attempted ? (blocked ? 'DENY' : 'ALLOW') : inconclusiveReason(reason);
+}
+
+export function mergeVerdict({ overrideApplied, userConfig, effectiveConfig, overridePresent, reason }) {
   const key = ['model', 'agent', 'provider'].find((candidate) => Object.hasOwn(userConfig ?? {}, candidate));
-  if (!overrideApplied || !overridePresent || !key) return { verdict: 'INCONCLUSIVE', key: key ?? null };
+  if (!overrideApplied || !overridePresent || !key) return { verdict: inconclusiveReason(reason), key: key ?? null };
   const survived = Object.hasOwn(effectiveConfig ?? {}, key)
     && JSON.stringify(effectiveConfig[key]) === JSON.stringify(userConfig[key]);
   return { verdict: survived ? 'MERGE' : 'REPLACE', key };
