@@ -81,10 +81,12 @@ test('CLI exits 2 and names invalid or unreadable server.json without printing i
   const clean = path.join(dir, 'clean');
   fs.mkdirSync(clean);
   const invalid = path.join(dir, 'server.json');
-  const privateContent = 'not-json-and-never-print-this';
+  const privateContent = 'zzqqSECRETzzqq';
   fs.writeFileSync(invalid, privateContent);
   const result = await runProcess(process.execPath, [SCRIPT, clean, '--server-json', invalid], { env: { PATH: process.env.PATH } });
   assert.equal(result.code, 2);
   assert.ok(result.stderr.includes(`scan-secrets: erro:`) && result.stderr.includes(invalid));
   assert.ok(!result.stderr.includes(privateContent));
+  assert.ok(!result.stderr.includes('zzqq'));
+  assert.ok(!result.stderr.includes('SECRET'));
 });

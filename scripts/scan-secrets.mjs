@@ -94,13 +94,13 @@ export function secretsFromServerJson(files) {
       content = fs.readFileSync(file, 'utf8');
     } catch (err) {
       if (err.code === 'ENOENT') continue;
-      throw new Error(`não foi possível ler ${file}: ${err.message}`, { cause: err });
+      throw new Error(`não foi possível ler ${file}${err.code ? ` (${err.code})` : ''}`, { cause: err });
     }
     let data;
     try {
       data = JSON.parse(content);
-    } catch (err) {
-      throw new Error(`JSON inválido em ${file}: ${err.message}`, { cause: err });
+    } catch {
+      throw new Error(`JSON inválido em ${file}`);
     }
     const pw = data?.password;
     if (typeof pw === 'string' && pw.length >= 8) out.push(pw);
