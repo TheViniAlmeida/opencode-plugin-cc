@@ -1,7 +1,9 @@
 // Process identity (cmdline + start time), detached spawn and group termination (spec §5.1.3, §5.5).
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ExitCode, OpcError } from './opc-error.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -71,8 +73,11 @@ export function identityMatches(expected, matcher) {
   return Boolean(matcher(current.cmdline));
 }
 
-function assertCommandExists(command, env) {
-  const paths = command.includes(path.sep) ? [command] : (env.PATH || '').split(path.delimiter).map((entry) => path.join(entry || '.', command));
+function assertCommandExists(command, env, cwd) {
+  const hasPath = command.includes('/') || command.includes(path.sep);
+  const paths = hasPath
+    ? [path.resolve(cwd, command)]
+    : (env.PATH || '').split(path.delimiter).map((entry) => path.resolve(cwd, entry || '.', command));
   if (!paths.some((candidate) => {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -87,25 +92,43 @@ function assertCommandExists(command, env) {
   }
 }
 
-export function spawnDetached(command, args, { cwd, env, logFile }) {
-  assertCommandExists(command, env);
+function spawnFailed(message, err = undefined) {
+  return new OpcError('SPAWN_FAILED', message, {
+    exitCode: ExitCode.CONNECTION,
+    details: err ? { causeCode: err.code } : undefined,
+    cause: err,
+  });
+}
+
+export async function spawnDetached(command, args, { cwd = process.cwd(), env = process.env, logFile }) {
+  try {
+    assertCommandExists(command, env, cwd);
+  } catch (err) {
+    throw spawnFailed(`Não foi possível iniciar o processo: ${command}`, err);
+  }
   const fd = fs.openSync(logFile, 'a', 0o600);
   try {
     fs.chmodSync(logFile, 0o600);
     const child = spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
-    child.on('error', () => {});
+    try {
+      await once(child, 'spawn');
+    } catch (err) {
+      throw spawnFailed(`Não foi possível iniciar o processo: ${command}`, err);
+    }
     if (!child.pid) {
-      const err = new Error(`failed to spawn ${command}`);
-      err.code = 'ENOENT';
-      throw err;
+      throw spawnFailed(`Não foi possível iniciar o processo: ${command}`);
     }
     child.unref();
     let identity = getProcessIdentity(child.pid);
-    for (let attempt = 0; !identity && attempt < 20; attempt += 1) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    const deadline = performance.now() + 1000;
+    while (!identity && performance.now() < deadline) {
+      await sleep(25);
       identity = getProcessIdentity(child.pid);
     }
-    return { pid: child.pid, startTime: identity ? identity.startTime : null };
+    if (!identity) {
+      throw spawnFailed(`Não foi possível ler a identidade do processo iniciado: ${command}`);
+    }
+    return { pid: child.pid, startTime: identity.startTime };
   } finally {
     fs.closeSync(fd);
   }
@@ -117,13 +140,26 @@ function signalGroup(pid, signal) {
       process.kill(-pid, signal);
       return;
     } catch (err) {
-      if (err.code !== 'ESRCH' && err.code !== 'EPERM') throw err;
+      if (err.code === 'ESRCH') return;
+      throw err;
     }
   }
   try {
     process.kill(pid, signal);
   } catch (err) {
     if (err.code !== 'ESRCH') throw err;
+  }
+}
+
+function isProcessGroupAlive(pgid) {
+  if (process.platform === 'win32') return isPidAlive(pgid);
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (err) {
+    if (err.code === 'ESRCH') return false;
+    if (err.code === 'EPERM') return true;
+    throw err;
   }
 }
 
@@ -134,13 +170,19 @@ function check(expected, matcher) {
   return 'ok';
 }
 
-async function waitGone(expected, matcher, ms) {
+async function waitGroupGone(pgid, ms) {
   const deadline = performance.now() + ms;
   while (performance.now() < deadline) {
+    if (!isProcessGroupAlive(pgid)) return true;
     await sleep(100);
-    if (check(expected, matcher) !== 'ok') return true;
   }
-  return check(expected, matcher) !== 'ok';
+  return !isProcessGroupAlive(pgid);
+}
+
+function killUnconfirmed(pgid) {
+  return new OpcError('KILL_UNCONFIRMED', `O grupo de processos ${pgid} continuou ativo após SIGKILL`, {
+    exitCode: ExitCode.JOB_FAILED,
+  });
 }
 
 export async function terminateProcessGroup(expected, matcher, { graceMs = 3000 } = {}) {
@@ -148,9 +190,12 @@ export async function terminateProcessGroup(expected, matcher, { graceMs = 3000 
   if (first === 'gone') return 'not-running';
   if (first === 'mismatch') return 'identity-mismatch';
   signalGroup(expected.pid, 'SIGTERM');
-  if (await waitGone(expected, matcher, graceMs)) return 'terminated';
-  if (check(expected, matcher) !== 'ok') return 'terminated';
+  if (await waitGroupGone(expected.pid, graceMs)) return 'terminated';
+  const beforeKill = check(expected, matcher);
+  if (beforeKill === 'mismatch') throw killUnconfirmed(expected.pid);
+  if (!isProcessGroupAlive(expected.pid)) return 'terminated';
+  // A dead leader's PID cannot be recycled as this PGID while any member of the group remains.
   signalGroup(expected.pid, 'SIGKILL');
-  await waitGone(expected, matcher, 2000);
+  if (!await waitGroupGone(expected.pid, 2000)) throw killUnconfirmed(expected.pid);
   return 'killed';
 }
