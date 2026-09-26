@@ -4,18 +4,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { ConnectionError } from './opc-error.mjs';
-import { getProcessIdentity } from './process.mjs';
+import { getProcessIdentity, isPidAlive } from './process.mjs';
 
 const FRESH_UNREADABLE_MS = 5000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function readOwner(lockPath) {
+  let raw;
   try {
-    const raw = fs.readFileSync(lockPath, 'utf8');
-    return { raw, owner: JSON.parse(raw) };
+    raw = fs.readFileSync(lockPath);
   } catch (err) {
     if (err.code === 'ENOENT') return { missing: true };
     return { raw: null, owner: null };
+  }
+  try {
+    return { raw, owner: JSON.parse(raw.toString('utf8')) };
+  } catch {
+    return { raw, owner: null };
   }
 }
 
@@ -28,9 +33,9 @@ function ownerAlive(lockPath, info) {
       return false;
     }
   }
+  if (process.platform === 'win32') return isPidAlive(info.owner.pid);
   const identity = getProcessIdentity(info.owner.pid);
   if (!identity) return false;
-  if (info.owner.startTime === null || info.owner.startTime === undefined) return true;
   return String(identity.startTime) === String(info.owner.startTime);
 }
 
@@ -44,29 +49,55 @@ function createLockFile(lockPath, purpose) {
     purpose: purpose ?? null,
     token,
   });
-  const fd = fs.openSync(lockPath, 'wx', 0o600);
+  const tempPath = `${lockPath}.tmp-${process.pid}-${randomUUID()}`;
+  const fd = fs.openSync(tempPath, 'wx', 0o600);
   try {
-    fs.writeSync(fd, body);
+    fs.writeFileSync(fd, body);
   } finally {
     fs.closeSync(fd);
   }
+  try {
+    fs.linkSync(tempPath, lockPath);
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }
+  const content = Buffer.from(body);
   let released = false;
   return function release() {
     if (released) return;
-    released = true;
-    const info = readOwner(lockPath);
-    if (info.owner && info.owner.token === token) {
-      try {
-        fs.unlinkSync(lockPath);
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err;
+    let current;
+    try {
+      current = fs.readFileSync(lockPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        released = true;
+        return;
       }
+      throw err;
+    }
+    if (!current.equals(content)) {
+      released = true;
+      return;
+    }
+    try {
+      fs.unlinkSync(lockPath);
+      released = true;
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        released = true;
+        return;
+      }
+      throw err;
     }
   };
 }
 
 function breakStaleLock(lockPath, judged) {
-  const stale = `${lockPath}.stale-${Date.now()}-${process.pid}`;
+  const stale = `${lockPath}.stale-${Date.now()}-${process.pid}-${randomUUID()}`;
   try {
     fs.renameSync(lockPath, stale);
   } catch (err) {
@@ -74,14 +105,18 @@ function breakStaleLock(lockPath, judged) {
     throw err;
   }
   const moved = readOwner(stale);
-  const sameLock = (moved.raw ?? null) === (judged.raw ?? null);
+  const sameLock = moved.raw === null
+    ? judged.raw === null
+    : judged.raw !== null && moved.raw.equals(judged.raw);
   if (!sameLock) {
     // We moved a fresh lock taken by someone else between our check and the rename: put it back.
     try {
       fs.linkSync(stale, lockPath);
       fs.unlinkSync(stale);
-    } catch {
-      // A third process already holds lockPath; the stale copy stays for inspection.
+    } catch (err) {
+      throw new ConnectionError('LOCK_RESTORE_FAILED', `Não foi possível restaurar o lock ${lockPath}.`, {
+        details: { lock: lockPath },
+      });
     }
   }
 }

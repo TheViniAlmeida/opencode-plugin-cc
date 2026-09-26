@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import { acquireLock, tryAcquireLock, withLock } from '../../plugins/opc/scripts/lib/locks.mjs';
-import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { ConnectionError, OpcError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { PLUGIN_ROOT, deadPid, makeTempDir, removeTempDir, runProcess } from '../helpers.mjs';
 
 function tempLock(t) {
@@ -36,8 +36,30 @@ test('acquireLock times out with ConnectionError TIMEOUT naming the holder', asy
     assert.ok(err instanceof ConnectionError);
     assert.equal(err.code, 'TIMEOUT');
     assert.match(err.message, /holder/);
+    assert.deepEqual(err.details.owner, { pid: process.pid, purpose: 'holder' });
     return true;
   });
+});
+
+test('lock publication links a complete private temp file into place', (t) => {
+  const { lock } = tempLock(t);
+  const originalLink = fs.linkSync;
+  let checked = false;
+  fs.linkSync = function (tempPath, lockPath) {
+    assert.equal(lockPath, lock);
+    assert.equal(fs.existsSync(lockPath), false);
+    assert.equal(fs.statSync(tempPath).mode & 0o777, 0o600);
+    const owner = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
+    assert.deepEqual(Object.keys(owner), ['pid', 'startTime', 'acquiredAt', 'purpose', 'token']);
+    checked = true;
+    return originalLink.call(this, tempPath, lockPath);
+  };
+  t.after(() => { fs.linkSync = originalLink; });
+
+  const release = tryAcquireLock(lock, { purpose: 'atomic' });
+  assert.equal(checked, true);
+  assert.deepEqual(fs.readdirSync(path.dirname(lock)), ['server.lock']);
+  release();
 });
 
 test('stale-lock: a lock owned by a dead pid is broken atomically (renamed to *.stale-*)', async (t) => {
@@ -56,15 +78,89 @@ test('a lock whose owner pid was reused (start time differs) is broken', async (
   release();
 });
 
-test('a fresh unreadable lock is respected; an old unreadable one is broken', async (t) => {
-  const { lock } = tempLock(t);
+test('an empty lock younger than five seconds is respected', (t) => {
+  const { lock, dir } = tempLock(t);
   fs.writeFileSync(lock, '');
   assert.equal(tryAcquireLock(lock, { purpose: 'x' }), null);
+  assert.deepEqual(fs.readdirSync(dir), ['server.lock']);
+});
+
+test('an empty lock older than five seconds is renamed stale before replacement', (t) => {
+  const { lock, dir } = tempLock(t);
+  fs.writeFileSync(lock, '');
   const old = new Date(Date.now() - 60000);
   fs.utimesSync(lock, old, old);
   const release = tryAcquireLock(lock, { purpose: 'x' });
   assert.equal(typeof release, 'function');
+  const stale = fs.readdirSync(dir).filter((name) => name.startsWith('server.lock.stale-'));
+  assert.equal(stale.length, 1);
+  assert.equal(fs.readFileSync(path.join(dir, stale[0]), 'utf8'), '');
   release();
+});
+
+test('stale comparison distinguishes different invalid raw bytes and restores the renamed lock', (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(lock, Buffer.from([0xff]));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  const originalRename = fs.renameSync;
+  let raced = false;
+  fs.renameSync = function (source, target) {
+    if (source === lock && !raced) {
+      fs.writeFileSync(lock, Buffer.from([0xfe]));
+      raced = true;
+    }
+    return originalRename.call(this, source, target);
+  };
+  t.after(() => { fs.renameSync = originalRename; });
+
+  assert.equal(tryAcquireLock(lock, { purpose: 'new' }), null);
+  assert.equal(raced, true);
+  assert.deepEqual(fs.readFileSync(lock), Buffer.from([0xfe]));
+});
+
+test('identity unavailable on win32 keeps a live owner lock held', (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startTime: 'different', purpose: 'live', token: 'old' }));
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...descriptor, value: 'win32' });
+  t.after(() => Object.defineProperty(process, 'platform', descriptor));
+
+  assert.equal(tryAcquireLock(lock, { purpose: 'new' }), null);
+  assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).purpose, 'live');
+});
+
+test('restore failure throws LOCK_RESTORE_FAILED with exit code 5 and lock path', async (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: await deadPid(), startTime: '1', purpose: 'gone', token: 'old' }));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  const originalRename = fs.renameSync;
+  const originalLink = fs.linkSync;
+  fs.renameSync = function (source, target) {
+    if (source === lock) fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startTime: 'racer', purpose: 'racer', token: 'race' }));
+    return originalRename.call(this, source, target);
+  };
+  fs.linkSync = function (source, target) {
+    if (source.startsWith(`${lock}.stale-`) && target === lock) {
+      const err = new Error('simulated restore failure');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalLink.call(this, source, target);
+  };
+  t.after(() => {
+    fs.renameSync = originalRename;
+    fs.linkSync = originalLink;
+  });
+
+  assert.throws(() => tryAcquireLock(lock, { purpose: 'new' }), (err) => {
+    assert.ok(err instanceof OpcError);
+    assert.equal(err.code, 'LOCK_RESTORE_FAILED');
+    assert.equal(err.exitCode, 5);
+    assert.equal(err.details.lock, lock);
+    return true;
+  });
 });
 
 test('release never removes a lock that now belongs to someone else', (t) => {
@@ -73,6 +169,44 @@ test('release never removes a lock that now belongs to someone else', (t) => {
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startTime: null, purpose: 'theirs', token: 'other' }));
   release();
   assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).purpose, 'theirs');
+});
+
+test('release propagates unlink errors and can be retried', (t) => {
+  const { lock } = tempLock(t);
+  const release = tryAcquireLock(lock, { purpose: 'mine' });
+  const originalUnlink = fs.unlinkSync;
+  let failOnce = true;
+  let failReadOnce = true;
+  const originalRead = fs.readFileSync;
+  fs.unlinkSync = function (target) {
+    if (target === lock && failOnce) {
+      failOnce = false;
+      const err = new Error('simulated unlink failure');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalUnlink.call(this, target);
+  };
+  fs.readFileSync = function (target, ...args) {
+    if (target === lock && failReadOnce) {
+      failReadOnce = false;
+      const err = new Error('simulated read failure');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalRead.call(this, target, ...args);
+  };
+  t.after(() => {
+    fs.unlinkSync = originalUnlink;
+    fs.readFileSync = originalRead;
+  });
+
+  assert.throws(release, { code: 'EACCES' });
+  assert.equal(fs.existsSync(lock), true);
+  assert.throws(release, { code: 'EACCES' });
+  assert.equal(fs.existsSync(lock), true);
+  release();
+  assert.equal(fs.existsSync(lock), false);
 });
 
 test('withLock releases on success and on failure', async (t) => {
