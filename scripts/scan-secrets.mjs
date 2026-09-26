@@ -45,25 +45,41 @@ export function scanText(text, { secrets = [] } = {}) {
   return findings;
 }
 
-function listFiles(target, out) {
+function listFiles(target, out, { explicit = false, onMissing = () => {} } = {}) {
   let st;
   try {
     st = fs.statSync(target);
-  } catch {
-    return out;
+  } catch (err) {
+    if (err.code === 'ENOENT' && explicit) {
+      onMissing(target);
+      return out;
+    }
+    throw new Error(`não foi possível acessar ${target}: ${err.message}`, { cause: err });
   }
   if (st.isDirectory()) {
-    for (const name of fs.readdirSync(target)) if (!SKIP_DIRS.has(name)) listFiles(path.join(target, name), out);
+    let names;
+    try {
+      names = fs.readdirSync(target);
+    } catch (err) {
+      throw new Error(`não foi possível ler ${target}: ${err.message}`, { cause: err });
+    }
+    for (const name of names) if (!SKIP_DIRS.has(name)) listFiles(path.join(target, name), out, { onMissing });
   } else if (st.isFile() && st.size <= MAX_FILE_BYTES) {
     out.push(target);
   }
   return out;
 }
 
-export function scanPaths(paths, { secrets = [] } = {}) {
+export function scanPaths(paths, { secrets = [], onMissing = () => {} } = {}) {
   const findings = [];
-  for (const file of paths.flatMap((p) => listFiles(p, []))) {
-    const buf = fs.readFileSync(file);
+  const files = paths.flatMap((p) => listFiles(p, [], { explicit: true, onMissing }));
+  for (const file of files) {
+    let buf;
+    try {
+      buf = fs.readFileSync(file);
+    } catch (err) {
+      throw new Error(`não foi possível ler ${file}: ${err.message}`, { cause: err });
+    }
     if (buf.includes(0)) continue;
     for (const f of scanText(buf.toString('utf8'), { secrets })) findings.push({ file, ...f });
   }
@@ -73,12 +89,21 @@ export function scanPaths(paths, { secrets = [] } = {}) {
 export function secretsFromServerJson(files) {
   const out = [];
   for (const file of files) {
+    let content;
     try {
-      const pw = JSON.parse(fs.readFileSync(file, 'utf8')).password;
-      if (typeof pw === 'string' && pw.length >= 8) out.push(pw);
-    } catch {
-      // missing or invalid server.json: nothing to register
+      content = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw new Error(`não foi possível ler ${file}: ${err.message}`, { cause: err });
     }
+    let data;
+    try {
+      data = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`JSON inválido em ${file}: ${err.message}`, { cause: err });
+    }
+    const pw = data?.password;
+    if (typeof pw === 'string' && pw.length >= 8) out.push(pw);
   }
   return out;
 }
@@ -112,7 +137,17 @@ function main(argv) {
     return 2;
   }
   if (process.env.OPC_DATA_DIR) serverJsons.push(...serverJsonFilesUnder(process.env.OPC_DATA_DIR));
-  const findings = scanPaths(targets, { secrets: secretsFromServerJson(serverJsons) });
+  let findings;
+  try {
+    const secrets = secretsFromServerJson(serverJsons);
+    findings = scanPaths(targets, {
+      secrets,
+      onMissing: (missing) => process.stderr.write(`scan-secrets: aviso: caminho inexistente ignorado: ${missing}\n`),
+    });
+  } catch (err) {
+    process.stderr.write(`scan-secrets: erro: ${err.message}\n`);
+    return 2;
+  }
   for (const f of findings) process.stdout.write(`${f.file}:${f.line}: ${f.kind} ${f.sample}\n`);
   if (findings.length > 0) {
     process.stderr.write(`scan-secrets: ${findings.length} achado(s).\n`);

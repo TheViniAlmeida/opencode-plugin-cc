@@ -65,3 +65,26 @@ test('CLI exits 1 with masked output when a registered secret is found, 0 when c
   assert.match(dirty.stdout, /leak\.md:1: registered-secret/);
   assert.ok(!dirty.stdout.includes(secret));
 });
+
+test('CLI warns and ignores an explicit missing path', async (t) => {
+  const dir = makeTempDir('opc-scan-');
+  t.after(() => removeTempDir(dir));
+  const missing = path.join(dir, 'missing');
+  const result = await runProcess(process.execPath, [SCRIPT, missing], { env: { PATH: process.env.PATH } });
+  assert.equal(result.code, 0);
+  assert.ok(result.stderr.includes(`scan-secrets: aviso: caminho inexistente ignorado: ${missing}`));
+});
+
+test('CLI exits 2 and names invalid or unreadable server.json without printing its contents', async (t) => {
+  const dir = makeTempDir('opc-scan-');
+  t.after(() => removeTempDir(dir));
+  const clean = path.join(dir, 'clean');
+  fs.mkdirSync(clean);
+  const invalid = path.join(dir, 'server.json');
+  const privateContent = 'not-json-and-never-print-this';
+  fs.writeFileSync(invalid, privateContent);
+  const result = await runProcess(process.execPath, [SCRIPT, clean, '--server-json', invalid], { env: { PATH: process.env.PATH } });
+  assert.equal(result.code, 2);
+  assert.ok(result.stderr.includes(`scan-secrets: erro:`) && result.stderr.includes(invalid));
+  assert.ok(!result.stderr.includes(privateContent));
+});
