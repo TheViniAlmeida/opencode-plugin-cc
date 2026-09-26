@@ -1,0 +1,3 @@
+#!/bin/sh
+# opc: entry point placed on the PATH of the Claude Code Bash tool by the plugin bin/ directory.
+exec node "$(dirname "$0")/../scripts/opc-companion.mjs" "$@"

@@ -1,0 +1,9 @@
+{
+  "name": "opc",
+  "version": "0.1.0",
+  "description": "Use o OpenCode a partir do Claude Code: servidor gerenciado por workspace, providers, modelos, agentes e permissões.",
+  "author": {
+    "name": "TheViniAlmeida"
+  },
+  "license": "Apache-2.0"
+}
