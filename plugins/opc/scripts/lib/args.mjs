@@ -5,6 +5,11 @@ const WHITESPACE = /\s/;
 const WORD_BEFORE = /[\p{L}\p{N}]$/u;
 const WORD_AFTER = /^[\p{L}\p{N}]/u;
 
+function preview(value) {
+  const text = String(value);
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+}
+
 // An apostrophe between two letters/digits (don't, rock'n'roll) is prose, never a quote.
 // slice() over two code units keeps astral letters (surrogate pairs) intact.
 function isIntraWordApostrophe(input, i) {
@@ -105,13 +110,14 @@ export function extractCwd(argv) {
       break;
     }
     if (token === '--cwd') {
-      if (i + 1 >= argv.length) throw new UsageError('USAGE', 'Faltou o valor de --cwd.');
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new UsageError('USAGE', 'Faltou o valor de --cwd.');
       cwd = argv[i + 1];
       i += 1;
       continue;
     }
     if (token.startsWith('--cwd=')) {
       cwd = token.slice('--cwd='.length);
+      if (!cwd) throw new UsageError('USAGE', 'Faltou o valor de --cwd.');
       continue;
     }
     out.push(token);
@@ -123,7 +129,7 @@ function coerce(name, def, raw) {
   switch (def.type) {
     case 'number': {
       const n = Number(raw);
-      if (raw === '' || !Number.isFinite(n)) throw new UsageError('USAGE', `--${name} exige um número (recebido: ${raw}).`);
+      if (raw === '' || !Number.isFinite(n)) throw new UsageError('USAGE', `--${name} exige um número (recebido: ${preview(raw)}).`);
       return n;
     }
     case 'list':
@@ -144,6 +150,14 @@ export function parseArgs(argv, spec) {
     else if (def.type === 'list') flags[name] = [];
   }
   const positionals = [];
+  const isDeclaredFlagToken = (value) => {
+    if (value.startsWith('--') && value.length > 2) {
+      const raw = value.slice(2).split('=', 1)[0];
+      return Object.hasOwn(defs, raw);
+    }
+    if (value.startsWith('-') && value.length === 2) return aliases.has(value.slice(1));
+    return false;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--') {
@@ -151,7 +165,7 @@ export function parseArgs(argv, spec) {
       break;
     }
     const isLong = token.startsWith('--') && token.length > 2;
-    const isShort = !isLong && token.startsWith('-') && token.length === 2 && token !== '--';
+    const isShort = !isLong && token.startsWith('-') && token !== '-' && !/^-\d+(?:\.\d+)?$/.test(token);
     if (!isLong && !isShort) {
       positionals.push(token);
       continue;
@@ -165,17 +179,21 @@ export function parseArgs(argv, spec) {
     } else {
       rawName = token.slice(1);
     }
-    const name = defs[rawName] ? rawName : aliases.get(rawName);
-    if (!name) throw new UsageError('USAGE', `Flag desconhecida: ${token}`);
+    const name = Object.hasOwn(defs, rawName) ? rawName : aliases.get(rawName);
+    if (!name) throw new UsageError('USAGE', `Flag desconhecida: ${preview(token)}`);
     const def = defs[name];
     if (def.type === 'boolean') {
+      if (inline === '') throw new UsageError('USAGE', `Faltou o valor de ${preview(token)}.`);
       if (inline !== undefined) flags[name] = !['false', '0', 'no'].includes(inline.toLowerCase());
       else flags[name] = true;
       continue;
     }
     let raw = inline;
+    if (raw === '') throw new UsageError('USAGE', `Faltou o valor de ${preview(token)}.`);
     if (raw === undefined) {
-      if (i + 1 >= argv.length) throw new UsageError('USAGE', `Faltou o valor de ${token}.`);
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--') || isDeclaredFlagToken(argv[i + 1])) {
+        throw new UsageError('USAGE', `Faltou o valor de ${preview(token)}.`);
+      }
       raw = argv[i + 1];
       i += 1;
     }
@@ -183,7 +201,7 @@ export function parseArgs(argv, spec) {
     flags[name] = def.type === 'list' ? [...(flags[name] ?? []), ...value] : value;
   }
   if (positionals.length > 0 && !spec?.allowPositionals) {
-    throw new UsageError('USAGE', `Argumento inesperado: ${positionals[0]}`);
+    throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[0])}`);
   }
   return { flags, positionals };
 }

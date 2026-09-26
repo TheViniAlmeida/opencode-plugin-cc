@@ -57,6 +57,8 @@ test('extractCwd removes --cwd from anywhere before --', () => {
   assert.deepEqual(extractCwd(['--cwd=/a', 'setup']), { cwd: '/a', argv: ['setup'] });
   assert.deepEqual(extractCwd(['task', '--', '--cwd', 'x']), { cwd: null, argv: ['task', '--', '--cwd', 'x'] });
   assert.throws(() => extractCwd(['setup', '--cwd']), UsageError);
+  assert.throws(() => extractCwd(['setup', '--cwd', '--json']), UsageError);
+  assert.throws(() => extractCwd(['setup', '--cwd=']), UsageError);
 });
 
 const SPEC = {
@@ -85,4 +87,13 @@ test('parseArgs rejects unknown flags, missing values, bad numbers and unexpecte
   assert.throws(() => parseArgs(['--model'], SPEC), UsageError);
   assert.throws(() => parseArgs(['--timeout', 'abc'], SPEC), UsageError);
   assert.throws(() => parseArgs(['extra'], { flags: {} }), UsageError);
+  assert.throws(() => parseArgs(['--model', '--json'], SPEC), UsageError);
+  assert.throws(() => parseArgs(['--unknown'], SPEC), UsageError);
+  assert.throws(() => parseArgs(['-unknown'], SPEC), UsageError);
+  assert.deepEqual(parseArgs(['-5'], SPEC).positionals, ['-5']);
+  assert.throws(() => parseArgs(['--toString'], SPEC), UsageError);
+  assert.throws(() => parseArgs(['--model='], SPEC), UsageError);
+  const offending = '--sk-AAAAAAAAAAAAAAAAAAAAAAAA';
+  assert.throws(() => parseArgs([offending], SPEC), (error) =>
+    error instanceof UsageError && !error.message.includes(offending));
 });
