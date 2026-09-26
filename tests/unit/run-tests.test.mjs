@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { collectTestFiles, supportsTestConcurrency } from '../../scripts/run-tests.mjs';
+import { collectTestFiles, supportsTestConcurrency, nodeVersionExitCode } from '../../scripts/run-tests.mjs';
 import { makeTempDir, removeTempDir } from '../helpers.mjs';
 
 function touch(root, rel) {
@@ -44,4 +44,17 @@ test('supportsTestConcurrency is true from Node 20.10', () => {
   assert.equal(supportsTestConcurrency('20.9.0'), false);
   assert.equal(supportsTestConcurrency('20.10.0'), true);
   assert.equal(supportsTestConcurrency('22.1.0'), true);
+});
+
+test('collectTestFiles propagates non-ENOENT directory errors', (t) => {
+  const root = makeTempDir('opc-rt-');
+  t.after(() => removeTempDir(root));
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tests', 'unit'), 'not a directory');
+  assert.throws(() => collectTestFiles(root, ['unit']), { code: 'ENOTDIR' });
+});
+
+test('Node CLI version guard returns exit 2 below major 20', () => {
+  assert.equal(nodeVersionExitCode('v18.20.0'), 2);
+  assert.equal(nodeVersionExitCode('v20.0.0'), 0);
 });

@@ -14,8 +14,9 @@ function walk(dir, out) {
   let entries = [];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
+  } catch (err) {
+    if (err.code === 'ENOENT') return out;
+    throw err;
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -44,6 +45,11 @@ export function supportsTestConcurrency(version = process.versions.node) {
   return major > 20 || (major === 20 && minor >= 10);
 }
 
+export function nodeVersionExitCode(version = process.versions.node) {
+  const major = Number(version.replace(/^v/, '').split('.')[0]);
+  return Number.isInteger(major) && major >= 20 ? 0 : 2;
+}
+
 function main(argv) {
   const requested = argv[0];
   if (requested && !KINDS.includes(requested)) {
@@ -64,4 +70,11 @@ function main(argv) {
 }
 
 const invokedDirectly = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
-if (invokedDirectly) process.exit(main(process.argv.slice(2)));
+if (invokedDirectly) {
+  const versionExitCode = nodeVersionExitCode();
+  if (versionExitCode !== 0) {
+    process.stderr.write(`opc: Node >= 20 é necessário (atual: ${process.version})\n`);
+    process.exit(versionExitCode);
+  }
+  process.exit(main(process.argv.slice(2)));
+}

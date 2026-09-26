@@ -37,15 +37,37 @@ function registry(t) {
     reg = { stoppers: [], envs: [], workspaces: [], dirs: [] };
     cleanups.set(t, reg);
     t.after(async () => {
-      for (const stop of [...reg.stoppers].reverse()) await Promise.resolve().then(stop).catch(() => {});
+      const errors = [];
+      for (const stop of [...reg.stoppers].reverse()) {
+        try {
+          await stop();
+        } catch (err) {
+          errors.push(err);
+        }
+      }
       if (fs.existsSync(COMPANION)) {
         for (const env of reg.envs) {
           for (const ws of reg.workspaces) {
-            if (fs.existsSync(ws)) await stopAllServers(env, ws).catch(() => {});
+            if (!fs.existsSync(ws)) continue;
+            try {
+              const result = await stopAllServers(env, ws);
+              if (result.code !== 0) {
+                errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
+              }
+            } catch (err) {
+              errors.push(err);
+            }
           }
         }
       }
-      for (const dir of reg.dirs) removeTempDir(dir);
+      for (const dir of reg.dirs) {
+        try {
+          removeTempDir(dir);
+        } catch (err) {
+          errors.push(err);
+        }
+      }
+      if (errors.length) throw new AggregateError(errors, `test cleanup failed:\n${errors.map((err) => err?.stack ?? String(err)).join('\n')}`);
     });
   }
   return reg;
@@ -154,10 +176,17 @@ export function parseJsonOutput(stdout) {
 }
 
 export function readFakeState(env) {
+  let content;
   try {
-    return JSON.parse(fs.readFileSync(env.FAKE_OPENCODE_STATE, 'utf8'));
-  } catch {
+    content = fs.readFileSync(env.FAKE_OPENCODE_STATE, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw new Error(`failed to read fake state file ${env.FAKE_OPENCODE_STATE}: ${err.message}`, { cause: err });
     return { requests: [], sessions: {}, messages: {}, permissions: {}, questions: {}, signals: [], sseConnections: 0, bootAttempts: 0, boots: [] };
+  }
+  try {
+    return JSON.parse(content);
+  } catch (err) {
+    throw new Error(`failed to parse fake state file ${env.FAKE_OPENCODE_STATE}: ${err.message}`, { cause: err });
   }
 }
 
@@ -187,11 +216,11 @@ export function processAlive(pid) {
 }
 
 export async function waitFor(predicate, { timeoutMs = 10000, intervalMs = 50, message = 'condition' } = {}) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   for (;;) {
     const value = await predicate();
     if (value) return value;
-    if (Date.now() > deadline) throw new Error(`waitFor timed out: ${message}`);
+    if (performance.now() > deadline) throw new Error(`waitFor timed out: ${message}`);
     await sleep(intervalMs);
   }
 }
