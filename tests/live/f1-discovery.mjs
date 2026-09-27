@@ -2,10 +2,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runCli, stopAllServers, REPO_ROOT } from '../helpers.mjs';
+import { makeTempDir, trackTempDir, trackEnv, trackWorkspace, runCli, REPO_ROOT } from '../helpers.mjs';
+import { createContext, connectApi } from '../../plugins/opc/scripts/lib/context.mjs';
 
 const source = fs.readFileSync(new URL(import.meta.url), 'utf8');
 
@@ -17,22 +17,36 @@ test('F1 live regression: raw JSON output file is private', () => {
   assert.ok(source.includes("fs.writeFileSync(file, outputs.join('\\n'), { mode: 0o600 });"));
 });
 
+test('F1 live regression: agents compares the CLI subset and raw server API sets', () => {
+  assert.doesNotMatch(source, /for \(const name of ours\)/);
+  assert.doesNotMatch(source, /json\(\['agents', '--json'\]\)/);
+  assert.match(source, /connectApi\(ctx\)/);
+  assert.match(source, /api\.agents\(\)/);
+  assert.match(source, /agents', '--verbose', '--json'/);
+  assert.match(source, /opencodeNames/);
+  assert.match(source, /serverAgents/);
+  assert.match(source, /new Set\(/);
+});
+
+test('F1 live regression: agent assertion diagnostics do not expose full names', () => {
+  const block = source.match(/test\('live: \/opc:agents[\s\S]*?\n\}\);/);
+  assert.ok(block, 'live agents test exists');
+  assert.doesNotMatch(block[0], /agents?: \$\{[^}]*\.join\(/);
+  assert.match(block[0], /count|length/);
+});
+
 const LIVE = process.env.OPC_LIVE === '1';
 const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/kimi-k3';
 const WORLD_PROVIDER = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [WORLD_PROVIDER] }, agents: { allow: [], deny: ['work-*'] } } };
 
 function liveEnv(t) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-live-f1-data-'));
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-live-f1-ws-'));
+  const dataDir = trackTempDir(t, makeTempDir('opc-live-f1-data-'));
+  const ws = trackTempDir(t, makeTempDir('opc-live-f1-ws-'));
+  trackWorkspace(t, ws);
   fs.writeFileSync(path.join(ws, 'README.md'), '# live f1\n');
-  const env = { ...process.env, OPC_DATA_DIR: dataDir };
+  const env = trackEnv(t, { ...process.env, OPC_DATA_DIR: dataDir });
   delete env.OPC_SERVER_URL;
-  t.after(async () => {
-    await stopAllServers(env, ws);
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    fs.rmSync(ws, { recursive: true, force: true });
-  });
   const cli = async (args, opts = {}) => runCli(args, { env, cwd: ws, timeoutMs: 180000, ...opts });
   const json = async (args) => {
     const r = await cli(args);
@@ -65,16 +79,25 @@ test('live: /opc:models --all matches `opencode models` per provider', { skip: !
   }
 });
 
-test('live: /opc:agents matches `opencode agent list`', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
-  const { ws, json } = liveEnv(t);
+test('live: /opc:agents matches the server API and includes the CLI agent subset', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+  const { ws, env, json } = liveEnv(t);
   const listing = opencode(['agent', 'list'], { cwd: ws });
   assert.equal(listing.code, 0, listing.stderr);
-  const ours = (await json(['agents', '--json'])).agents.map((a) => a.name);
-  assert.ok(ours.length > 0);
-  for (const name of ours) {
-    assert.match(listing.stdout, new RegExp(`(^|\\W)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\W|$)`, 'm'), `agent ${name} in opencode agent list`);
-  }
-  t.diagnostic(`agents: ${ours.join(', ')}`);
+  const opencodeNames = new Set(listing.stdout.split('\n').map((line) => line.trim()).filter((line) => /^[\w-]+(?:\s|$)/.test(line)).map((line) => line.split(/\s+/)[0]));
+  const ctx = await createContext({ argv: [], env, cwd: ws, createDataDir: true });
+  const { api } = await connectApi(ctx);
+  const serverAgents = await api.agents();
+  const listed = (await json(['agents', '--verbose', '--json'])).agents;
+  const listedByName = new Map(listed.map((agent) => [agent.name, agent]));
+  const rawByName = new Map(serverAgents.map((agent) => [agent.name, agent]));
+  const missingFromOpc = [...opencodeNames].filter((name) => !listedByName.has(name));
+  const namesMatch = listedByName.size === rawByName.size && [...rawByName.keys()].every((name) => listedByName.has(name));
+  const modesMatch = [...rawByName].every(([name, agent]) => listedByName.get(name)?.mode === agent.mode);
+  const examples = (names) => names.slice(0, 3).map((name) => `${String(name).slice(0, 32)}${String(name).length > 32 ? '…' : ''}`).join(', ');
+  assert.equal(missingFromOpc.length, 0, `CLI agents missing from opc: count=${missingFromOpc.length}${missingFromOpc.length ? ` examples=${examples(missingFromOpc)}` : ''}`);
+  assert.ok(namesMatch, `/opc:agents names differ from server API: opc=${listedByName.size} api=${rawByName.size}`);
+  assert.ok(modesMatch, `/opc:agents modes differ from server API: opc=${listedByName.size} api=${rawByName.size}`);
+  t.diagnostic(`agents: opc=${listedByName.size} api=${rawByName.size} cli=${opencodeNames.size}`);
 });
 
 test('live: world policy hides omniroute-work/* and work-* and refuses explicit use', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
