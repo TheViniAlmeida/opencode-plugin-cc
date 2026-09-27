@@ -5,7 +5,22 @@
   },
   "agent": [
     {
-      "*": "mixed"
+      "*": "mixed",
+      "color": "null",
+      "description": "string",
+      "hidden": "null",
+      "mode": "string",
+      "name": "string",
+      "options": {},
+      "permission": [
+        {
+          "*": "string"
+        }
+      ],
+      "prompt": "null",
+      "steps": "null",
+      "temperature": "null",
+      "variant": "null"
     }
   ],
   "config": {
