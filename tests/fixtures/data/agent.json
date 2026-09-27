@@ -1,5 +1,5 @@
 [
-  {"name":"build","description":"The default agent. Executes tools based on configured permissions.","mode":"primary","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"build","description":"The default agent. Executes tools based on configured permissions.","mode":"primary","native":true,"color":"#888888","steps":12,"temperature":0.2,"topP":0.9,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
   {"name":"plan","description":"Plan mode. Disallows all edit tools.","mode":"primary","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"},{"permission":"edit","pattern":"*","action":"deny"}],"options":{}},
   {"name":"general","description":"General-purpose agent for researching complex questions and executing multi-step tasks.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
   {"name":"explore","description":"Fast agent specialized for exploring codebases.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},

@@ -95,6 +95,118 @@
   "question": [
     "empty"
   ],
+  "provider": {
+    "all": [
+      {
+        "env": [
+          "string"
+        ],
+        "id": "string",
+        "models": {
+          "*": {
+            "api": {
+              "id": "string",
+              "npm": "string",
+              "url": "string"
+            },
+            "capabilities": {
+              "attachment": "boolean",
+              "input": {
+                "audio": "boolean",
+                "image": "boolean",
+                "pdf": "boolean",
+                "text": "boolean",
+                "video": "boolean"
+              },
+              "interleaved": "mixed",
+              "output": {
+                "audio": "boolean",
+                "image": "boolean",
+                "pdf": "boolean",
+                "text": "boolean",
+                "video": "boolean"
+              },
+              "reasoning": "boolean",
+              "temperature": "boolean",
+              "toolcall": "boolean"
+            },
+            "cost": {
+              "cache": {
+                "read": "number",
+                "write": "number"
+              },
+              "input": "number",
+              "output": "number",
+              "tiers": [
+                {
+                  "cache": {
+                    "read": "number",
+                    "write": "number"
+                  },
+                  "input": "number",
+                  "output": "number",
+                  "tier": {
+                    "size": "number",
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "family": "string",
+            "headers": {
+              "*": "empty"
+            },
+            "id": "string",
+            "limit": {
+              "context": "number",
+              "input": "number",
+              "output": "number"
+            },
+            "name": "string",
+            "options": {
+              "*": "empty"
+            },
+            "providerID": "string",
+            "release_date": "string",
+            "status": "string",
+            "variants": {
+              "*": "mixed"
+            }
+          }
+        },
+        "name": "string",
+        "options": {
+          "*": "empty"
+        },
+        "source": "string"
+      }
+    ],
+    "connected": [
+      "string"
+    ],
+    "default": {
+      "*": "string"
+    }
+  },
+  "command": [
+    {
+      "description": "string",
+      "hints": [
+        "string"
+      ],
+      "name": "string",
+      "source": "string",
+      "template": "string"
+    }
+  ],
+  "skill": [
+    {
+      "content": "string",
+      "description": "string",
+      "location": "string",
+      "name": "string"
+    }
+  ],
   "event:server.connected": {
     "id": "string",
     "properties": {},
