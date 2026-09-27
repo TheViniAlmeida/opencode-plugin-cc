@@ -7,6 +7,16 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runCli, stopAllServers, REPO_ROOT } from '../helpers.mjs';
 
+const source = fs.readFileSync(new URL(import.meta.url), 'utf8');
+
+test('F1 live regression: scanner receives the test OPC_DATA_DIR', () => {
+  assert.match(source, /spawnSync\(process\.execPath, \[path\.join\(REPO_ROOT, 'scripts', 'scan-secrets\.mjs'\), file\], \{[^}]*env: \{ \.\.\.process\.env, OPC_DATA_DIR: dataDir \}/s);
+});
+
+test('F1 live regression: raw JSON output file is private', () => {
+  assert.ok(source.includes("fs.writeFileSync(file, outputs.join('\\n'), { mode: 0o600 });"));
+});
+
 const LIVE = process.env.OPC_LIVE === '1';
 const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/kimi-k3';
 const WORLD_PROVIDER = 'omniroute-work';
@@ -158,7 +168,10 @@ test('live: JSON output of providers/models never carries provider credentials',
     walk(JSON.parse(r.stdout));
   }
   const file = path.join(dataDir, 'live-f1-outputs.json');
-  fs.writeFileSync(file, outputs.join('\n'));
-  const scan = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'scan-secrets.mjs'), file], { encoding: 'utf8' });
+  fs.writeFileSync(file, outputs.join('\n'), { mode: 0o600 });
+  const scan = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'scan-secrets.mjs'), file], {
+    encoding: 'utf8',
+    env: { ...process.env, OPC_DATA_DIR: dataDir },
+  });
   assert.equal(scan.status, 0, scan.stdout + scan.stderr);
 });
