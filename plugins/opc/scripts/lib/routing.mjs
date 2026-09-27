@@ -90,7 +90,7 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
     }
   }
   if (candidates.length === 0) {
-    const where = source === 'tier' ? `routing.tiers.${flags.tier}` : `routing.tasks.${kind}`;
+    const where = source === 'tier' ? `routing.tiers.${echo(flags.tier)}` : `routing.tasks.${kind}`;
     const message = `nenhum modelo utilizável em ${where}:\n- ${problems.join('\n- ')}`;
     if (denied === values.length) throw new PolicyError('POLICY_DENIED', message);
     throw new UsageError('NO_VALID_CANDIDATE', message);

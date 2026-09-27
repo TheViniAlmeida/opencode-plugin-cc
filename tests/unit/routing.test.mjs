@@ -105,6 +105,14 @@ test('routing messages are PT-BR and truncate echoed user values', () => {
     assert.match(e.message, /routing\.tiers\.tier-abcdefg… não está configurado/);
     return true;
   });
+  const longTier = 'tier-abcdefghijk';
+  const invalidTierConfig = { ...baseConfig, routing: { ...baseConfig.routing, tiers: { ...baseConfig.routing.tiers, [longTier]: ['ghost'] } } };
+  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: longTier }, config: invalidTierConfig, catalog }), (e) => {
+    assert.equal(e.code, 'NO_VALID_CANDIDATE');
+    assert.match(e.message, /routing\.tiers\.tier-abcdefg…/);
+    assert.ok(!e.message.includes(longTier));
+    return true;
+  });
   assert.throws(() => validateSelection({ candidate: { full: FLASH }, agentName: 'agent-abcdefghijkl', agents: [], catalog }), (e) => {
     assert.equal(e.code, 'UNKNOWN_AGENT');
     assert.match(e.message, /agente desconhecido "agent-abcdef…"/);
