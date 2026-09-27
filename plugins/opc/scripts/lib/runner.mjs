@@ -146,6 +146,14 @@ async function applyPermissionPatch(api, sessionID, rules) {
   }
 }
 
+function serverLostResult(sessionID, messageID) {
+  return {
+    sessionID, messageID, childSessionIDs: [], status: 'failed', errorClass: 'fatal', errorType: 'ServerLost', errorCode: 'server_lost',
+    errorMessage: `Servidor OpenCode desconectado durante o turno; sessão ${displayValue(sessionID)} preservada. Continue com --resume <valor>`,
+    finalText: '', structured: null, error: null, touchedFiles: [], toolsRan: false, usage: null,
+  };
+}
+
 async function waitIdle(api, sessionID, maxMs) {
   const deadline = performance.now() + maxMs;
   while (performance.now() < deadline) {
@@ -192,11 +200,16 @@ export async function runTurn({
   };
 
   let sessionID = request.sessionID ?? null;
-  if (sessionID) {
-    if (request.patchPermission) await applyPermissionPatch(api, sessionID, request.patchPermission);
-  } else {
-    const created = await api.createSession(request.newSession ?? {});
-    sessionID = created.id;
+  try {
+    if (sessionID) {
+      if (request.patchPermission) await applyPermissionPatch(api, sessionID, request.patchPermission);
+    } else {
+      const created = await api.createSession(request.newSession ?? {});
+      sessionID = created.id;
+    }
+  } catch (err) {
+    if (isServerDown(err)) return serverLostResult(sessionID, messageID);
+    throw err;
   }
   progress({ phase: 'starting', sessionID, message: `Sessão ${displayValue(sessionID)}` });
 
@@ -235,39 +248,53 @@ export async function runTurn({
     progress({ phase, message });
   };
 
-  const addChild = (childID) => {
+  const addChild = async (childID) => {
     if (!childID || tracked.has(childID)) return;
     tracked.add(childID);
     children.add(childID);
     lastPhase = 'subagent';
     progress({ phase: 'subagent', childSessionID: childID, message: `Sessão filha ${displayValue(childID)}` });
     if (request.childPermission) {
-      api.patchSession(childID, { permission: request.childPermission }).catch((err) => {
-        progress({ message: `Não foi possível aplicar regras à sessão filha ${displayValue(childID)}: ${displayValue(err.message)}` });
-      });
+      try {
+        await applyPermissionPatch(api, childID, request.childPermission);
+      } catch (err) {
+        finish('child-permission-failed', { detail: err });
+      }
     }
   };
 
   const handlePermission = async (req) => {
     if (!req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
-    seenRequests.add(req.id);
     progress({ message: `Permissão solicitada (${displayValue(req.id)}): ${displayValue(req.permission)} ${(req.patterns ?? []).map(displayValue).join(' ')}`.trim() });
-    await onPermission(req);
+    try {
+      await onPermission(req);
+      seenRequests.add(req.id);
+    } catch (err) {
+      finish('callback-failed', { detail: err });
+    }
   };
   const handleQuestion = async (req) => {
     if (!req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
-    seenRequests.add(req.id);
     progress({ message: `Pergunta solicitada (${displayValue(req.id)}): ${(req.questions ?? []).map((q) => displayValue(q.header ?? q.question)).join(' | ')}` });
-    await onQuestion(req);
+    try {
+      await onQuestion(req);
+      seenRequests.add(req.id);
+    } catch (err) {
+      finish('callback-failed', { detail: err });
+    }
   };
 
   const checkFinished = async () => {
     if (settled) return;
     const messages = await api.messages(sessionID, { limit: 200 });
     const turn = turnMessages(messages, messageID);
-    const last = turn.at(-1);
-    if (last && (last.info?.time?.completed || last.info?.error)) return finish('idle');
-    if (sawBusy) return finish('idle');
+    if (turn.some((m) => m.info?.role === 'assistant' && m.info?.parentID === messageID && m.info?.time?.completed)) return finish('idle');
+    if (sawBusy) {
+      const resynced = await api.messages(sessionID, { limit: 200 });
+      const recovered = turnMessages(resynced, messageID);
+      if (recovered.some((m) => m.info?.role === 'assistant' && m.info?.parentID === messageID && m.info?.time?.completed)) return finish('idle');
+      return finish('no-assistant-message');
+    }
     // idle before any activity of this turn: stale status, keep waiting
   };
 
@@ -277,7 +304,7 @@ export async function runTurn({
       const props = event.properties ?? {};
       switch (event.type) {
         case 'session.created':
-          if (props.info?.parentID && tracked.has(props.info.parentID)) addChild(props.info.id ?? props.sessionID);
+          if (props.info?.parentID && tracked.has(props.info.parentID)) await addChild(props.info.id ?? props.sessionID);
           return;
         case 'session.status': {
           if (props.sessionID !== sessionID) return;
@@ -287,13 +314,7 @@ export async function runTurn({
             if (lastPhase === 'starting') setPhase('running');
           } else if (status.type === 'retry') {
             sawBusy = true;
-            lastPhase = 'retrying';
-            progress({ phase: 'retrying', message: `Nova tentativa (${displayValue(status.attempt)}): ${displayValue(status.message ?? '')}`.trim() });
-            if (!forcedError && retryExceedsCap(status, request.fallbackCfg ?? {})) {
-              forcedError = { name: 'RetryCapExceeded', data: { message: 'Limite de tentativas do provedor excedido' } };
-              progress({ message: 'Interrompendo sessão: limite de tentativas excedido' });
-              await api.abort(sessionID);
-            }
+            await handleRetryStatus(status);
           } else if (status.type === 'idle') {
             await checkFinished();
           }
@@ -355,11 +376,23 @@ export async function runTurn({
     if (settled) return;
     const statuses = await api.sessionStatus();
     const own = statuses?.[sessionID];
-    if (own && own.type !== 'idle') sawBusy = true;
-    for (const child of (await api.children(sessionID)) ?? []) addChild(child?.id);
+    if (own?.type === 'busy') sawBusy = true;
+    if (own?.type === 'retry') await handleRetryStatus(own);
+    for (const child of (await api.children(sessionID)) ?? []) await addChild(child?.id);
     for (const req of (await api.listPermissions()) ?? []) await handlePermission(req);
     for (const req of (await api.listQuestions()) ?? []) await handleQuestion(req);
     if (!own || own.type === 'idle') await checkFinished();
+  };
+
+  const handleRetryStatus = async (status) => {
+    lastPhase = 'retrying';
+    progress({ phase: 'retrying', message: `Nova tentativa (${displayValue(status.attempt)}): ${displayValue(status.message ?? '')}`.trim() });
+    if (!forcedError && retryExceedsCap(status, request.fallbackCfg ?? {})) {
+      forcedError = { name: 'RetryCapExceeded', data: { message: 'Limite de tentativas do provedor excedido' } };
+      progress({ message: 'Interrompendo sessão: limite de tentativas excedido' });
+      await api.abort(sessionID);
+      finish('forced-error');
+    }
   };
 
   const untrack = hub.track(sessionID, onEvent);
@@ -372,7 +405,7 @@ export async function runTurn({
 
   try {
     try {
-      await sendPrompt(api, sessionID, buildBody(request, messageID));
+      if (!signal?.aborted) await sendPrompt(api, sessionID, buildBody(request, messageID));
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
       else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada' } } });
@@ -393,20 +426,7 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, childSessionIDs: [...children] };
-    const serverLost = () => ({
-      ...base,
-      status: 'failed',
-      errorClass: 'fatal',
-      errorType: 'ServerLost',
-      errorCode: 'server_lost',
-      errorMessage: `Servidor OpenCode desconectado durante o turno; sessão ${displayValue(sessionID)} preservada. Continue com --resume <valor>`,
-      finalText: '',
-      structured: null,
-      error: null,
-      touchedFiles: [],
-      toolsRan: toolsRanLive,
-      usage: null,
-    });
+    const serverLost = () => ({ ...serverLostResult(sessionID, messageID), ...base, toolsRan: toolsRanLive });
     if (outcome.reason === 'server-lost') return serverLost();
     if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
       try {
@@ -434,6 +454,19 @@ export async function runTurn({
     }
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };
+    if (outcome.reason === 'no-assistant-message') {
+      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'NoAssistantMessage', errorCode: 'NO_ASSISTANT_MESSAGE', errorMessage: 'A sessão ficou idle sem uma mensagem assistant concluída para este turno.' };
+    }
+    if (outcome.reason === 'callback-failed') {
+      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'CallbackFailed', errorCode: 'CALLBACK_FAILED', errorMessage: `O callback do turno falhou: ${displayValue(outcome.detail?.message)}` };
+    }
+    if (outcome.reason === 'child-permission-failed') {
+      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'ChildPermissionFailed', errorCode: 'CHILD_PERMISSION_FAILED', errorMessage: `Não foi possível aplicar as regras de permissão à sessão filha: ${displayValue(outcome.detail?.message)}` };
+    }
+    if (outcome.reason === 'forced-error' && forcedError) {
+      const classified = classifyError(forcedError, { toolsRan });
+      return { ...result, status: 'failed', error: forcedError, errorClass: classified.errorClass, errorType: classified.errorType, errorMessage: classified.message, errorCode: ERROR_CODES[classified.errorType] ?? 'model_error' };
+    }
     if (outcome.reason === 'cancelled') {
       return { ...result, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
     }

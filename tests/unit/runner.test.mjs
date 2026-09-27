@@ -109,6 +109,18 @@ test('stale idle before any activity is ignored', async () => {
   assert.equal(r.finalText, 'late');
 });
 
+test('idle after busy without this turn completed assistant message fails clearly', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid) => {
+    api.store[sid].push(assistant(sid, 'msg_prior_turn', { text: 'stale answer' }));
+    setStatus(hub, api, sid, { type: 'busy' });
+    setStatus(hub, api, sid, { type: 'idle' });
+  } });
+  const r = await runTurn({ api, hub, request: baseRequest() });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'NO_ASSISTANT_MESSAGE');
+});
+
 test('session.error ends the turn with the received error', async () => {
   const hub = stubHub();
   const api = stubApi({ hub, onPrompt: (sid) => {
@@ -159,6 +171,50 @@ test('abort signal cancels the turn', async () => {
   const api = stubApi({ hub, onPrompt: (sid) => { setStatus(hub, api, sid, { type: 'busy' }); setTimeout(() => controller.abort(), 30); } });
   const r = await runTurn({ api, hub, request: baseRequest(), signal: controller.signal });
   assert.equal(r.status, 'cancelled');
+  assert.ok(api.calls.some((c) => c[0] === 'abort'));
+});
+
+test('already aborted signal cancels before prompt_async', async () => {
+  const hub = stubHub();
+  const controller = new AbortController();
+  controller.abort();
+  const api = stubApi({ hub });
+  const r = await runTurn({ api, hub, request: baseRequest(), signal: controller.signal });
+  assert.equal(r.status, 'cancelled');
+  assert.ok(!api.calls.some((c) => c[0] === 'promptAsync'));
+});
+
+test('SERVER_DOWN during session creation is returned as server_lost', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub });
+  api.createSession = async () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
+  const r = await runTurn({ api, hub, request: baseRequest() });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'server_lost');
+  assert.equal(r.sessionID, null);
+});
+
+test('SERVER_DOWN during resume permission patch is returned as server_lost', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub });
+  api.patchSession = async () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
+  const r = await runTurn({ api, hub, request: baseRequest({ newSession: undefined, sessionID: 'ses_old', patchPermission: [{ permission: '*', pattern: '*', action: 'deny' }] }) });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'server_lost');
+  assert.equal(r.sessionID, 'ses_old');
+});
+
+test('retry recovered by resync still enforces retry cap', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid) => {
+    api.statusMap[sid] = { type: 'retry', attempt: 4, message: '429' };
+  } });
+  const phases = [];
+  const r = await runTurn({ api, hub, request: baseRequest({ fallbackCfg: { maxProviderRetries: 3, maxRetryWaitSec: 60 } }), onProgress: (e) => e.phase && phases.push(e.phase) });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorType, 'RetryCapExceeded');
+  assert.equal(r.errorClass, 'recoverable');
+  assert.ok(phases.includes('retrying'));
   assert.ok(api.calls.some((c) => c[0] === 'abort'));
 });
 
@@ -234,6 +290,45 @@ test('permissions/questions from session and child reach callbacks; resync recov
   assert.deepEqual(resolved, ['per_1']);
   assert.deepEqual(r.childSessionIDs, ['ses_child']);
   assert.ok(api.calls.some((c) => c[0] === 'patchSession' && c[1] === 'ses_child'));
+  assert.deepEqual(api.calls.find((c) => c[0] === 'patchSession' && c[1] === 'ses_child')[2].permission, [{ permission: 'bash', pattern: 'rm -rf*', action: 'ask' }]);
+});
+
+test('child permission patch failure fails the turn', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid, body) => {
+    setStatus(hub, api, sid, { type: 'busy' });
+    hub.emit({ type: 'session.created', properties: { sessionID: 'ses_child', info: { id: 'ses_child', parentID: sid } } });
+    setTimeout(() => completeTurn(hub, api, sid, body), 20);
+  } });
+  api.patchSession = async (id, body) => {
+    api.calls.push(['patchSession', id, body]);
+    return { id, permission: [] };
+  };
+  const r = await runTurn({ api, hub, request: baseRequest({ childPermission: [{ permission: 'bash', pattern: '*', action: 'ask' }] }) });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'CHILD_PERMISSION_FAILED');
+});
+
+test('permission callback failure fails instead of only reporting progress', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid) => {
+    setStatus(hub, api, sid, { type: 'busy' });
+    hub.emit({ type: 'permission.asked', properties: { id: 'per_throw', sessionID: sid, permission: 'bash', patterns: [] } });
+  } });
+  const r = await runTurn({ api, hub, request: baseRequest(), onPermission: async () => { throw new Error('callback broke'); } });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'CALLBACK_FAILED');
+});
+
+test('question callback failure fails instead of only reporting progress', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid) => {
+    setStatus(hub, api, sid, { type: 'busy' });
+    hub.emit({ type: 'question.asked', properties: { id: 'que_throw', sessionID: sid, questions: [] } });
+  } });
+  const r = await runTurn({ api, hub, request: baseRequest(), onQuestion: async () => { throw new Error('callback broke'); } });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.errorCode, 'CALLBACK_FAILED');
 });
 
 test('resume with patchPermission verifies the returned rules', async () => {
