@@ -6,7 +6,16 @@ const MAX_MESSAGE_CHARS = 2000;
 function messageOf(error) {
   let raw;
   if (typeof error === 'string') raw = error;
-  else raw = error?.data?.message ?? error?.message ?? JSON.stringify(error ?? null);
+  else {
+    raw = error?.data?.message ?? error?.message;
+    if (raw === undefined || raw === null) {
+      try {
+        raw = JSON.stringify(error ?? null);
+      } catch {
+        raw = error?.code ?? error?.name ?? 'erro desconhecido';
+      }
+    }
+  }
   const text = redactText(String(raw));
   return text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text;
 }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyError, retryExceedsCap } from '../../plugins/opc/scripts/lib/errors.mjs';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 const cases = [
   [{ name: 'APIError', data: { message: '429', isRetryable: true, statusCode: 429 } }, {}, 'recoverable'],
@@ -36,6 +37,28 @@ test('classifyError tolerates missing name and huge messages', () => {
   assert.equal(classifyError(null).errorClass, 'fatal');
   const r = classifyError({ name: 'UnknownError', data: { message: 'x'.repeat(5000) } });
   assert.ok(r.message.length <= 2001);
+});
+
+test('classifyError safely describes circular unknown errors', () => {
+  const error = { name: 'UnknownError', code: 'E_UNKNOWN' };
+  error.self = error;
+
+  assert.deepEqual(classifyError(error), {
+    errorClass: 'fatal',
+    errorType: 'UnknownError',
+    message: 'E_UNKNOWN',
+  });
+});
+
+test('classifyError redacts registered secrets and preserves the expected message', () => {
+  const secret = 'opc-test-secret-value';
+  registerSecret(secret);
+
+  const result = classifyError({ name: 'UnknownError', message: `request failed with ${secret}` });
+
+  assert.equal(result.message, 'request failed with ***');
+  assert.ok(result.message.includes('***'));
+  assert.ok(!result.message.includes(secret));
 });
 
 test('retryExceedsCap: attempt above max or wait above max', () => {
