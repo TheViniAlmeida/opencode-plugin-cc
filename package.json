@@ -1,0 +1,18 @@
+{
+  "name": "opencode-plugin-cc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plugin Claude Code que usa o OpenCode como executor (opc).",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node scripts/run-tests.mjs",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "test:live": "node scripts/run-tests.mjs live",
+    "scan-secrets": "node scripts/scan-secrets.mjs docs README.md CHANGELOG.md plugins"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "opencode-plugin-cc",
+  "owner": {
+    "name": "TheViniAlmeida"
+  },
+  "metadata": {
+    "description": "Plugins Claude Code para usar o OpenCode: delegação, review, sessões e consulta a vários modelos.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "opc",
+      "description": "Use o OpenCode a partir do Claude Code: servidor gerenciado por workspace, providers, modelos, agentes e permissões.",
+      "version": "0.1.0",
+      "author": {
+        "name": "TheViniAlmeida"
+      },
+      "source": "./plugins/opc"
+    }
+  ]
+}

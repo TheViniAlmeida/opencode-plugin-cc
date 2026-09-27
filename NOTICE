@@ -1,0 +1,14 @@
+opc — plugin Claude Code para o OpenCode
+Copyright 2026 TheViniAlmeida
+
+Este produto é distribuído sob a Apache License, Version 2.0 (arquivo LICENSE).
+
+Este produto inclui trabalho derivado de openai/codex-plugin-cc
+(https://github.com/openai/codex-plugin-cc), Copyright 2026 OpenAI,
+licenciado sob a Apache License, Version 2.0: estrutura de comandos, schema de
+review, prompts adaptados e a coleta de diff (git.mjs). Os arquivos derivados
+trazem no cabeçalho o aviso "Adapted from openai/codex-plugin-cc (Apache-2.0);
+modified".
+
+As capacidades inspiradas em apoapps/swarm-code-plugin foram reimplementadas do
+zero; nenhum código ou texto desse projeto foi copiado.
