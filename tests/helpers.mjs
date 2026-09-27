@@ -324,3 +324,76 @@ export function createServerCleanup(dir, { stop = stopServer } = {}) {
   };
   return cleanup;
 }
+
+// ---- F1 additions (aliased imports so they never collide with F0's) ----
+import { PassThrough as F1PassThrough, Writable as F1Writable } from 'node:stream';
+import * as fsF1 from 'node:fs';
+import * as pathF1 from 'node:path';
+import { pathToFileURL as pathToFileURLF1 } from 'node:url';
+
+export function scriptedTTY(lines) {
+  const input = new F1PassThrough();
+  input.isTTY = true;
+  input.end(lines.map((line) => `${line}\n`).join(''));
+  return input;
+}
+
+export function pipedStdin(text = '') {
+  const input = new F1PassThrough();
+  input.isTTY = false;
+  input.end(text);
+  return input;
+}
+
+export function captureStream({ isTTY = false } = {}) {
+  const chunks = [];
+  const stream = new F1Writable({ write(chunk, _enc, cb) { chunks.push(String(chunk)); cb(); } });
+  stream.isTTY = isTTY;
+  stream.text = () => chunks.join('');
+  return stream;
+}
+
+export function fixtureData(name) {
+  return JSON.parse(fsF1.readFileSync(pathF1.join(REPO_ROOT, 'tests', 'fixtures', 'data', name), 'utf8'));
+}
+
+// Canonical writer of <OPC_DATA_DIR>/config.json for every phase (mode 600) → file path.
+export function writeGlobalConfig(env, cfg) {
+  fsF1.mkdirSync(env.OPC_DATA_DIR, { recursive: true, mode: 0o700 });
+  const file = pathF1.join(env.OPC_DATA_DIR, 'config.json');
+  fsF1.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
+  fsF1.chmodSync(file, 0o600);
+  return file;
+}
+
+export function readGlobalConfig(env) {
+  const file = pathF1.join(env.OPC_DATA_DIR, 'config.json');
+  return fsF1.existsSync(file) ? JSON.parse(fsF1.readFileSync(file, 'utf8')) : null;
+}
+
+// Canonical writer of <ws>/.opc.json → file path.
+export function writeWorkspaceConfig(ws, cfg) {
+  const file = pathF1.join(ws, '.opc.json');
+  fsF1.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
+  return file;
+}
+
+export async function runInProcess(sub, argv, { env, cwd, stdin = pipedStdin('') }) {
+  const lib = (m) => pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'lib', m)).href;
+  const { createContext } = await import(lib('context.mjs'));
+  const { toExitCode } = await import(lib('opc-error.mjs'));
+  const { renderError } = await import(lib('render.mjs'));
+  const stdout = captureStream();
+  const stderr = captureStream();
+  let code;
+  try {
+    const ctx = await createContext({ argv, env, cwd, stdin, stdout, stderr });
+    const mod = await import(pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'commands', `${sub}.mjs`)).href);
+    code = await mod.run(ctx, argv);
+  } catch (err) {
+    stderr.write(renderError(err));
+    code = toExitCode(err);
+  }
+  return { code, stdout: stdout.text(), stderr: stderr.text() };
+}
+// ---- end F1 additions ----

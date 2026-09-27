@@ -1,49 +1,12 @@
 [
-  {
-    "name": "build",
-    "description": "The default agent. Executes tools based on configured permissions.",
-    "mode": "primary",
-    "native": true,
-    "permission": [
-      { "permission": "*", "pattern": "*", "action": "allow" },
-      { "permission": "doom_loop", "pattern": "*", "action": "ask" },
-      { "permission": "external_directory", "pattern": "*", "action": "ask" },
-      { "permission": "question", "pattern": "*", "action": "deny" },
-      { "permission": "read", "pattern": "*.env", "action": "ask" },
-      { "permission": "read", "pattern": "*.env.*", "action": "ask" }
-    ],
-    "options": {}
-  },
-  {
-    "name": "plan",
-    "description": "Plan mode. Disallows all edit tools.",
-    "mode": "primary",
-    "native": true,
-    "permission": [
-      { "permission": "*", "pattern": "*", "action": "allow" },
-      { "permission": "edit", "pattern": "*", "action": "deny" }
-    ],
-    "options": {}
-  },
-  {
-    "name": "general",
-    "description": "General-purpose agent for researching complex questions and executing multi-step tasks.",
-    "mode": "subagent",
-    "native": true,
-    "permission": [
-      { "permission": "*", "pattern": "*", "action": "allow" }
-    ],
-    "options": {}
-  },
-  {
-    "name": "explore",
-    "description": "Fast agent specialized for exploring codebases.",
-    "mode": "subagent",
-    "native": true,
-    "permission": [
-      { "permission": "*", "pattern": "*", "action": "allow" },
-      { "permission": "edit", "pattern": "*", "action": "deny" }
-    ],
-    "options": {}
-  }
+  {"name":"build","description":"The default agent. Executes tools based on configured permissions.","mode":"primary","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"plan","description":"Plan mode. Disallows all edit tools.","mode":"primary","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"},{"permission":"edit","pattern":"*","action":"deny"}],"options":{}},
+  {"name":"general","description":"General-purpose agent for researching complex questions and executing multi-step tasks.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"explore","description":"Fast agent specialized for exploring codebases.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"title","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"summary","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"compaction","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"docs-writer","description":"Writes and updates documentation in PT-BR.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"model":{"providerID":"omniroute-mvalmeida","modelID":"opencode-go/qwen3.8-max"},"variant":"high","prompt":"You write docs.","options":{}},
+  {"name":"work-deploy","description":"Work deploy helper.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
+  {"name":"work-reviewer","description":"Work code reviewer.","mode":"all","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}}
 ]

@@ -282,3 +282,27 @@ export async function startFake({
   }
   return fake;
 }
+
+// ---- F1: data-driven discovery routes (fixtures in tests/fixtures/data; scenarios override with `data`) ----
+// Scenario modules may export `data: { '<file>.json': value | (base) => value }` to override fixture responses.
+export function loadFixtureData(name, { dataDir = FIXTURE_DATA_DIR, scenario = null } = {}) {
+  const base = JSON.parse(fs.readFileSync(path.join(dataDir, name), 'utf8'));
+  const override = scenario?.data?.[name];
+  if (override === undefined) return base;
+  return typeof override === 'function' ? override(base) : override;
+}
+
+export const F1_DATA_ROUTES = Object.freeze({
+  'GET /provider': 'provider.json',
+  'GET /agent': 'agent.json',
+  'GET /command': 'command.json',
+  'GET /skill': 'skill.json',
+  'GET /config': 'config.json',
+});
+
+registerFakeExtension(() => Object.fromEntries(Object.entries(F1_DATA_ROUTES).map(([key, file]) => [key, (fake) => {
+  const data = loadFixtureData(file, { dataDir: fake.dataDir, scenario: fake.scenario });
+  // GET /config keeps the F0 contract: OPENCODE_CONFIG_CONTENT (configOverride) is merged over the file.
+  return { body: file === 'config.json' ? { ...data, ...fake.configOverride } : data };
+}])));
+// ---- end F1 ----

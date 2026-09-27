@@ -1,0 +1,4 @@
+[
+  {"name":"brainstorm","description":"Explore intent and design before building.","location":"/home/fixture/.config/opencode/skill/brainstorm/SKILL.md","content":"---\nname: brainstorm\n---\nAsk one question at a time."},
+  {"name":"release-notes","description":"Draft release notes from git log.","location":"/home/fixture/project/.opencode/skill/release-notes/SKILL.md","content":"---\nname: release-notes\n---\nSummarize commits."}
+]
