@@ -66,6 +66,7 @@ function renderStop(report) {
     lines.push(renderTable(['job', 'tipo', 'status', 'título'], report.activeJobs.map((j) => [j.id, j.kind, j.status, j.title ?? ''])));
     lines.push('Espere os jobs terminarem, cancele-os, ou use `--stop-server --force` com confirmação do usuário.');
   }
+  if (report.warnings?.length) lines.push('', 'Avisos:', ...report.warnings.map((warning) => `- ${warning}`));
   return lines;
 }
 

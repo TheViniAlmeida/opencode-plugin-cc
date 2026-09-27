@@ -116,7 +116,9 @@ async function cmdEdit(ctx, flags, op, rest) {
     const checked = validateAgainstServer(effective.config, deps);
     const own = checked.errors.filter(touches(key));
     if (own.length) throw new UsageError(own[0].code ?? 'INVALID_VALUE', own.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: own } });
-    const denied = policyViolations(effective.config, deps).filter(touches(key));
+    const before = mergeConfig(loaded.global ?? {}, loaded.workspace ?? {});
+    const existingViolations = new Set(policyViolations(before.config, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
+    const denied = policyViolations(effective.config, deps).filter((e) => !existingViolations.has(`${e.path}|${e.code}|${e.message}`));
     if (denied.length) throw new PolicyError('POLICY_DENIED', denied.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: denied } });
     for (const e of checked.errors.filter((x) => !touches(key)(x))) warnings.push({ path: e.path, code: e.code, message: e.message });
   } else {
@@ -152,7 +154,7 @@ async function cmdValidate(ctx, flags) {
     const source = details.path?.endsWith('.opc.json') ? 'workspace' : 'global';
     const errors = (details.errors?.length ? details.errors : [{ path: '', code: 'CONFIG_INVALID', message: err.message }])
       .map((e) => ({ source, ...e }));
-    emit(ctx, flags, { kind: 'validate', valid: false, errors, serverChecked: false }, renderConfig);
+    emit(ctx, flags, { kind: 'validate', valid: false, errors, warnings: [], serverChecked: false, serverError: null }, renderConfig);
     return 2;
   }
   const errors = [];

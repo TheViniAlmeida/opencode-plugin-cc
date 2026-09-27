@@ -142,6 +142,7 @@ async function stop(ctx, flags) {
   const report = {
     mode: 'stop',
     stop: result,
+    warnings: ctx.configWarnings ?? [],
     activeJobs: result.reason === 'active-jobs'
       ? listActiveJobs(ctx.stateDir).map((j) => ({ id: j.id, kind: j.kind, status: j.status, title: j.title ?? null }))
       : [],

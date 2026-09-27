@@ -52,7 +52,23 @@ test('validate renders structured errors for a config shape rejected during load
   assert.equal(view.kind, 'validate');
   assert.equal(view.valid, false);
   assert.equal(view.serverChecked, false);
+  assert.deepEqual(view.warnings, []);
   assert.ok(view.errors.some((e) => e.path === 'project.goal' && e.code === 'INVALID_VALUE'));
+  const text = await runInProcess('config', ['validate'], { env, cwd: ws });
+  assert.equal(text.code, 2);
+  assert.match(text.stdout, /project\.goal/);
+});
+
+test('setup --stop-server works with invalid config and reports the defaults fallback', async (t) => {
+  const { ws, env } = setup(t, { config: { project: { goal: 42 } } });
+  const r = await runInProcess('setup', ['--stop-server', '--json'], { env, cwd: ws });
+  assert.equal(r.code, 0, r.stderr);
+  const view = JSON.parse(r.stdout);
+  assert.equal(view.mode, 'stop');
+  assert.match(view.warnings?.join(' ') ?? '', /defaults/i);
+  const text = await runInProcess('setup', ['--stop-server'], { env, cwd: ws });
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /Avisos:[\s\S]*defaults/i);
 });
 
 test('unset of workspace override checks the resulting effective policy before writing', async (t) => {
@@ -185,7 +201,8 @@ test('locked keys are refused without a TTY (exit 4) and nothing is written', as
   let r = await cli(['config', 'set', 'policy.models.deny', 'x/*']);
   assert.equal(r.code, 4);
   assert.match(all(r), /LOCKED_KEY/);
-  assert.match(all(r), /opc config set policy\.models\.deny 'x\/\*' --tty-confirm/);
+  assert.match(all(r), /opc config set policy\.models\.deny '<valor>' --tty-confirm/);
+  assert.doesNotMatch(all(r), /'x\/\*'/);
   r = await cli(['config', 'set', 'policy.models.deny', 'x/*', '--tty-confirm']);
   assert.equal(r.code, 4);
   assert.match(all(r), /not a TTY/);

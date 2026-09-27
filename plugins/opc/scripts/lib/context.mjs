@@ -33,9 +33,15 @@ export async function createContext({
   } catch (err) {
     const args = argv.map(String);
     const validatingConfig = args[0] === 'validate' || (args[0] === 'config' && args[1] === 'validate');
-    if (err.code !== 'CONFIG_INVALID' || !validatingConfig) throw err;
+    const stoppingServer = args.includes('--stop-server') && (args[0] === 'setup' || args[0] === '--stop-server');
+    if (err.code !== 'CONFIG_INVALID' || (!validatingConfig && !stoppingServer)) throw err;
     // Let `config validate` render the structured CONFIG_INVALID details itself.
-    loaded = { config: DEFAULT_CONFIG, warnings: [], hasGlobal: false, workspace: null };
+    loaded = {
+      config: DEFAULT_CONFIG,
+      warnings: stoppingServer ? ['Config inválida; usando defaults para parar o servidor.'] : [],
+      hasGlobal: false,
+      workspace: null,
+    };
   }
   return {
     argv,
