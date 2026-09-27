@@ -4,8 +4,37 @@ import path from 'node:path';
 
 import { OpcError } from './opc-error.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
+import { matchesAny } from './models.mjs';
 
-export const DEFAULT_CONFIG = Object.freeze({
+// ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
+export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
+const MISSING = Symbol('missing');
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export function getPath(obj, dotted) {
+  let cur = obj;
+  for (const part of String(dotted).split('.')) {
+    if (!isObj(cur) || !(part in cur)) return undefined;
+    cur = cur[part];
+  }
+  return cur;
+}
+
+export function setPath(obj, dotted, value) {
+  const [head, ...rest] = String(dotted).split('.');
+  const base = isObj(obj) ? obj : {};
+  if (rest.length === 0) return { ...base, [head]: value };
+  return { ...base, [head]: setPath(base[head], rest.join('.'), value) };
+}
+
+export function matchesGlob(value, glob) {
+  const escaped = String(glob).split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp(`^${escaped}$`).test(String(value));
+}
+
+const freezeDeep = (o) => { Object.values(o).forEach((v) => v && typeof v === 'object' && freezeDeep(v)); return Object.freeze(o); };
+
+export const DEFAULT_CONFIG = freezeDeep({
   defaultProvider: null,
   defaultModel: null,
   defaultVariant: null,
@@ -25,11 +54,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     permissionTimeoutSec: 600,
   },
   permissionProfiles: {},
-  routing: {
-    tasks: {},
-    tiers: {},
-    fallback: { enabled: true, maxAttempts: 3, maxProviderRetries: 3, maxRetryWaitSec: 60 },
-  },
+  routing: { tasks: {}, tiers: {}, fallback: { enabled: true, maxAttempts: 3, maxProviderRetries: 3, maxRetryWaitSec: 60 } },
   conclave: { pools: {}, defaultPool: null, judge: 'claude', rounds: 1, quorum: 2, memberTimeoutSec: 900 },
   orchestrate: { planner: null, maxSubtasks: 5, synthesizer: 'claude' },
   delegation: { auto: false },
@@ -37,262 +62,255 @@ export const DEFAULT_CONFIG = Object.freeze({
   server: { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' } },
 });
 
-export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
+const schemaField = (type, extra = {}) => Object.freeze({ type, ...extra });
+const TASK_TYPES = ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'];
 
-const WORKSPACE_OVERRIDABLE = Object.freeze([
-  'defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel',
-  'routing', 'conclave', 'orchestrate', 'project', 'stopGate.model',
-]);
-const POLICY_LIST_KINDS = Object.freeze(['providers', 'models', 'agents']);
-const SECRET_KEY_RE = /token|password|secret|api[-_]?key/i;
-const MISSING = Symbol('missing');
+export const CONFIG_SCHEMA = Object.freeze({
+  defaultProvider: schemaField('string', { nullable: true }),
+  defaultModel: schemaField('model', { nullable: true }),
+  defaultVariant: schemaField('string', { nullable: true }),
+  defaultAgent: schemaField('string', { nullable: true }),
+  aliases: schemaField('model-map'),
+  reviewModel: schemaField('modelref', { nullable: true }),
+  'stopGate.enabled': schemaField('boolean'),
+  'stopGate.model': schemaField('modelref', { nullable: true }),
+  'project.goal': schemaField('string', { nullable: true }),
+  'project.scope': schemaField('string-list'),
+  'project.taskTypes': schemaField('enum-list', { values: TASK_TYPES }),
+  'policy.providers.allow': schemaField('string-list'),
+  'policy.providers.deny': schemaField('string-list'),
+  'policy.providers.allowWorkspace': schemaField('string-list', { internal: true }),
+  'policy.models.allow': schemaField('string-list'),
+  'policy.models.deny': schemaField('string-list'),
+  'policy.models.allowWorkspace': schemaField('string-list', { internal: true }),
+  'policy.agents.allow': schemaField('string-list'),
+  'policy.agents.deny': schemaField('string-list'),
+  'policy.agents.allowWorkspace': schemaField('string-list', { internal: true }),
+  'policy.tools.deny': schemaField('string-list'),
+  'policy.sensitivePaths': schemaField('string-list'),
+  'policy.destructiveBash': schemaField('string-list'),
+  'policy.approver': schemaField('enum', { values: ['user', 'claude'] }),
+  'policy.permissionTimeoutSec': schemaField('integer', { min: 1, max: 86400 }),
+  permissionProfiles: schemaField('rules-map'),
+  'routing.tasks': schemaField('modelref-list-map'),
+  'routing.tiers': schemaField('modelref-list-map'),
+  'routing.fallback.enabled': schemaField('boolean'),
+  'routing.fallback.maxAttempts': schemaField('integer', { min: 1, max: 10 }),
+  'routing.fallback.maxProviderRetries': schemaField('integer', { min: 0, max: 20 }),
+  'routing.fallback.maxRetryWaitSec': schemaField('integer', { min: 0, max: 3600 }),
+  'conclave.pools': schemaField('modelref-list-map'),
+  'conclave.defaultPool': schemaField('string', { nullable: true }),
+  'conclave.judge': schemaField('modelref-or-claude'),
+  'conclave.rounds': schemaField('integer', { min: 1, max: 3 }),
+  'conclave.quorum': schemaField('integer', { min: 2, max: 16 }),
+  'conclave.memberTimeoutSec': schemaField('integer', { min: 1, max: 86400 }),
+  'orchestrate.planner': schemaField('modelref', { nullable: true }),
+  'orchestrate.maxSubtasks': schemaField('integer', { min: 2, max: 20 }),
+  'orchestrate.synthesizer': schemaField('modelref-or-claude'),
+  'delegation.auto': schemaField('boolean'),
+  'jobs.maxActive': schemaField('integer', { min: 1, max: 64 }),
+  'jobs.maxParallel': schemaField('integer', { min: 1, max: 32 }),
+  'server.bootTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
+  'server.requestTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
+  'server.configOverride': schemaField('object'),
+});
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+const MAP_ENTRY = { 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') };
+const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
+const SECRET_LIKE = /(token|password|secret|api[-_]?key)/i;
+const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
+const WORKSPACE_POLICY_LISTS = ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny', 'policy.agents.allow', 'policy.agents.deny', 'policy.tools.deny', 'policy.sensitivePaths', 'policy.destructiveBash'];
+const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-map', 'modelref-list-map', 'modelref-list']);
 
-export function getPath(obj, dotted) {
-  let cur = obj;
-  for (const part of String(dotted).split('.')) {
-    if (!isPlainObject(cur) || !(part in cur)) return undefined;
-    cur = cur[part];
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const cloneJson = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+export function schemaFor(dotted) {
+  if (CONFIG_SCHEMA[dotted]) return CONFIG_SCHEMA[dotted];
+  const parts = dotted.split('.');
+  for (let i = parts.length - 1; i > 0; i -= 1) {
+    const parent = CONFIG_SCHEMA[parts.slice(0, i).join('.')];
+    if (parent && MAP_ENTRY[parent.type]) return parent.type === 'object' ? MAP_ENTRY.object : (i === parts.length - 1 ? MAP_ENTRY[parent.type] : null);
   }
-  return cur;
+  return null;
 }
 
-export function setPath(obj, dotted, value) {
-  const [head, ...rest] = String(dotted).split('.');
-  const base = isPlainObject(obj) ? obj : {};
-  if (rest.length === 0) return { ...base, [head]: value };
-  return { ...base, [head]: setPath(base[head], rest.join('.'), value) };
+export function isLockedKey(dotted) {
+  return LOCKED_KEYS.some((k) => dotted === k || dotted.startsWith(`${k}.`) || k.startsWith(`${dotted}.`));
 }
 
-function unsetPath(obj, dotted) {
-  const [head, ...rest] = String(dotted).split('.');
-  if (!isPlainObject(obj) || !(head in obj)) return obj;
-  const copy = { ...obj };
-  if (rest.length === 0) delete copy[head];
-  else copy[head] = unsetPath(copy[head], rest.join('.'));
-  return copy;
+export function isWorkspaceKey(dotted) {
+  if (WORKSPACE_POLICY_LISTS.includes(dotted)) return true;
+  return WORKSPACE_PREFERENCE_KEYS.some((k) => dotted === k || dotted.startsWith(`${k}.`));
 }
 
-export function matchesGlob(value, glob) {
-  const escaped = String(glob).split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
-  return new RegExp(`^${escaped}$`).test(String(value));
+export function keyNeedsServer(dotted) {
+  const desc = schemaFor(dotted);
+  return Boolean(desc && MODEL_TYPES.has(desc.type)) || ['defaultProvider', 'defaultAgent', 'defaultVariant'].includes(dotted);
 }
 
-function deepMerge(base, override) {
-  if (!isPlainObject(base) || !isPlainObject(override)) return clone(override);
-  const out = clone(base);
-  for (const [k, v] of Object.entries(override)) {
-    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k], v) : clone(v);
+function checkValue(desc, value) {
+  if (value === null) return desc.nullable ? null : 'must not be null';
+  switch (desc.type) {
+    case 'string': case 'model': case 'modelref': case 'modelref-or-claude':
+      return typeof value === 'string' && value.trim() !== '' ? null : 'must be a non-empty string';
+    case 'boolean':
+      return typeof value === 'boolean' ? null : 'must be true or false';
+    case 'integer':
+      if (!Number.isInteger(value)) return 'must be an integer';
+      if (value < desc.min || value > desc.max) return `must be between ${desc.min} and ${desc.max}`;
+      return null;
+    case 'enum':
+      return desc.values.includes(value) ? null : `must be one of: ${desc.values.join(', ')}`;
+    case 'string-list': case 'modelref-list':
+      return Array.isArray(value) && value.every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'must be a list of non-empty strings';
+    case 'enum-list':
+      if (!Array.isArray(value)) return 'must be a list';
+      return value.every((v) => desc.values.includes(v)) ? null : `items must be in: ${desc.values.join(', ')}`;
+    case 'model-map':
+      return isObj(value) && Object.values(value).every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'must map names to model IDs';
+    case 'modelref-list-map':
+      return isObj(value) && Object.values(value).every((v) => Array.isArray(v) && v.every((x) => typeof x === 'string')) ? null : 'must map names to lists of models';
+    case 'rules': return checkRules(value);
+    case 'rules-map':
+      if (!isObj(value)) return 'must map profile names to rule lists';
+      for (const rules of Object.values(value)) { const e = checkRules(rules); if (e) return e; }
+      return null;
+    case 'object': return isObj(value) ? null : 'must be an object';
+    case 'json': return null;
+    default: return `unknown schema type ${desc.type}`;
   }
-  return out;
 }
 
-const isStr = (v) => typeof v === 'string';
-const isStrOrNull = (v) => v === null || typeof v === 'string';
-const isStrList = (v) => Array.isArray(v) && v.every(isStr);
-const isPosNum = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
-const isPosInt = (v) => Number.isInteger(v) && v > 0;
-const isBool = (v) => typeof v === 'boolean';
-const isStrMap = (v) => isPlainObject(v) && Object.values(v).every(isStr);
-const isListMap = (v) => isPlainObject(v) && Object.values(v).every(isStrList);
-const isRuleList = (v) => Array.isArray(v) && v.every((r) => isPlainObject(r) && isStr(r.permission) && isStr(r.pattern)
-  && ['allow', 'deny', 'ask'].includes(r.action));
+function checkRules(rules) {
+  if (!Array.isArray(rules)) return 'rules must be a list';
+  const ok = rules.every((r) => isObj(r) && typeof r.permission === 'string' && typeof r.pattern === 'string' && ['allow', 'deny', 'ask'].includes(r.action));
+  return ok ? null : 'each rule needs {permission, pattern, action: allow|deny|ask}';
+}
 
-const SHAPE = {
-  defaultProvider: [isStrOrNull, 'texto ou null'],
-  defaultModel: [isStrOrNull, 'texto ou null'],
-  defaultVariant: [isStrOrNull, 'texto ou null'],
-  defaultAgent: [isStrOrNull, 'texto ou null'],
-  aliases: [isStrMap, 'mapa de texto'],
-  reviewModel: [isStrOrNull, 'texto ou null'],
-  stopGate: [isPlainObject, 'objeto'],
-  'stopGate.enabled': [isBool, 'booleano'],
-  'stopGate.model': [isStrOrNull, 'texto ou null'],
-  project: [isPlainObject, 'objeto'],
-  'project.goal': [isStrOrNull, 'texto ou null'],
-  'project.scope': [isStrList, 'lista de texto'],
-  'project.taskTypes': [isStrList, 'lista de texto'],
-  policy: [isPlainObject, 'objeto'],
-  'policy.providers': [isPlainObject, 'objeto'],
-  'policy.models': [isPlainObject, 'objeto'],
-  'policy.agents': [isPlainObject, 'objeto'],
-  'policy.tools': [isPlainObject, 'objeto'],
-  'policy.providers.allow': [isStrList, 'lista de texto'],
-  'policy.providers.deny': [isStrList, 'lista de texto'],
-  'policy.models.allow': [isStrList, 'lista de texto'],
-  'policy.models.deny': [isStrList, 'lista de texto'],
-  'policy.agents.allow': [isStrList, 'lista de texto'],
-  'policy.agents.deny': [isStrList, 'lista de texto'],
-  'policy.tools.deny': [isStrList, 'lista de texto'],
-  'policy.sensitivePaths': [isStrList, 'lista de texto'],
-  'policy.destructiveBash': [isStrList, 'lista de texto'],
-  'policy.approver': [(v) => v === 'user' || v === 'claude', '"user" ou "claude"'],
-  'policy.permissionTimeoutSec': [isPosNum, 'número > 0'],
-  permissionProfiles: [isPlainObject, 'objeto'],
-  routing: [isPlainObject, 'objeto'],
-  'routing.tasks': [isListMap, 'mapa de listas'],
-  'routing.tiers': [isListMap, 'mapa de listas'],
-  'routing.fallback.enabled': [isBool, 'booleano'],
-  'routing.fallback.maxAttempts': [isPosInt, 'inteiro > 0'],
-  'routing.fallback.maxProviderRetries': [isPosInt, 'inteiro > 0'],
-  'routing.fallback.maxRetryWaitSec': [isPosNum, 'número > 0'],
-  conclave: [isPlainObject, 'objeto'],
-  'conclave.pools': [isListMap, 'mapa de listas'],
-  'conclave.defaultPool': [isStrOrNull, 'texto ou null'],
-  'conclave.judge': [isStr, 'texto'],
-  'conclave.rounds': [(v) => Number.isInteger(v) && v >= 1 && v <= 3, 'inteiro entre 1 e 3'],
-  'conclave.quorum': [(v) => Number.isInteger(v) && v >= 2, 'inteiro >= 2'],
-  'conclave.memberTimeoutSec': [isPosNum, 'número > 0'],
-  orchestrate: [isPlainObject, 'objeto'],
-  'orchestrate.planner': [isStrOrNull, 'texto ou null'],
-  'orchestrate.maxSubtasks': [(v) => Number.isInteger(v) && v >= 2, 'inteiro >= 2'],
-  'orchestrate.synthesizer': [isStr, 'texto'],
-  delegation: [isPlainObject, 'objeto'],
-  'delegation.auto': [isBool, 'booleano'],
-  jobs: [isPlainObject, 'objeto'],
-  'jobs.maxActive': [isPosInt, 'inteiro > 0'],
-  'jobs.maxParallel': [isPosInt, 'inteiro > 0'],
-  server: [isPlainObject, 'objeto'],
-  'server.bootTimeoutSec': [isPosNum, 'número > 0'],
-  'server.requestTimeoutSec': [isPosNum, 'número > 0'],
-  'server.configOverride': [isPlainObject, 'objeto'],
-};
-
-function collectSecretLikeKeys(value, prefix, out) {
-  if (!isPlainObject(value)) return;
-  for (const [k, v] of Object.entries(value)) {
-    const p = prefix ? `${prefix}.${k}` : k;
-    if (SECRET_KEY_RE.test(k)) out.push(p);
-    collectSecretLikeKeys(v, p, out);
+export function findSecretLikeKeys(obj, prefix = '') {
+  const hits = [];
+  if (!isObj(obj) && !Array.isArray(obj)) return hits;
+  for (const [key, value] of Object.entries(obj)) {
+    const p = prefix ? `${prefix}.${key}` : key;
+    if (!Array.isArray(obj) && SECRET_LIKE.test(key)) hits.push(p);
+    hits.push(...findSecretLikeKeys(value, p));
   }
+  return hits;
 }
 
 export function validateConfigShape(obj, { source = 'global' } = {}) {
   const errors = [];
   const warnings = [];
-  if (!isPlainObject(obj)) {
-    errors.push({ path: '', message: 'a configuração precisa ser um objeto JSON' });
-    return { errors, warnings };
-  }
-  for (const key of Object.keys(obj)) {
-    if (!(key in DEFAULT_CONFIG)) warnings.push({ path: key, message: 'chave desconhecida (ignorada)' });
-  }
-  for (const [dotted, [check, expected]] of Object.entries(SHAPE)) {
-    const value = getPath(obj, dotted);
-    if (value !== undefined && !check(value)) errors.push({ path: dotted, message: `valor inválido: esperado ${expected}` });
-  }
-  if (isPlainObject(obj.permissionProfiles)) {
-    for (const [name, rules] of Object.entries(obj.permissionProfiles)) {
-      if (!isRuleList(rules)) errors.push({ path: `permissionProfiles.${name}`, message: 'valor inválido: esperado lista de regras' });
-    }
-  }
-  const secretLike = [];
-  collectSecretLikeKeys(obj, '', secretLike);
-  for (const p of secretLike) warnings.push({ path: p, message: 'chave com cara de segredo: não guarde segredos na config do opc' });
-  if (source === 'workspace') {
-    for (const key of LOCKED_KEYS) {
-      if (getPath(obj, key) !== undefined && key !== 'policy') {
-        warnings.push({ path: key, message: 'chave travada: só vale na config global (ignorada no .opc.json)' });
+  if (obj === null || obj === undefined) return { errors, warnings };
+  if (!isObj(obj)) return { errors: [{ path: '', code: 'INVALID_VALUE', message: `${source} config must be a JSON object` }], warnings };
+  const walk = (node, prefix) => {
+    for (const [key, value] of Object.entries(node)) {
+      const p = prefix ? `${prefix}.${key}` : key;
+      const desc = CONFIG_SCHEMA[p];
+      if (desc) {
+        const problem = checkValue(desc, value);
+        if (problem) errors.push({ path: p, code: 'INVALID_VALUE', message: problem });
+      } else if (GROUPS.has(p)) {
+        if (isObj(value)) walk(value, p);
+        else errors.push({ path: p, code: 'INVALID_VALUE', message: 'must be an object' });
+      } else {
+        warnings.push({ path: p, code: 'UNKNOWN_KEY', message: `unknown key (ignored) in ${source} config` });
       }
     }
+  };
+  walk(obj, '');
+  if (source === 'workspace') {
+    for (const key of LOCKED_KEYS) {
+      if (getPath(obj, key) !== undefined) warnings.push({ path: key, code: 'UNKNOWN_KEY', message: 'locked key (global only)' });
+    }
+  }
+  for (const p of findSecretLikeKeys(obj)) {
+    warnings.push({ path: p, code: 'SECRET_LIKE_KEY', message: 'key looks like a secret; config files must never hold secrets (use env vars or the vault)' });
   }
   return { errors, warnings };
 }
 
-function intersectAllow(globalAllow, wsAllow) {
-  if (wsAllow.length === 0) return { allow: [...globalAllow], dropped: [], empty: false };
-  if (globalAllow.length === 0) return { allow: [...wsAllow], dropped: [], empty: false };
-  const keptWs = wsAllow.filter((w) => globalAllow.some((g) => matchesGlob(w, g)));
-  const keptGlobal = globalAllow.filter((g) => wsAllow.some((w) => matchesGlob(g, w)));
-  const allow = [...new Set([...keptWs, ...keptGlobal])];
-  const dropped = wsAllow.filter((w) => !allow.includes(w) && !keptGlobal.some((g) => matchesGlob(g, w)));
-  return { allow: allow.length > 0 ? allow : [...globalAllow], dropped, empty: allow.length === 0 };
+function mergeDeep(base, over) {
+  if (!isObj(base) || !isObj(over)) return cloneJson(over);
+  const out = cloneJson(base);
+  for (const [k, v] of Object.entries(over)) out[k] = isObj(v) && isObj(out[k]) ? mergeDeep(out[k], v) : cloneJson(v);
+  return out;
 }
 
-function mergeWorkspacePolicy(effective, wsPolicy, warnings) {
-  if (wsPolicy === undefined) return effective;
-  if (!isPlainObject(wsPolicy)) {
-    warnings.push({ path: 'policy', message: 'policy do .opc.json inválida (ignorada)' });
-    return effective;
-  }
-  const policy = clone(effective.policy);
-  for (const [key, value] of Object.entries(wsPolicy)) {
-    if (POLICY_LIST_KINDS.includes(key) && isPlainObject(value)) {
-      for (const [listName, list] of Object.entries(value)) {
-        const p = `policy.${key}.${listName}`;
-        if (!isStrList(list) || !['allow', 'deny'].includes(listName)) {
-          warnings.push({ path: p, message: 'entrada inválida no .opc.json (ignorada)' });
-          continue;
-        }
-        if (listName === 'deny') {
-          policy[key].deny = [...new Set([...policy[key].deny, ...list])];
-        } else {
-          const res = intersectAllow(policy[key].allow, list);
-          policy[key].allow = res.allow;
-          for (const _d of res.dropped) warnings.push({ path: p, message: 'entrada amplia o allow global (ignorada)' });
-          if (res.empty) {
-            policy[key].deny = [...new Set([...policy[key].deny, '*'])];
-            warnings.push({ path: p, message: 'interseção vazia com o allow global: nada fica permitido' });
-          }
-        }
-      }
-    } else if (key === 'tools' && isPlainObject(value) && isStrList(value.deny ?? [])) {
-      policy.tools.deny = [...new Set([...policy.tools.deny, ...(value.deny ?? [])])];
-      for (const extra of Object.keys(value).filter((k) => k !== 'deny')) {
-        warnings.push({ path: `policy.tools.${extra}`, message: 'chave travada: só vale na config global (ignorada no .opc.json)' });
-      }
-    } else if ((key === 'sensitivePaths' || key === 'destructiveBash') && isStrList(value)) {
-      policy[key] = [...new Set([...policy[key], ...value])];
-    } else if (key === 'approver' && value === 'user') {
-      policy.approver = 'user';
-    } else {
-      warnings.push({ path: `policy.${key}`, message: 'chave travada: só vale na config global (ignorada no .opc.json)' });
-    }
-  }
-  return { ...effective, policy };
+const unionList = (a = [], b = []) => [...new Set([...(a ?? []), ...(b ?? [])])];
+
+function unsetConfigPath(obj, dotted) {
+  const [head, ...rest] = dotted.split('.');
+  if (!isObj(obj) || !Object.hasOwn(obj, head)) return obj;
+  const out = { ...obj };
+  if (rest.length === 0) delete out[head];
+  else out[head] = unsetConfigPath(out[head], rest.join('.'));
+  return out;
 }
 
 export function mergeConfig(globalCfg, workspaceCfg) {
   const warnings = [];
-  let config = deepMerge(clone(DEFAULT_CONFIG), isPlainObject(globalCfg) ? globalCfg : {});
-  if (!isPlainObject(workspaceCfg)) return { config, warnings };
-  const { errors } = validateConfigShape(workspaceCfg, { source: 'workspace' });
-  const invalid = new Set(errors.map((e) => e.path));
-  for (const e of errors) warnings.push({ path: e.path, message: `.opc.json: ${e.message} (ignorado)` });
-  let ws = workspaceCfg;
-  for (const p of invalid) ws = unsetPath(ws, p);
-  config = mergeWorkspacePolicy(config, ws.policy, warnings);
-  for (const key of ['permissionProfiles', 'server.configOverride']) {
-    if (getPath(ws, key) !== undefined) {
-      warnings.push({ path: key, message: 'chave travada: só vale na config global (ignorada no .opc.json)' });
-    }
+  const config = mergeDeep(cloneJson(DEFAULT_CONFIG), isObj(globalCfg) ? globalCfg : {});
+  let ws = isObj(workspaceCfg) ? cloneJson(workspaceCfg) : {};
+  const { errors: wsErrors } = validateConfigShape(ws, { source: 'workspace' });
+  for (const error of wsErrors) {
+    warnings.push({ path: error.path, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${error.message}; ignored` });
+    if (error.path) ws = unsetConfigPath(ws, error.path);
   }
-  for (const dotted of WORKSPACE_OVERRIDABLE) {
-    const value = getPath(ws, dotted);
-    if (value === undefined) continue;
-    const current = getPath(config, dotted);
-    config = setPath(config, dotted, isPlainObject(value) && isPlainObject(current) ? deepMerge(current, value) : clone(value));
-  }
-  const handledTop = new Set(['policy', 'permissionProfiles', ...WORKSPACE_OVERRIDABLE.map((k) => k.split('.')[0])]);
-  for (const key of Object.keys(ws)) {
-    if (handledTop.has(key)) continue;
-    if (key === 'server') {
-      for (const sub of Object.keys(ws.server ?? {}).filter((k) => k !== 'configOverride')) {
-        warnings.push({ path: `server.${sub}`, message: 'chave não sobrescrevível no .opc.json (ignorada)' });
+  const ignore = (p, why) => warnings.push({ path: p, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${why}; ignored` });
+  for (const [key, value] of Object.entries(ws)) {
+    if (key === 'policy') {
+      if (!isObj(value)) { ignore('policy', 'must be an object'); continue; }
+      mergeWorkspacePolicy(config, value, ignore, warnings);
+    } else if (key === 'stopGate' && isObj(value)) {
+      for (const [sub, v] of Object.entries(value)) {
+        if (sub === 'model') config.stopGate.model = cloneJson(v);
+        else ignore(`stopGate.${sub}`, 'not overridable per workspace');
       }
-      continue;
-    }
-    warnings.push({ path: key, message: 'chave não sobrescrevível no .opc.json (ignorada)' });
-  }
-  if (isPlainObject(ws.stopGate)) {
-    for (const sub of Object.keys(ws.stopGate).filter((k) => k !== 'model')) {
-      warnings.push({ path: `stopGate.${sub}`, message: 'chave não sobrescrevível no .opc.json (ignorada)' });
+    } else if (WORKSPACE_PREFERENCE_KEYS.includes(key)) {
+      config[key] = isObj(value) && isObj(config[key]) ? mergeDeep(config[key], value) : cloneJson(value);
+    } else if (isLockedKey(key) || key === 'server') {
+      ignore(key, 'locked key (global only)');
+    } else if (key in DEFAULT_CONFIG) {
+      ignore(key, 'not overridable per workspace');
+    } else {
+      ignore(key, 'unknown key');
     }
   }
   return { config, warnings };
 }
+
+function mergeWorkspacePolicy(config, wsPolicy, ignore, warnings) {
+  for (const [sub, value] of Object.entries(wsPolicy)) {
+    const p = `policy.${sub}`;
+    if (['providers', 'models', 'agents', 'tools'].includes(sub) && isObj(value)) {
+      for (const [listName, list] of Object.entries(value)) {
+        const lp = `${p}.${listName}`;
+        if (!Array.isArray(list)) { ignore(lp, 'must be a list'); continue; }
+        if (listName === 'deny') {
+          config.policy[sub].deny = unionList(config.policy[sub].deny, list);
+        } else if (listName === 'allow' && sub !== 'tools') {
+          if (list.length === 0) continue;
+          const globalAllow = config.policy[sub].allow;
+          if (globalAllow.length > 0) {
+            for (const entry of list) {
+              if (!matchesAny(entry, globalAllow)) warnings.push({ path: lp, code: 'WORKSPACE_ALLOW_NARROWED', message: `.opc.json: "${entry}" is outside the global allow list; only the intersection applies` });
+            }
+          }
+          config.policy[sub].allowWorkspace = [...list];
+        } else {
+          ignore(lp, 'only allow/deny lists can be set per workspace');
+        }
+      }
+    } else if ((sub === 'sensitivePaths' || sub === 'destructiveBash') && Array.isArray(value)) {
+      config.policy[sub] = unionList(config.policy[sub], value);
+    } else {
+      ignore(p, 'locked key (global only)');
+    }
+  }
+}
+// ---- end F1 (part A) ----
 
 export function globalConfigPath(dataDir) {
   return path.join(dataDir, 'config.json');

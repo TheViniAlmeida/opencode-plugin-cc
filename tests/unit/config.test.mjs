@@ -86,17 +86,18 @@ test('workspace deny lists are unioned with the global ones', () => {
   assert.deepEqual(config.policy.tools.deny, ['gitlab_*']);
 });
 
-test('workspace allow is intersected with the global allow', () => {
+test('workspace allow is retained separately for restrictive intersection', () => {
   const g = { policy: { models: { allow: ['prov-a/*', 'anthropic/claude-x'] } } };
   const narrow = mergeConfig(g, { policy: { models: { allow: ['prov-a/fast-*', 'anthropic/*'] } } });
-  assert.deepEqual(narrow.config.policy.models.allow.sort(), ['anthropic/claude-x', 'prov-a/fast-*']);
+  assert.deepEqual(narrow.config.policy.models.allow, ['prov-a/*', 'anthropic/claude-x']);
+  assert.deepEqual(narrow.config.policy.models.allowWorkspace, ['prov-a/fast-*', 'anthropic/*']);
   const widen = mergeConfig(g, { policy: { models: { allow: ['prov-b/*'] } } });
-  assert.deepEqual(widen.config.policy.models.deny, ['*']);
-  assert.ok(widen.warnings.some((w) => w.path === 'policy.models.allow' && /amplia/.test(w.message)));
-  assert.ok(widen.warnings.every((w) => !w.message.includes('prov-b/*')));
-  assert.ok(widen.warnings.some((w) => /interseção vazia/.test(w.message)));
+  assert.deepEqual(widen.config.policy.models.allow, ['prov-a/*', 'anthropic/claude-x']);
+  assert.deepEqual(widen.config.policy.models.allowWorkspace, ['prov-b/*']);
+  assert.ok(widen.warnings.some((w) => w.path === 'policy.models.allow' && /intersection/.test(w.message)));
   const openGlobal = mergeConfig({}, { policy: { models: { allow: ['prov-a/*'] } } });
-  assert.deepEqual(openGlobal.config.policy.models.allow, ['prov-a/*']);
+  assert.deepEqual(openGlobal.config.policy.models.allow, []);
+  assert.deepEqual(openGlobal.config.policy.models.allowWorkspace, ['prov-a/*']);
   const openWs = mergeConfig(g, { policy: { models: { allow: [] } } });
   assert.deepEqual(openWs.config.policy.models.allow, ['prov-a/*', 'anthropic/claude-x']);
 });
@@ -117,11 +118,11 @@ test('locked keys in the workspace are ignored with a warning (only restrictive 
   assert.deepEqual(config.server.configOverride, { share: 'disabled' });
   assert.equal(config.server.bootTimeoutSec, 60);
   const p = paths(warnings);
-  for (const expected of ['policy.approver', 'policy.permissionTimeoutSec', 'permissionProfiles', 'server.configOverride', 'server.bootTimeoutSec']) {
+  for (const expected of ['policy.approver', 'policy.permissionTimeoutSec', 'permissionProfiles', 'server']) {
     assert.ok(p.includes(expected), `missing warning for ${expected}: ${p.join(', ')}`);
   }
   const stricter = mergeConfig({ policy: { approver: 'claude' } }, { policy: { approver: 'user' } });
-  assert.equal(stricter.config.policy.approver, 'user');
+  assert.equal(stricter.config.policy.approver, 'claude');
 });
 
 test('preference scalars are overridable; other keys are not', () => {
@@ -135,7 +136,7 @@ test('preference scalars are overridable; other keys are not', () => {
   assert.equal(config.stopGate.enabled, false);
   assert.equal(config.delegation.auto, false);
   assert.equal(config.jobs.maxActive, 8);
-  assert.deepEqual(paths(warnings).sort(), ['delegation', 'jobs', 'stopGate.enabled']);
+  assert.deepEqual(paths(warnings).sort(), ['delegation', 'jobs', 'jobs.maxActive', 'stopGate.enabled']);
 });
 
 test('invalid workspace values are dropped with a warning', () => {
