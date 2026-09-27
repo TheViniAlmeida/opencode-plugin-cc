@@ -5,12 +5,12 @@
       "name": "OmniRoute (mvalmeida)",
       "source": "config",
       "env": [],
-      "key": "sk-omr-FIXTURE-mvalmeida-0001", "key": "sk-omr-FIXTURE-mvalmeida-0001", "fixture-marker": "scan-secrets:allow",
+      "key": "FAKE-PROVIDER-KEY-0001",
       "options": {
         "baseURL": "http://127.0.0.1:9/v1",
-        "apiKey": "sk-FIXTURE-apikey-0002",
+        "apiKey": "FAKE-API-KEY-0002",
         "headers": {
-          "Authorization": "Bearer FIXTURE-hdr-0003"
+          "Authorization": "FAKE-AUTH-HEADER-0003"
         }
       },
       "models": {
@@ -400,10 +400,10 @@
       "name": "OmniRoute (work)",
       "source": "config",
       "env": [],
-      "key": "sk-omr-FIXTURE-work-0006", "key": "sk-omr-FIXTURE-work-0006", "fixture-marker": "scan-secrets:allow",
+      "key": "FAKE-PROVIDER-KEY-0006",
       "options": {
         "baseURL": "http://127.0.0.1:9/v1",
-        "apiKey": "sk-FIXTURE-apikey-0007"
+        "apiKey": "FAKE-API-KEY-0007"
       },
       "models": {
         "opencode-go/kimi-k3": {
@@ -681,7 +681,7 @@
       "env": [
         "ANTHROPIC_API_KEY"
       ],
-      "key": "sk-ant-FIXTURE-0008",
+      "key": "FAKE-PROVIDER-KEY-0008",
       "options": {},
       "models": {
         "claude-opus-5-5": {

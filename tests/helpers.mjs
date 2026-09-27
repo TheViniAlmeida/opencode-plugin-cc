@@ -360,6 +360,7 @@ export function fixtureData(name) {
 // Canonical writer of <OPC_DATA_DIR>/config.json for every phase (mode 600) → file path.
 export function writeGlobalConfig(env, cfg) {
   fsF1.mkdirSync(env.OPC_DATA_DIR, { recursive: true, mode: 0o700 });
+  fsF1.chmodSync(env.OPC_DATA_DIR, 0o700);
   const file = pathF1.join(env.OPC_DATA_DIR, 'config.json');
   fsF1.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
   fsF1.chmodSync(file, 0o600);

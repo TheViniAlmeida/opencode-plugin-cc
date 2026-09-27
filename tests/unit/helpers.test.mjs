@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { getProcessIdentity, identityMatches, spawnDetached, terminateProcessGroup } from '../../plugins/opc/scripts/lib/process.mjs';
-import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor } from '../helpers.mjs';
+import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor, writeGlobalConfig } from '../helpers.mjs';
 
 test('waitFor uses a monotonic clock instead of Date.now', async () => {
   const original = Date.now;
@@ -14,6 +14,16 @@ test('waitFor uses a monotonic clock instead of Date.now', async () => {
   } finally {
     Date.now = original;
   }
+});
+
+test('writeGlobalConfig repairs an existing data directory to mode 700 and writes mode 600', (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-helper-config-'));
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { mode: 0o777 });
+  fs.chmodSync(dataDir, 0o777);
+  const file = writeGlobalConfig({ OPC_DATA_DIR: dataDir }, { theme: 'dark' });
+  assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
 
 test('registry closes an external fake and preserves recovery directories when another stopper fails', async (outer) => {
