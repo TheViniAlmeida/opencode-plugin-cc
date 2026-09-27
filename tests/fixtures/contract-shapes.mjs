@@ -14,7 +14,15 @@ export const PROBES = [
 export const EVENT_TYPES = ['server.connected', 'server.heartbeat'];
 
 // Only config fields consumed by the plugin belong in snapshots.
-export const CONFIG_USED_FIELDS = ['share', 'model', 'small_model', 'mcp', 'agent', 'provider', 'permission'];
+export const CONFIG_USED_FIELDS = ['share', 'autoshare', 'model', 'small_model', 'mcp', 'agent', 'provider', 'permission'];
+
+// Known OpenCode config schema properties; all other nested names are user data.
+export const KNOWN_CONFIG_PROPS = new Set([
+  'enabled', 'type', 'command', 'url', 'environment', 'headers', 'timeout', 'model',
+  'mode', 'prompt', 'description', 'temperature', 'top_p', 'tools', 'disable',
+  'hidden', 'permission', 'options', 'models', 'name', 'npm', 'api', 'variant',
+  'variants', 'steps', 'color',
+]);
 
 // Maps whose keys are user data (provider names, MCP names…): only the value shape is recorded.
 export const MAP_PATHS = new Set([
@@ -36,6 +44,17 @@ function mergeShapes(shapes) {
 
 function collapseKeys(value, at, keys) {
   const childPath = (key) => at ? `${at}.${key}` : key;
+  if (at.startsWith('config.')) {
+    const collapseAll = MAP_PATHS.has(at) || /(^|\.)permission(\.|\[|$)/.test(at);
+    const groups = new Map();
+    for (const key of keys) {
+      const safeKey = collapseAll || !KNOWN_CONFIG_PROPS.has(key) ? '*' : key;
+      if (!groups.has(safeKey)) groups.set(safeKey, []);
+      groups.get(safeKey).push(shapeOf(value[key], childPath(safeKey)));
+    }
+    if (collapseAll && keys.length === 0) return { '*': 'empty' };
+    return Object.fromEntries([...groups.keys()].sort().map((key) => [key, mergeShapes(groups.get(key))]));
+  }
   const isPermission = /(^|\\.)permission(\\.|$)/i.test(at);
   const collapse = MAP_PATHS.has(at) || isPermission || keys.length > 8
     || keys.some((key) => !/^[A-Za-z0-9_.-]+$/.test(key));

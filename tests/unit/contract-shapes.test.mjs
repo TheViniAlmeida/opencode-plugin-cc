@@ -14,20 +14,71 @@ test('shapeOf records types, first array element and collapses user-data maps', 
 
 test('config snapshots retain only used fields and redact user-controlled keys at every depth', () => {
   const config = {
-    share: 'auto', model: 'private/model', small_model: 'private/small',
+    autoshare: true, share: 'auto', model: 'private/model', small_model: 'private/small',
     mcp: { 'hive-alice': { type: 'local' } },
-    agent: { build: { permission: { bash: { '*> $HOME/.*': 'deny', '/home/alice/bin*': 'allow' } } } },
-    provider: { 'omniroute-alice': { models: { 'private/model': { name: 'private value' } } } },
+    agent: {
+      'alice-agent': { model: 'private/model' },
+      bob: { permission: { bash: { alice: 'deny', '/home/*/bin*': 'allow', '$HOME/.*': 'deny' } } },
+    },
+    provider: { 'omniroute-alice': { models: { 'opencode-go/alice-model': { name: 'private value' } } } },
     permission: { nested: { '/home/alice/bin*': 'deny' } },
+    keybinds: { alice: 'private value' },
     unrelated: { alice: 'private value' },
   };
   const shape = shapeOf(config, 'config');
   const serialized = JSON.stringify(shape);
-  for (const personal of ['alice', '/home', 'HOME', 'hive', 'omniroute', 'private value']) assert.equal(serialized.includes(personal), false, personal);
+  for (const personal of ['alice', 'bob', '/home', 'HOME', 'hive', 'omniroute', 'keybinds', 'private value']) assert.equal(serialized.includes(personal), false, personal);
+  for (const field of ['autoshare', 'share', 'agent', 'permission', 'mcp', 'provider']) assert.ok(Object.hasOwn(shape, field), `${field} missing from shape`);
   assert.deepEqual(Object.keys(shape).sort(), CONFIG_USED_FIELDS.filter((field) => Object.hasOwn(config, field)).sort());
   for (const field of CONFIG_USED_FIELDS) assert.ok(Object.hasOwn(shape, field), `${field} missing from shape`);
   assert.equal(shape.share, 'string');
   assert.deepEqual(shape.mcp, { '*': { type: 'string' } });
+});
+
+test('config snapshots include every consumed top-level field including legacy autoshare', () => {
+  const fields = ['autoshare', 'share', 'model', 'small_model', 'mcp', 'agent', 'provider', 'permission'];
+  for (const field of fields) assert.ok(CONFIG_USED_FIELDS.includes(field), field);
+  assert.deepEqual(shapeOf({ autoshare: true, keybinds: {} }, 'config'), { autoshare: 'boolean' });
+});
+
+test('config snapshots merge unknown keys recursively while retaining known properties', () => {
+  const shape = shapeOf({ agent: {
+    'alice-agent': { options: { alice: { enabled: true, bob: { temperature: 0.5 } } } },
+    bob: { options: { bob: { timeout: 10, alice: { top_p: 0.9 } } }, description: 'private value' },
+  } }, 'config');
+  assert.deepEqual(shape, { agent: { '*': {
+    description: 'string',
+    options: { '*': { enabled: 'boolean', timeout: 'number', '*': { temperature: 'number', top_p: 'number' } } },
+  } } });
+  assert.deepEqual(shapeOf({ mcp: { alice: { command: [{ alice: { enabled: true } }] } } }, 'config'), {
+    mcp: { '*': { command: [{ '*': { enabled: 'boolean' } }] } },
+  });
+});
+
+test('config permission keys always collapse even when they match known property names', () => {
+  for (const permission of [
+    { bash: { alice: 'deny' } },
+    { bash: { '/home/*/bin*': 'allow', '$HOME/.*': 'deny' } },
+    { model: { enabled: 'deny', options: { timeout: 'allow' } } },
+  ]) {
+    const expected = Object.hasOwn(permission, 'model')
+      ? { '*': { '*': 'mixed' } }
+      : { '*': { '*': 'string' } };
+    assert.deepEqual(shapeOf({ permission }, 'config'), { permission: expected });
+    assert.deepEqual(shapeOf({ agent: { bob: { permission } } }, 'config'), {
+      agent: { '*': { permission: expected } },
+    });
+  }
+});
+
+test('config snapshots preserve allowlisted properties regardless of object size', () => {
+  const properties = ['enabled', 'type', 'command', 'url', 'environment', 'headers', 'timeout',
+    'model', 'mode', 'prompt', 'description', 'temperature', 'top_p', 'tools', 'disable',
+    'hidden', 'permission', 'options', 'models', 'name', 'npm', 'api', 'variant', 'variants', 'steps', 'color'];
+  const config = { agent: { bob: Object.fromEntries(properties.map((key) => [key, 'private value'])) } };
+  assert.deepEqual(shapeOf(config, 'config'), {
+    agent: { '*': Object.fromEntries(properties.map((key) => [key, 'string'])) },
+  });
 });
 
 test('lookup walks dotted paths with [] for array elements', () => {
