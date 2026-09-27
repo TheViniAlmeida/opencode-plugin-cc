@@ -23,7 +23,10 @@ test('coerceValue: per type', () => {
   assert.equal(coerceValue('defaultModel', 'null'), null);
   assert.deepEqual(coerceValue('policy.models.deny', 'a/*,b/*'), ['a/*', 'b/*']);
   assert.deepEqual(coerceValue('policy.models.deny', '["a/*","b/*"]'), ['a/*', 'b/*']);
-  assert.deepEqual(coerceValue('policy.models.deny', '[a/*,b/*]'), ['a/*', 'b/*'], 'shell-stripped quotes still parse');
+  assert.deepEqual(coerceValue('policy.models.deny', '["a/*","b/*"]'), ['a/*', 'b/*']);
+  for (const raw of ['[123]', '[{"x":1}]', '[a,b']) {
+    assert.throws(() => coerceValue('policy.models.deny', raw), (e) => e.code === 'INVALID_VALUE' && e.exitCode === 2 && /lista|array|JSON/i.test(e.message));
+  }
   assert.deepEqual(coerceValue('aliases', '{"fast":"p/m"}'), { fast: 'p/m' });
   assert.equal(coerceValue('policy.approver', 'claude'), 'claude');
   assert.throws(() => coerceValue('policy.approver', 'robot'), (e) => e.code === 'INVALID_VALUE' && e.exitCode === 2);
@@ -119,6 +122,15 @@ test('policyViolations: denied defaults, aliases and pinned agent models', () =>
   assert.deepEqual(paths, ['aliases.eqk3', 'defaultAgent', 'defaultModel', 'defaultProvider', 'reviewModel']);
   assert.match(v.find((e) => e.path === 'defaultAgent').rule, /pinned model/);
   assert.ok(v.every((e) => e.code === 'POLICY_DENIED'));
+});
+
+test('policyViolations evaluates denied unknown referenced model ids', () => {
+  const cfg = mergeConfig({
+    defaultModel: 'blocked/model',
+    policy: { models: { deny: ['blocked/*'] } },
+  }, {}).config;
+  assert.equal(validateAgainstServer(cfg, { catalog, agents }).errors.find((e) => e.path === 'defaultModel')?.code, 'UNKNOWN_MODEL');
+  assert.ok(policyViolations(cfg, { catalog, agents }).some((e) => e.path === 'defaultModel' && e.code === 'POLICY_DENIED'));
 });
 
 test('configPaths', () => {

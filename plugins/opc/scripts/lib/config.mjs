@@ -1,11 +1,8 @@
 // Global config + workspace override with the restrictive merge of spec §3.2 (F0 base; F1 completes).
 import fs from 'node:fs';
-import path from 'node:path';
-
-import { OpcError } from './opc-error.mjs';
+import path, { join as joinPathF1 } from 'node:path';
+import { OpcError, UsageError } from './opc-error.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
-import { join as joinPathF1 } from 'node:path';
-import { UsageError } from './opc-error.mjs';
 import { matchesAny, resolveModelRef, normalizeModelId, validateVariant } from './models.mjs';
 import { evaluate, evaluateAgent } from './policy.mjs';
 
@@ -409,11 +406,14 @@ export function unsetPath(obj, dotted) {
 function parseList(raw) {
   const text = String(raw).trim();
   if (text.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean);
-    } catch { /* fall back to comma split (quotes may have been stripped by the shell splitter) */ }
-    return text.replace(/^\[|\]$/g, '').split(',').map((v) => v.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      throw new UsageError('INVALID_VALUE', 'lista deve ser um array JSON de strings não vazias');
+    }
+    if (!Array.isArray(parsed) || parsed.some((v) => typeof v !== 'string' || v.trim() === '')) {
+      throw new UsageError('INVALID_VALUE', 'lista deve ser um array JSON de strings não vazias');
+    }
+    return parsed.map((v) => v.trim());
   }
   return text === '' ? [] : text.split(',').map((v) => v.trim()).filter(Boolean);
 }
@@ -562,7 +562,11 @@ export function policyViolations(cfg, { catalog, agents = [] }) {
   const deny = (path, value, rule) => errors.push({ path, code: 'POLICY_DENIED', message: `"${value}" denied by ${rule}`, rule });
   for (const ref of modelRefsIn(cfg)) {
     let full;
-    try { full = resolveStored(ref, cfg, catalog).full; } catch { continue; }
+    try { full = resolveStored(ref, cfg, catalog).full; } catch {
+      full = ref.kind !== 'model' && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value)
+        ? cfg.aliases[ref.value]
+        : ref.value;
+    }
     if (!full) continue;
     const r = evaluate('model', full, cfg.policy);
     if (!r.allowed) deny(ref.path, full, r.rule);
