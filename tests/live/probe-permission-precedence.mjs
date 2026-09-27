@@ -8,10 +8,10 @@ import path from 'node:path';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { redact, redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { clientFor, ensureServer, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
+import { clientFor, ensureServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { EventHub } from '../../plugins/opc/scripts/lib/sse.mjs';
 import { ensurePrivateDir, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
-import { makeTempDir, removeTempDir } from '../helpers.mjs';
+import { makeTempDir, createServerCleanup } from '../helpers.mjs';
 import { evidenceVerdict, mergeVerdict, toolAttempted } from '../fixtures/contract-shapes.mjs';
 
 if (process.env.OPC_LIVE !== '1') {
@@ -266,7 +266,7 @@ async function probeDisableUserMcp(dataDir, ws, env, userMcpNames) {
   const name = userMcpNames[0];
   const stateDir = ensurePrivateDir(path.join(dataDir, 'state', 'disable-mcp'));
   const config = mergeConfig({ server: { configOverride: { share: 'disabled', mcp: { [name]: { enabled: false } } } } }, null).config;
-  const ctx = { stateDir, workspaceRoot: ws, config, env };
+  const ctx = cleanup.track({ stateDir, workspaceRoot: ws, config, env });
   try {
     const server = await ensureServer(ctx);
     const client = clientFor(ctx, server);
@@ -275,7 +275,7 @@ async function probeDisableUserMcp(dataDir, ws, env, userMcpNames) {
   } catch (err) {
     return { item: '§15.5 desligar MCP do usuário via override', mcp: name, bootOk: false, error: err.code, verdict: 'OVERRIDE_PARCIAL_INVALIDO' };
   } finally {
-    await stopServer(ctx, { force: true, confirmedByUser: true }).catch(() => {});
+    await cleanup.stop(ctx);
   }
 }
 
@@ -288,6 +288,7 @@ function renderMarkdown(results) {
 }
 
 const base = makeTempDir('opc-probe-');
+const cleanup = createServerCleanup(base);
 const { ws, mcpScript, callLog } = prepareProject(base);
 const env = cleanEnv();
 const dataDir = path.join(base, 'data');
@@ -296,7 +297,7 @@ const stateDir = ensurePrivateDir(workspaceStateDir(dataDir, ws));
 const config = mergeConfig({
   server: { configOverride: { share: 'disabled', mcp: { opcprobe: { type: 'local', command: [process.execPath, mcpScript, callLog], enabled: true } } } },
 }, null).config;
-const ctx = { stateDir, workspaceRoot: ws, config, env };
+const ctx = cleanup.track({ stateDir, workspaceRoot: ws, config, env });
 const results = [];
 let hub = null;
 let exitCode = 0;
@@ -310,7 +311,7 @@ try {
     const key = ['model', 'agent', 'provider'].find((candidate) => Object.hasOwn(effectiveUserConfig ?? {}, candidate));
     if (key) userConfig = { [key]: effectiveUserConfig[key] };
   } finally {
-    await stopServer(baselineCtx, { force: true, confirmedByUser: true });
+    await cleanup.stop(baselineCtx);
   }
   log(`subindo servidor dedicado em ${ws}`);
   const server = await ensureServer(ctx);
@@ -326,15 +327,19 @@ try {
   results.push(await probeAlways(turn));
   hub.stop();
   hub = null;
-  await stopServer(ctx, { force: true, confirmedByUser: true });
+  await cleanup.stop(ctx);
   results.push(await probeDisableUserMcp(dataDir, ws, env, merge.userMcpNames));
 } catch (err) {
   exitCode = 1;
   results.push({ item: 'erro do probe', verdict: 'ERRO', code: redactText(err.code ?? ''), message: redactText(err.message) });
 } finally {
   if (hub) hub.stop();
-  await stopServer(ctx, { force: true, confirmedByUser: true }).catch(() => {});
-  removeTempDir(base);
+  try {
+    await cleanup.finish();
+  } catch (err) {
+    exitCode = 1;
+    results.push({ item: 'limpeza do probe', verdict: 'ERRO', message: redactText(err.message) });
+  }
 }
 for (const r of results) delete r.userMcpNames;
 process.stdout.write(redactText(WANT_JSON ? `${JSON.stringify(redact(results), null, 2)}\n` : `${renderMarkdown(results)}\n`));

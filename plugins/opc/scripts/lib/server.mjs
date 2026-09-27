@@ -200,6 +200,9 @@ async function worldCheck(client, config) {
   let oc;
   try {
     oc = await client.get('/config', { retryOnServerDown: false });
+    if (!oc || typeof oc !== 'object' || Array.isArray(oc)) {
+      throw new Error('Resposta de GET /config não é um objeto de configuração.');
+    }
   } catch (err) {
     world.shareBlocked = true;
     world.shareReason = 'config-unavailable';
@@ -208,6 +211,7 @@ async function worldCheck(client, config) {
   }
   if (oc?.share === 'auto' || (oc?.autoshare === true && oc?.share !== 'disabled')) {
     world.shareBlocked = true;
+    world.shareReason = 'share-auto';
     warnings.push('O OpenCode está com share "auto": o opc recusa criar sessões até o share ser desligado '
       + '(server.configOverride.share = "disabled" na config global do opc, ou share "manual"/"disabled" no OpenCode).');
   }
@@ -423,7 +427,8 @@ export async function stopServer(ctx, { force = false, confirmedByUser = false }
   const settings = serverSettings(config);
   return withLock(path.join(stateDir, 'server.lock'), { timeoutMs: 4 * settings.bootTimeoutSec * 1000, purpose: 'stop-server' }, async () => {
     if (env.OPC_SERVER_URL) return { stopped: false, reason: 'attached' };
-    const record = readServerRecord(stateDir);
+    const record = readServerRecordData(stateDir);
+    if (record?.password) registerSecret(record.password);
     if (!record) return { stopped: false, reason: 'not-running' };
     if (hasActiveJobs() && !force) return { stopped: false, reason: 'active-jobs' };
     const identity = getProcessIdentity(record.pid);

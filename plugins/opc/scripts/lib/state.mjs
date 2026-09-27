@@ -171,10 +171,15 @@ export function loadState(stateDir) {
     throw err;
   }
   try {
-    return normalizeState(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.version !== 1
+      || !Array.isArray(parsed.jobs) || !Array.isArray(parsed.claudeSessions)) {
+      throw new Error('Invalid state structure');
+    }
+    return normalizeState(parsed);
   } catch {
     const backup = `${file}.corrupt-${Date.now()}`;
-    fs.copyFileSync(file, backup);
+    fs.writeFileSync(backup, raw, { mode: 0o600, flag: 'wx' });
     if (process.platform !== 'win32') fs.chmodSync(backup, 0o600);
     const result = rebuildJobs(stateDir);
     const rebuilt = { ...defaultState(), jobs: result.jobs, rebuildWarnings: result.warnings };

@@ -143,3 +143,23 @@ test('listActiveJobs filters by ACTIVE_JOB_STATUSES', async (t) => {
   });
   assert.deepEqual(listActiveJobs(dir).map((j) => j.id), ['a', 'c']);
 });
+
+for (const invalid of [null, [], 'state', 42, { version: 2, jobs: [], claudeSessions: [] },
+  { version: 1, jobs: {}, claudeSessions: [] }, { version: 1, jobs: [], claudeSessions: {} }, {}]) {
+  test(`structurally invalid state is backed up and rebuilt: ${JSON.stringify(invalid)}`, async (t) => {
+    const dir = temp(t);
+    const raw = JSON.stringify(invalid);
+    fs.mkdirSync(path.join(dir, 'jobs'));
+    const job = { id: 'recovered', status: 'running' };
+    fs.writeFileSync(path.join(dir, 'jobs', 'recovered.json'), JSON.stringify(job));
+    fs.writeFileSync(path.join(dir, 'state.json'), raw, { mode: 0o644 });
+    const state = await updateState(dir, (s) => { s.claudeSessions.push({ id: 'new' }); });
+    assert.deepEqual(state.jobs, [job]);
+    const backups = fs.readdirSync(dir).filter((name) => name.startsWith('state.json.corrupt-'));
+    assert.equal(backups.length, 1);
+    const backup = path.join(dir, backups[0]);
+    assert.equal(fs.readFileSync(backup, 'utf8'), raw);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(backup).mode & 0o777, 0o600);
+    assert.equal(loadState(dir).version, 1);
+  });
+}

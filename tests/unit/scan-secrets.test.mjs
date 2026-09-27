@@ -94,3 +94,21 @@ test('CLI exits 2 and names invalid or unreadable server.json without printing i
     }
   }
 });
+
+test('F1 plan fixtures are explicitly exempted without weakening scanning', () => {
+  const file = path.join(REPO_ROOT, 'docs/superpowers/plans/2026-09-26-opc-F1-discovery-config.md');
+  assert.deepEqual(scanPaths([file]), []);
+  const text = fs.readFileSync(file, 'utf8');
+  const fixtureLines = text.split('\n').filter((line) => line.includes('sk-omr-FIXTURE-'));
+  assert.equal(fixtureLines.length, 3);
+  for (const line of fixtureLines) {
+    assert.ok(line.includes(ALLOW_MARKER));
+    assert.ok(scanText(line.replace(ALLOW_MARKER, '')).length > 0);
+  }
+});
+
+test('F0 public report records the controller commits', () => {
+  const report = fs.readFileSync(path.join(REPO_ROOT, 'docs/phases/F0-report.md'), 'utf8');
+  assert.ok(!report.includes('COMMIT_BLOCKED'));
+  assert.match(report, /Commits realizados pelo controlador/);
+});

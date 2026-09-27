@@ -9,12 +9,12 @@ import path from 'node:path';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
-import { clientFor, ensureServer, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
+import { clientFor, ensureServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { EventHub } from '../../plugins/opc/scripts/lib/sse.mjs';
 import { ensurePrivateDir, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import { EVENT_TYPES, PROBES, diffShapes, shapeOf } from '../fixtures/contract-shapes.mjs';
 import { startFake } from '../fixtures/fake-opencode.mjs';
-import { REPO_ROOT, makeTempDir, removeTempDir } from '../helpers.mjs';
+import { REPO_ROOT, makeTempDir, createServerCleanup } from '../helpers.mjs';
 
 if (process.env.OPC_LIVE !== '1') {
   console.log('contract: skipped (set OPC_LIVE=1)');
@@ -42,6 +42,7 @@ async function collect(client, sseClient) {
 }
 
 const base = makeTempDir('opc-contract-');
+const cleanup = createServerCleanup(base);
 const ws = path.join(base, 'contract-project');
 fs.mkdirSync(ws);
 execFileSync('git', ['init', '-q'], { cwd: ws });
@@ -49,7 +50,7 @@ const dataDir = path.join(base, 'data');
 ensurePrivateDir(path.join(dataDir, 'state'));
 const stateDir = ensurePrivateDir(workspaceStateDir(dataDir, ws));
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(OPC_SERVER_|OPENCODE_SERVER_|FAKE_)/.test(k)));
-const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig({}, null).config, env };
+const ctx = cleanup.track({ stateDir, workspaceRoot: ws, config: mergeConfig({}, null).config, env });
 let exitCode = 0;
 let fake = null;
 try {
@@ -85,8 +86,11 @@ try {
   console.error(`contract: erro ${err.code ?? ''} ${err.message}`);
   exitCode = 2;
 } finally {
-  if (fake) await fake.close();
-  await stopServer(ctx, { force: true, confirmedByUser: true }).catch(() => {});
-  removeTempDir(base);
+  try {
+    await cleanup.finish(fake ? [() => fake.close()] : []);
+  } catch (err) {
+    console.error(`contract: ${err.message}`);
+    exitCode = 2;
+  }
 }
 process.exit(exitCode);

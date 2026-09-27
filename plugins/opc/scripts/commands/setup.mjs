@@ -115,11 +115,13 @@ async function diagnose(ctx, flags) {
         version: s.version,
         reused: s.reused,
         attached: s.attached,
-        sessionsBlocked: s.world?.shareBlocked ? 'share-auto' : null,
+        sessionsBlocked: s.world?.shareBlocked ? (s.world.shareReason ?? 'share-auto') : null,
         warnings: s.warnings,
       };
       if (s.world?.shareBlocked) {
-        report.nextSteps.push('Desligue o share automático: `server.configOverride.share = "disabled"` na config global do opc, ou `share: "manual"` no OpenCode.');
+        report.nextSteps.push(s.world.shareReason === 'config-unavailable'
+          ? 'Não foi possível confirmar a configuração de compartilhamento. Verifique o servidor OpenCode e tente `/opc:setup` novamente.'
+          : 'Desligue o share automático: `server.configOverride.share = "disabled"` na config global do opc, ou `share: "manual"` no OpenCode.');
         exitCode = ExitCode.POLICY;
       }
     } catch (err) {

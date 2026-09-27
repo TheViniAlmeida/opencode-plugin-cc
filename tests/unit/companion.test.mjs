@@ -62,3 +62,18 @@ test('main: JSON mode survives --cwd usage errors during argument extraction', a
   assert.equal(JSON.parse(stdout.text()).error.code, 'USAGE');
   assert.match(JSON.parse(stdout.text()).error.message, /--cwd/);
 });
+
+for (const json of [false, true]) {
+  test(`unknown subcommand preview is bounded (json=${json})`, async () => {
+    const sub = 'unknown-command-private-suffix';
+    const stdout = sink();
+    const stderr = sink();
+    assert.equal(await main([sub, ...(json ? ['--json'] : [])], {
+      stdin: Readable.from([]), stdout, stderr, env: {}, cwd: '/nonexistent',
+    }), 2);
+    const output = stdout.text() + stderr.text();
+    assert.ok(!output.includes(sub));
+    assert.ok(!output.includes('private-suffix'));
+    assert.ok(output.includes(sub.slice(0, 12) + '…'));
+  });
+}

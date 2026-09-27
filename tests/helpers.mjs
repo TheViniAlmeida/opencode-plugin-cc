@@ -44,7 +44,8 @@ function registry(t) {
       const errors = [];
       for (const stop of [...reg.stoppers].reverse()) {
         try {
-          await stop();
+          const result = await stop();
+          if (result && typeof result === 'object') requireStopped(result);
         } catch (err) {
           errors.push(err);
         }
@@ -57,6 +58,8 @@ function registry(t) {
               const result = await stopAllServers(env, ws);
               if (result.code !== 0) {
                 errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
+              } else {
+                requireStopped(parseJsonOutput(result.stdout).stop);
               }
             } catch (err) {
               errors.push(err);
@@ -65,6 +68,10 @@ function registry(t) {
         }
       }
       for (const dir of reg.dirs) {
+        if (errors.length) {
+          process.stderr.write(`test cleanup: diretório preservado para recuperação: ${dir}\n`);
+          continue;
+        }
         try {
           removeTempDir(dir);
         } catch (err) {
@@ -253,6 +260,49 @@ export function makeServerCtx(t, { scenario = 'ok', extraEnv = {}, config = {} }
   ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
   const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
-  registerStopper(t, () => stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }));
+  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true })));
   return { ctx, env, ws, stateDir };
+}
+
+// A successful CLI exit alone does not confirm that a managed server stopped.
+export function requireStopped(result) {
+  if (result?.stopped === true || (result?.stopped === false && result.reason === 'not-running')) return result;
+  throw new Error(`server stop not confirmed: ${result?.reason ?? 'missing result'}`);
+}
+
+// Shared by standalone live scripts. Remember failures even when a retry succeeds,
+// and keep every tracked server record available for manual recovery.
+export function createServerCleanup(dir, { stop = stopServer } = {}) {
+  const contexts = new Map();
+  const errors = [];
+  const cleanup = {
+    track(ctx) {
+      contexts.set(ctx.stateDir, ctx);
+      return ctx;
+    },
+    async stop(ctx) {
+      cleanup.track(ctx);
+      try {
+        return requireStopped(await stop(ctx, { force: true, confirmedByUser: true }));
+      } catch (err) {
+        errors.push(err);
+        throw err;
+      }
+    },
+    async finish(stoppers = []) {
+      for (const stopper of stoppers) {
+        try { await stopper(); } catch (err) { errors.push(err); }
+      }
+      for (const ctx of contexts.values()) {
+        try { await cleanup.stop(ctx); } catch { /* Recorded above; finish fails below. */ }
+      }
+      if (errors.length) {
+        const message = `server cleanup failed; diretório preservado para recuperação: ${dir}`;
+        process.stderr.write(`${message}\n`);
+        throw new AggregateError(errors, message);
+      }
+      removeTempDir(dir);
+    },
+  };
+  return cleanup;
 }

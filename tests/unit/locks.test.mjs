@@ -50,7 +50,7 @@ test('lock publication links a complete private temp file into place', (t) => {
     assert.equal(fs.existsSync(lockPath), false);
     assert.equal(fs.statSync(tempPath).mode & 0o777, 0o600);
     const owner = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
-    assert.deepEqual(Object.keys(owner), ['pid', 'startTime', 'acquiredAt', 'purpose', 'token']);
+    assert.deepEqual(Object.keys(owner), ['pid', 'startTime', 'acquiredAt', 'purpose', 'token', 'cancelled']);
     checked = true;
     return originalLink.call(this, tempPath, lockPath);
   };
@@ -283,4 +283,165 @@ test('withLock gives mutual exclusion across processes', async (t) => {
   const results = await Promise.all(runs);
   for (const r of results) assert.equal(r.code, 0, r.stderr);
   assert.equal(fs.readFileSync(counter, 'utf8'), '5');
+});
+
+test('orphan recovery is serialized by an identity-owned break lock', async (t) => {
+  const { lock } = tempLock(t);
+  const orphan = JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' });
+  fs.writeFileSync(lock, orphan);
+  const releaseBreak = tryAcquireLock(`${lock}.break`, { purpose: 'another-breaker' });
+  try {
+    assert.equal(tryAcquireLock(lock), null);
+    assert.equal(fs.readFileSync(lock, 'utf8'), orphan);
+  } finally { releaseBreak(); }
+  const release = tryAcquireLock(lock);
+  assert.equal(typeof release, 'function');
+  release();
+});
+
+test('recovery rechecks ownership after acquiring the break lock', async (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' }));
+  const originalLink = fs.linkSync;
+  let replacement;
+  let releaseNew;
+  t.mock.method(fs, 'linkSync', (source, target) => {
+    if (target === `${lock}.break` && !replacement) {
+      // Another breaker completed before we acquired the recovery guard.
+      fs.renameSync(lock, `${lock}.previous`);
+      releaseNew = tryAcquireLock(lock, { purpose: 'live-replacement' });
+      replacement = fs.readFileSync(lock);
+    }
+    return originalLink(source, target);
+  });
+  const release = tryAcquireLock(lock);
+  if (release) release();
+  try {
+    assert.equal(release, null);
+    assert.ok(replacement);
+    assert.deepEqual(fs.readFileSync(lock), replacement);
+  } finally { releaseNew?.(); }
+});
+
+test('an orphaned break lock is recoverable without stealing live guards', async (t) => {
+  const { lock } = tempLock(t);
+  const orphan = JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' });
+  fs.writeFileSync(lock, orphan);
+  fs.writeFileSync(`${lock}.break`, orphan);
+  const releaseGuard = tryAcquireLock(`${lock}.break.break`);
+  try { assert.equal(tryAcquireLock(lock), null); } finally { releaseGuard(); }
+  const release = tryAcquireLock(lock);
+  assert.equal(typeof release, 'function');
+  release();
+});
+
+test('orphan recovery stress: eight processes repeatedly enter and exit without overlap', async (t) => {
+  const { dir, lock } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' }));
+  const markers = path.join(dir, 'markers.jsonl');
+  const locksUrl = pathToFileURL(path.join(PLUGIN_ROOT, 'scripts/lib/locks.mjs')).href;
+  const script = `
+    import fs from 'node:fs';
+    import { withLock } from ${JSON.stringify(locksUrl)};
+    for (let i = 0; i < 80; i++) {
+      await withLock(${JSON.stringify(lock)}, { timeoutMs: 30000, pollMs: 1 }, async () => {
+        fs.appendFileSync(${JSON.stringify(markers)}, JSON.stringify(['enter', process.pid]) + '\\n');
+        await new Promise(r => setTimeout(r, 1));
+        fs.appendFileSync(${JSON.stringify(markers)}, JSON.stringify(['exit', process.pid]) + '\\n');
+      });
+    }
+  `;
+  const results = await Promise.all(Array.from({ length: 8 }, () => runProcess(process.execPath,
+    ['--input-type=module', '-e', script], { timeoutMs: 60000 })));
+  for (const result of results) assert.equal(result.code, 0, result.stderr);
+  const events = fs.readFileSync(markers, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.length, 8 * 80 * 2);
+  let holder = null;
+  for (const [kind, pid] of events) {
+    if (kind === 'enter') { assert.equal(holder, null, `overlap: ${holder} and ${pid}`); holder = pid; }
+    else { assert.equal(holder, pid); holder = null; }
+  }
+  assert.equal(holder, null);
+});
+
+test('acquisition cannot enter during orphan rename or release-during-break', async (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(lock, JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' }));
+  const originalRename = fs.renameSync;
+  let attempted = false;
+  let competing;
+  t.mock.method(fs, 'renameSync', (source, target) => {
+    const result = originalRename(source, target);
+    if (source === lock) {
+      attempted = true;
+      // Simulates the old owner having released while a breaker held a snapshot.
+      competing = tryAcquireLock(lock, { purpose: 'racer' });
+    }
+    return result;
+  });
+  let release;
+  try {
+    release = tryAcquireLock(lock);
+    assert.equal(attempted, true);
+    assert.equal(competing, null, 'no new holder may enter while recovery is in progress');
+    assert.equal(typeof release, 'function');
+  } finally { competing?.(); release?.(); }
+});
+
+test('a dead break owner is recovered even when the primary lock was already released', async (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(`${lock}.break`, JSON.stringify({ pid: await deadPid(), startTime: 'gone', token: 'orphan' }));
+  const release = tryAcquireLock(lock);
+  assert.equal(typeof release, 'function');
+  assert.equal(fs.existsSync(`${lock}.break`), false);
+  release();
+});
+
+test('an unreadable or malformed break owner is not broken by age alone', (t) => {
+  const { lock } = tempLock(t);
+  fs.writeFileSync(`${lock}.break`, '');
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(`${lock}.break`, old, old);
+  assert.equal(tryAcquireLock(lock), null);
+  assert.equal(fs.readFileSync(`${lock}.break`, 'utf8'), '');
+});
+
+test('a recovery guard racing publication withdraws the candidate without unlinking the shared path', (t) => {
+  const { lock } = tempLock(t);
+  const originalLink = fs.linkSync;
+  let releaseBreak;
+  t.mock.method(fs, 'linkSync', (source, target) => {
+    if (target === lock && !releaseBreak) releaseBreak = tryAcquireLock(`${lock}.break`);
+    return originalLink(source, target);
+  });
+  try {
+    assert.equal(tryAcquireLock(lock), null);
+    assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).cancelled, 1);
+  } finally { releaseBreak?.(); }
+  const release = tryAcquireLock(lock);
+  assert.equal(typeof release, 'function', 'withdrawn candidates are recoverable even while their process lives');
+  release();
+});
+
+test('withdrawal changes only the candidate inode after a breaker replaced the path', (t) => {
+  const { lock } = tempLock(t);
+  const originalLink = fs.linkSync;
+  const moved = `${lock}.stale-candidate`;
+  let replaced = false;
+  let replacement;
+  t.mock.method(fs, 'linkSync', (source, target) => {
+    const result = originalLink(source, target);
+    if (target === lock && !replaced) {
+      replaced = true;
+      fs.renameSync(lock, moved);
+      // A breaker published its replacement before the candidate validated itself.
+      replacement = JSON.parse(fs.readFileSync(moved, 'utf8'));
+      replacement.token = 'replacement';
+      fs.writeFileSync(lock, JSON.stringify(replacement));
+    }
+    return result;
+  });
+  assert.equal(tryAcquireLock(lock), null);
+  assert.equal(JSON.parse(fs.readFileSync(moved, 'utf8')).cancelled, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(lock, 'utf8')), replacement);
 });

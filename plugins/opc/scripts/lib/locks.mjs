@@ -33,9 +33,10 @@ function ownerAlive(lockPath, info) {
       return false;
     }
   }
+  if (info.owner.cancelled === 1) return false;
   if (process.platform === 'win32') return isPidAlive(info.owner.pid);
   const identity = getProcessIdentity(info.owner.pid);
-  if (!identity) return false;
+  if (!identity) return isPidAlive(info.owner.pid);
   return String(identity.startTime) === String(info.owner.startTime);
 }
 
@@ -48,17 +49,20 @@ function createLockFile(lockPath, purpose) {
     acquiredAt: new Date().toISOString(),
     purpose: purpose ?? null,
     token,
+    cancelled: 0,
   });
   const tempPath = `${lockPath}.tmp-${process.pid}-${randomUUID()}`;
-  const fd = fs.openSync(tempPath, 'wx', 0o600);
+  const fd = fs.openSync(tempPath, 'wx+', 0o600);
   try {
     fs.writeFileSync(fd, body);
-  } finally {
+  } catch (err) {
     fs.closeSync(fd);
+    throw err;
   }
   try {
     fs.linkSync(tempPath, lockPath);
   } catch (err) {
+    fs.closeSync(fd);
     try {
       fs.unlinkSync(tempPath);
     } catch (err) {
@@ -75,7 +79,7 @@ function createLockFile(lockPath, purpose) {
   }
   const content = Buffer.from(body);
   let released = false;
-  return function release() {
+  function release() {
     if (released) return;
     let current;
     try {
@@ -109,7 +113,34 @@ function createLockFile(lockPath, purpose) {
         if (err.code === 'ENOENT') tempCleaned = true;
       }
     }
+  }
+  return {
+    release,
+    content,
+    close: () => fs.closeSync(fd),
+    // Withdraw only this inode, even if recovery already renamed it. Unlinking
+    // the shared path here races with a breaker replacing our candidate.
+    cancel: () => fs.writeSync(fd, Buffer.from('1'), 0, 1, content.length - 2),
   };
+}
+
+function publishLock(lockPath, purpose, holdingBreak = false) {
+  if (!holdingBreak && fs.existsSync(`${lockPath}.break`)) return null;
+  const candidate = createLockFile(lockPath, purpose);
+  try {
+    // Check AFTER publication: a pre-check alone races with creation of .break.
+    // Recovery may have renamed this candidate before dropping its guard, so also
+    // verify ownership after checking the guard. No caller enters until both pass.
+    const guarded = !holdingBreak && fs.existsSync(`${lockPath}.break`);
+    const current = readOwner(lockPath);
+    if (guarded || !Buffer.isBuffer(current.raw) || !current.raw.equals(candidate.content)) {
+      candidate.cancel();
+      return null;
+    }
+    return candidate.release;
+  } finally {
+    candidate.close();
+  }
 }
 
 function breakStaleLock(lockPath, judged) {
@@ -125,7 +156,8 @@ function breakStaleLock(lockPath, judged) {
     && Buffer.isBuffer(judged.raw)
     && moved.raw.equals(judged.raw);
   if (!sameLock) {
-    // We moved a fresh lock taken by someone else between our check and the rename: put it back.
+    // A racing publication is still a candidate: its guard check prevents entry.
+    // Restore under the guard; withdrawn candidates remain recoverable.
     try {
       fs.linkSync(stale, lockPath);
       fs.unlinkSync(stale);
@@ -137,21 +169,46 @@ function breakStaleLock(lockPath, judged) {
   }
 }
 
-export function tryAcquireLock(lockPath, { purpose } = {}) {
+function tryAcquire(lockPath, purpose, recoveryGuard = false) {
   try {
-    return createLockFile(lockPath, purpose);
+    const release = publishLock(lockPath, purpose);
+    if (release) return release;
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
   }
-  const info = readOwner(lockPath);
-  if (ownerAlive(lockPath, info)) return null;
-  breakStaleLock(lockPath, info);
+  const canBreak = (info) => !info.missing && Buffer.isBuffer(info.raw)
+    // Recovery guards require an identified dead owner (or explicit withdrawal), never an expired mtime.
+    && (!recoveryGuard || (Number.isInteger(info.owner?.pid) && info.owner.pid > 0 && info.owner.startTime != null))
+    && !ownerAlive(lockPath, info);
+  const initial = readOwner(lockPath);
+  if (!initial.missing && !canBreak(initial)) return null;
+
+  // The same protocol protects orphaned recovery guards: concurrent reapers of a
+  // dead .break owner serialize on .break.break and re-read that owner there.
+  const releaseBreak = tryAcquire(`${lockPath}.break`, 'recover-lock', true);
+  if (!releaseBreak) return null;
   try {
-    return createLockFile(lockPath, purpose);
-  } catch (err) {
-    if (err.code === 'EEXIST') return null;
-    throw err;
+    const current = readOwner(lockPath);
+    // A live owner may release and exit during the identity check. Acquirers
+    // cannot enter while this guard exists; missing means create, never rename.
+    // Re-read here so a newer live owner is never judged using an old snapshot.
+    if (!current.missing) {
+      if (!canBreak(current)) return null;
+      breakStaleLock(lockPath, current);
+    }
+    try {
+      return publishLock(lockPath, purpose, true);
+    } catch (err) {
+      if (err.code === 'EEXIST') return null;
+      throw err;
+    }
+  } finally {
+    releaseBreak();
   }
+}
+
+export function tryAcquireLock(lockPath, { purpose } = {}) {
+  return tryAcquire(lockPath, purpose);
 }
 
 export async function acquireLock(lockPath, { timeoutMs, purpose, pollMs = 100 } = {}) {

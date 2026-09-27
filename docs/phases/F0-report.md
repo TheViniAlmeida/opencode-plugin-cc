@@ -91,7 +91,7 @@ CI em Node 20 e 22: **NÃO VALIDADO** neste relatório; o link e o status da exe
 | Reaproveitamento levou ~8,6 s | Inclui GET `/config` da checagem de mundo e aquecimento; investigar na F1 | Não |
 | Primeira versão do snapshot descartada | Vazava chaves de mapas de configuração; não foi commitada; gerador passou a usar allowlist | Não |
 | Testes com socket foram executados pelo controlador fora do sandbox | Limitação do sandbox | Não |
-| Commit | **COMMIT_BLOCKED** — sandbox com `.git` somente leitura; mensagem prevista: `docs: add F0 docs, phase report and changelog` | Não |
+| Commit | Commits realizados pelo controlador após a entrega no sandbox; mensagem: `docs: add F0 docs, phase report and changelog` | Não |
 
 ## 7. Interfaces novas entregues
 

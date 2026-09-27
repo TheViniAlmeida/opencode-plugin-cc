@@ -79,15 +79,21 @@ test('spawnDetached resolves relative executables from the requested cwd', linux
   assert.ok(getProcessIdentity(proc.pid));
 });
 
-test('spawnDetached fails when the child exits before its identity can be read', linuxOnly, async (t) => {
+test('spawnDetached accepts either valid outcome for a short-lived child', linuxOnly, async (t) => {
   const dir = makeTempDir('opc-proc-');
   t.after(() => removeTempDir(dir));
-  await assert.rejects(spawnDetached('/bin/true', [], { cwd: dir, env: process.env, logFile: path.join(dir, 'exit.log') }), (err) => {
+  let proc;
+  try {
+    proc = await spawnDetached('/bin/true', [], { cwd: dir, env: process.env, logFile: path.join(dir, 'exit.log') });
+  } catch (err) {
     assert.equal(err.code, 'SPAWN_FAILED');
     assert.equal(err.exitCode, 5);
     assert.match(err.message, /identidade/i);
-    return true;
-  });
+    return;
+  }
+  assert.ok(proc.pid > 0 && proc.startTime);
+  await waitFor(() => !isPidAlive(proc.pid), { message: 'short-lived child exit' });
+
 });
 
 test('an exited detached child is reported dead (zombie-aware)', linuxOnly, async (t) => {

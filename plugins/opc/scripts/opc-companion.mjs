@@ -34,7 +34,8 @@ export async function loadCommand(sub) {
   const name = String(sub ?? '');
   const file = SUBCOMMAND_RE.test(name) ? path.join(COMMANDS_DIR, `${name}.mjs`) : null;
   if (!file || !fs.existsSync(file)) {
-    throw new UsageError('USAGE', `Subcomando desconhecido: ${name}. Disponíveis: ${listSubcommands().join(', ')}.`);
+    const preview = name.length > 12 ? `${name.slice(0, 12)}…` : name;
+    throw new UsageError('USAGE', `Subcomando desconhecido: ${preview}. Disponíveis: ${listSubcommands().join(', ')}.`);
   }
   const mod = await import(pathToFileURL(file).href);
   if (typeof mod.run !== 'function') throw new UsageError('USAGE', `O subcomando ${name} não exporta run().`);
