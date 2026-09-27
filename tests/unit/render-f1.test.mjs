@@ -40,6 +40,11 @@ test('renderConfig: redacts secret-looking values and renders all kinds', () => 
   assert.equal(renderConfig({ kind: 'get', setting: 'defaultModel', value: null }), 'defaultModel = null\n');
   assert.equal(renderConfig({ kind: 'get', setting: 'server.apiKey', value: 'fake-secret-value' }), 'server.apiKey = "***"\n');
   assert.match(renderConfig({ kind: 'edit', setting: 'server.apiKey', value: 'fake-secret-value', op: 'set', scope: 'global', path: '/d/config.json' }), /Valor: `"\*\*\*"`/);
+  for (const setting of ['key', 'server.key', 'provider.privateKey', 'x.api_key']) {
+    assert.equal(renderConfig({ kind: 'get', setting, value: 'sensitive-value' }), `${setting} = "***"\n`, `${setting} get`);
+    assert.match(renderConfig({ kind: 'edit', setting, value: 'sensitive-value', op: 'set', scope: 'global', path: '/d' }), /Valor: `"\*\*\*"`/, `${setting} edit`);
+  }
+  assert.equal(renderConfig({ kind: 'get', setting: 'defaultModel', value: 'public-model' }), 'defaultModel = "public-model"\n');
   const secret = 'registered-secret-warning-value';
   registerSecret(secret);
   assert.ok(!renderConfig({ kind: 'edit', setting: 'defaultModel', value: 'm', op: 'set', scope: 'global', path: '/d', warnings: [`warning ${secret}`] }).includes(secret));

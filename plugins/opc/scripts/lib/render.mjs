@@ -1,7 +1,7 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
 import { redact, redactText } from './redact.mjs';
-import { findSecretLikeKeys } from './config.mjs';
+import { isSecretLikeSetting } from './config.mjs';
 
 function cell(value) {
   return redactText(String(value ?? '')).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
@@ -106,7 +106,7 @@ export function renderSetup(report) {
 
 const RenderF1 = Object.freeze({
   finish: (text) => redactText(text),
-  settingValue: (setting, value) => (findSecretLikeKeys({ [setting]: value }).length ? '***' : redact(value)),
+  settingValue: (setting, value) => (isSecretLikeSetting(setting) ? '***' : redact(value)),
   policy: (item) => (item.allowed === false ? `negado (${item.rule})` : 'permitido'),
   yesNo: (v) => (v ? 'sim' : 'não'),
   dash: (v) => (v === null || v === undefined || v === '' ? '—' : String(v)),

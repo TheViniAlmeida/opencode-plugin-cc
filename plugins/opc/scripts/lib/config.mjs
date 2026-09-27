@@ -117,7 +117,7 @@ export const CONFIG_SCHEMA = Object.freeze({
 
 const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') });
 const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
-const SECRET_LIKE = /(token|password|secret|api[-_]?key)/i;
+const SECRET_LIKE = /(token|password|secret|api[-_]?key|key)/i;
 const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
 const WORKSPACE_POLICY_LISTS = ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny', 'policy.agents.allow', 'policy.agents.deny', 'policy.tools.deny', 'policy.sensitivePaths', 'policy.destructiveBash'];
 const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-map', 'modelref-list-map', 'modelref-list']);
@@ -198,6 +198,10 @@ export function findSecretLikeKeys(obj, prefix = '') {
     hits.push(...findSecretLikeKeys(value, p));
   }
   return hits;
+}
+
+export function isSecretLikeSetting(setting) {
+  return String(setting).split('.').some((segment) => SECRET_LIKE.test(segment));
 }
 
 export function validateConfigShape(obj, { source = 'global' } = {}) {

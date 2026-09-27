@@ -43,7 +43,7 @@ test('validateConfigShape: non-object config is an error', () => {
 });
 
 test('findSecretLikeKeys: token/password/secret/apikey at any depth', () => {
-  assert.deepEqual(findSecretLikeKeys({ a: { API_KEY: 1, b: [{ password: 2 }] }, secretSauce: 3, fine: 4 }).sort(), ['a.API_KEY', 'a.b.0.password', 'secretSauce']);
+  assert.deepEqual(findSecretLikeKeys({ a: { API_KEY: 1, b: [{ password: 2 }] }, secretSauce: 3, fine: 4, key: 5, server: { key: 6 }, provider: { privateKey: 7 }, x: { api_key: 8 } }).sort(), ['a.API_KEY', 'a.b.0.password', 'key', 'provider.privateKey', 'secretSauce', 'server.key', 'x.api_key']);
 });
 
 test('isLockedKey / isWorkspaceKey', () => {
