@@ -6,7 +6,7 @@ import {
   makeWorkspace, makeTempDir, testEnv, runCli, runInProcess, pipedStdin, stopAllServers, trackTempDir, writeGlobalConfig, readGlobalConfig,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 function setup(t, { config = null, env: extra = {} } = {}) {
@@ -18,6 +18,11 @@ function setup(t, { config = null, env: extra = {} } = {}) {
   const draftFile = path.join(env.OPC_DATA_DIR, 'config.draft.json');
   return { ws, env, cli, apply, draftFile };
 }
+const completeBootstrap = {
+  defaultProvider: MV, defaultModel: `${MV}/opencode-go/kimi-k3`, reviewModel: null, defaultVariant: null,
+  stopGate: { model: null, enabled: false }, project: { goal: null }, aliases: {},
+  policy: { models: { allow: [] }, agents: { allow: [] }, approver: 'user' },
+};
 const all = (r) => `${r.stdout}${r.stderr}`;
 
 test('setup --json reports the onboarding state on first run', async (t) => {
@@ -110,7 +115,7 @@ test('guided flow: apply every step, commit atomically, effective config shown',
 
 test('setup commit refuses a denied default (exit 4); only the draft remains', async (t) => {
   const { env, cli, apply, draftFile } = setup(t);
-  assert.equal((await apply({ defaultProvider: MV, defaultModel: `${EQ}/opencode-go/kimi-k3` })).code, 0);
+  assert.equal((await apply({ ...completeBootstrap, defaultModel: `${EQ}/opencode-go/kimi-k3` })).code, 0);
   const pol = await apply({ policy: { providers: { deny: [EQ] } } });
   assert.equal(pol.code, 0);
   assert.equal(JSON.parse(pol.stdout).warnings[0].path, 'defaultModel');
@@ -189,7 +194,7 @@ test('after bootstrap: locked keys refused from Claude with the terminal command
 
 test('bootstrap race: a global config created before commit makes locked values fail', async (t) => {
   const { env, cli, apply } = setup(t);
-  assert.equal((await apply({ policy: { approver: 'claude' } })).code, 0);
+  assert.equal((await apply({ ...completeBootstrap, policy: { ...completeBootstrap.policy, approver: 'claude' } })).code, 0);
   assert.equal((await cli(['config', 'set', 'stopGate.enabled', 'false'])).code, 0);
   const commit = await cli(['setup', 'commit', '--json']);
   assert.equal(commit.code, 4);
@@ -203,6 +208,9 @@ test('reconfigure with workspace scope writes .opc.json', async (t) => {
   assert.equal((await apply({ defaultModel: 'opencode-go/qwen3.8-max' })).code, 0);
   const globalOnly = await apply({ delegation: { auto: true } });
   assert.equal(globalOnly.code, 2);
+  assert.equal((await apply({
+    defaultProvider: MV, reviewModel: null, defaultVariant: null, project: { goal: null }, aliases: {},
+  })).code, 0);
   const commit = await cli(['setup', 'commit', '--json']);
   assert.equal(commit.code, 0, all(commit));
   assert.equal(JSON.parse(commit.stdout).scope, 'workspace');

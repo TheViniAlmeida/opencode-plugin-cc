@@ -1,8 +1,8 @@
 {
   "all": [
     {
-      "id": "omniroute-mvalmeida",
-      "name": "OmniRoute (mvalmeida)",
+      "id": "omniroute-personal",
+      "name": "OmniRoute (personal)",
       "source": "config",
       "env": [],
       "key": "FAKE-PROVIDER-KEY-0001",
@@ -16,7 +16,7 @@
       "models": {
         "opencode-go/deepseek-v4.1-flash": {
           "id": "opencode-go/deepseek-v4.1-flash",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode-go/deepseek-v4.1-flash",
             "url": "http://127.0.0.1:9/v1",
@@ -99,7 +99,7 @@
         },
         "opencode-go/qwen3.8-max": {
           "id": "opencode-go/qwen3.8-max",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode-go/qwen3.8-max",
             "url": "http://127.0.0.1:9/v1",
@@ -155,7 +155,7 @@
         },
         "opencode-go/kimi-k3": {
           "id": "opencode-go/kimi-k3",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode-go/kimi-k3",
             "url": "http://127.0.0.1:9/v1",
@@ -214,7 +214,7 @@
         },
         "opencode-go/qwen3.8-flash": {
           "id": "opencode-go/qwen3.8-flash",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode-go/qwen3.8-flash",
             "url": "http://127.0.0.1:9/v1",
@@ -263,7 +263,7 @@
         },
         "opencode-go/kimi-k2.6": {
           "id": "opencode-go/kimi-k2.6",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode-go/kimi-k2.6",
             "url": "http://127.0.0.1:9/v1",
@@ -312,7 +312,7 @@
         },
         "cx/gpt-5.6-sol": {
           "id": "cx/gpt-5.6-sol",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "cx/gpt-5.6-sol",
             "url": "http://127.0.0.1:9/v1",
@@ -371,7 +371,7 @@
         },
         "opencode/big-pickle": {
           "id": "opencode/big-pickle",
-          "providerID": "omniroute-mvalmeida",
+          "providerID": "omniroute-personal",
           "api": {
             "id": "opencode/big-pickle",
             "url": "http://127.0.0.1:9/v1",
@@ -892,14 +892,14 @@
     }
   ],
   "default": {
-    "omniroute-mvalmeida": "opencode-go/deepseek-v4.1-flash",
+    "omniroute-personal": "opencode-go/deepseek-v4.1-flash",
     "omniroute-work": "opencode-go/kimi-k3",
     "opencode": "big-pickle",
     "anthropic": "claude-opus-5-5",
     "openai": "gpt-5.6"
   },
   "connected": [
-    "omniroute-mvalmeida",
+    "omniroute-personal",
     "omniroute-work",
     "opencode",
     "anthropic"

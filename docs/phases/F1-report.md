@@ -65,6 +65,6 @@ CI em Node 20 e 22: **NÃO VALIDADO** neste relatório; a execução é prevista
 
 ## Git e gravação dupla
 
-- **COMMIT_BLOCKED:** `docs: add F1 configuration, commands and phase report`.
+- **Commit documental criado:** `efd8981` — `docs: add F1 configuration, commands and phase report`.
 - PR: não criado.
 - Gravação dupla: N/A nesta tarefa documental; não foi solicitada e o ambiente não oferece a colmeia.

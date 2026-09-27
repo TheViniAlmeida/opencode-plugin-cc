@@ -1,4 +1,6 @@
 // opc config get|set|unset|add|remove|show|validate|path|init — spec §3.2, §3.3
+import { redact } from '../lib/redact.mjs';
+import { f1Command } from '../lib/f1-command.mjs';
 import { parseArgs } from '../lib/args.mjs';
 import { UsageError, PolicyError, OpcError, ConnectionError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
@@ -22,11 +24,11 @@ const SPEC = {
 const USAGE = 'uso: opc config get [chave] | set <chave> <valor> | unset <chave> | add|remove <chave-de-lista> <valor> | show [--effective] | validate | path | init   (edições aceitam --workspace e --tty-confirm)';
 
 const shellQuote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
-const emit = (ctx, flags, view, render) => { if (flags.json) ctx.json(view); else ctx.out(render(view)); };
+const emit = (ctx, flags, view, render) => { if (flags.json) ctx.json(redact(view)); else ctx.out(render(view)); };
 const touches = (key) => (e) => e.path === key || e.path.startsWith(`${key}.`) || e.path.startsWith(`${key}[`);
 const knownKey = (key) => Boolean(schemaFor(key)) || Object.keys(CONFIG_SCHEMA).some((k) => k.startsWith(`${key}.`));
 
-export async function run(ctx, argv) {
+async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   const [sub, ...rest] = positionals;
   switch (sub) {
@@ -225,3 +227,5 @@ async function cmdInit(ctx, flags) {
     prompter.close();
   }
 }
+
+export const run = f1Command(runCommand);

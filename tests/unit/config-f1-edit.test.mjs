@@ -13,7 +13,7 @@ const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const fresh = () => JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 

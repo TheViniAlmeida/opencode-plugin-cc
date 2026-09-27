@@ -6,7 +6,7 @@ import {
   makeWorkspace, testEnv, runCli, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [EQ] }, agents: { allow: [], deny: ['work-*'] } } };
 

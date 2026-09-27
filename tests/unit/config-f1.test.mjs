@@ -5,7 +5,7 @@ import {
   schemaFor, keyNeedsServer, isSecretLikeSetting, coerceValue, applyConfigEdit,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 test('DEFAULT_CONFIG is valid against CONFIG_SCHEMA and neutral', () => {

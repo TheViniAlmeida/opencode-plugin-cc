@@ -1,4 +1,8 @@
 // `opc setup`: diagnostic + start/reuse of the workspace server (F0); `--stop-server` (spec §4, §5.5).
+import { withLock } from '../lib/locks.mjs';
+import { redact } from '../lib/redact.mjs';
+import { providerEcho } from './models.mjs';
+import { f1Command, f1Error } from '../lib/f1-command.mjs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +12,7 @@ import { globalConfigPath, workspaceConfigPath } from '../lib/config.mjs';
 import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
 import { renderSetup } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, stopServer } from '../lib/server.mjs';
-import { listActiveJobs } from '../lib/state.mjs';
+import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SPEC = {
@@ -127,7 +131,7 @@ async function diagnose(ctx, flags) {
     } catch (err) {
       report.server = { status: 'error', error: { code: err.code ?? 'INTERNAL', message: err.message }, warnings: [] };
       if (NEXT_STEP_BY_CODE[err.code]) report.nextSteps.push(NEXT_STEP_BY_CODE[err.code]);
-      exitCode = toExitCode(err);
+      exitCode = toExitCode(f1Error(err));
     }
   }
   if (!report.config.hasGlobal) report.nextSteps.push('Ainda não há config global do opc; o onboarding guiado chega na F1.');
@@ -198,7 +202,7 @@ const SetupOnboarding = {
   },
 
   emit(d, ctx, flags, view) {
-    if (flags.json) ctx.json(view);
+    if (flags.json) ctx.json(redact(view));
     else ctx.out(d.renderOnboarding(view));
     return 0;
   },
@@ -215,6 +219,7 @@ const SetupOnboarding = {
         const { api } = await d.connectApi(ctx);
         catalog = d.buildCatalog(await api.providers());
       } catch (err) {
+        if (err.code === 'SERVER_ERROR') throw err;
         serverError = `${err.code ?? 'ERROR'}: ${err.message}`;
       }
     }
@@ -247,10 +252,10 @@ const SetupOnboarding = {
       flags: { provider: { type: 'string' }, top: { type: 'number', default: 3 }, query: { type: 'string' }, json: { type: 'boolean' }, cwd: { type: 'string' } },
       allowPositionals: true,
     });
-    if (!flags.provider || positionals.length) throw new d.UsageError('USAGE', 'usage: opc setup models --provider <id> [--top N] [--query text|glob] [--json]');
-    if (!Number.isInteger(flags.top) || flags.top < 1 || flags.top > 50) throw new d.UsageError('USAGE', '--top must be an integer between 1 and 50');
+    if (!flags.provider || positionals.length) throw new d.UsageError('USAGE', 'uso: opc setup models --provider <id> [--top N] [--query texto|padrão] [--json]');
+    if (!Number.isInteger(flags.top) || flags.top < 1 || flags.top > 50) throw new d.UsageError('USAGE', '--top deve ser um inteiro entre 1 e 50');
     const { catalog } = await this.discovery(d, ctx);
-    if (!catalog.connected.has(flags.provider)) throw new d.UsageError('UNKNOWN_PROVIDER', `provider "${flags.provider}" is not connected`);
+    if (!catalog.connected.has(flags.provider)) throw new d.UsageError('UNKNOWN_PROVIDER', `o provedor "${providerEcho(flags.provider)}" não está conectado`);
     const { policy } = this.policyFor(d, ctx);
     const view = {
       kind: 'models',
@@ -274,7 +279,7 @@ const SetupOnboarding = {
       throw new d.UsageError('USAGE', "uso: opc setup apply [--json] ('<JSON parcial>' | --stdin); não combine --stdin com um payload posicional");
     }
     const text = flags.stdin ? await d.readStdin(ctx.stdin) : positionals.join(' ');
-    if (!text.trim()) throw new d.UsageError('USAGE', "usage: opc setup apply [--json] ('<partial config JSON>' | --stdin)");
+    if (!text.trim()) throw new d.UsageError('USAGE', "uso: opc setup apply [--json] ('<JSON parcial>' | --stdin)");
     let partial;
     try { partial = JSON.parse(text); } catch { throw new d.UsageError('INVALID_JSON', 'O payload informado não contém JSON válido.'); }
     const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
@@ -297,16 +302,21 @@ const SetupOnboarding = {
   async commit(ctx, argv) {
     const d = await this.deps();
     const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
-    if (positionals.length) throw new d.UsageError('USAGE', 'usage: opc setup commit [--json]');
-    const draft = d.loadDraft(ctx.dataDir);
-    if (!draft) throw new d.UsageError('NO_DRAFT', 'no onboarding draft to commit; run /opc:setup first');
-    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
-    const deps = await this.discovery(d, ctx);
-    const result = d.commitDraft({
-      dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot, draft, ...deps,
-      existing: this.existingOf(loaded), allowLocked: draft.mode === 'bootstrap' && !loaded.hasGlobal,
+    if (positionals.length) throw new d.UsageError('USAGE', 'uso: opc setup commit [--json]');
+    ensurePrivateDir(ctx.dataDir);
+    return withLock(path.join(ctx.dataDir, 'config.lock'), { timeoutMs: 30000, purpose: 'setup-commit' }, async () => {
+      const draft = d.loadDraft(ctx.dataDir);
+      if (!draft) throw new d.UsageError('NO_DRAFT', 'nenhum rascunho de configuração para gravar; execute /opc:setup primeiro');
+      const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+      const allowLocked = draft.mode === 'bootstrap' && !loaded.hasGlobal;
+      d.assertDraftComplete(draft, { allowLocked });
+      const deps = await this.discovery(d, ctx);
+      const result = d.commitDraft({
+        dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot, draft, ...deps,
+        existing: this.existingOf(loaded), allowLocked,
+      });
+      return this.emit(d, ctx, flags, { kind: 'commit', ...result });
     });
-    return this.emit(d, ctx, flags, { kind: 'commit', ...result });
   },
 
   async discard(ctx, argv) {
@@ -316,7 +326,7 @@ const SetupOnboarding = {
   },
 };
 
-export async function run(ctx, argv) {
+async function runCommand(ctx, argv) {
   const sub = argv[0];
   if (['models', 'apply', 'commit', 'discard'].includes(sub)) return SetupOnboarding[sub](ctx, argv.slice(1));
   if (argv.some((arg) => arg === '--enable-review-gate' || arg === '--disable-review-gate')) {
@@ -351,3 +361,5 @@ export async function run(ctx, argv) {
   return exitCode;
 }
 // ---- end F1 ----
+
+export const run = f1Command(runCommand);

@@ -1,4 +1,5 @@
 // opc providers [--all] [--json] — spec §4 (/opc:providers)
+import { f1Command } from '../lib/f1-command.mjs';
 import { parseArgs } from '../lib/args.mjs';
 import { UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
@@ -8,7 +9,7 @@ import { renderProviders } from '../lib/render.mjs';
 
 const SPEC = { flags: { all: { type: 'boolean' }, json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true };
 
-export async function run(ctx, argv) {
+async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   if (positionals.length) throw new UsageError('USAGE', 'uso: opc providers [--all] [--json]');
   const { api } = await connectApi(ctx);
@@ -21,3 +22,5 @@ export async function run(ctx, argv) {
   else ctx.out(renderProviders(view));
   return 0;
 }
+
+export const run = f1Command(runCommand);

@@ -56,7 +56,18 @@ export function loadDraft(dataDir) {
     if (error.code === 'INVALID_JSON') return null;
     throw error;
   }
-  if (!isPlainObject(draft) || draft.schemaVersion !== DRAFT_SCHEMA_VERSION || !isPlainObject(draft.values)) return null;
+  if (!isPlainObject(draft) || draft.schemaVersion !== DRAFT_SCHEMA_VERSION
+    || !['bootstrap', 'reconfigure'].includes(draft.mode)
+    || !['global', 'workspace'].includes(draft.scope)
+    || (draft.mode === 'bootstrap' && draft.scope !== 'global')
+    || !Array.isArray(draft.completed)
+    || draft.completed.some((id) => !ONBOARDING_STEPS.some((step) => step.id === id))
+    || new Set(draft.completed).size !== draft.completed.length
+    || !isPlainObject(draft.values)
+    || ![draft.createdAt, draft.updatedAt].every((stamp) => typeof stamp === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(stamp) && Number.isFinite(Date.parse(stamp)))) return null;
+  for (const [key, value] of Object.entries(draft.values)) {
+    if (!schemaFor(key) || validateConfigShape(setPath({}, key, value)).errors.length) return null;
+  }
   return draft;
 }
 
@@ -192,7 +203,15 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
   return { draft: next, applied, warnings, nextStep: nextStep(next, { allowLocked }) };
 }
 
+export function assertDraftComplete(draft, { allowLocked = false } = {}) {
+  const pending = remainingSteps(draft, { allowLocked });
+  if (pending.length) {
+    throw new UsageError('INCOMPLETE_ONBOARDING', `Há etapas pendentes no assistente de configuração: ${pending.join(', ')}. Conclua-as antes de gravar.`, { details: { remainingSteps: pending } });
+  }
+}
+
 export function commitDraft({ dataDir, workspaceRoot, draft, catalog, agents = [], opencodeConfig = null, existing, allowLocked = false }) {
+  assertDraftComplete(draft, { allowLocked });
   if (draft.scope === 'workspace') {
     const disallowed = Object.keys(draft.values).filter((key) => !isWorkspaceKey(key));
     if (disallowed.length) {
@@ -401,7 +420,7 @@ export function onboardingSummary({ hasGlobal, draft, catalog, policy, opencode,
     providerChoices: providers.filter((p) => p.allowed).slice(0, 3).map((p) => p.id),
     needsOtherProvider: providers.filter((p) => p.allowed).length > 3,
     lockedKeysEditable: allowLocked,
-    draft: draft ? { exists: true, mode: draft.mode, scope: draft.scope, completed: draft.completed, values: draft.values, updatedAt: draft.updatedAt } : { exists: false },
+    draft: draft ? { exists: true, mode: draft.mode, scope: draft.scope, completed: draft.completed, values: redact(draft.values), updatedAt: draft.updatedAt } : { exists: false },
     nextStep: draft ? nextStep(draft, { allowLocked }) : (hasGlobal ? 'scope' : 'defaultProvider'),
     projectDirs: workspaceRoot ? projectDirs(workspaceRoot) : [],
     terminalWizard: 'opc config init',

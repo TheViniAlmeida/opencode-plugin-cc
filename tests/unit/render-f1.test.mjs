@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { renderProviders, renderModels, renderAgents, renderCatalog, renderConfig, renderOnboarding } from '../../plugins/opc/scripts/lib/render.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 
-const model = { full: 'omniroute-mvalmeida/opencode-go/kimi-k3', name: 'Kimi K3', variants: ['low', 'high'], limit: { context: 262144, output: 32768 }, cost: { input: 0.6, output: 2.5 }, status: 'active', allowed: true };
+const model = { full: 'omniroute-personal/opencode-go/kimi-k3', name: 'Kimi K3', variants: ['low', 'high'], limit: { context: 262144, output: 32768 }, cost: { input: 0.6, output: 2.5 }, status: 'active', allowed: true };
 
 test('renderProviders: table with policy column and empty state', () => {
   const text = renderProviders({ providers: [{ id: 'omniroute-work', name: 'EQ', connected: true, modelCount: 3, defaultModel: null, allowed: false, rule: 'policy.providers.deny: omniroute-work' }], all: false });
@@ -14,8 +14,8 @@ test('renderProviders: table with policy column and empty state', () => {
 
 test('renderModels: compact and verbose', () => {
   const compact = renderModels({ models: [model], provider: null, verbose: false });
-  assert.match(compact, /\| omniroute-mvalmeida\/opencode-go\/kimi-k3 \| Kimi K3 \| low, high \| permitido \|/);
-  const verbose = renderModels({ models: [model], provider: 'omniroute-mvalmeida', verbose: true, allowedOnly: true });
+  assert.match(compact, /\| omniroute-personal\/opencode-go\/kimi-k3 \| Kimi K3 \| low, high \| permitido \|/);
+  const verbose = renderModels({ models: [model], provider: 'omniroute-personal', verbose: true, allowedOnly: true });
   assert.match(verbose, /só permitidos/);
   assert.match(verbose, /262144/);
   assert.match(verbose, /0\.6 \/ 2\.5/);

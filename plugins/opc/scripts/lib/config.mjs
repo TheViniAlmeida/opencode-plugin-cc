@@ -1,4 +1,6 @@
 // Global config + workspace override with the restrictive merge of spec §3.2 (F0 base; F1 completes).
+import { isSecretLikeSetting } from './secret-settings.mjs';
+export { isSecretLikeSetting } from './secret-settings.mjs';
 import fs from 'node:fs';
 import path, { join as joinPathF1 } from 'node:path';
 import { OpcError, UsageError } from './opc-error.mjs';
@@ -117,7 +119,6 @@ export const CONFIG_SCHEMA = Object.freeze({
 
 const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') });
 const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
-const SECRET_WORD = /(token|password|passwd|secret|apikey|credential)/i;
 const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
 const WORKSPACE_POLICY_LISTS = ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny', 'policy.agents.allow', 'policy.agents.deny', 'policy.tools.deny', 'policy.sensitivePaths', 'policy.destructiveBash'];
 const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-map', 'modelref-list-map', 'modelref-list']);
@@ -200,13 +201,6 @@ export function findSecretLikeKeys(obj, prefix = '') {
   return hits;
 }
 
-export function isSecretLikeSetting(setting) {
-  const segment = String(setting).split('.').at(-1) ?? '';
-  return segment.toLowerCase() === 'key'
-    || (segment.length > 3 && segment.slice(-3).toLowerCase() === 'key' && segment.at(-3) === 'K')
-    || /[_-]key$/i.test(segment)
-    || SECRET_WORD.test(segment);
-}
 
 export function validateConfigShape(obj, { source = 'global' } = {}) {
   const errors = [];

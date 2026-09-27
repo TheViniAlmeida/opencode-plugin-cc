@@ -6,7 +6,7 @@ import {
   makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 function setup(t, { config = null, git = true } = {}) {
@@ -45,7 +45,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   fs.mkdirSync(path.join(ws, 'src'));
   fs.mkdirSync(path.join(ws, 'tests'));
   const answers = [
-    '1',                        // provider: omniroute-mvalmeida (most models)
+    '1',                        // provider: omniroute-personal (most models)
     'kimi-k3', '1',             // model: filter by text, pick the first match
     '1',                        // review model: none (use default)
     '1',                        // stop gate model: none
@@ -72,7 +72,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   assert.deepEqual(cfg.project, { goal: 'Plugin Claude Code para OpenCode', scope: ['src/', 'tests/'], taskTypes: ['ask', 'review'] });
   assert.equal(cfg.aliases.fast, `${MV}/opencode-go/qwen3.8-flash`);
   assert.equal(cfg.aliases.strong, `${MV}/opencode-go/qwen3.8-max`);
-  assert.match(r.stderr, / 1\) omniroute-mvalmeida/);
+  assert.match(r.stderr, / 1\) omniroute-personal/);
 });
 
 test('config init without a TTY is refused (exit 2) and writes nothing', async (t) => {

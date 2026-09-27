@@ -6,7 +6,7 @@ import { UsageError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { scriptedTTY, captureStream } from '../helpers.mjs';
 
 const CHOICES = [
-  { label: 'omniroute-mvalmeida (182 modelos)', value: 'omniroute-mvalmeida' },
+  { label: 'omniroute-personal (182 modelos)', value: 'omniroute-personal' },
   { label: 'omniroute-work (51 modelos)', value: 'omniroute-work' },
   { label: 'anthropic (18 modelos)', value: 'anthropic' },
   { label: 'opencode (7 modelos)', value: 'opencode' },
@@ -50,7 +50,7 @@ test('select by number, with invalid answer retried', async () => {
   const p = createPrompter({ input: scriptedTTY(['9', '3']), output });
   assert.equal(await p.select('Provider padrão?', CHOICES), 'anthropic');
   assert.match(output.text(), /Opção inválida: 9/);
-  assert.match(output.text(), / 1\) omniroute-mvalmeida \(182 modelos\)/);
+  assert.match(output.text(), / 1\) omniroute-personal \(182 modelos\)/);
   p.close();
 });
 
@@ -89,7 +89,7 @@ test('select default on empty answer and "Outro"', async () => {
 test('multiSelect by ranges, min enforced', async () => {
   const output = captureStream();
   const p = createPrompter({ input: scriptedTTY(['', '1,3-4']), output });
-  assert.deepEqual(await p.multiSelect('Tipos?', CHOICES, { min: 1 }), ['omniroute-mvalmeida', 'anthropic', 'opencode']);
+  assert.deepEqual(await p.multiSelect('Tipos?', CHOICES, { min: 1 }), ['omniroute-personal', 'anthropic', 'opencode']);
   assert.match(output.text(), /pelo menos 1/);
   p.close();
 });

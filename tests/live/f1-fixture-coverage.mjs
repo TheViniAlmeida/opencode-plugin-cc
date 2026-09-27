@@ -2,10 +2,7 @@
 // Run: OPC_LIVE=1 node --test tests/live/f1-fixture-coverage.mjs   (prints key paths only, never values)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fixtureData, stopAllServers } from '../helpers.mjs';
+import { fixtureData, makeTempDir, trackTempDir, trackEnv, trackWorkspace } from '../helpers.mjs';
 import { resolveDataDir, resolveWorkspaceRoot, workspaceStateDir, ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import { loadConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { ensureServer, clientFor } from '../../plugins/opc/scripts/lib/server.mjs';
@@ -36,15 +33,11 @@ export function shapePaths(value, at = '$', out = new Set()) {
 }
 
 test('live contract: fixtures cover every key path the real server returns', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-live-f1c-data-'));
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-live-f1c-ws-'));
-  const env = { ...process.env, OPC_DATA_DIR: dataDir };
+  const dataDir = trackTempDir(t, makeTempDir('opc-live-f1c-data-'));
+  const ws = trackTempDir(t, makeTempDir('opc-live-f1c-ws-'));
+  trackWorkspace(t, ws);
+  const env = trackEnv(t, { ...process.env, OPC_DATA_DIR: dataDir });
   delete env.OPC_SERVER_URL;
-  t.after(async () => {
-    await stopAllServers(env, ws);
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    fs.rmSync(ws, { recursive: true, force: true });
-  });
   const workspaceRoot = resolveWorkspaceRoot(ws);
   const stateDir = workspaceStateDir(resolveDataDir(env), workspaceRoot);
   ensurePrivateDir(stateDir);

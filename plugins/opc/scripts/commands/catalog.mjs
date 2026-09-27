@@ -1,4 +1,5 @@
 // opc catalog commands|skills [--json] — spec §4 (/opc:catalog)
+import { f1Command } from '../lib/f1-command.mjs';
 import { parseArgs } from '../lib/args.mjs';
 import { UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
@@ -7,7 +8,7 @@ import { renderCatalog } from '../lib/render.mjs';
 
 const SPEC = { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true };
 
-export async function run(ctx, argv) {
+async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   const kind = positionals[0];
   if (positionals.length !== 1 || !['commands', 'skills'].includes(kind)) throw new UsageError('USAGE', 'uso: opc catalog commands|skills [--json]');
@@ -35,3 +36,5 @@ export async function run(ctx, argv) {
   else ctx.out(renderCatalog(view));
   return 0;
 }
+
+export const run = f1Command(runCommand);

@@ -37,7 +37,7 @@ test('getPath/setPath use dotted paths and setPath is immutable', () => {
 });
 
 test('matchesGlob: * matches any sequence including /', () => {
-  assert.equal(matchesGlob('omniroute-mvalmeida/opencode-go/kimi-k3', 'omniroute-mvalmeida/*'), true);
+  assert.equal(matchesGlob('omniroute-personal/opencode-go/kimi-k3', 'omniroute-personal/*'), true);
   assert.equal(matchesGlob('anthropic/claude', 'anthropic/*'), true);
   assert.equal(matchesGlob('work-review', 'work-*'), true);
   assert.equal(matchesGlob('prov.a/x', 'prov.a/x'), true);

@@ -36,7 +36,8 @@ test('F1 live regression: agent assertion diagnostics do not expose full names',
 });
 
 const LIVE = process.env.OPC_LIVE === '1';
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/kimi-k3';
+const MODEL = process.env.OPC_LIVE_MODEL?.trim();
+const SKIP = !MODEL ? 'OPC_LIVE_MODEL não definida; informe provider/model para executar os testes ao vivo.' : !LIVE && 'OPC_LIVE!=1';
 const WORLD_PROVIDER = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [WORLD_PROVIDER] }, agents: { allow: [], deny: ['work-*'] } } };
 
@@ -61,7 +62,7 @@ function opencode(args, { cwd }) {
   return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-test('live: /opc:models --all matches `opencode models` per provider', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: /opc:models --all matches `opencode models` per provider', { skip: SKIP }, async (t) => {
   const { ws, json } = liveEnv(t);
   const { providers } = await json(['providers', '--json']);
   assert.ok(providers.length > 0, 'at least one connected provider');
@@ -79,7 +80,7 @@ test('live: /opc:models --all matches `opencode models` per provider', { skip: !
   }
 });
 
-test('live: /opc:agents matches the server API and includes the CLI agent subset', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: /opc:agents matches the server API and includes the CLI agent subset', { skip: SKIP }, async (t) => {
   const { ws, env, json } = liveEnv(t);
   const listing = opencode(['agent', 'list'], { cwd: ws });
   assert.equal(listing.code, 0, listing.stderr);
@@ -100,7 +101,7 @@ test('live: /opc:agents matches the server API and includes the CLI agent subset
   t.diagnostic(`agents: opc=${listedByName.size} api=${rawByName.size} cli=${opencodeNames.size}`);
 });
 
-test('live: world policy hides omniroute-work/* and work-* and refuses explicit use', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: world policy hides omniroute-work/* and work-* and refuses explicit use', { skip: SKIP }, async (t) => {
   const { dataDir, cli, json } = liveEnv(t);
   fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify(WORLD), { mode: 0o600 });
   const models = (await json(['models', '--allowed', '--json'])).models;
@@ -125,7 +126,7 @@ test('live: world policy hides omniroute-work/* and work-* and refuses explicit 
   }
 });
 
-test('live: valid variant of the phase model is accepted; invalid one refused', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: valid variant of the phase model is accepted; invalid one refused', { skip: SKIP }, async (t) => {
   const { cli, json } = liveEnv(t);
   const provider = MODEL.split('/')[0];
   const entry = (await json(['models', provider, '--verbose', '--json'])).models.find((m) => m.full === MODEL);
@@ -142,7 +143,7 @@ test('live: valid variant of the phase model is accepted; invalid one refused', 
   assert.match(bad.stdout + bad.stderr, /UNKNOWN_VARIANT/);
 });
 
-test('live: companion side of the guided onboarding writes the expected config', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: companion side of the guided onboarding writes the expected config', { skip: SKIP }, async (t) => {
   const { dataDir, cli, json } = liveEnv(t);
   const state = (await json(['setup', '--json'])).onboarding;
   assert.equal(state.mode, 'bootstrap');
@@ -172,7 +173,7 @@ test('live: companion side of the guided onboarding writes the expected config',
   assert.equal(fs.statSync(path.join(dataDir, 'config.json')).mode & 0o777, 0o600);
 });
 
-test('live: JSON output of providers/models never carries provider credentials', { skip: !LIVE && 'OPC_LIVE!=1' }, async (t) => {
+test('live: JSON output of providers/models never carries provider credentials', { skip: SKIP }, async (t) => {
   const { cli, dataDir } = liveEnv(t);
   const outputs = [];
   for (const args of [['providers', '--all', '--json'], ['models', '--all', '--verbose', '--json'], ['setup', '--json']]) {

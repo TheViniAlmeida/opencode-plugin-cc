@@ -11,12 +11,12 @@ import {
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const providers = JSON.parse(fs.readFileSync(path.join(DATA, 'provider.json'), 'utf8'));
 const catalog = buildCatalog(providers);
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 
 test('globToRegExp: * matches any sequence including slashes', () => {
-  assert.ok(globToRegExp('omniroute-mvalmeida/*').test('omniroute-mvalmeida/opencode-go/kimi-k3'));
+  assert.ok(globToRegExp('omniroute-personal/*').test('omniroute-personal/opencode-go/kimi-k3'));
   assert.ok(globToRegExp('*/kimi-*').test('omniroute-work/opencode-go/kimi-k3'));
-  assert.ok(!globToRegExp('anthropic/*').test('omniroute-mvalmeida/anthropic/x'));
+  assert.ok(!globToRegExp('anthropic/*').test('omniroute-personal/anthropic/x'));
   assert.ok(globToRegExp('a.b').test('a.b'));
   assert.ok(!globToRegExp('a.b').test('axb'), 'dots are literal');
   assert.ok(globToRegExp('work-*').test('work-deploy'));

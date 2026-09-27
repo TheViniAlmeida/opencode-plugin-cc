@@ -14,10 +14,11 @@ const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const NOW = new Date('2026-09-26T12:00:00Z');
 const tmp = (t) => trackTempDir(t, makeTempDir('opc-onb-'));
+const completed = ONBOARDING_STEPS.map((step) => step.id);
 const NONE = { global: null, workspace: null };
 const deps = (extra = {}) => ({ catalog, agents, existing: NONE, allowLocked: true, now: NOW, ...extra });
 
@@ -128,6 +129,10 @@ test('commitDraft: writes atomically, removes draft, returns effective config', 
   const ws = tmp(t);
   let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
   ({ draft } = applyDraftStep(draft, { defaultProvider: MV, defaultModel: 'opencode-go/kimi-k3', policy: { providers: { deny: [EQ] }, agents: { deny: ['work-*'] } } }, deps()));
+  ({ draft } = applyDraftStep(draft, {
+    reviewModel: null, stopGate: { model: null, enabled: false }, defaultVariant: null,
+    policy: { approver: 'user' }, project: { goal: null }, aliases: {},
+  }, deps()));
   saveDraft(dataDir, draft);
   const r = commitDraft({ dataDir, workspaceRoot: ws, draft, catalog, agents, existing: NONE, allowLocked: true });
   assert.equal(r.path, path.join(dataDir, 'config.json'));
@@ -140,7 +145,7 @@ test('commitDraft: writes atomically, removes draft, returns effective config', 
 
 test('commitDraft: denied default refused (exit 4), nothing written, draft kept', (t) => {
   const dataDir = tmp(t);
-  const draft = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { defaultModel: `${EQ}/opencode-go/kimi-k3`, 'policy.providers.deny': [EQ] } };
+  const draft = { ...buildDraft({ hasGlobal: false, now: NOW }), completed, values: { defaultModel: `${EQ}/opencode-go/kimi-k3`, 'policy.providers.deny': [EQ] } };
   saveDraft(dataDir, draft);
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: dataDir, draft, catalog, agents, existing: NONE, allowLocked: true }), (e) => e.code === 'POLICY_DENIED' && e.exitCode === 4);
   assert.equal(fs.existsSync(path.join(dataDir, 'config.json')), false);
@@ -149,9 +154,9 @@ test('commitDraft: denied default refused (exit 4), nothing written, draft kept'
 
 test('commitDraft: invalid model refused (exit 2); locked change refused without allowLocked', (t) => {
   const dataDir = tmp(t);
-  const bad = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { defaultModel: `${MV}/opencode-go/removed` } };
+  const bad = { ...buildDraft({ hasGlobal: false, now: NOW }), completed, values: { defaultModel: `${MV}/opencode-go/removed` } };
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: dataDir, draft: bad, catalog, agents, existing: NONE, allowLocked: true }), (e) => e.code === 'INVALID_CONFIG' && e.exitCode === 2);
-  const lockedDraft = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { 'policy.approver': 'FAKE-SECRET-VALUE-123456' } };
+  const lockedDraft = { ...buildDraft({ hasGlobal: false, now: NOW }), completed, values: { 'policy.approver': 'FAKE-SECRET-VALUE-123456' } };
   const existing = { global: { defaultProvider: MV }, workspace: null };
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: dataDir, draft: lockedDraft, catalog, agents, existing, allowLocked: false }), (e) => {
     assert.equal(e.code, 'LOCKED_KEY');
@@ -168,6 +173,7 @@ test('commitDraft: changing scope cannot write accumulated global-only keys to w
     scope: 'global', stopGate: { enabled: true }, delegation: { auto: true },
   }, deps());
   ({ draft } = applyDraftStep(draft, { scope: 'workspace' }, deps()));
+  draft.completed = completed;
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: ws, draft, catalog, agents, existing: NONE, allowLocked: true }), (e) => {
     assert.equal(e.exitCode, 2);
     assert.match(e.message, /stopGate\.enabled/);

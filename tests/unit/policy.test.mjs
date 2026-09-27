@@ -4,7 +4,7 @@ import {
   evaluate, assertAllowed, evaluateAgent, evaluateCommand, assertAgentUsable, assertCommandUsable, pinnedModelOf,
 } from '../../plugins/opc/scripts/lib/policy.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = {
   providers: { allow: [], deny: [EQ] },

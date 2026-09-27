@@ -22,7 +22,7 @@ test('fake serves /provider, /command, /skill and /agent from fixtures (raw, wit
   const { api } = await boot(t);
   const providers = await api.providers();
   assert.deepEqual(providers.connected, fixtureData('provider.json').connected);
-  const rawKey = providers.all.find((p) => p.id === 'omniroute-mvalmeida').key;
+  const rawKey = providers.all.find((p) => p.id === 'omniroute-personal').key;
   assert.equal(rawKey, 'FAKE-PROVIDER-KEY-0001');
   const cliJson = JSON.stringify(redact(providers));
   assert.ok(!cliJson.includes(rawKey), 'provider key is redacted from CLI JSON by its property name');

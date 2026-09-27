@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [EQ] }, agents: { allow: [], deny: ['work-*'] } } };
 const SECRET_MARKERS = /FIXTURE-|sk-omr|sk-ant|sk-FIXTURE|Bearer /;

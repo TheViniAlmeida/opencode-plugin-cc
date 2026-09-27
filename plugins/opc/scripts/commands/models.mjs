@@ -1,4 +1,5 @@
 // opc models [provider] [--verbose] [--allowed] [--all] [--json] — spec §4 (/opc:models)
+import { f1Command } from '../lib/f1-command.mjs';
 import { parseArgs } from '../lib/args.mjs';
 import { UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
@@ -15,7 +16,7 @@ export function providerEcho(provider) {
   return `${provider.slice(0, 12)}…`;
 }
 
-export async function run(ctx, argv) {
+async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   if (positionals.length > 1) throw new UsageError('USAGE', 'uso: opc models [provider] [--verbose] [--allowed] [--all] [--json]');
   const provider = positionals[0] ?? null;
@@ -35,3 +36,5 @@ export async function run(ctx, argv) {
   else ctx.out(renderModels(view));
   return 0;
 }
+
+export const run = f1Command(runCommand);
