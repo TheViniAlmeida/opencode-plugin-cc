@@ -34,6 +34,27 @@ test('agent array snapshots collapse unknown names recursively and permission ma
   }]);
 });
 
+test('F1 endpoint snapshots never expose provider, model, command, or skill names', () => {
+  const value = {
+    all: [{
+      id: 'synthetic-provider', name: 'Synthetic Provider',
+      models: { 'synthetic-provider/synthetic-model': { id: 'synthetic-model', name: 'Synthetic Model', limit: {} } },
+      options: { syntheticProviderOption: true },
+    }],
+    default: 'synthetic-provider',
+  };
+  const snapshots = [
+    shapeOf(value, 'provider'),
+    shapeOf({ 'synthetic-command': { name: 'synthetic-command', description: 'synthetic command' } }, 'command'),
+    shapeOf({ 'synthetic-skill': { name: 'synthetic-skill', description: 'synthetic skill' } }, 'skill'),
+    shapeOf({ 'synthetic-agent': { name: 'synthetic-agent', mode: 'primary' } }, 'agent'),
+  ];
+  const serialized = JSON.stringify(snapshots);
+  for (const personal of ['synthetic-provider', 'Synthetic Provider', 'synthetic-model', 'Synthetic Model', 'syntheticProviderOption', 'synthetic-command', 'synthetic-skill', 'synthetic-agent']) {
+    assert.equal(serialized.includes(personal), false, personal);
+  }
+});
+
 test('live collection prunes real and fake agent responses identically before diffing', async () => {
   const source = fs.readFileSync(path.resolve('tests/live/contract.mjs'), 'utf8');
   const collectSource = source.slice(source.indexOf('async function collect('), source.indexOf('\nconst base ='));

@@ -10,6 +10,9 @@ export const PROBES = [
   { name: 'session.status', method: 'GET', path: '/session/status', used: [] },
   { name: 'permission', method: 'GET', path: '/permission', used: [] },
   { name: 'question', method: 'GET', path: '/question', used: [] },
+  { name: 'provider', method: 'GET', path: '/provider', used: ['all.[].id', 'all.[].name'], optionalUsed: ['connected', 'default', 'all.[].models', 'all.[].models.*.id', 'all.[].models.*.name', 'all.[].models.*.limit', 'all.[].models.*.variants', 'all.[].models.*.status', 'all.[].models.*.release_date'] },
+  { name: 'command', method: 'GET', path: '/command', used: ['[].name'], optionalUsed: ['[].description', '[].source', '[].agent', '[].model', '[].subtask', '[].template', '[].hints'] },
+  { name: 'skill', method: 'GET', path: '/skill', used: [], optionalUsed: ['[].name', '[].description', '[].location'] },
 ];
 export const EVENT_TYPES = ['server.connected', 'server.heartbeat'];
 
@@ -28,6 +31,9 @@ export const KNOWN_CONFIG_PROPS = new Set([
 export const MAP_PATHS = new Set([
   'config.agent', 'config.mcp', 'config.provider', 'config.command', 'config.mode', 'config.lsp', 'config.formatter',
   'config.permission', 'session.status',
+  'agent', 'command', 'skill',
+  'provider.all[].models', 'provider.default', 'provider.all[].options', 'provider.all[].models.*.options',
+  'provider.all[].models.*.headers', 'provider.all[].models.*.variants',
 ]);
 
 function mergeShapes(shapes) {
