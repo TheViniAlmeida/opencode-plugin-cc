@@ -37,7 +37,7 @@ Acréscimos da F1 (valem além da lista acima):
 - **Mensagens:** todo texto ao usuário em PT-BR na origem; eco de entrada do usuário truncado a 12 caracteres + `…` e **nunca** guardado inteiro em `details`; comandos de recuperação sugeridos usam `<valor>`.
 - **Fixtures:** o provider pessoal nas fixtures é `omniroute-personal` (o plano foi atualizado); o de trabalho é `omniroute-work` / agentes `work-*`. **Testes ao vivo exigem `OPC_LIVE_MODEL`** (sem default com IDs do operador) e são executados um a um pelo controlador.
 - **Config:** `.opc.json` tem modo 0644 (versionável); a primeira configuração é sempre global; checagem de política em toda edição (config efetiva antes × depois); bootstrap sob `config.lock`.
-- **Perfil read-only — plano B do §8.1 (achado §15.4a da F0):** os padrões de permissão de `grep`/`glob` são o termo buscado/o glob, **não** caminhos. Portanto o perfil `read-only` deve **negar `grep`** (`{permission:'grep', pattern:'*', action:'deny'}`) — `read` (com `sensitivePaths` negados), `glob` e `list` continuam permitidos. Aplique também às invariantes: `grep` só é permitido no perfil `write`/`custom` se o usuário liberar explicitamente.
+- **Perfil read-only — plano B do §8.1 (achado §15.4a da F0):** os padrões de permissão de `grep`/`glob` são o termo buscado/o glob, **não** caminhos. Portanto o perfil `read-only` deve **negar `grep`** (`{permission:'grep', pattern:'*', action:'deny'}`) — `read` (com `sensitivePaths` negados), `glob` e `list` continuam permitidos. No perfil `write` o `grep` segue as regras herdadas do agente/usuário (negá-lo ali não traria proteção real, pois o bash herdado também lê arquivos); a negação vale só para `read-only` (e `custom`, que parte do `read-only`).
 
 ## Global Constraints
 
