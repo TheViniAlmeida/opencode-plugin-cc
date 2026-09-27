@@ -320,8 +320,9 @@ export async function run(ctx, argv) {
   };
   const exitCode = await runDiagnostics(captured, rest);
   if (exitCode !== ExitCode.OK) {
-    if (report !== undefined) ctx.json(report);
-    else ctx.out(output);
+    const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
+    if (report !== undefined) ctx.json({ ...report, onboarding });
+    else ctx.out(`${output}${text}`);
     return exitCode;
   }
 

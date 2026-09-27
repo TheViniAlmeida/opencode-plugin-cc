@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeWorkspace, makeTempDir, testEnv, runCli, runInProcess, pipedStdin, stopAllServers, writeGlobalConfig, readGlobalConfig,
+  makeWorkspace, makeTempDir, testEnv, runCli, runInProcess, pipedStdin, stopAllServers, trackTempDir, writeGlobalConfig, readGlobalConfig,
 } from '../helpers.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -40,11 +40,16 @@ test('setup --json reports the onboarding state on first run', async (t) => {
 });
 
 test('setup --json without opencode on PATH: install offer data', async (t) => {
-  const bin = makeTempDir();
+  const bin = trackTempDir(t, makeTempDir());
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const { cli } = setup(t, { env: { PATH: bin } });
   const r = await cli(['setup', '--json']);
-  const s = JSON.parse(r.stdout).onboarding;
+  assert.equal(r.code, 5);
+  const report = JSON.parse(r.stdout);
+  assert.equal(report.opencode.installed, false);
+  assert.equal(report.server.status, 'skipped');
+  assert.ok(report.nextSteps.some((step) => /npm install -g opencode-ai/.test(step)));
+  const s = report.onboarding;
   assert.equal(s.opencodeInstalled, false);
   assert.equal(s.npmAvailable, false);
   assert.deepEqual(s.connectedProviders, []);
@@ -171,7 +176,7 @@ test('after bootstrap: locked keys refused from Claude with the terminal command
   const locked = await apply({ policy: { approver: 'claude' } });
   assert.equal(locked.code, 4);
   assert.match(all(locked), /LOCKED_KEY/);
-  assert.match(all(locked), /opc config set policy\.approver 'claude' --tty-confirm/);
+  assert.match(all(locked), /opc config set policy\.approver '<valor>' --tty-confirm/);
   const ok = await apply({ scope: 'global', stopGate: { enabled: true } });
   assert.equal(ok.code, 0, all(ok));
   assert.ok(!JSON.parse(ok.stdout).remainingSteps.includes('allowedModels'));
