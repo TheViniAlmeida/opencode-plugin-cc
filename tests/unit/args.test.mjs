@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import { extractCwd, parseArgs, readStdin, resolveArgv, splitArgString } from '../../plugins/opc/scripts/lib/args.mjs';
+import { extractCwd, parseArgs, parsePromptArgs, readStdin, resolveArgv, splitArgString } from '../../plugins/opc/scripts/lib/args.mjs';
 import { UsageError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 
 const stdinOf = (text) => Readable.from([Buffer.from(text, 'utf8')]);
@@ -18,10 +18,11 @@ test('splitArgString splits like a shell without any expansion', () => {
 });
 
 test('prompt-roundtrip: quotes, backticks, $(), newlines and unicode survive intact', () => {
-  const prompt = 'Corrija "isso" com `crases`, $(rm -rf ~) e $HOME\nsegunda linha: ação ✓ 🚀 日本';
+  const prompt = 'Corrija "isso" com `crases`, $(rm -rf ~) e $HOME\nsegunda linha: ação ✓ 🚀 日本\n--write and --model fast stay literal';
   const quoted = `'${prompt.replace(/'/g, `'\\''`)}'`;
   assert.deepEqual(splitArgString(`--json ${quoted}`), ['--json', prompt]);
   assert.deepEqual(splitArgString(`"${prompt.replace(/(["\\$`])/g, '\\$1')}"`), [prompt]);
+  assert.deepEqual(parsePromptArgs(`--write ${prompt}\n`, { write: { type: 'boolean' } }), { argv: ['--write'], prompt });
 });
 
 test('unterminated quotes are treated as literal characters (apostrophes in prose)', () => {

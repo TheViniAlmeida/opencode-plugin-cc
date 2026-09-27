@@ -18,12 +18,25 @@ test('prompt mantido verbatim: aspas, apóstrofos, crases, expansão e unicode',
 
 test('flags em palavras inteiras; valores entre aspas; --flag=value; -- encerra flags', () => {
   const r = parsePromptArgs('explain the bug --background --effort "high" in src', SPEC);
-  assert.deepEqual(r.argv, ['--background', '--effort', 'high']);
-  assert.equal(r.prompt, 'explain the bug in src');
+  assert.deepEqual(r.argv, []);
+  assert.equal(r.prompt, 'explain the bug --background --effort "high" in src');
   const e = parsePromptArgs('--model=fast do it -- --write is literal here', SPEC);
   assert.deepEqual(e.argv, ['--model', 'fast']);
-  assert.equal(e.prompt, 'do it --write is literal here');
+  assert.equal(e.prompt, 'do it -- --write is literal here');
   assert.deepEqual(parsePromptArgs('talk about --writers and -mild', SPEC).argv, []);
+});
+
+test('reconhece flags somente nos runs inicial e final e preserva o corpo exatamente', () => {
+  assert.deepEqual(parsePromptArgs('a\n--write\nb', SPEC), { argv: [], prompt: 'a\n--write\nb' });
+  assert.deepEqual(parsePromptArgs('a --resume=keep going', SPEC), { argv: [], prompt: 'a --resume=keep going' });
+  assert.deepEqual(parsePromptArgs('--model m fix it\r\nnow --write', SPEC), {
+    argv: ['--model', 'm', '--write'], prompt: 'fix it\r\nnow',
+  });
+  assert.deepEqual(parsePromptArgs('--\n--write stays text', SPEC), { argv: [], prompt: '--write stays text' });
+});
+
+test('flags com valor seguidas de outra flag falham também no run final', () => {
+  assert.throws(() => parsePromptArgs('prompt --model --write', SPEC), (e) => e.code === 'USAGE' && e.exitCode === 2);
 });
 
 test('optional-string consome a próxima palavra somente se corresponder', () => {
@@ -32,6 +45,10 @@ test('optional-string consome a próxima palavra somente se corresponder', () =>
   assert.deepEqual(parsePromptArgs('--resume keep going', SPEC), { argv: ['--resume'], prompt: 'keep going' });
   assert.deepEqual(parsePromptArgs('--resume', SPEC), { argv: ['--resume'], prompt: '' });
   assert.deepEqual(parsePromptArgs('--resume=keep going', SPEC), { argv: ['--resume'], prompt: 'keep going' });
+  assert.deepEqual(parsePromptArgs('--resume=keep', SPEC), { argv: ['--resume'], prompt: 'keep' });
+  assert.deepEqual(parsePromptArgs('--resume=task-abc123-x1y2z3 go', SPEC), { argv: ['--resume', 'task-abc123-x1y2z3'], prompt: 'go' });
+  assert.deepEqual(parsePromptArgs('--resume="task-abc123-x1y2z3" go', SPEC), { argv: ['--resume', 'task-abc123-x1y2z3'], prompt: 'go' });
+  assert.deepEqual(parsePromptArgs('keep going --resume=ses_01ABC', SPEC), { argv: ['--resume', 'ses_01ABC'], prompt: 'keep going' });
 });
 
 test('preserva exatamente quebras de linha e o terminador -- dentro do texto', () => {
@@ -39,6 +56,7 @@ test('preserva exatamente quebras de linha e o terminador -- dentro do texto', (
   assert.equal(parsePromptArgs('a\n--\nb', SPEC).prompt, 'a\n--\nb');
   const raw = 'quotes "x" don\'t `whoami` $(touch pwned) ${HOME} ção 🚀\n';
   assert.equal(parsePromptArgs(raw, SPEC).prompt, raw.slice(0, -1));
+  assert.equal(parsePromptArgs('body\n\n', SPEC).prompt, 'body\n');
 });
 
 test('flag de valor sem valor gera erro de uso; entrada vazia fica vazia', () => {

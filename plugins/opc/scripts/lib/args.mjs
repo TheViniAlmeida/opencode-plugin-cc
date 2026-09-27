@@ -208,122 +208,131 @@ export function parseArgs(argv, spec) {
 
 // ---- F2a: prompt-preserving argument parsing for free-text commands ----
 
-const isSpaceChar = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
-
-// Splits a raw argument string into known flags and a verbatim prompt. Unlike splitArgString it
-// never interprets quotes or apostrophes in the prompt text ("don't" stays intact). Known flags
-// are recognized only as whole words; everything after a standalone `--` is prompt.
+// Parse only the leading and trailing runs of known flags; preserve the intervening prompt bytes.
 // flagSpec: { [name]: { type: 'boolean'|'string'|'number'|'optional-string', alias?, match? } }
 export function parsePromptArgs(raw, flagSpec) {
   const source = String(raw ?? '');
   const text = source.endsWith('\r\n') ? source.slice(0, -2) : source.endsWith('\n') ? source.slice(0, -1) : source;
+  const tokens = [];
+  for (let i = 0; i < text.length;) {
+    while (i < text.length && /\s/u.test(text[i])) i += 1;
+    if (i >= text.length) break;
+    const start = i;
+    while (i < text.length && !/\s/u.test(text[i])) {
+      const quote = (i === start || text[i - 1] === '=') && (text[i] === '"' || text[i] === "'") ? text[i] : null;
+      if (quote) {
+        const close = text.indexOf(quote, i + 1);
+        if (close > i) {
+          i = close + 1;
+          continue;
+        }
+      }
+      i += 1;
+    }
+    tokens.push({ raw: text.slice(start, i), start, end: i });
+  }
   const known = new Map();
   for (const [name, def] of Object.entries(flagSpec)) {
     known.set(`--${name}`, def);
     if (def.alias) known.set(`-${def.alias}`, def);
   }
   const argv = [];
-  const kept = [];
-  let afterFlag = false;
-  const dropTrailingSpace = () => {
-    if (kept.length && /^\s+$/.test(kept.at(-1))) kept.pop();
+  let promptStartOverride = null;
+  const parseHead = (token) => {
+    const eq = token.indexOf('=');
+    const head = token.startsWith('--') && eq > 0 ? token.slice(0, eq) : token;
+    const def = known.get(head);
+    return def ? { head, def, inline: eq > 0 ? decodeValue(token.slice(eq + 1)) : undefined } : null;
   };
-  let i = 0;
-  while (i < text.length) {
-    if (isSpaceChar(text[i])) {
-      let j = i;
-      while (j < text.length && isSpaceChar(text[j])) j += 1;
-      if (afterFlag) {
-        if (kept.join('').length > 0) kept.push(' ');
-        afterFlag = false;
-      } else kept.push(text.slice(i, j));
-      i = j;
-      continue;
+  const decodeValue = (value) => {
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+      return value.slice(1, -1);
     }
-    let j = i;
-    while (j < text.length && !isSpaceChar(text[j])) j += 1;
-    const word = text.slice(i, j);
-    const isPromptLine = text.slice(Math.max(0, i - 1), i).includes('\n') || text.slice(j, Math.min(text.length, j + 1)).includes('\n');
-    if (word === '--' && (!kept.join('').trim() || !isPromptLine)) {
-      let k = j;
-      while (k < text.length && isSpaceChar(text[k])) k += 1;
-      dropTrailingSpace();
-      if (kept.length) kept.push(' ');
-      kept.push(text.slice(k));
+    return value;
+  }
+  const isFlag = (token) => token === '--' || Boolean(parseHead(token));
+  let left = 0;
+  let stoppedByTerminator = false;
+  while (left < tokens.length) {
+    const token = tokens[left].raw;
+    if (token === '--') {
+      left += 1;
+      stoppedByTerminator = true;
       break;
     }
-    const eq = word.startsWith('--') ? word.indexOf('=') : -1;
-    const head = eq > 0 ? word.slice(0, eq) : word;
-    const def = known.get(head);
-    if (!def) {
-      kept.push(word);
-      i = j;
-      continue;
-    }
-    dropTrailingSpace();
-    if (eq > 0) {
-      if (def.type === 'optional-string') {
-        const inlineValue = word.slice(eq + 1);
-        if (!inlineValue || !(def.match instanceof RegExp) || !def.match.test(inlineValue)) {
-          argv.push(head);
-          kept.push(inlineValue);
-          afterFlag = false;
-          i = j;
-          continue;
-        }
-      }
-      argv.push(head, word.slice(eq + 1));
-      afterFlag = true;
-      i = j;
-      continue;
-    }
-    if (def.type === 'boolean') {
-      argv.push(head);
-      afterFlag = true;
-      i = j;
-      continue;
-    }
-    let k = j;
-    while (k < text.length && isSpaceChar(text[k])) k += 1;
-    if (def.type !== 'optional-string' && k < text.length) {
-      let nextEnd = k;
-      while (nextEnd < text.length && !isSpaceChar(text[nextEnd])) nextEnd += 1;
-      const nextWord = text.slice(k, nextEnd);
-      const nextHead = nextWord.startsWith('--') && nextWord.includes('=') ? nextWord.slice(0, nextWord.indexOf('=')) : nextWord;
-      if (known.has(nextHead)) throw new UsageError('USAGE', `A flag ${head} exige um valor.`);
-    }
-    let value;
-    let end = k;
-    const quote = text[k];
-    if (quote === '"' || quote === "'") {
-      const close = text.indexOf(quote, k + 1);
-      if (close > k) {
-        value = text.slice(k + 1, close);
-        end = close + 1;
-      }
-    }
-    if (value === undefined) {
-      while (end < text.length && !isSpaceChar(text[end])) end += 1;
-      value = text.slice(k, end);
-    }
-    if (def.type === 'optional-string') {
-      if (value && def.match instanceof RegExp && def.match.test(value)) {
-        argv.push(head, value);
-        afterFlag = true;
-        i = end;
+    const flag = parseHead(token);
+    if (!flag) break;
+    if (flag.inline !== undefined) {
+      if (flag.def.type === 'optional-string' && (!flag.inline || !(flag.def.match instanceof RegExp) || !flag.def.match.test(flag.inline))) {
+        argv.push(flag.head);
+        promptStartOverride = tokens[left].start + flag.head.length + 1;
       } else {
-        argv.push(head);
-        afterFlag = true;
-        i = j;
+        if (flag.def.type !== 'boolean' && !flag.inline) throw new UsageError('USAGE', `A flag ${flag.head} exige um valor.`);
+        argv.push(flag.head, flag.inline);
       }
+      left += 1;
       continue;
     }
-    if (!value) throw new UsageError('USAGE', `A flag ${head} exige um valor.`);
-    argv.push(head, value);
-    afterFlag = true;
-    i = end;
+    argv.push(flag.head);
+    if (flag.def.type === 'boolean') {
+      left += 1;
+      continue;
+    }
+    const next = tokens[left + 1]?.raw;
+    if (next !== undefined && isFlag(next)) throw new UsageError('USAGE', `A flag ${flag.head} exige um valor.`);
+    if (flag.def.type === 'optional-string') {
+      const value = next === undefined ? '' : decodeValue(next);
+      if (value && flag.def.match instanceof RegExp && flag.def.match.test(value)) {
+        argv.push(value);
+        left += 2;
+      } else left += 1;
+      continue;
+    }
+    if (next === undefined) throw new UsageError('USAGE', `A flag ${flag.head} exige um valor.`);
+    argv.push(decodeValue(next));
+    left += 2;
   }
-  return { argv, prompt: kept.join('') };
+
+  let right = tokens.length;
+  const suffixGroups = [];
+  if (!stoppedByTerminator) {
+    while (right > left) {
+      const last = tokens[right - 1].raw;
+      const inlineFlag = parseHead(last);
+      if (inlineFlag) {
+        if (inlineFlag.def.type === 'optional-string' && (!inlineFlag.inline || !(inlineFlag.def.match instanceof RegExp) || !inlineFlag.def.match.test(inlineFlag.inline))) break;
+        if (inlineFlag.def.type !== 'boolean' && inlineFlag.inline === '') throw new UsageError('USAGE', `A flag ${inlineFlag.head} exige um valor.`);
+        if (inlineFlag.inline === undefined && inlineFlag.def.type !== 'boolean' && inlineFlag.def.type !== 'optional-string') {
+          throw new UsageError('USAGE', `A flag ${inlineFlag.head} exige um valor.`);
+        }
+        suffixGroups.push(inlineFlag.inline === undefined ? [inlineFlag.head] : [inlineFlag.head, inlineFlag.inline]);
+        right -= 1;
+        continue;
+      }
+      if (right - 1 === left) break;
+      const before = parseHead(tokens[right - 2].raw);
+      if (!before || before.inline !== undefined || before.def.type === 'boolean') break;
+      const value = decodeValue(last);
+      if (before.def.type === 'optional-string' && (!value || !(before.def.match instanceof RegExp) || !before.def.match.test(value))) break;
+      suffixGroups.push([before.head, value]);
+      right -= 2;
+    }
+  }
+  // Suffix groups were discovered backwards; restore their original order.
+  for (const group of suffixGroups.reverse()) argv.push(...group);
+
+  if (left > right) right = left;
+  let promptStart = promptStartOverride;
+  if (promptStart === null) {
+    promptStart = left === 0 ? 0 : (tokens[left - 1]?.end ?? text.length);
+    if (left > 0) while (promptStart < text.length && /\s/u.test(text[promptStart])) promptStart += 1;
+  }
+  let promptEnd = text.length;
+  if (right < tokens.length) {
+    promptEnd = right > left ? tokens[right - 1].end : promptStart;
+  }
+  const prompt = text.slice(promptStart, Math.max(promptStart, promptEnd));
+  return { argv, prompt };
 }
 
 export const RAW_ARGS_FLAG = '--raw-args-stdin';
