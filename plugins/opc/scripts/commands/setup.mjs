@@ -152,7 +152,7 @@ async function stop(ctx, flags) {
   return result.reason === 'active-jobs' ? ExitCode.USAGE : ExitCode.OK;
 }
 
-export async function run(ctx, argv) {
+async function runDiagnostics(ctx, argv) {
   const { flags } = parseArgs(argv, SPEC);
   if ((flags.force || flags['confirmed-by-user']) && !flags['stop-server']) {
     throw new UsageError('USAGE', '--force e --confirmed-by-user só valem junto com --stop-server.');
@@ -160,3 +160,163 @@ export async function run(ctx, argv) {
   if (flags['stop-server']) return stop(ctx, flags);
   return diagnose(ctx, flags);
 }
+
+// ---- F1: onboarding (spec §3.3). Only two new top-level names (`run`, `SetupOnboarding`);
+// dependencies are loaded with dynamic import so they never collide with F0's imports. ----
+const SETUP_PASSTHROUGH_FLAGS = ['--stop-server', '--enable-review-gate', '--disable-review-gate'];
+
+const SetupOnboarding = {
+  async deps() {
+    const mods = await Promise.all([
+      import('node:child_process'), import('../lib/args.mjs'), import('../lib/opc-error.mjs'), import('../lib/context.mjs'),
+      import('../lib/config.mjs'), import('../lib/models.mjs'), import('../lib/onboarding.mjs'), import('../lib/render.mjs'),
+    ]);
+    return Object.assign({}, ...mods);
+  },
+
+  existingOf(loaded) {
+    return { global: loaded.global, workspace: loaded.workspace };
+  },
+
+  probeBinary(d, command, args, env) {
+    const r = d.spawnSync(command, args, { env, encoding: 'utf8', shell: false, timeout: 15000 });
+    if (r.error || r.status !== 0) return { installed: false, version: null };
+    return { installed: true, version: String(r.stdout).trim().split('\n')[0] || null };
+  },
+
+  async discovery(d, ctx) {
+    const { api } = await d.connectApi(ctx);
+    const [providers, agents, opencodeConfig] = await Promise.all([api.providers(), api.agents(), api.getConfig()]);
+    return { catalog: d.buildCatalog(providers), agents, opencodeConfig };
+  },
+
+  policyFor(d, ctx) {
+    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const draft = d.loadDraft(ctx.dataDir);
+    const policy = draft ? d.draftEffectiveConfig(draft, this.existingOf(loaded)).policy : loaded.config.policy;
+    return { loaded, draft, policy };
+  },
+
+  emit(d, ctx, flags, view) {
+    if (flags.json) ctx.json(view);
+    else ctx.out(d.renderOnboarding(view));
+    return 0;
+  },
+
+  async state(ctx, { reconfigure }) {
+    const d = await this.deps();
+    const opencode = this.probeBinary(d, 'opencode', ['--version'], ctx.env);
+    const npmAvailable = this.probeBinary(d, 'npm', ['--version'], ctx.env).installed;
+    const { loaded, draft, policy } = this.policyFor(d, ctx);
+    let catalog = null;
+    let serverError = null;
+    if (opencode.installed) {
+      try {
+        const { api } = await d.connectApi(ctx);
+        catalog = d.buildCatalog(await api.providers());
+      } catch (err) {
+        serverError = `${err.code ?? 'ERROR'}: ${err.message}`;
+      }
+    }
+    const onboarding = d.onboardingSummary({ hasGlobal: loaded.hasGlobal, draft, catalog, policy, opencode, npmAvailable, reconfigure, workspaceRoot: ctx.workspaceRoot, serverError });
+    return { onboarding, text: d.renderOnboarding({ kind: 'state', onboarding }) };
+  },
+
+  async models(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, {
+      flags: { provider: { type: 'string' }, top: { type: 'number', default: 3 }, query: { type: 'string' }, json: { type: 'boolean' }, cwd: { type: 'string' } },
+      allowPositionals: true,
+    });
+    if (!flags.provider || positionals.length) throw new d.UsageError('USAGE', 'usage: opc setup models --provider <id> [--top N] [--query text|glob] [--json]');
+    if (!Number.isInteger(flags.top) || flags.top < 1 || flags.top > 50) throw new d.UsageError('USAGE', '--top must be an integer between 1 and 50');
+    const { catalog } = await this.discovery(d, ctx);
+    if (!catalog.connected.has(flags.provider)) throw new d.UsageError('UNKNOWN_PROVIDER', `provider "${flags.provider}" is not connected`);
+    const { policy } = this.policyFor(d, ctx);
+    const view = {
+      kind: 'models',
+      provider: flags.provider,
+      total: catalog.models.filter((m) => m.providerID === flags.provider).length,
+      suggestions: d.suggestModels(catalog, flags.provider, { top: flags.top, policy }),
+      aliases: d.suggestAliases(catalog, flags.provider, policy),
+      families: d.modelFamilies(catalog, flags.provider),
+    };
+    if (flags.query) {
+      view.query = flags.query;
+      view.matches = d.searchModels(catalog, flags.query, { providerID: flags.provider });
+    }
+    return this.emit(d, ctx, flags, view);
+  },
+
+  async apply(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, stdin: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+    const text = flags.stdin ? await d.readStdin(ctx.stdin) : positionals.join(' ');
+    if (!text.trim()) throw new d.UsageError('USAGE', "usage: opc setup apply [--json] ('<partial config JSON>' | --stdin)");
+    let partial;
+    try { partial = JSON.parse(text); } catch (err) { throw new d.UsageError('INVALID_JSON', `payload is not valid JSON: ${err.message}`); }
+    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const draft = d.loadDraft(ctx.dataDir) ?? d.buildDraft({ hasGlobal: loaded.hasGlobal });
+    const allowLocked = draft.mode === 'bootstrap' && !loaded.hasGlobal;
+    const { catalog, agents } = await this.discovery(d, ctx);
+    const result = d.applyDraftStep(draft, partial, { catalog, agents, existing: this.existingOf(loaded), allowLocked });
+    d.saveDraft(ctx.dataDir, result.draft);
+    return this.emit(d, ctx, flags, {
+      kind: 'apply',
+      draftPath: d.draftPath(ctx.dataDir),
+      applied: result.applied,
+      nextStep: result.nextStep,
+      remainingSteps: d.remainingSteps(result.draft, { allowLocked }),
+      warnings: result.warnings,
+      draft: { mode: result.draft.mode, scope: result.draft.scope, completed: result.draft.completed },
+    });
+  },
+
+  async commit(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+    if (positionals.length) throw new d.UsageError('USAGE', 'usage: opc setup commit [--json]');
+    const draft = d.loadDraft(ctx.dataDir);
+    if (!draft) throw new d.UsageError('NO_DRAFT', 'no onboarding draft to commit; run /opc:setup first');
+    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const deps = await this.discovery(d, ctx);
+    const result = d.commitDraft({
+      dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot, draft, ...deps,
+      existing: this.existingOf(loaded), allowLocked: draft.mode === 'bootstrap' && !loaded.hasGlobal,
+    });
+    return this.emit(d, ctx, flags, { kind: 'commit', ...result });
+  },
+
+  async discard(ctx, argv) {
+    const d = await this.deps();
+    const { flags } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: false });
+    return this.emit(d, ctx, flags, { kind: 'discard', discarded: d.discardDraft(ctx.dataDir) });
+  },
+};
+
+export async function run(ctx, argv) {
+  const sub = argv[0];
+  if (['models', 'apply', 'commit', 'discard'].includes(sub)) return SetupOnboarding[sub](ctx, argv.slice(1));
+  const reconfigure = argv.includes('--reconfigure');
+  const rest = argv.filter((a) => a !== '--reconfigure');
+  if (rest.some((a) => SETUP_PASSTHROUGH_FLAGS.includes(a))) return runDiagnostics(ctx, rest);
+  const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
+  let emitted = false;
+  const wrapped = {
+    ...ctx,
+    json: (obj) => { emitted = true; ctx.json({ ...obj, onboarding }); },
+    out: (chunk) => {
+      ctx.out(emitted ? chunk : `${chunk}${text}`);
+      emitted = true;
+    },
+  };
+  try {
+    return await runDiagnostics(wrapped, rest);
+  } catch (err) {
+    if (emitted || !rest.includes('--json')) throw err;
+    const { toExitCode } = await import('../lib/opc-error.mjs');
+    ctx.json({ error: { code: err.code ?? 'ERROR', message: err.message }, onboarding });
+    return toExitCode(err);
+  }
+}
+// ---- end F1 ----
