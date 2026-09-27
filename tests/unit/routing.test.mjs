@@ -13,6 +13,7 @@ const catalog = buildCatalog({
       'opencode-go/deepseek-v4.1-flash': { id: 'opencode-go/deepseek-v4.1-flash', providerID: P, name: 'DeepSeek', variants: { high: {}, low: {} }, limit: { context: 128000, output: 8192 } },
       'opencode-go/qwen3.8-max': { id: 'opencode-go/qwen3.8-max', providerID: P, name: 'Qwen', variants: {}, limit: { context: 256000, output: 8192 } },
       'opencode-go/kimi-k3': { id: 'opencode-go/kimi-k3', providerID: P, name: 'Kimi', variants: { thinking: {} }, limit: { context: 200000, output: 8192 } },
+      'abcdefghijklmnop': { id: 'abcdefghijklmnop', providerID: P, name: 'Long ID' },
     } },
     { id: 'anthropic', name: 'Anthropic', models: { 'claude-x': { id: 'claude-x', providerID: 'anthropic', name: 'X', variants: {} } } },
     { id: 'omniroute-work', name: 'EQ', models: { 'm': { id: 'm', providerID: 'omniroute-work', name: 'm' } } },
@@ -79,8 +80,39 @@ test('lists skip denied/invalid entries with warnings; all denied → PolicyErro
 });
 
 test('single value denied → PolicyError; disconnected provider → usage error', () => {
-  assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: 'omniroute-work/m' }, config: baseConfig, catalog }), PolicyError);
+  for (const model of ['omniroute-work/m', '=omniroute-work/m']) {
+    assert.throws(() => resolveCandidates({ kind: 'task', flags: { model }, config: baseConfig, catalog }), (e) => {
+      assert.ok(e instanceof PolicyError);
+      assert.equal(e.code, 'POLICY_DENIED');
+      assert.match(e.message, /provider omniroute-wo… negado pela política/);
+      return true;
+    });
+  }
   assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: 'ollama/llama9' }, config: baseConfig, catalog }), (e) => e instanceof UsageError && e.code === 'PROVIDER_NOT_CONNECTED');
+});
+
+test('routing messages are PT-BR and truncate echoed user values', () => {
+  const longModel = `${P}/abcdefghijklmnop`;
+  const modelDenied = { ...baseConfig, policy: { models: { deny: [longModel] } } };
+  assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: longModel }, config: modelDenied, catalog }), (e) => {
+    assert.equal(e.code, 'POLICY_DENIED');
+    assert.match(e.message, /modelo omniroute-pe… negado pela política/);
+    assert.ok(!e.message.includes(longModel));
+    return true;
+  });
+  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'tier-abcdefghijk' }, config: baseConfig, catalog }), (e) => {
+    assert.equal(e.code, 'UNKNOWN_TIER');
+    assert.match(e.message, /routing\.tiers\.tier-abcdefg… não está configurado/);
+    return true;
+  });
+  assert.throws(() => validateSelection({ candidate: { full: FLASH }, agentName: 'agent-abcdefghijkl', agents: [], catalog }), (e) => {
+    assert.equal(e.code, 'UNKNOWN_AGENT');
+    assert.match(e.message, /agente desconhecido "agent-abcdef…"/);
+    return true;
+  });
+  const aliasRoute = { ...baseConfig, routing: { tasks: { ask: ['alias-abcdefghijk', 'fast'] } } };
+  const skipped = resolveCandidates({ kind: 'ask', config: aliasRoute, catalog });
+  assert.match(skipped.warnings[0], /ignorado alias-abcdef…/);
 });
 
 test('validateSelection: variant (F1 validateVariant), agent existence, policy (F1 assertAgentUsable), mode and pinned model', () => {
