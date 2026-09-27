@@ -205,3 +205,106 @@ export function parseArgs(argv, spec) {
   }
   return { flags, positionals };
 }
+
+// ---- F2a: prompt-preserving argument parsing for free-text commands ----
+
+const isSpaceChar = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
+
+// Splits a raw argument string into known flags and a verbatim prompt. Unlike splitArgString it
+// never interprets quotes or apostrophes in the prompt text ("don't" stays intact). Known flags
+// are recognized only as whole words; everything after a standalone `--` is prompt.
+// flagSpec: { [name]: { type: 'boolean'|'string'|'number'|'optional-string', alias?, match? } }
+export function parsePromptArgs(raw, flagSpec) {
+  const text = String(raw ?? '').replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  const known = new Map();
+  for (const [name, def] of Object.entries(flagSpec)) {
+    known.set(`--${name}`, def);
+    if (def.alias) known.set(`-${def.alias}`, def);
+  }
+  const argv = [];
+  const kept = [];
+  const dropTrailingSpace = () => {
+    if (kept.length && /^\s+$/.test(kept.at(-1))) kept.pop();
+  };
+  let i = 0;
+  while (i < text.length) {
+    if (isSpaceChar(text[i])) {
+      let j = i;
+      while (j < text.length && isSpaceChar(text[j])) j += 1;
+      kept.push(text.slice(i, j));
+      i = j;
+      continue;
+    }
+    let j = i;
+    while (j < text.length && !isSpaceChar(text[j])) j += 1;
+    const word = text.slice(i, j);
+    if (word === '--') {
+      let k = j;
+      while (k < text.length && isSpaceChar(text[k])) k += 1;
+      dropTrailingSpace();
+      if (kept.length) kept.push(' ');
+      kept.push(text.slice(k));
+      break;
+    }
+    const eq = word.startsWith('--') ? word.indexOf('=') : -1;
+    const head = eq > 0 ? word.slice(0, eq) : word;
+    const def = known.get(head);
+    if (!def) {
+      kept.push(word);
+      i = j;
+      continue;
+    }
+    dropTrailingSpace();
+    if (eq > 0) {
+      argv.push(head, word.slice(eq + 1));
+      i = j;
+      continue;
+    }
+    if (def.type === 'boolean') {
+      argv.push(head);
+      i = j;
+      continue;
+    }
+    let k = j;
+    while (k < text.length && isSpaceChar(text[k])) k += 1;
+    let value;
+    let end = k;
+    const quote = text[k];
+    if (quote === '"' || quote === "'") {
+      const close = text.indexOf(quote, k + 1);
+      if (close > k) {
+        value = text.slice(k + 1, close);
+        end = close + 1;
+      }
+    }
+    if (value === undefined) {
+      while (end < text.length && !isSpaceChar(text[end])) end += 1;
+      value = text.slice(k, end);
+    }
+    if (def.type === 'optional-string') {
+      if (value && def.match instanceof RegExp && def.match.test(value)) {
+        argv.push(head, value);
+        i = end;
+      } else {
+        argv.push(head);
+        i = j;
+      }
+      continue;
+    }
+    if (!value) throw new UsageError('USAGE', `A flag ${head} exige um valor.`);
+    argv.push(head, value);
+    i = end;
+  }
+  return { argv, prompt: kept.join('').trim() };
+}
+
+export const RAW_ARGS_FLAG = '--raw-args-stdin';
+
+// Commands that take free text: with --raw-args-stdin in argv, reads stdin once, extracts the known
+// flags with parsePromptArgs and returns the verbatim text (the flag itself stays in argv, so the
+// command's parseArgs spec must declare 'raw-args-stdin': { type: 'boolean' }). Otherwise text is null.
+export async function readRawArgs(argv, flagSpec, { stdin = process.stdin } = {}) {
+  if (!argv.includes(RAW_ARGS_FLAG)) return { argv: [...argv], text: null };
+  const { argv: flagArgv, prompt } = parsePromptArgs(await readStdin(stdin), flagSpec);
+  return { argv: [...argv, ...flagArgv], text: prompt };
+}
