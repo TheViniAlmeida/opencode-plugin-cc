@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { createPrompter, parseSelection } from '../../plugins/opc/scripts/lib/tty.mjs';
+import { UsageError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { scriptedTTY, captureStream } from '../helpers.mjs';
 
 const CHOICES = [
@@ -24,7 +25,24 @@ test('parseSelection: numbers, ranges, all, empty, invalid', () => {
 
 test('createPrompter refuses a non-TTY input', () => {
   const input = new PassThrough();
-  assert.throws(() => createPrompter({ input, output: captureStream() }), (err) => err.code === 'NOT_A_TTY' && err.exitCode === 2);
+  assert.throws(() => createPrompter({ input, output: captureStream() }), (err) => {
+    assert.equal(err.code, 'NOT_A_TTY');
+    assert.equal(err.exitCode, 2);
+    assert.match(err.message, /terminal.*interativo/i);
+    return true;
+  });
+});
+
+test('select with no choices reports NO_CHOICES in Brazilian Portuguese', async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  const p = createPrompter({ input, output: captureStream() });
+  await assert.rejects(p.select('Q?', []), (err) => {
+    assert.equal(err.code, 'NO_CHOICES');
+    assert.match(err.message, /nenhuma opção disponível/i);
+    return true;
+  });
+  p.close();
 });
 
 test('select by number, with invalid answer retried', async () => {
@@ -34,6 +52,24 @@ test('select by number, with invalid answer retried', async () => {
   assert.match(output.text(), /Opção inválida: 9/);
   assert.match(output.text(), / 1\) omniroute-mvalmeida \(182 modelos\)/);
   p.close();
+});
+
+test('invalid long answers and unmatched filters are truncated before output', async () => {
+  const token = 'FAKE-TOKEN-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const output = captureStream();
+  const p = createPrompter({ input: scriptedTTY([token, '3']), output });
+  assert.equal(await p.select('Provider padrão?', CHOICES), 'anthropic');
+  assert.ok(!output.text().includes(token));
+  assert.ok(output.text().includes(`${token.slice(0, 12)}…`));
+  p.close();
+
+  const filter = 'NO-MATCH-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const filterOutput = captureStream();
+  const filterPrompter = createPrompter({ input: scriptedTTY([filter, '2']), output: filterOutput });
+  assert.equal(await filterPrompter.select('Provider padrão?', CHOICES), 'omniroute-work');
+  assert.ok(!filterOutput.text().includes(filter));
+  assert.ok(filterOutput.text().includes(`${filter.slice(0, 12)}…`));
+  filterPrompter.close();
 });
 
 test('select with text filter then number within the filtered list', async () => {
@@ -69,5 +105,5 @@ test('text with default and validation; confirm s/n', async () => {
 
 test('closed input rejects with TTY_CLOSED', async () => {
   const p = createPrompter({ input: scriptedTTY([]), output: captureStream() });
-  await assert.rejects(p.text('x? '), (err) => err.code === 'TTY_CLOSED');
+  await assert.rejects(p.text('x? '), (err) => err.code === 'TTY_CLOSED' && err.exitCode === 2);
 });

@@ -27,7 +27,7 @@ export function parseSelection(text, count) {
 
 export function createPrompter({ input, output }) {
   if (!input || !input.isTTY) {
-    throw new UsageError('NOT_A_TTY', 'this command needs an interactive terminal (stdin is not a TTY); run it directly in your terminal');
+    throw new UsageError('NOT_A_TTY', 'Este comando precisa de um terminal interativo (stdin não é TTY); execute-o diretamente no terminal.');
   }
   const rl = readline.createInterface({ input, terminal: false });
   const queue = [];
@@ -56,7 +56,7 @@ export function createPrompter({ input, output }) {
   };
 
   async function select(question, choices, { defaultIndex = null, allowOther = false } = {}) {
-    if (!choices.length && !allowOther) throw new UsageError('NO_CHOICES', `no options available for: ${question}`);
+    if (!choices.length && !allowOther) throw new UsageError('NO_CHOICES', `Nenhuma opção disponível para: ${question}`);
     let visible = choices;
     for (;;) {
       write(`\n${question}\n`);
@@ -69,13 +69,13 @@ export function createPrompter({ input, output }) {
       if (/^\d+$/.test(answer)) {
         const n = Number(answer);
         if (n >= 1 && n <= visible.length) return visible[n - 1].value;
-        write(`Opção inválida: ${answer}\n`);
+        write(`Opção inválida: ${truncateAnswer(answer)}\n`);
         continue;
       }
       if (answer === '') { visible = choices; continue; }
       const needle = answer.toLowerCase();
       const filtered = choices.filter((c) => c.label.toLowerCase().includes(needle));
-      if (!filtered.length) { write(`Nada casa com "${answer}".\n`); visible = choices; continue; }
+      if (!filtered.length) { write(`Nada corresponde a "${truncateAnswer(answer)}".\n`); visible = choices; continue; }
       visible = filtered;
     }
   }
@@ -86,7 +86,7 @@ export function createPrompter({ input, output }) {
       printList(choices);
       const answer = await ask(`Números/intervalos (ex.: 1,3,5-7), 'todos' ou vazio para nenhum: `);
       const picked = parseSelection(answer, choices.length);
-      if (picked === null) { write(`Seleção inválida: ${answer}\n`); continue; }
+      if (picked === null) { write(`Seleção inválida: ${truncateAnswer(answer)}\n`); continue; }
       if (picked.length < min) { write(`Escolha pelo menos ${min}.\n`); continue; }
       return picked.map((i) => choices[i].value);
     }
@@ -118,4 +118,8 @@ export function createPrompter({ input, output }) {
   }
 
   return { select, multiSelect, text, confirm, close };
+}
+
+function truncateAnswer(answer) {
+  return answer.length > 12 ? `${answer.slice(0, 12)}…` : answer;
 }
