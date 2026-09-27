@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F0 — fundação e conexão**. Nesta fase existe só o `/opc:setup` (diagnóstico e ciclo
-> de vida do servidor). Os demais comandos chegam nas fases seguintes.
+> Estado: **F1 — descoberta, configuração e onboarding**. Além do diagnóstico do servidor, os
+> comandos de descoberta, configuração e onboarding já estão disponíveis.
 
 ## Requisitos
 
@@ -25,9 +25,14 @@ permissões controladas pelo plugin.
 
 Veja os detalhes em [docs/installation.md](docs/installation.md). A instalação no Claude Code e a confirmação do diretório de dados ainda são itens do operador.
 
-## Início rápido (F0)
+## Início rápido
 
-No Claude Code, execute `/opc:setup`. Para preservar argumentos literalmente quando a invocação for feita pelo comando interno, o plugin usa este heredoc canônico:
+1. Execute `/opc:setup` e responda ao onboarding: provider, modelo padrão, política, projeto e aliases.
+2. Consulte `/opc:models --allowed` e `/opc:agents` para ver o que o `opc` pode usar.
+3. Para ajustes não interativos, use `/opc:config set …`. Alterações de política são feitas no terminal com `opc config init`.
+4. O primeiro review chega na F2b, com `/opc:review`.
+
+Para preservar argumentos literalmente quando a invocação for feita pelo comando interno, o plugin usa este heredoc canônico:
 
 ```bash
 opc setup --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
@@ -35,14 +40,14 @@ $ARGUMENTS
 OPC_ARGS_5f1d0c7a_EOF
 ```
 
-O teste ao vivo de conexão confirmou um primeiro `setup` com exit 0, porta 40405, OpenCode 1.18.32 e `healthy=true`; o segundo reaproveitou o mesmo servidor. Esses resultados vieram da CLI, não de uma instalação no Claude Code.
+O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem credenciais. A validação completa do onboarding dentro do Claude Code continua pendente do operador.
 
 ## Mapa de comandos
 
 | Comando | Fase | Situação |
 |---|---|---|
 | `/opc:setup` | F0 | diagnóstico, sobe/reaproveita o servidor, `--stop-server [--force]` |
-| `/opc:config`, `/opc:providers`, `/opc:models`, `/opc:agents`, `/opc:catalog` | F1 | planejado |
+| `/opc:config`, `/opc:providers`, `/opc:models`, `/opc:agents`, `/opc:catalog` | F1 | disponível |
 | `/opc:task`, `/opc:ask`, `/opc:plan`, `/opc:status`, `/opc:result`, `/opc:cancel`, `/opc:permissions` | F2a | planejado |
 | `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | planejado |
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | planejado |
@@ -57,6 +62,9 @@ O teste ao vivo de conexão confirmou um primeiro `setup` com exit 0, porta 4040
 - [Arquitetura](docs/architecture.md)
 - [Solução de problemas](docs/troubleshooting.md)
 - [Relatório da F0](docs/phases/F0-report.md)
+- [Configuração](docs/configuration.md)
+- [Comandos F1](docs/commands.md)
+- [Relatório da F1](docs/phases/F1-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos
