@@ -74,10 +74,11 @@ test('applyDraftStep: ambiguity, unknown provider, unknown key', () => {
 
 test('applyDraftStep: locked keys need allowLocked; error carries the terminal command', () => {
   const draft = buildDraft({ hasGlobal: true, now: NOW });
-  assert.throws(() => applyDraftStep(draft, { policy: { models: { allow: [`${MV}/*`] } } }, deps({ allowLocked: false })), (e) => {
+  assert.throws(() => applyDraftStep(draft, { policy: { models: { allow: ['FAKE-SECRET-VALUE-123456'] } } }, deps({ allowLocked: false })), (e) => {
     assert.equal(e.code, 'LOCKED_KEY');
     assert.equal(e.exitCode, 4);
-    assert.equal(e.details.command, `opc config set policy.models.allow '["omniroute-mvalmeida/*"]' --tty-confirm`);
+    assert.equal(JSON.stringify(e).includes('FAKE-SECRET-VALUE-123456'), false);
+    assert.equal(e.details.command, "opc config set policy.models.allow '<valor>' --tty-confirm");
     return true;
   });
 });
@@ -138,11 +139,12 @@ test('commitDraft: invalid model refused (exit 2); locked change refused without
   const dataDir = tmp(t);
   const bad = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { defaultModel: `${MV}/opencode-go/removed` } };
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: dataDir, draft: bad, catalog, agents, existing: NONE, allowLocked: true }), (e) => e.code === 'INVALID_CONFIG' && e.exitCode === 2);
-  const lockedDraft = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { 'policy.approver': 'claude' } };
+  const lockedDraft = { ...buildDraft({ hasGlobal: false, now: NOW }), values: { 'policy.approver': 'FAKE-SECRET-VALUE-123456' } };
   const existing = { global: { defaultProvider: MV }, workspace: null };
   assert.throws(() => commitDraft({ dataDir, workspaceRoot: dataDir, draft: lockedDraft, catalog, agents, existing, allowLocked: false }), (e) => {
     assert.equal(e.code, 'LOCKED_KEY');
-    assert.deepEqual(e.details.commands, [`opc config set policy.approver 'claude' --tty-confirm`]);
+    assert.equal(JSON.stringify(e).includes('FAKE-SECRET-VALUE-123456'), false);
+    assert.deepEqual(e.details.commands, ["opc config set policy.approver '<valor>' --tty-confirm"]);
     return true;
   });
 });
@@ -164,8 +166,10 @@ test('commitDraft: changing scope cannot write accumulated global-only keys to w
   assert.equal(fs.existsSync(path.join(dataDir, 'config.json')), false);
 });
 
-test('lockedCommand quotes single quotes safely', () => {
-  assert.equal(lockedCommand('project.goal', "it's"), `opc config set project.goal 'it'\\''s' --tty-confirm`);
+test('lockedCommand uses a placeholder for every value type', () => {
+  for (const value of ["it's", 'FAKE-SECRET-VALUE-123456', ['FAKE-SECRET-VALUE-123456'], true, null, undefined]) {
+    assert.equal(lockedCommand('policy.models.deny', value), "opc config set policy.models.deny '<valor>' --tty-confirm");
+  }
 });
 
 test('rankProviders / suggestModels / suggestAliases / modelFamilies', () => {

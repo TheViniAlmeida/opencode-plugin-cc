@@ -103,13 +103,8 @@ function flattenPartial(partial) {
   return out;
 }
 
-function shellQuote(text) {
-  return `'${String(text).replace(/'/g, `'\\''`)}'`;
-}
-
-export function lockedCommand(key, value) {
-  const rendered = typeof value === 'string' ? value : JSON.stringify(value);
-  return `opc config set ${key} ${shellQuote(rendered)} --tty-confirm`;
+export function lockedCommand(key) {
+  return `opc config set ${key} '<valor>' --tty-confirm`;
 }
 
 export function candidateConfig(draft, existing) {
@@ -138,7 +133,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
       continue;
     }
     if (isLockedKey(key) && !allowLocked) {
-      const command = lockedCommand(key, rawValue);
+      const command = lockedCommand(key);
       throw new PolicyError('LOCKED_KEY', `"${key}" fica travada após a configuração inicial; execute no seu terminal: ${command}`, { details: { setting: key, command } });
     }
     if (next.scope === 'workspace' && !isWorkspaceKey(key)) {
@@ -206,7 +201,7 @@ export function commitDraft({ dataDir, workspaceRoot, draft, catalog, agents = [
   if (!allowLocked) {
     const changedLocked = Object.keys(draft.values).filter((k) => isLockedKey(k) && JSON.stringify(draft.values[k]) !== JSON.stringify(getPath(base, k)));
     if (changedLocked.length) {
-      const commands = changedLocked.map((k) => lockedCommand(k, draft.values[k]));
+      const commands = changedLocked.map((k) => lockedCommand(k));
       throw new PolicyError('LOCKED_KEY', `chaves travadas não podem mais ser alteradas pelo Claude (já existe uma configuração global); execute no seu terminal: ${commands.join(' ; ')}`,
         { details: { settings: changedLocked, commands } });
     }
