@@ -215,7 +215,8 @@ const isSpaceChar = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
 // are recognized only as whole words; everything after a standalone `--` is prompt.
 // flagSpec: { [name]: { type: 'boolean'|'string'|'number'|'optional-string', alias?, match? } }
 export function parsePromptArgs(raw, flagSpec) {
-  const text = String(raw ?? '').replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  const source = String(raw ?? '');
+  const text = source.endsWith('\r\n') ? source.slice(0, -2) : source.endsWith('\n') ? source.slice(0, -1) : source;
   const known = new Map();
   for (const [name, def] of Object.entries(flagSpec)) {
     known.set(`--${name}`, def);
@@ -223,6 +224,7 @@ export function parsePromptArgs(raw, flagSpec) {
   }
   const argv = [];
   const kept = [];
+  let afterFlag = false;
   const dropTrailingSpace = () => {
     if (kept.length && /^\s+$/.test(kept.at(-1))) kept.pop();
   };
@@ -231,14 +233,18 @@ export function parsePromptArgs(raw, flagSpec) {
     if (isSpaceChar(text[i])) {
       let j = i;
       while (j < text.length && isSpaceChar(text[j])) j += 1;
-      kept.push(text.slice(i, j));
+      if (afterFlag) {
+        if (kept.join('').length > 0) kept.push(' ');
+        afterFlag = false;
+      } else kept.push(text.slice(i, j));
       i = j;
       continue;
     }
     let j = i;
     while (j < text.length && !isSpaceChar(text[j])) j += 1;
     const word = text.slice(i, j);
-    if (word === '--') {
+    const isPromptLine = text.slice(Math.max(0, i - 1), i).includes('\n') || text.slice(j, Math.min(text.length, j + 1)).includes('\n');
+    if (word === '--' && (!kept.join('').trim() || !isPromptLine)) {
       let k = j;
       while (k < text.length && isSpaceChar(text[k])) k += 1;
       dropTrailingSpace();
@@ -256,17 +262,36 @@ export function parsePromptArgs(raw, flagSpec) {
     }
     dropTrailingSpace();
     if (eq > 0) {
+      if (def.type === 'optional-string') {
+        const inlineValue = word.slice(eq + 1);
+        if (!inlineValue || !(def.match instanceof RegExp) || !def.match.test(inlineValue)) {
+          argv.push(head);
+          kept.push(inlineValue);
+          afterFlag = false;
+          i = j;
+          continue;
+        }
+      }
       argv.push(head, word.slice(eq + 1));
+      afterFlag = true;
       i = j;
       continue;
     }
     if (def.type === 'boolean') {
       argv.push(head);
+      afterFlag = true;
       i = j;
       continue;
     }
     let k = j;
     while (k < text.length && isSpaceChar(text[k])) k += 1;
+    if (def.type !== 'optional-string' && k < text.length) {
+      let nextEnd = k;
+      while (nextEnd < text.length && !isSpaceChar(text[nextEnd])) nextEnd += 1;
+      const nextWord = text.slice(k, nextEnd);
+      const nextHead = nextWord.startsWith('--') && nextWord.includes('=') ? nextWord.slice(0, nextWord.indexOf('=')) : nextWord;
+      if (known.has(nextHead)) throw new UsageError('USAGE', `A flag ${head} exige um valor.`);
+    }
     let value;
     let end = k;
     const quote = text[k];
@@ -284,18 +309,21 @@ export function parsePromptArgs(raw, flagSpec) {
     if (def.type === 'optional-string') {
       if (value && def.match instanceof RegExp && def.match.test(value)) {
         argv.push(head, value);
+        afterFlag = true;
         i = end;
       } else {
         argv.push(head);
+        afterFlag = true;
         i = j;
       }
       continue;
     }
     if (!value) throw new UsageError('USAGE', `A flag ${head} exige um valor.`);
     argv.push(head, value);
+    afterFlag = true;
     i = end;
   }
-  return { argv, prompt: kept.join('').trim() };
+  return { argv, prompt: kept.join('') };
 }
 
 export const RAW_ARGS_FLAG = '--raw-args-stdin';
