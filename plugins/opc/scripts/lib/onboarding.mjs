@@ -96,7 +96,7 @@ function flattenPartial(partial) {
       const p = prefix ? `${prefix}.${key}` : key;
       if (p === 'scope' || CONFIG_SCHEMA[p] || (prefix && schemaFor(p))) out.push([p, value]);
       else if (isPlainObject(value)) walk(value, p);
-      else throw new UsageError('UNKNOWN_KEY', `unknown config key "${p}"`);
+      else throw new UsageError('UNKNOWN_KEY', `chave de configuração desconhecida: "${p}"`);
     }
   };
   walk(partial, '');
@@ -132,17 +132,17 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
   for (const [key, rawValue] of flattenPartial(partial)) {
     if (key === 'scope') {
       if (!['global', 'workspace'].includes(rawValue)) throw new UsageError('INVALID_VALUE', 'scope must be "global" or "workspace"');
-      if (next.mode === 'bootstrap' && rawValue !== 'global') throw new UsageError('INVALID_VALUE', 'first setup must use the global scope (no global config yet)');
+      if (next.mode === 'bootstrap' && rawValue !== 'global') throw new UsageError('INVALID_VALUE', 'a configuração inicial deve usar o escopo global (ainda não existe configuração global)');
       next.scope = rawValue;
       applied.push('scope');
       continue;
     }
     if (isLockedKey(key) && !allowLocked) {
       const command = lockedCommand(key, rawValue);
-      throw new PolicyError('LOCKED_KEY', `"${key}" is locked after the first setup; run in your own terminal: ${command}`, { details: { setting: key, command } });
+      throw new PolicyError('LOCKED_KEY', `"${key}" fica travada após a configuração inicial; execute no seu terminal: ${command}`, { details: { setting: key, command } });
     }
     if (next.scope === 'workspace' && !isWorkspaceKey(key)) {
-      throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" can only be set in the global config`);
+      throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" só pode ser definida na configuração global`);
     }
     const defaultProvider = key === 'defaultProvider' ? null : effectiveValue(next, existing, 'defaultProvider');
     let value;
@@ -161,7 +161,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
       value = normalizeEditValue(key, rawValue, { catalog, aliases, defaultProvider });
     }
     if (key === 'defaultProvider' && value !== null && !catalog.connected.has(value)) {
-      throw new UsageError('UNKNOWN_PROVIDER', `provider "${value}" is not connected (connected: ${[...catalog.connected].join(', ')})`);
+      throw new UsageError('UNKNOWN_PROVIDER', `o provider "${value}" não está conectado (conectados: ${[...catalog.connected].join(', ')})`);
     }
     if (key === 'defaultAgent' && value !== null) {
       const agent = agents.find((a) => a.name === value);
@@ -170,7 +170,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
     if (key === 'defaultVariant' && value !== null) {
       const model = effectiveValue(next, existing, 'defaultModel');
       const entry = model ? catalog.byFull.get(model) : null;
-      if (!entry) throw new UsageError('UNKNOWN_VARIANT', 'choose the default model before the variant');
+      if (!entry) throw new UsageError('UNKNOWN_VARIANT', 'escolha o modelo padrão antes da variante');
       validateVariant(entry, value);
     }
     next.values[key] = value;
@@ -182,11 +182,11 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
     const touched = applied.some((k) => violation.path === k || violation.path.startsWith(`${k}.`) || violation.path.startsWith(`${k}[`));
     const deferredModel = deferModelPolicy && touched && ['defaultModel', 'reviewModel', 'stopGate.model'].some((key) => violation.path === key || violation.path.startsWith(`${key}.`));
     if (deferredModel) {
-      warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (a etapa de política precisa permitir este modelo)` });
+      warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (modelo negado pela política existente; a etapa de política precisa permitir este modelo)` });
       continue;
     }
     if (touched) throw new PolicyError('POLICY_DENIED', `${violation.path}: ${violation.message}`, { details: violation });
-    warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (commit will be refused until fixed)` });
+    warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (o salvamento será recusado até a correção)` });
   }
   for (const step of ONBOARDING_STEPS) {
     if (!next.completed.includes(step.id) && step.keys.some((k) => applied.includes(k))) next.completed.push(step.id);
@@ -207,21 +207,21 @@ export function commitDraft({ dataDir, workspaceRoot, draft, catalog, agents = [
     const changedLocked = Object.keys(draft.values).filter((k) => isLockedKey(k) && JSON.stringify(draft.values[k]) !== JSON.stringify(getPath(base, k)));
     if (changedLocked.length) {
       const commands = changedLocked.map((k) => lockedCommand(k, draft.values[k]));
-      throw new PolicyError('LOCKED_KEY', `locked keys can no longer be changed from Claude (a global config now exists); run in your own terminal: ${commands.join(' ; ')}`,
+      throw new PolicyError('LOCKED_KEY', `chaves travadas não podem mais ser alteradas pelo Claude (já existe uma configuração global); execute no seu terminal: ${commands.join(' ; ')}`,
         { details: { settings: changedLocked, commands } });
     }
   }
   const candidate = candidateConfig(draft, existing);
   const shape = validateConfigShape(candidate, { source: draft.scope });
-  if (shape.errors.length) throw new UsageError('INVALID_CONFIG', 'draft config is invalid', { details: { errors: shape.errors } });
+  if (shape.errors.length) throw new UsageError('INVALID_CONFIG', 'a configuração em edição é inválida', { details: { errors: shape.errors } });
   const merged = effectiveOf(draft, candidate, existing);
   const server = validateAgainstServer(merged.config, { catalog, agents, opencodeConfig });
   if (server.errors.length) {
-    throw new UsageError('INVALID_CONFIG', `draft config is invalid: ${server.errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, { details: { errors: server.errors } });
+    throw new UsageError('INVALID_CONFIG', `a configuração em edição é inválida: ${server.errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, { details: { errors: server.errors } });
   }
   const denied = policyViolations(merged.config, { catalog, agents });
   if (denied.length) {
-    throw new PolicyError('POLICY_DENIED', `draft config uses values denied by the policy: ${denied.map((e) => `${e.path} ${e.message}`).join('; ')}`, { details: { errors: denied } });
+    throw new PolicyError('POLICY_DENIED', `a configuração em edição contém valores negados pela política: ${denied.map((e) => `${e.path} ${e.message}`).join('; ')}`, { details: { errors: denied } });
   }
   if (draft.scope === 'workspace') saveWorkspaceConfig(workspaceRoot, candidate);
   else saveGlobalConfig(dataDir, candidate);
@@ -342,7 +342,7 @@ async function askStep(prompter, stepId, { draft, catalog, agents, existing, wor
       return { aliases };
     }
     default:
-      throw new UsageError('USAGE', `unknown onboarding step ${stepId}`);
+      throw new UsageError('USAGE', `etapa desconhecida do assistente de configuração: ${stepId}`);
   }
 }
 

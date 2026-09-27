@@ -19,7 +19,7 @@ const SPEC = {
   },
   allowPositionals: true,
 };
-const USAGE = 'usage: opc config get [key] | set <key> <value> | unset <key> | add|remove <list-key> <value> | show [--effective] | validate | path | init   (edits accept --workspace and --tty-confirm)';
+const USAGE = 'uso: opc config get [chave] | set <chave> <valor> | unset <chave> | add|remove <chave-de-lista> <valor> | show [--effective] | validate | path | init   (edições aceitam --workspace e --tty-confirm)';
 
 const shellQuote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
 const emit = (ctx, flags, view, render) => { if (flags.json) ctx.json(view); else ctx.out(render(view)); };
@@ -48,7 +48,7 @@ function cmdPath(ctx, flags) {
 function cmdGet(ctx, flags, rest) {
   if (rest.length > 1) throw new UsageError('USAGE', USAGE);
   const key = rest[0] ?? null;
-  if (key && !knownKey(key)) throw new UsageError('UNKNOWN_KEY', `unknown config key "${key}"`);
+  if (key && !knownKey(key)) throw new UsageError('UNKNOWN_KEY', `chave de configuração desconhecida: "${key}"`);
   const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
   const source = flags.global ? 'global' : flags.workspace ? 'workspace' : 'effective';
   const obj = source === 'global' ? (loaded.global ?? {}) : source === 'workspace' ? (loaded.workspace ?? {}) : loaded.config;
@@ -66,16 +66,16 @@ function terminalCommand(op, key, raw, scope) {
 async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
   const command = terminalCommand(op, key, raw, scope);
   if (!flags['tty-confirm']) {
-    throw new PolicyError('LOCKED_KEY', `"${key}" is a locked key; change it in your own terminal: ${command} (or run: opc config init)`, { details: { setting: key, command } });
+    throw new PolicyError('LOCKED_KEY', `"${key}" é uma chave travada; altere-a no seu terminal: ${command} (ou execute: opc config init)`, { details: { setting: key, command } });
   }
   if (!ctx.stdin || !ctx.stdin.isTTY) {
-    throw new PolicyError('LOCKED_KEY', `--tty-confirm needs an interactive terminal (stdin is not a TTY); run in your terminal: ${command}`, { details: { setting: key, command } });
+    throw new PolicyError('LOCKED_KEY', `--tty-confirm exige um terminal interativo (stdin não é TTY); execute no seu terminal: ${command}`, { details: { setting: key, command } });
   }
   const prompter = createPrompter({ input: ctx.stdin, output: ctx.stderr });
   try {
     ctx.err(`[opc] "${key}" é uma chave travada (política/mundo).\n`);
     const typed = await prompter.text(`Digite "${key}" para confirmar a alteração: `);
-    if (typed !== key) throw new PolicyError('LOCKED_KEY', 'confirmation did not match; nothing was changed', { details: { setting: key } });
+    if (typed !== key) throw new PolicyError('LOCKED_KEY', 'a confirmação não correspondeu; nada foi alterado', { details: { setting: key } });
   } finally {
     prompter.close();
   }
@@ -90,12 +90,12 @@ async function serverDeps(ctx) {
 async function cmdEdit(ctx, flags, op, rest) {
   const [key, ...valueParts] = rest;
   if (!key) throw new UsageError('USAGE', USAGE);
-  if (!schemaFor(key)) throw new UsageError('UNKNOWN_KEY', `unknown config key "${key}"`);
+  if (!schemaFor(key)) throw new UsageError('UNKNOWN_KEY', `chave de configuração desconhecida: "${key}"`);
   if (op === 'unset' ? valueParts.length > 0 : valueParts.length === 0) throw new UsageError('USAGE', USAGE);
   const raw = op === 'unset' ? undefined : valueParts.join(' ');
   const scope = flags.workspace ? 'workspace' : 'global';
   if (scope === 'workspace' && !isWorkspaceKey(key)) {
-    throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" cannot be set in .opc.json (the workspace file only restricts); use the global config`);
+    throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" não pode ser definida em .opc.json (o arquivo do workspace só pode restringir); use a configuração global`);
   }
   if (isLockedKey(key)) await confirmLocked(ctx, flags, { op, key, raw, scope });
   let value = raw === undefined ? undefined : coerceValue(key, raw);

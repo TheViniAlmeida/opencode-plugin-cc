@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runInitWizard } from '../../plugins/opc/scripts/lib/onboarding.mjs';
+import { applyDraftStep, buildDraft, runInitWizard } from '../../plugins/opc/scripts/lib/onboarding.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 import { createPrompter } from '../../plugins/opc/scripts/lib/tty.mjs';
 import { scriptedTTY, captureStream, makeTempDir, trackTempDir } from '../helpers.mjs';
@@ -90,6 +90,16 @@ test('wizard can select a model denied by the existing policy and allow it in th
   assert.deepEqual(cfg.policy.models.allow, [`${MV}/*`]);
   assert.match(output.text(), /kimi-k3/);
   assert.match(log.text(), /etapa de política precisa permitir este modelo/);
+  assert.match(log.text(), /modelo negado pela política existente/);
+  assert.doesNotMatch(log.text(), /commit will be refused until fixed|commit será recusado/);
+});
+
+test('onboarding validation errors are shown in Brazilian Portuguese', () => {
+  const draft = buildDraft({ hasGlobal: false });
+  assert.throws(() => applyDraftStep(draft, { defaultProvider: 'provider-not-connected' }, { catalog, agents }), {
+    code: 'UNKNOWN_PROVIDER',
+    message: /não está conectado/,
+  });
 });
 
 test('wizard refuses commit when the new policy still denies the chosen model', async (t) => {

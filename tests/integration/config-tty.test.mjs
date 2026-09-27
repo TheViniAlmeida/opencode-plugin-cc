@@ -20,7 +20,7 @@ test('--tty-confirm on a TTY: typed key confirms; mismatch refuses (exit 4)', as
   const { ws, env } = setup(t, { config: { defaultProvider: MV } });
   const wrong = await runInProcess('config', ['set', 'policy.approver', 'claude', '--tty-confirm'], { env, cwd: ws, stdin: scriptedTTY(['policy.aprover']) });
   assert.equal(wrong.code, 4);
-  assert.match(wrong.stderr, /did not match/);
+  assert.match(wrong.stderr, /a confirmação não correspondeu; nada foi alterado/);
   assert.equal(readGlobalConfig(env).policy, undefined);
   const ok = await runInProcess('config', ['set', 'policy.approver', 'claude', '--tty-confirm', '--json'], { env, cwd: ws, stdin: scriptedTTY(['policy.approver']) });
   assert.equal(ok.code, 0, ok.stderr);
@@ -29,6 +29,14 @@ test('--tty-confirm on a TTY: typed key confirms; mismatch refuses (exit 4)', as
   const list = await runInProcess('config', ['add', 'policy.agents.deny', 'work-*', '--tty-confirm'], { env, cwd: ws, stdin: scriptedTTY(['policy.agents.deny']) });
   assert.equal(list.code, 0, list.stderr);
   assert.deepEqual(readGlobalConfig(env).policy.agents.deny, ['work-*']);
+});
+
+test('config usage and unknown-key messages are in Brazilian Portuguese', async (t) => {
+  const { ws, env } = setup(t);
+  const usage = await runInProcess('config', [], { env, cwd: ws });
+  assert.match(usage.stderr, /uso: opc config/);
+  const unknown = await runInProcess('config', ['get', 'unknown.setting'], { env, cwd: ws });
+  assert.match(unknown.stderr, /chave de configuração desconhecida/);
 });
 
 test('config init: scripted wizard writes the full config (numbered lists, filter, ranges)', async (t) => {
