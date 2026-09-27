@@ -2,7 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import { loadConfig } from './config.mjs';
+import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { redact, redactText } from './redact.mjs';
 import { defaultDataDir, ensurePrivateDir, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
 
@@ -27,7 +27,16 @@ export async function createContext({
   const workspaceRoot = resolveWorkspaceRoot(path.resolve(cwd));
   ensurePrivateDir(path.join(dataDir, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(dataDir, workspaceRoot));
-  const loaded = loadConfig({ dataDir, workspaceRoot });
+  let loaded;
+  try {
+    loaded = loadConfig({ dataDir, workspaceRoot });
+  } catch (err) {
+    const args = argv.map(String);
+    const validatingConfig = args[0] === 'validate' || (args[0] === 'config' && args[1] === 'validate');
+    if (err.code !== 'CONFIG_INVALID' || !validatingConfig) throw err;
+    // Let `config validate` render the structured CONFIG_INVALID details itself.
+    loaded = { config: DEFAULT_CONFIG, warnings: [], hasGlobal: false, workspace: null };
+  }
   return {
     argv,
     env,

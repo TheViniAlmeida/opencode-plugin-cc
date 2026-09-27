@@ -48,7 +48,6 @@ function registry(t) {
           const result = await stop();
           if (result && typeof result === 'object') {
             requireStopped(result);
-            for (const env of reg.envs) requireStopped(result, env);
           }
         } catch (err) {
           errors.push(err);
@@ -56,19 +55,7 @@ function registry(t) {
       }
       if (fs.existsSync(COMPANION)) {
         for (const env of reg.envs) {
-          for (const ws of reg.workspaces) {
-            if (!fs.existsSync(ws)) continue;
-            try {
-              const result = await stopAllServers(env, ws);
-              if (result.code !== 0) {
-                errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
-              } else {
-                requireStopped(parseJsonOutput(result.stdout).stop, env);
-              }
-            } catch (err) {
-              errors.push(err);
-            }
-          }
+          errors.push(...await stopAllWorkspaces(env, reg.workspaces.filter((ws) => fs.existsSync(ws))));
         }
       }
       for (const dir of reg.dirs) {
@@ -264,7 +251,7 @@ export function makeServerCtx(t, { scenario = 'ok', extraEnv = {}, config = {} }
   ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
   const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
-  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }), env));
+  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true })));
   return { ctx, env, ws, stateDir };
 }
 
@@ -286,6 +273,25 @@ export function requireStopped(result, env) {
     return result;
   }
   throw new Error(`server stop not confirmed: ${result?.reason ?? 'missing result'}`);
+}
+
+export async function stopAllWorkspaces(env, workspaces, stop = stopAllServers) {
+  const errors = [];
+  for (const ws of workspaces) {
+    try {
+      const result = await stop(env, ws);
+      if (result.code !== 0) {
+        errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
+      } else {
+        requireStopped(parseJsonOutput(result.stdout).stop);
+      }
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  try { requireStopped({ stopped: false, reason: 'not-running' }, env); }
+  catch (err) { errors.push(err); }
+  return errors;
 }
 
 // Shared by standalone live scripts. Remember failures even when a retry succeeds,

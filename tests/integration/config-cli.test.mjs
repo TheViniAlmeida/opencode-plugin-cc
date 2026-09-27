@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig,
+  makeWorkspace, testEnv, runCli, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig, runInProcess,
 } from '../helpers.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -27,6 +27,44 @@ test('path and get work without any config', async (t) => {
   assert.equal(get.code, 0);
   assert.equal(get.stdout, 'defaultModel = null\n');
   assert.equal((await cli(['config', 'get', 'no.such.key'])).code, 2);
+});
+
+test('get masks secret-like settings in JSON and text; locked recovery never echoes a value', async (t) => {
+  const { ws, env } = setup(t, { config: { server: { configOverride: { provider: { x: { options: { apiKey: 'credential-value-marker' } } } } } } });
+  const json = await runInProcess('config', ['get', 'server.configOverride.provider.x.options.apiKey', '--json'], { env, cwd: ws });
+  assert.equal(json.code, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).value, '***');
+  const text = await runInProcess('config', ['get', 'server.configOverride.provider.x.options.apiKey'], { env, cwd: ws });
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /\*\*\*/);
+  assert.doesNotMatch(text.stdout + json.stdout, /credential-value-marker/);
+  const locked = await runInProcess('config', ['set', 'server.configOverride', 'credential-value-marker'], { env, cwd: ws });
+  assert.equal(locked.code, 4);
+  assert.match(locked.stderr, /'\<valor\>'/);
+  assert.doesNotMatch(locked.stderr, /credential-value-marker/);
+});
+
+test('validate renders structured errors for a config shape rejected during load', async (t) => {
+  const { ws, env } = setup(t, { config: { project: { goal: 42 } } });
+  const r = await runInProcess('config', ['validate', '--json'], { env, cwd: ws });
+  assert.equal(r.code, 2);
+  const view = JSON.parse(r.stdout);
+  assert.equal(view.kind, 'validate');
+  assert.equal(view.valid, false);
+  assert.equal(view.serverChecked, false);
+  assert.ok(view.errors.some((e) => e.path === 'project.goal' && e.code === 'INVALID_VALUE'));
+});
+
+test('unset of workspace override checks the resulting effective policy before writing', async (t) => {
+  const { ws, env, cli } = setup(t, { config: { policy: WORLD.policy, defaultModel: `${EQ}/opencode-go/kimi-k3` } });
+  writeWorkspaceConfig(ws, { defaultModel: `${MV}/opencode-go/kimi-k3` });
+  const r = await cli(['config', 'unset', 'defaultModel', '--workspace']);
+  assert.equal(r.code, 4, all(r));
+  assert.match(all(r), /policy\.providers\.deny: omniroute-work/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')).defaultModel, `${MV}/opencode-go/kimi-k3`);
+  const nullValue = await cli(['config', 'set', 'defaultModel', 'null', '--workspace']);
+  assert.equal(nullValue.code, 4, all(nullValue));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')).defaultModel, `${MV}/opencode-go/kimi-k3`);
 });
 
 test('set scalar without server: file created with mode 0600', async (t) => {

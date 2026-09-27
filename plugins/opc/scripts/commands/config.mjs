@@ -5,7 +5,7 @@ import { connectApi } from '../lib/context.mjs';
 import {
   loadConfig, configPaths, getPath, schemaFor, coerceValue, applyConfigEdit, isLockedKey, isWorkspaceKey,
   keyNeedsServer, normalizeEditValue, validateConfigShape, mergeConfig, validateAgainstServer, policyViolations,
-  saveGlobalConfig, saveWorkspaceConfig, CONFIG_SCHEMA,
+  saveGlobalConfig, saveWorkspaceConfig, CONFIG_SCHEMA, isSecretLikeSetting,
 } from '../lib/config.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { createPrompter } from '../lib/tty.mjs';
@@ -50,13 +50,15 @@ function cmdGet(ctx, flags, rest) {
   const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
   const source = flags.global ? 'global' : flags.workspace ? 'workspace' : 'effective';
   const obj = source === 'global' ? (loaded.global ?? {}) : source === 'workspace' ? (loaded.workspace ?? {}) : loaded.config;
-  const value = key ? (getPath(obj, key) ?? null) : obj;
+  const rawValue = key ? (getPath(obj, key) ?? null) : obj;
+  const value = key && isSecretLikeSetting(key) && rawValue !== null ? '***' : rawValue;
   emit(ctx, flags, { kind: 'get', setting: key ?? '(all)', source, value }, renderConfig);
   return 0;
 }
 
 function terminalCommand(op, key, raw, scope) {
-  return `opc config ${op} ${key}${raw !== undefined ? ` ${shellQuote(raw)}` : ''}${scope === 'workspace' ? ' --workspace' : ''} --tty-confirm`;
+  const safeRaw = raw === undefined ? undefined : '<valor>';
+  return `opc config ${op} ${key}${safeRaw !== undefined ? ` ${shellQuote(safeRaw)}` : ''}${scope === 'workspace' ? ' --workspace' : ''} --tty-confirm`;
 }
 
 async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
@@ -99,13 +101,15 @@ async function cmdEdit(ctx, flags, op, rest) {
   const base = (scope === 'workspace' ? loaded.workspace : loaded.global) ?? {};
   const warnings = [];
   let next;
-  if (value !== undefined && value !== null && keyNeedsServer(key)) {
+  if (keyNeedsServer(key)) {
     const deps = await serverDeps(ctx);
-    const normOpts = { catalog: deps.catalog, aliases: loaded.config.aliases ?? {}, defaultProvider: key === 'defaultProvider' ? null : loaded.config.defaultProvider };
-    try {
-      value = normalizeEditValue(key, value, normOpts);
-    } catch (err) {
-      if (op !== 'remove') throw err;
+    if (value !== undefined && value !== null) {
+      const normOpts = { catalog: deps.catalog, aliases: loaded.config.aliases ?? {}, defaultProvider: key === 'defaultProvider' ? null : loaded.config.defaultProvider };
+      try {
+        value = normalizeEditValue(key, value, normOpts);
+      } catch (err) {
+        if (op !== 'remove') throw err;
+      }
     }
     next = applyConfigEdit(base, op, key, value);
     const effective = scope === 'workspace' ? mergeConfig(loaded.global ?? {}, next) : mergeConfig(next, loaded.workspace ?? {});
@@ -139,7 +143,18 @@ function cmdShow(ctx, flags) {
 }
 
 async function cmdValidate(ctx, flags) {
-  const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+  let loaded;
+  try {
+    loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+  } catch (err) {
+    if (err.code !== 'CONFIG_INVALID') throw err;
+    const details = err.details ?? {};
+    const source = details.path?.endsWith('.opc.json') ? 'workspace' : 'global';
+    const errors = (details.errors?.length ? details.errors : [{ path: '', code: 'CONFIG_INVALID', message: err.message }])
+      .map((e) => ({ source, ...e }));
+    emit(ctx, flags, { kind: 'validate', valid: false, errors, serverChecked: false }, renderConfig);
+    return 2;
+  }
   const errors = [];
   const warnings = [];
   const seen = new Set();
