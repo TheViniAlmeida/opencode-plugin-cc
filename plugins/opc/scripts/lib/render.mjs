@@ -193,7 +193,7 @@ export function renderOnboarding(view) {
         '',
         `- Config global: ${s.configExists ? 'existe' : 'ainda não existe'} (modo ${s.mode})`,
         `- OpenCode: ${s.opencodeInstalled ? `instalado (${s.opencodeVersion ?? 'versão ?'})` : 'não instalado'}`,
-        `- Providers conectados: ${s.connectedProviders.length ? s.connectedProviders.map((p) => `${p.id} (${p.modelCount})`).join(', ') : 'nenhum'}`,
+        `- Providers conectados: ${s.connectedProviders === null ? 'não consultados' : s.connectedProviders.length ? s.connectedProviders.map((p) => `${p.id} (${p.modelCount})`).join(', ') : 'nenhum'}`,
         `- Rascunho: ${s.draft.exists ? `sim, próxima etapa: ${s.nextStep ?? 'commit'}` : 'não'}`,
         `- Chaves travadas editáveis aqui: ${RenderF1.yesNo(s.lockedKeysEditable)}`,
       ];

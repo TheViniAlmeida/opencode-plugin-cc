@@ -52,7 +52,8 @@ test('setup --json without opencode on PATH: install offer data', async (t) => {
   const s = report.onboarding;
   assert.equal(s.opencodeInstalled, false);
   assert.equal(s.npmAvailable, false);
-  assert.deepEqual(s.connectedProviders, []);
+  assert.equal(s.connectedProviders, null);
+  assert.match(s.serverError, /não consultados.*falha no diagnóstico/i);
 });
 
 test('setup models: top suggestions, aliases, families and search', async (t) => {

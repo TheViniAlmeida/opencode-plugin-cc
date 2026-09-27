@@ -65,6 +65,7 @@ test('renderConfig: redacts secret-looking values and renders all kinds', () => 
 test('renderOnboarding: state/models/apply/commit/discard', () => {
   const state = renderOnboarding({ kind: 'state', onboarding: { configExists: false, mode: 'bootstrap', opencodeInstalled: true, opencodeVersion: '1.18.32', connectedProviders: [{ id: 'p', modelCount: 2 }], draft: { exists: false }, nextStep: 'defaultProvider', lockedKeysEditable: true } });
   assert.match(state, /ainda não existe/);
+  assert.match(renderOnboarding({ kind: 'state', onboarding: { configExists: false, mode: 'bootstrap', opencodeInstalled: true, connectedProviders: null, draft: { exists: false }, lockedKeysEditable: true } }), /Providers conectados: não consultados/);
   assert.match(renderOnboarding({ kind: 'models', provider: 'p', suggestions: [model] }), /Sugestões de modelo/);
   assert.match(renderOnboarding({ kind: 'apply', applied: ['defaultModel'], nextStep: null, warnings: [] }), /Próxima etapa: commit/);
   assert.match(renderOnboarding({ kind: 'commit', scope: 'global', path: '/d/config.json', warnings: [] }), /global/);

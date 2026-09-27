@@ -222,6 +222,25 @@ const SetupOnboarding = {
     return { onboarding, text: d.renderOnboarding({ kind: 'state', onboarding }) };
   },
 
+  async offlineState(ctx, { reconfigure, opencode }) {
+    const d = await this.deps();
+    const npmAvailable = this.probeBinary(d, 'npm', ['--version'], ctx.env).installed;
+    const { loaded, draft, policy } = this.policyFor(d, ctx);
+    const summary = d.onboardingSummary({
+      hasGlobal: loaded.hasGlobal,
+      draft,
+      catalog: null,
+      policy,
+      opencode: opencode ?? detectOpencode(ctx.env),
+      npmAvailable,
+      reconfigure,
+      workspaceRoot: ctx.workspaceRoot,
+      serverError: 'Dados do servidor e provedores não consultados devido à falha no diagnóstico.',
+    });
+    const onboarding = { ...summary, connectedProviders: null, providerChoices: null, needsOtherProvider: null };
+    return { onboarding, text: d.renderOnboarding({ kind: 'state', onboarding }) };
+  },
+
   async models(ctx, argv) {
     const d = await this.deps();
     const { flags, positionals } = d.parseArgs(argv, {
@@ -320,7 +339,7 @@ export async function run(ctx, argv) {
   };
   const exitCode = await runDiagnostics(captured, rest);
   if (exitCode !== ExitCode.OK) {
-    const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
+    const { onboarding, text } = await SetupOnboarding.offlineState(ctx, { reconfigure, opencode: report?.opencode });
     if (report !== undefined) ctx.json({ ...report, onboarding });
     else ctx.out(`${output}${text}`);
     return exitCode;
