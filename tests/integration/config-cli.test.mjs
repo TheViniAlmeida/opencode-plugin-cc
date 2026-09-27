@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeWorkspace, testEnv, runCli, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig, runInProcess,
+  makeWorkspace, testEnv, runCli, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -73,26 +73,38 @@ test('setup --stop-server works with invalid config and reports the defaults fal
   assert.match(text.stdout, /Avisos:[\s\S]*defaults/i);
 });
 
-test('offline policy check rejects a policy edit that denies an effective model', async (t) => {
-  const { ws, env, cli } = setup(t, { config: { defaultModel: `${EQ}/opencode-go/kimi-k3` } });
-  const r = await cli(['config', 'add', 'policy.providers.deny', EQ, '--workspace']);
+test('offline policy check rejects a TTY-confirmed policy edit that denies an effective model', async (t) => {
+  const { ws, env } = setup(t, { config: { defaultModel: `${EQ}/opencode-go/kimi-k3` } });
+  const globalPath = path.join(env.OPC_DATA_DIR, 'config.json');
+  const before = fs.readFileSync(globalPath, 'utf8');
+  const r = await runInProcess('config', ['add', 'policy.providers.deny', EQ, '--workspace', '--tty-confirm'], {
+    env, cwd: ws, stdin: scriptedTTY(['policy.providers.deny']),
+  });
   assert.equal(r.code, 4, all(r));
+  assert.match(all(r), /POLICY_DENIED/);
+  assert.doesNotMatch(all(r), /LOCKED_KEY/);
   assert.match(all(r), /policy\.providers\.deny: omniroute-work/);
   assert.equal(fs.existsSync(path.join(ws, '.opc.json')), false, 'denied policy edit is not written');
-  assert.equal(readGlobalConfig(env).defaultModel, `${EQ}/opencode-go/kimi-k3`);
+  assert.equal(fs.readFileSync(globalPath, 'utf8'), before);
+  assert.equal(fs.existsSync(env.FAKE_OPENCODE_STATE), false, 'offline check never boots a server');
 });
 
-test('unset of workspace override checks the resulting effective policy before writing', async (t) => {
-  const { ws, env, cli } = setup(t, { config: { policy: WORLD.policy, defaultModel: `${EQ}/opencode-go/kimi-k3` } });
-  writeWorkspaceConfig(ws, { defaultModel: `${MV}/opencode-go/kimi-k3` });
-  const r = await cli(['config', 'unset', 'defaultModel', '--workspace']);
-  assert.equal(r.code, 4, all(r));
-  assert.match(all(r), /policy\.providers\.deny: omniroute-work/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')).defaultModel, `${MV}/opencode-go/kimi-k3`);
-  const nullValue = await cli(['config', 'set', 'defaultModel', 'null', '--workspace']);
-  assert.equal(nullValue.code, 4, all(nullValue));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')).defaultModel, `${MV}/opencode-go/kimi-k3`);
-});
+for (const edit of [['unset', 'defaultModel'], ['set', 'defaultModel', 'null']]) {
+  const operation = edit[0] === 'unset' ? 'unset' : 'set null';
+  test(`${operation} of workspace override checks the resulting effective policy before writing`, async (t) => {
+    const { ws, env, cli } = setup(t, { config: { policy: WORLD.policy, defaultModel: `${EQ}/opencode-go/kimi-k3` } });
+    const workspacePath = writeWorkspaceConfig(ws, { defaultModel: `${MV}/opencode-go/kimi-k3` });
+    const globalPath = path.join(env.OPC_DATA_DIR, 'config.json');
+    const beforeGlobal = fs.readFileSync(globalPath, 'utf8');
+    const beforeWorkspace = fs.readFileSync(workspacePath, 'utf8');
+    const r = await cli(['config', ...edit, '--workspace']);
+    assert.equal(r.code, 4, all(r));
+    assert.match(all(r), /POLICY_DENIED/);
+    assert.match(all(r), /policy\.providers\.deny: omniroute-work/);
+    assert.equal(fs.readFileSync(workspacePath, 'utf8'), beforeWorkspace);
+    assert.equal(fs.readFileSync(globalPath, 'utf8'), beforeGlobal);
+  });
+}
 
 test('set scalar without server: file created with mode 0600', async (t) => {
   const { env, cli } = setup(t);

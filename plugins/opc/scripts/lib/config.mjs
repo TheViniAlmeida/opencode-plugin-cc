@@ -279,6 +279,8 @@ export function mergeConfig(globalCfg, workspaceCfg) {
         else ignore(`stopGate.${sub}`, 'not overridable per workspace');
       }
     } else if (WORKSPACE_PREFERENCE_KEYS.includes(key)) {
+      // A cleared workspace defaultModel inherits the global model, like unset.
+      if (key === 'defaultModel' && value === null) continue;
       config[key] = isObj(value) && isObj(config[key]) ? mergeDeep(config[key], value) : cloneJson(value);
     } else if (isLockedKey(key) || key === 'server') {
       ignore(key, 'locked key (global only)');

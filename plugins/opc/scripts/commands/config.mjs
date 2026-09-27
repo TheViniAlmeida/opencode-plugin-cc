@@ -99,6 +99,8 @@ async function cmdEdit(ctx, flags, op, rest) {
   let value = raw === undefined ? undefined : coerceValue(key, raw);
   const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
   const base = (scope === 'workspace' ? loaded.workspace : loaded.global) ?? {};
+  // Compare effective configs: a workspace override may mask a denied global default.
+  const before = loaded.config;
   const warnings = [];
   let next;
   let deps = { catalog: undefined, agents: [] };
@@ -117,16 +119,14 @@ async function cmdEdit(ctx, flags, op, rest) {
     const checked = validateAgainstServer(effective.config, deps);
     const own = checked.errors.filter(touches(key));
     if (own.length) throw new UsageError(own[0].code ?? 'INVALID_VALUE', own.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: own } });
-    const before = mergeConfig(loaded.global ?? {}, loaded.workspace ?? {});
-    const existingViolations = new Set(policyViolations(before.config, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
+    const existingViolations = new Set(policyViolations(before, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
     const denied = policyViolations(effective.config, deps).filter((e) => !existingViolations.has(`${e.path}|${e.code}|${e.message}`));
     if (denied.length) throw new PolicyError('POLICY_DENIED', denied.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: denied } });
     for (const e of checked.errors.filter((x) => !touches(key)(x))) warnings.push({ path: e.path, code: e.code, message: e.message });
   } else {
     next = applyConfigEdit(base, op, key, value);
     const effective = scope === 'workspace' ? mergeConfig(loaded.global ?? {}, next) : mergeConfig(next, loaded.workspace ?? {});
-    const before = mergeConfig(loaded.global ?? {}, loaded.workspace ?? {});
-    const existingViolations = new Set(policyViolations(before.config, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
+    const existingViolations = new Set(policyViolations(before, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
     const denied = policyViolations(effective.config, deps).filter((e) => !existingViolations.has(`${e.path}|${e.code}|${e.message}`));
     if (denied.length) throw new PolicyError('POLICY_DENIED', denied.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: denied } });
   }

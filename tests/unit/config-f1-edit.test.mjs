@@ -133,6 +133,39 @@ test('policyViolations evaluates denied unknown referenced model ids', () => {
   assert.ok(policyViolations(cfg, { catalog, agents }).some((e) => e.path === 'defaultModel' && e.code === 'POLICY_DENIED'));
 });
 
+for (const [op, value] of [['unset', undefined], ['set', null]]) {
+  test(`workspace ${op} defaultModel ${String(value)} exposes the denied global model`, () => {
+    const global = {
+      defaultModel: `${EQ}/opencode-go/kimi-k3`,
+      policy: { providers: { deny: [EQ] } },
+    };
+    const workspace = { defaultModel: `${MV}/opencode-go/kimi-k3` };
+    const before = mergeConfig(global, workspace).config;
+    const next = applyConfigEdit(workspace, op, 'defaultModel', value);
+    const after = mergeConfig(global, next).config;
+
+    assert.deepEqual(policyViolations(before, { catalog, agents }), []);
+    assert.equal(after.defaultModel, global.defaultModel);
+    for (const deps of [{ catalog, agents }, { catalog: undefined, agents: [] }]) {
+      const denied = policyViolations(after, deps);
+      assert.equal(denied.length, 1);
+      assert.equal(denied[0].path, 'defaultModel');
+      assert.equal(denied[0].code, 'POLICY_DENIED');
+      assert.match(denied[0].message, /policy\.providers\.deny: omniroute-work/);
+    }
+    assert.equal(workspace.defaultModel, `${MV}/opencode-go/kimi-k3`, 'edit and merge preserve the original override');
+  });
+}
+
+test('workspace null defaultModel inherits an allowed global model or the neutral default', () => {
+  const workspace = { defaultModel: null };
+  const inherited = mergeConfig({ defaultModel: `${MV}/opencode-go/kimi-k3` }, workspace).config;
+  assert.equal(inherited.defaultModel, `${MV}/opencode-go/kimi-k3`);
+  assert.deepEqual(policyViolations(inherited, { catalog, agents }), []);
+  assert.equal(mergeConfig({}, workspace).config.defaultModel, null);
+  assert.equal(mergeConfig({ defaultModel: null }, {}).config.defaultModel, null);
+});
+
 test('configPaths', () => {
   assert.deepEqual(configPaths({ dataDir: '/d', workspaceRoot: '/w' }), { dataDir: '/d', global: '/d/config.json', workspace: '/w/.opc.json', draft: '/d/config.draft.json' });
 });
