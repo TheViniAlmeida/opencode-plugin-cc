@@ -198,7 +198,10 @@ export function requiresUser(request, policy = {}) {
     const commands = [...patterns];
     if (typeof request.metadata?.command === 'string') commands.push(request.metadata.command);
     const destructive = destructiveBashOf(policy);
-    return commands.some((command) => bashSegments(command).some((segment) => matchesAny(stripBashPrefixes(segment), destructive)));
+    return commands.some((command) => {
+      const segments = bashSegments(command);
+      return segments === null || segments.some((segment) => matchesAny(stripBashPrefixes(segment), destructive));
+    });
   }
   if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || request.permission === 'edit') {
     return patterns.some((pattern) => matchesAny(pattern, sensitivePathsOf(policy)));
@@ -207,14 +210,139 @@ export function requiresUser(request, policy = {}) {
 }
 
 function bashSegments(command) {
-  // Separators are deliberately treated lexically: detecting a possible destructive
-  // command is safer than trying to emulate shell quoting and expansion here.
-  return String(command)
-    .replace(/\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, (_, inner) => `;${inner};`)
-    .replace(/`([^`]*)`/g, (_, inner) => `;${inner};`)
-    .split(/&&|\|\||[;|\n\r]/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  function scan(source, allowUnmatchedClose = false) {
+    const parts = [];
+    let start = 0;
+    let quote = null;
+    let escaped = false;
+    for (let i = 0; i < source.length; i += 1) {
+      const char = source[i];
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\' && quote !== "'") {
+        if (source[i + 1] === '`') {
+          const end = source.indexOf('\\`', i + 2);
+          if (end < 0) return null;
+          const nested = scan(source.slice(i + 2, end));
+          if (nested === null) return null;
+          parts.push(...nested);
+          i = end + 1;
+          continue;
+        }
+        escaped = true; continue;
+      }
+      if (quote === "'") { if (char === "'") quote = null; continue; }
+      if (quote === '"') {
+        if (char === '"') { quote = null; continue; }
+        if (char === '`') {
+          const end = findBacktick(source, i + 1);
+          if (end < 0) return null;
+          const nested = scan(source.slice(i + 1, end));
+          if (nested === null) return null;
+          parts.push(...nested);
+          i = end;
+        } else if (char === '$' && source[i + 1] === '(') {
+          const end = findParen(source, i + 1);
+          if (end < 0) return null;
+          const nested = scan(source.slice(i + 2, end));
+          if (nested === null) return null;
+          parts.push(...nested);
+          i = end;
+        }
+        continue;
+      }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === '`') {
+        const end = findBacktick(source, i + 1);
+        if (end < 0) return null;
+        const nested = scan(source.slice(i + 1, end));
+        if (nested === null) return null;
+        parts.push(...nested);
+        i = end;
+        continue;
+      }
+      if (char === '$' && source[i + 1] === '(') {
+        const end = findParen(source, i + 1);
+        if (end < 0) return null;
+        const nested = scan(source.slice(i + 2, end));
+        if (nested === null) return null;
+        parts.push(...nested);
+        i = end;
+        continue;
+      }
+      if (char === '(' || char === '{') {
+        const close = char === '(' ? ')' : '}';
+        const end = findGroup(source, i, char, close);
+        if (end < 0) return null;
+        const nested = scan(source.slice(i + 1, end));
+        if (nested === null) return null;
+        parts.push(...nested);
+        i = end;
+        continue;
+      }
+      if (char === ')' || char === '}') {
+        if (!allowUnmatchedClose) return null;
+        continue;
+      }
+      if (char === ';' || char === '|' || char === '\n' || char === '\r' || (char === '&' && source[i + 1] === '&')) {
+        const end = char === '&' ? i : i;
+        const segment = source.slice(start, end).trim();
+        if (segment) parts.push(segment);
+        if (char === '&') i += 1;
+        start = i + 1;
+      }
+    }
+    if (quote !== null || escaped) return null;
+    const segment = source.slice(start).trim();
+    if (segment) parts.push(segment);
+    return parts;
+  }
+
+  function findBacktick(source, from) {
+    let escaped = false;
+    for (let i = from; i < source.length; i += 1) {
+      if (escaped) { escaped = false; continue; }
+      if (source[i] === '\\') { escaped = true; continue; }
+      if (source[i] === '`') return i;
+    }
+    return -1;
+  }
+
+  function findParen(source, open) {
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    for (let i = open; i < source.length; i += 1) {
+      const char = source[i];
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\' && quote !== "'") { escaped = true; continue; }
+      if (quote === "'") { if (char === "'") quote = null; continue; }
+      if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === '$' && source[i + 1] === '(') { depth += 1; i += 1; continue; }
+      if (char === '(') depth += 1;
+      else if (char === ')' && --depth === 0) return i;
+    }
+    return -1;
+  }
+
+  function findGroup(source, open, opening, closing) {
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    for (let i = open; i < source.length; i += 1) {
+      const char = source[i];
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\' && quote !== "'") { escaped = true; continue; }
+      if (quote === "'") { if (char === "'") quote = null; continue; }
+      if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === opening) depth += 1;
+      else if (char === closing && --depth === 0) return i;
+    }
+    return -1;
+  }
+
+  return scan(String(command));
 }
 
 function stripBashPrefixes(segment) {

@@ -97,6 +97,19 @@ test('requiresUser: detects destructive commands in compound and wrapped segment
   assert.equal(requiresUser({ permission: 'bash', patterns: ['npm test && git status'] }, policy), false);
 });
 
+test('requiresUser: recursively inspects nested substitutions and shell groups', () => {
+  for (const command of [
+    'echo $(echo $(rm -rf /x))',
+    'echo `echo \\`rm -rf /x\\``',
+    'a=$(b $(git push --force))',
+    '(echo (rm -rf /x))',
+    '{ echo { rm -rf /x; }; }',
+  ]) {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }, policy), true, command);
+  }
+  assert.equal(requiresUser({ permission: 'bash', patterns: ['echo $(echo $(printf safe))'] }, policy), false);
+});
+
 test('checkReply: never always; approver user needs confirmation; claude only for destructive', () => {
   const destructive = { permission: 'bash', patterns: ['rm -rf build'] };
   const benign = { permission: 'bash', patterns: ['ls'] };
