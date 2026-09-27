@@ -3,13 +3,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
+import { CONFIG_USED_FIELDS, diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
 
 test('shapeOf records types, first array element and collapses user-data maps', () => {
   assert.deepEqual(shapeOf({ b: 1, a: 'x', n: null, l: [{ k: true }] }), { a: 'string', b: 'number', l: [{ k: 'boolean' }], n: 'null' });
   assert.deepEqual(shapeOf([]), ['empty']);
   assert.deepEqual(shapeOf({ mcp: { gitlab: { type: 'local' }, other: {} } }, 'config'), { mcp: { '*': { type: 'string' } } });
   assert.deepEqual(shapeOf({}, 'session.status'), { '*': 'empty' });
+});
+
+test('config snapshots retain only used fields and redact user-controlled keys at every depth', () => {
+  const config = {
+    share: 'auto', model: 'private/model', small_model: 'private/small',
+    mcp: { 'hive-alice': { type: 'local' } },
+    agent: { build: { permission: { bash: { '*> $HOME/.*': 'deny', '/home/alice/bin*': 'allow' } } } },
+    provider: { 'omniroute-alice': { models: { 'private/model': { name: 'private value' } } } },
+    permission: { nested: { '/home/alice/bin*': 'deny' } },
+    unrelated: { alice: 'private value' },
+  };
+  const shape = shapeOf(config, 'config');
+  const serialized = JSON.stringify(shape);
+  for (const personal of ['alice', '/home', 'HOME', 'hive', 'omniroute', 'private value']) assert.equal(serialized.includes(personal), false, personal);
+  assert.deepEqual(Object.keys(shape).sort(), CONFIG_USED_FIELDS.filter((field) => Object.hasOwn(config, field)).sort());
+  for (const field of CONFIG_USED_FIELDS) assert.ok(Object.hasOwn(shape, field), `${field} missing from shape`);
+  assert.equal(shape.share, 'string');
+  assert.deepEqual(shape.mcp, { '*': { type: 'string' } });
 });
 
 test('lookup walks dotted paths with [] for array elements', () => {

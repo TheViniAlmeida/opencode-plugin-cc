@@ -13,11 +13,37 @@ export const PROBES = [
 ];
 export const EVENT_TYPES = ['server.connected', 'server.heartbeat'];
 
+// Only config fields consumed by the plugin belong in snapshots.
+export const CONFIG_USED_FIELDS = ['share', 'model', 'small_model', 'mcp', 'agent', 'provider', 'permission'];
+
 // Maps whose keys are user data (provider names, MCP names…): only the value shape is recorded.
 export const MAP_PATHS = new Set([
   'config.agent', 'config.mcp', 'config.provider', 'config.command', 'config.mode', 'config.lsp', 'config.formatter',
   'config.permission', 'session.status',
 ]);
+
+function mergeShapes(shapes) {
+  if (shapes.length === 0) return 'empty';
+  const first = shapes[0];
+  if (shapes.every((shape) => JSON.stringify(shape) === JSON.stringify(first))) return first;
+  if (shapes.every((shape) => shape && typeof shape === 'object' && !Array.isArray(shape))) {
+    const keys = [...new Set(shapes.flatMap((shape) => Object.keys(shape)))].sort();
+    return Object.fromEntries(keys.map((key) => [key, mergeShapes(shapes.filter((shape) => Object.hasOwn(shape, key)).map((shape) => shape[key]))]));
+  }
+  if (shapes.every(Array.isArray)) return mergeShapes(shapes.flatMap((shape) => shape));
+  return 'mixed';
+}
+
+function collapseKeys(value, at, keys) {
+  const childPath = (key) => at ? `${at}.${key}` : key;
+  const isPermission = /(^|\\.)permission(\\.|$)/i.test(at);
+  const collapse = MAP_PATHS.has(at) || isPermission || keys.length > 8
+    || keys.some((key) => !/^[A-Za-z0-9_.-]+$/.test(key));
+  if (collapse) {
+    return { '*': mergeShapes(keys.map((key) => shapeOf(value[key], childPath(key)))) };
+  }
+  return Object.fromEntries(keys.sort().map((key) => [key, shapeOf(value[key], childPath(key))]));
+}
 
 export function toolAttempted(tools, asked, tool) {
   return tools.some((part) => part.tool === tool && ['error', 'completed'].includes(part.status))
@@ -45,11 +71,11 @@ export function shapeOf(value, at = '') {
   if (value === null) return 'null';
   if (Array.isArray(value)) return value.length === 0 ? ['empty'] : [shapeOf(value[0], `${at}[]`)];
   if (typeof value === 'object') {
-    if (MAP_PATHS.has(at)) {
-      const first = Object.values(value)[0];
-      return { '*': first === undefined ? 'empty' : shapeOf(first, `${at}.*`) };
+    const keys = Object.keys(value);
+    if (at === 'config') {
+      return Object.fromEntries(CONFIG_USED_FIELDS.filter((key) => Object.hasOwn(value, key)).map((key) => [key, shapeOf(value[key], `config.${key}`)]));
     }
-    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, shapeOf(value[k], at ? `${at}.${k}` : k)]));
+    return collapseKeys(value, at, keys);
   }
   return typeof value;
 }
