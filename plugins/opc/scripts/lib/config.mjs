@@ -115,7 +115,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   'server.configOverride': schemaField('object'),
 });
 
-const MAP_ENTRY = { 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') };
+const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') });
 const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
 const SECRET_LIKE = /(token|password|secret|api[-_]?key)/i;
 const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
@@ -126,10 +126,11 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const cloneJson = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
 export function schemaFor(dotted) {
-  if (CONFIG_SCHEMA[dotted]) return CONFIG_SCHEMA[dotted];
+  if (Object.hasOwn(CONFIG_SCHEMA, dotted)) return CONFIG_SCHEMA[dotted];
   const parts = dotted.split('.');
   for (let i = parts.length - 1; i > 0; i -= 1) {
-    const parent = CONFIG_SCHEMA[parts.slice(0, i).join('.')];
+    const parentPath = parts.slice(0, i).join('.');
+    const parent = Object.hasOwn(CONFIG_SCHEMA, parentPath) ? CONFIG_SCHEMA[parentPath] : null;
     if (parent && MAP_ENTRY[parent.type]) return parent.type === 'object' ? MAP_ENTRY.object : (i === parts.length - 1 ? MAP_ENTRY[parent.type] : null);
   }
   return null;
@@ -170,7 +171,7 @@ function checkValue(desc, value) {
     case 'model-map':
       return isObj(value) && Object.values(value).every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'must map names to model IDs';
     case 'modelref-list-map':
-      return isObj(value) && Object.values(value).every((v) => Array.isArray(v) && v.every((x) => typeof x === 'string')) ? null : 'must map names to lists of models';
+      return isObj(value) && Object.values(value).every((v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.trim() !== '')) ? null : 'must map names to lists of models';
     case 'rules': return checkRules(value);
     case 'rules-map':
       if (!isObj(value)) return 'must map profile names to rule lists';
@@ -259,6 +260,7 @@ export function mergeConfig(globalCfg, workspaceCfg) {
     if (error.path) ws = unsetConfigPath(ws, error.path);
   }
   const ignore = (p, why) => warnings.push({ path: p, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${why}; ignored` });
+  ws = dropUnknownConfigKeys(ws, '', (p) => ignore(p, 'unknown key'));
   for (const [key, value] of Object.entries(ws)) {
     if (key === 'policy') {
       if (!isObj(value)) { ignore('policy', 'must be an object'); continue; }
@@ -272,6 +274,7 @@ export function mergeConfig(globalCfg, workspaceCfg) {
       config[key] = isObj(value) && isObj(config[key]) ? mergeDeep(config[key], value) : cloneJson(value);
     } else if (isLockedKey(key) || key === 'server') {
       ignore(key, 'locked key (global only)');
+      if (key === 'server' && isObj(value) && Object.hasOwn(value, 'configOverride')) ignore('server.configOverride', 'locked key (global only)');
     } else if (key in DEFAULT_CONFIG) {
       ignore(key, 'not overridable per workspace');
     } else {
@@ -279,6 +282,21 @@ export function mergeConfig(globalCfg, workspaceCfg) {
     }
   }
   return { config, warnings };
+}
+
+function dropUnknownConfigKeys(node, prefix, onUnknown) {
+  if (!isObj(node)) return node;
+  const out = {};
+  for (const [key, value] of Object.entries(node)) {
+    const p = prefix ? `${prefix}.${key}` : key;
+    const exact = Object.hasOwn(CONFIG_SCHEMA, p);
+    const desc = exact ? CONFIG_SCHEMA[p] : schemaFor(p);
+    if (!desc && !GROUPS.has(p)) { onUnknown(p); continue; }
+    if (exact && ['object', 'json'].includes(desc.type)) out[key] = cloneJson(value);
+    else if (GROUPS.has(p) && isObj(value)) out[key] = dropUnknownConfigKeys(value, p, onUnknown);
+    else out[key] = cloneJson(value);
+  }
+  return out;
 }
 
 function mergeWorkspacePolicy(config, wsPolicy, ignore, warnings) {
@@ -359,7 +377,7 @@ export function loadConfig({ dataDir, workspaceRoot }) {
     else {
       const { errors, warnings: w } = validateConfigShape(workspace, { source: 'workspace' });
       if (errors.length) throw new OpcError('CONFIG_INVALID', `Config workspace inválida: ${errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`, { exitCode: 2, details: { path: wPath, errors } });
-      warnings.push(...w.filter((x) => x.message.startsWith('chave com cara')).map((x) => ({ ...x, source: 'workspace' })));
+      warnings.push(...w.map((x) => ({ ...x, source: 'workspace' })));
     }
   } else workspace = null;
   const merged = mergeConfig(global, workspace);

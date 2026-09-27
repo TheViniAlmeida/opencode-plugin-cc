@@ -95,7 +95,7 @@ test('mergeConfig: global over defaults; restrictive workspace merge', () => {
   assert.equal(config.stopGate.enabled, false);
   assert.equal(config.stopGate.model, 'fast');
   const w = warnings.map((x) => x.path);
-  for (const p of ['policy.approver', 'permissionProfiles', 'server', 'jobs', 'stopGate.enabled', 'policy.models.allow']) assert.ok(w.includes(p), `warning for ${p}`);
+  for (const p of ['policy.approver', 'permissionProfiles', 'server', 'server.configOverride', 'jobs', 'stopGate.enabled', 'policy.models.allow']) assert.ok(w.includes(p), `warning for ${p}`);
   assert.match(warnings.find((x) => x.path === 'policy.models.allow').message, /anthropic\/\*.*intersection/);
   assert.equal(validateConfigShape(config, { source: 'effective' }).errors.length, 0);
 });
@@ -114,7 +114,19 @@ test('schemaFor: exact keys and map entries', () => {
   assert.equal(schemaFor('server.configOverride.share').type, 'json');
   assert.equal(schemaFor('nope'), null);
   assert.equal(schemaFor('routing.tasks.ask.deeper'), null);
+  for (const key of ['constructor', '__proto__', 'toString', 'routing.unknownFlag']) assert.equal(schemaFor(key), null);
   assert.ok(Object.keys(CONFIG_SCHEMA).length > 40);
+});
+
+test('modelref-list-map entries reject empty strings', () => {
+  const errors = validateConfigShape({ routing: { tasks: { ask: [''] } } }).errors;
+  assert.ok(errors.some((error) => ['routing.tasks', 'routing.tasks.ask'].includes(error.path)));
+});
+
+test('workspace unknown nested keys are warned and dropped', () => {
+  const { config, warnings } = mergeConfig({}, { routing: { unknownFlag: true, tasks: { ask: ['prov/model'] } } });
+  assert.ok(warnings.some((warning) => warning.path === 'routing.unknownFlag' && warning.code === 'WORKSPACE_IGNORED'));
+  assert.deepEqual(config.routing, { tasks: { ask: ['prov/model'] }, tiers: {}, fallback: { enabled: true, maxAttempts: 3, maxProviderRetries: 3, maxRetryWaitSec: 60 } });
 });
 
 test('keyNeedsServer', () => {

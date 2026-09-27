@@ -172,6 +172,14 @@ test('loadConfig surfaces invalid JSON or shape in global and workspace files', 
   assert.throws(() => loadConfig({ dataDir, workspaceRoot: ws }), (e) => e.code === 'CONFIG_INVALID' && e.details.errors.some((x) => x.path === 'policy.models'));
 });
 
+test('loadConfig preserves structured secret-like warnings for workspace config', (t) => {
+  const dataDir = temp(t);
+  const ws = temp(t);
+  fs.writeFileSync(path.join(ws, '.opc.json'), JSON.stringify({ apiToken: 'placeholder' }));
+  const loaded = loadConfig({ dataDir, workspaceRoot: ws });
+  assert.ok(loaded.warnings.some((warning) => warning.path === 'apiToken' && warning.code === 'SECRET_LIKE_KEY'));
+});
+
 test('loadConfig rejects unreadable .opc.json with READ_FAILED', { skip: process.platform === 'win32' }, (t) => {
   const dataDir = temp(t);
   const ws = temp(t);
