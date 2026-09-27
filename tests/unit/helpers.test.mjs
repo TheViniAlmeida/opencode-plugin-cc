@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
-import { makeTempDir, readFakeState, registerStopper, trackTempDir, waitFor } from '../helpers.mjs';
+import { getProcessIdentity, identityMatches, spawnDetached, terminateProcessGroup } from '../../plugins/opc/scripts/lib/process.mjs';
+import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor } from '../helpers.mjs';
 
 test('waitFor uses a monotonic clock instead of Date.now', async () => {
   const original = Date.now;
@@ -14,20 +16,21 @@ test('waitFor uses a monotonic clock instead of Date.now', async () => {
   }
 });
 
-test('registry preserves recovery directories when a stopper fails', async (outer) => {
+test('registry closes an external fake and preserves recovery directories when another stopper fails', async (outer) => {
   const hooks = [];
   const t = { after(fn) { hooks.push(fn); } };
   const dir = trackTempDir(outer, makeTempDir('opc-helper-'));
   trackTempDir(t, dir);
   const order = [];
-  registerStopper(t, () => { order.push('first'); });
+  const fake = { close() { order.push('close external fake'); } };
+  registerStopper(t, () => fake.close());
   registerStopper(t, () => { order.push('second'); throw new Error('stopper broke'); });
   await assert.rejects(hooks[0](), (err) => {
     assert.ok(err instanceof AggregateError);
     assert.match(err.message, /stopper broke/);
     return true;
   });
-  assert.deepEqual(order, ['second', 'first']);
+  assert.deepEqual(order, ['second', 'close external fake']);
   assert.equal(fs.existsSync(dir), true);
 });
 
@@ -90,17 +93,77 @@ test('live cleanup removes data only after every context confirms stop', async (
   assert.equal(fs.existsSync(dir), false);
 });
 
-test('registry keeps tracked environment data when CLI stop is not confirmed', async (outer) => {
+test('registry accepts attached CLI stop and removes tracked environment data', async (outer) => {
   const { trackEnv, trackWorkspace } = await import('../helpers.mjs');
   const hooks = [];
   const t = { after(fn) { hooks.push(fn); } };
   const dir = trackTempDir(outer, makeTempDir('opc-helper-'));
   trackTempDir(t, dir);
   trackWorkspace(t, dir);
-  // Attach stop returns code 0 but stopped:false; no sockets or signals are used.
+  // Attach stop is a valid end state; no sockets or signals are used.
   trackEnv(t, { PATH: process.env.PATH, HOME: dir, OPC_DATA_DIR: `${dir}/data`, OPC_SERVER_URL: 'http://127.0.0.1:1' });
-  await assert.rejects(hooks[0](), /test cleanup failed/);
-  assert.equal(fs.existsSync(dir), true);
+  await hooks[0]();
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test('requireStopped accepts attached without stopping an external server', () => {
+  const result = { stopped: false, reason: 'attached' };
+  assert.equal(requireStopped(result), result);
+});
+
+test('registry accepts attached stoppers and removes temporary data', async (outer) => {
+  const hooks = [];
+  const t = { after(fn) { hooks.push(fn); } };
+  const dir = trackTempDir(outer, makeTempDir('opc-helper-'));
+  trackTempDir(t, dir);
+  registerStopper(t, () => ({ stopped: false, reason: 'attached' }));
+  await hooks[0]();
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test('requireStopped rejects not-running with a live recorded fake boot and preserves recovery data', async (outer) => {
+  const dir = trackTempDir(outer, makeTempDir('opc-helper-'));
+  const env = { FAKE_OPENCODE_STATE: path.join(dir, 'fake-state.json') };
+  const fakeBin = path.join(FAKE_BIN_DIR, 'opencode');
+  // Simulate the fake cmdline without listening on a socket.
+  const proc = await spawnDetached(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', fakeBin, 'serve'], {
+    env: process.env, cwd: dir, logFile: path.join(dir, 'child.log'),
+  });
+  const matcher = (argv) => argv.includes(fakeBin) && argv.includes('serve');
+  registerStopper(outer, async () => {
+    assert.notEqual(await terminateProcessGroup(proc, matcher, { graceMs: 500 }), 'identity-mismatch');
+  });
+  fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({ boots: [{ pid: await deadPid() }, { pid: proc.pid }] }));
+  const result = { stopped: false, reason: 'not-running' };
+  assert.throws(() => requireStopped(result, env), /live fake server/);
+  assert.equal(identityMatches(proc, matcher), true, 'verification must not signal the fake');
+
+  const hooks = [];
+  const t = { after(fn) { hooks.push(fn); } };
+  trackTempDir(t, dir);
+  trackEnv(t, env);
+  registerStopper(t, () => result);
+  const output = [];
+  const stderr = outer.mock.method(process.stderr, 'write', (chunk) => { output.push(String(chunk)); return true; });
+  try {
+    await assert.rejects(hooks[0](), /live fake server/);
+    assert.equal(fs.existsSync(dir), true);
+    assert.ok(output.some((line) => line.includes(dir)), 'retained directory must be printed');
+  } finally {
+    stderr.mock.restore();
+  }
+});
+
+test('requireStopped accepts not-running with no live fake boot', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-helper-'));
+  const env = { FAKE_OPENCODE_STATE: path.join(dir, 'fake-state.json') };
+  const result = { stopped: false, reason: 'not-running' };
+  assert.equal(requireStopped(result, env), result, 'missing state means no recorded boots');
+  fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({ boots: [] }));
+  assert.equal(requireStopped(result, env), result);
+  fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({ boots: [{ pid: await deadPid() }, { pid: process.pid }] }));
+  assert.ok(getProcessIdentity(process.pid));
+  assert.equal(requireStopped(result, env), result, 'dead and unrelated live PIDs are not fake servers');
 });
 
 test('generic child stoppers may resolve with the child exit code', async (outer) => {

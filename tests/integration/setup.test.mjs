@@ -7,7 +7,7 @@ import test from 'node:test';
 import { startFake } from '../fixtures/fake-opencode.mjs';
 import { terminalAlias } from '../../plugins/opc/scripts/commands/setup.mjs';
 import {
-  FAKE_BIN_DIR, makeTempDir, makeWorkspace, parseJsonOutput, readFakeState, readJsonFile, runCli, testEnv, trackTempDir,
+  FAKE_BIN_DIR, makeTempDir, makeWorkspace, parseJsonOutput, readFakeState, readJsonFile, registerStopper, runCli, testEnv, trackTempDir,
 } from '../helpers.mjs';
 
 const posixOnly = { skip: process.platform === 'win32' && 'POSIX modes' };
@@ -200,7 +200,7 @@ test('attach mode on loopback: validates health with OPC_SERVER_PASSWORD, never 
   const dir = trackTempDir(t, makeTempDir('opc-attach-'));
   const password = 'attach-password-0123456789';
   const fake = await startFake({ port: 0, password, stateFile: path.join(dir, 'fake.json') });
-  t.after(() => fake.close());
+  registerStopper(t, () => fake.close());
   const env = testEnv(t, { extra: { OPC_SERVER_URL: fake.url, OPC_SERVER_PASSWORD: password } });
   const ws = makeWorkspace(t);
   const { code, report } = await setupJson(env, ws);

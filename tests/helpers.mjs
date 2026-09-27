@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { mergeConfig } from '../plugins/opc/scripts/lib/config.mjs';
+import { getProcessIdentity, identityMatches } from '../plugins/opc/scripts/lib/process.mjs';
 import { stopServer } from '../plugins/opc/scripts/lib/server.mjs';
 import { ensurePrivateDir, workspaceStateDir } from '../plugins/opc/scripts/lib/state.mjs';
 
@@ -45,7 +46,10 @@ function registry(t) {
       for (const stop of [...reg.stoppers].reverse()) {
         try {
           const result = await stop();
-          if (result && typeof result === 'object') requireStopped(result);
+          if (result && typeof result === 'object') {
+            requireStopped(result);
+            for (const env of reg.envs) requireStopped(result, env);
+          }
         } catch (err) {
           errors.push(err);
         }
@@ -59,7 +63,7 @@ function registry(t) {
               if (result.code !== 0) {
                 errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
               } else {
-                requireStopped(parseJsonOutput(result.stdout).stop);
+                requireStopped(parseJsonOutput(result.stdout).stop, env);
               }
             } catch (err) {
               errors.push(err);
@@ -260,13 +264,27 @@ export function makeServerCtx(t, { scenario = 'ok', extraEnv = {}, config = {} }
   ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
   const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
-  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true })));
+  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }), env));
   return { ctx, env, ws, stateDir };
 }
 
 // A successful CLI exit alone does not confirm that a managed server stopped.
-export function requireStopped(result) {
-  if (result?.stopped === true || (result?.stopped === false && result.reason === 'not-running')) return result;
+export function requireStopped(result, env) {
+  if (result?.stopped === true || (result?.stopped === false && result.reason === 'attached')) return result;
+  if (result?.stopped === false && result.reason === 'not-running') {
+    if (env?.FAKE_OPENCODE_STATE) {
+      const fakeBin = path.join(FAKE_BIN_DIR, 'opencode');
+      const matcher = (cmdline) => cmdline.includes(fakeBin) && cmdline.includes('serve');
+      for (const boot of readFakeState(env).boots) {
+        // Boots record PIDs only: recheck the current identity and fake cmdline without signaling.
+        const identity = getProcessIdentity(boot.pid);
+        if (identity && identityMatches(identity, matcher)) {
+          throw new Error(`server stop not confirmed: live fake server pid ${boot.pid}; state: ${env.FAKE_OPENCODE_STATE}`);
+        }
+      }
+    }
+    return result;
+  }
   throw new Error(`server stop not confirmed: ${result?.reason ?? 'missing result'}`);
 }
 
@@ -283,7 +301,7 @@ export function createServerCleanup(dir, { stop = stopServer } = {}) {
     async stop(ctx) {
       cleanup.track(ctx);
       try {
-        return requireStopped(await stop(ctx, { force: true, confirmedByUser: true }));
+        return requireStopped(await stop(ctx, { force: true, confirmedByUser: true }), ctx.env);
       } catch (err) {
         errors.push(err);
         throw err;
