@@ -23,7 +23,7 @@ export async function run(ctx, argv) {
   const catalog = buildCatalog(await api.providers());
   if (provider) {
     const known = catalog.providers.find((p) => p.id === provider);
-    if (!known) throw new UsageError('UNKNOWN_PROVIDER', `unknown provider "${providerEcho(provider)}" (known: ${catalog.providers.map((p) => p.id).join(', ')})`);
+    if (!known) throw new UsageError('UNKNOWN_PROVIDER', `provider desconhecido "${providerEcho(provider)}" (conhecidos: ${catalog.providers.map((p) => p.id).join(', ')})`);
     if (!known.connected && !flags.all) throw new UsageError('UNKNOWN_PROVIDER', `provider "${provider}" is not connected; use --all to list its catalog or run: opencode auth login`);
   }
   const models = catalog.models

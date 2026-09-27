@@ -56,7 +56,7 @@ test('models: listing, provider filter, --all, --verbose, no model headers leak'
   const longUnknown = 'a-very-long-unrecognized-provider-name';
   const longUnknownResult = await runCli(['models', longUnknown], { env, cwd: ws });
   assert.equal(longUnknownResult.code, 2);
-  assert.match(longUnknownResult.stdout + longUnknownResult.stderr, /unknown provider "a-very-long…"/);
+  assert.match(longUnknownResult.stdout + longUnknownResult.stderr, /provider desconhecido "a-very-long-…"/);
   assert.doesNotMatch(longUnknownResult.stdout + longUnknownResult.stderr, /unrecognized-provider-name/);
   for (const r of [mv, verboseText]) noSecrets(r);
 });
