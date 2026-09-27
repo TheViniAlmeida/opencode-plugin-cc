@@ -11,6 +11,7 @@ import {
 } from './config.mjs';
 import { validateVariant } from './models.mjs';
 import { evaluate } from './policy.mjs';
+import { redact } from './redact.mjs';
 
 export const DRAFT_SCHEMA_VERSION = 1;
 
@@ -256,6 +257,107 @@ export function suggestAliases(catalog, providerID, policy) {
   const pool = allowedModels(catalog, providerID, policy).filter((m) => m.status !== 'deprecated').sort(byQuality);
   const pick = (re) => pool.find((m) => re.test(m.modelID))?.full ?? null;
   return { fast: pick(/flash|mini|lite|haiku|fast/i), strong: pick(/max|pro|opus|k3|strong/i) };
+}
+
+// ---- F1 Task 12: terminal wizard (the TTY is only an interface over the same steps) ----
+const TASK_TYPE_CHOICES = ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'].map((t) => ({ label: t, value: t }));
+const splitGlobs = (text) => String(text ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const modelChoice = (m) => ({ label: m.full, hint: `${m.name}${m.variants.length ? ` · variants: ${m.variants.join(', ')}` : ''}`, value: m.full });
+
+async function askStep(prompter, stepId, { draft, catalog, agents, existing, workspaceRoot }) {
+  const eff = draftEffectiveConfig(draft, existing);
+  const provider = eff.defaultProvider;
+  const allowedOf = (p) => suggestModels(catalog, p, { top: Infinity, policy: eff.policy });
+  const pickModel = async (question, { allowNone }) => {
+    const choices = [...(allowNone ? [{ label: 'Nenhum (usar o modelo padrão)', value: null }] : []), ...(provider ? allowedOf(provider) : []).map(modelChoice)];
+    const answer = await prompter.select(question, choices, { allowOther: true });
+    return answer && typeof answer === 'object' ? answer.other : answer;
+  };
+  switch (stepId) {
+    case 'scope':
+      return { scope: await prompter.select('Onde gravar?', [{ label: 'Global (todas as pastas)', value: 'global' }, { label: 'Só este workspace (.opc.json)', value: 'workspace' }]) };
+    case 'defaultProvider': {
+      const ranked = rankProviders(catalog, eff.policy).filter((p) => p.allowed);
+      if (!ranked.length) throw new UsageError('NO_PROVIDER', 'no connected provider allowed by the policy; run: opencode auth login');
+      return { defaultProvider: await prompter.select('Provider padrão?', ranked.map((p) => ({ label: p.id, hint: `${p.modelCount} modelos`, value: p.id }))) };
+    }
+    case 'defaultModel':
+      return { defaultModel: await pickModel('Modelo padrão? (número, texto para filtrar ou "o" para digitar)', { allowNone: false }) };
+    case 'reviewModels': {
+      const reviewModel = await pickModel('Modelo do review?', { allowNone: true });
+      const stopGateModel = await pickModel('Modelo do stop gate?', { allowNone: true });
+      return { reviewModel, stopGate: { model: stopGateModel } };
+    }
+    case 'defaultVariant': {
+      const entry = eff.defaultModel ? catalog.byFull.get(eff.defaultModel) : null;
+      const variants = entry ? entry.variants : [];
+      return { defaultVariant: await prompter.select('Variant padrão?', [{ label: 'Nenhuma', value: null }, ...variants.map((v) => ({ label: v, value: v }))]) };
+    }
+    case 'allowedModels': {
+      const families = provider ? modelFamilies(catalog, provider).slice(0, 3) : [];
+      const answer = await prompter.select('Modelos permitidos?', [
+        { label: 'Sem restrição', value: [] },
+        ...(provider ? [{ label: `Todos do provider padrão (${provider}/*)`, value: [`${provider}/*`] }] : []),
+        ...families.map((f) => ({ label: `Só ${f.glob}`, hint: `${f.count} modelos`, value: [f.glob] })),
+      ], { allowOther: true });
+      const allow = Array.isArray(answer) ? answer : splitGlobs(answer.other);
+      const denyProviders = splitGlobs(await prompter.text('Providers a negar (globs separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
+      return { policy: { models: { allow }, providers: { deny: denyProviders } } };
+    }
+    case 'allowedAgents': {
+      const builtIn = agents.filter((a) => a.native && !a.hidden).map((a) => a.name);
+      const answer = await prompter.select('Agentes permitidos?', [
+        { label: 'Todos', value: [] },
+        { label: `Só built-in (${builtIn.join(', ')})`, value: builtIn },
+      ], { allowOther: true });
+      const allow = Array.isArray(answer) ? answer : splitGlobs(answer.other);
+      const deny = splitGlobs(await prompter.text('Agentes a negar (globs separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
+      return { policy: { agents: { allow, deny } } };
+    }
+    case 'approver':
+      return { policy: { approver: await prompter.select('Quem aprova pedidos de permissão?', [{ label: 'Eu (usuário) — recomendado', value: 'user' }, { label: 'O Claude (exceto destrutivos, fora do diretório e caminhos sensíveis)', value: 'claude' }]) } };
+    case 'behaviour':
+      return {
+        stopGate: { enabled: await prompter.confirm('Ligar o stop gate (review ao parar)?', { defaultValue: false }) },
+        delegation: { auto: await prompter.confirm('Ligar a delegação automática?', { defaultValue: false }) },
+      };
+    case 'project': {
+      const goal = await prompter.text('Objetivo do projeto (vazio = nenhum): ', { defaultValue: eff.project?.goal ?? '' });
+      const dirs = projectDirs(workspaceRoot);
+      const scope = dirs.length ? await prompter.multiSelect('Diretórios do escopo?', dirs.map((d) => ({ label: d, value: d }))) : [];
+      const taskTypes = await prompter.multiSelect('Tipos de tarefa?', TASK_TYPE_CHOICES);
+      return { project: { goal: goal === '' ? null : goal, scope, taskTypes } };
+    }
+    case 'aliases': {
+      const suggested = provider ? suggestAliases(catalog, provider, eff.policy) : { fast: null, strong: null };
+      const aliases = {};
+      for (const name of ['fast', 'strong']) {
+        if (suggested[name] && await prompter.confirm(`Criar alias "${name}" → ${suggested[name]}?`, { defaultValue: true })) aliases[name] = suggested[name];
+      }
+      return { aliases };
+    }
+    default:
+      throw new UsageError('USAGE', `unknown onboarding step ${stepId}`);
+  }
+}
+
+export async function runInitWizard({ prompter, catalog, agents, opencodeConfig = null, existing, hasGlobal, dataDir, workspaceRoot, log = () => {} }) {
+  let draft = buildDraft({ hasGlobal });
+  const deps = { catalog, agents, existing, allowLocked: true };
+  for (let step = nextStep(draft, { allowLocked: true }); step; step = nextStep(draft, { allowLocked: true })) {
+    const partial = await askStep(prompter, step, { draft, catalog, agents, existing, workspaceRoot });
+    try {
+      const result = applyDraftStep(draft, partial, deps);
+      draft = result.draft;
+      result.warnings.forEach((w) => log(`[opc] aviso: ${w.path}: ${w.message}\n`));
+    } catch (err) {
+      if (!(err.exitCode === 2 || err.exitCode === 4) || err.code === 'NO_PROVIDER') throw err;
+      log(`[opc] ${err.message}\n`);
+    }
+  }
+  log(`\n${JSON.stringify(redact(candidateConfig(draft, existing)), null, 2)}\n`);
+  if (!(await prompter.confirm('Gravar esta config?', { defaultValue: true }))) return null;
+  return commitDraft({ dataDir, workspaceRoot, draft, catalog, agents, opencodeConfig, existing, allowLocked: true });
 }
 
 export function modelFamilies(catalog, providerID) {

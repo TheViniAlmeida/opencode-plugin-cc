@@ -1,6 +1,6 @@
 // opc config get|set|unset|add|remove|show|validate|path|init — spec §3.2, §3.3
 import { parseArgs } from '../lib/args.mjs';
-import { UsageError, PolicyError, ConnectionError } from '../lib/opc-error.mjs';
+import { UsageError, PolicyError, OpcError, ConnectionError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
 import {
   loadConfig, configPaths, getPath, schemaFor, coerceValue, applyConfigEdit, isLockedKey, isWorkspaceKey,
@@ -9,7 +9,8 @@ import {
 } from '../lib/config.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { createPrompter } from '../lib/tty.mjs';
-import { renderConfig } from '../lib/render.mjs';
+import { runInitWizard } from '../lib/onboarding.mjs';
+import { renderConfig, renderOnboarding } from '../lib/render.mjs';
 
 const SPEC = {
   flags: {
@@ -18,7 +19,7 @@ const SPEC = {
   },
   allowPositionals: true,
 };
-const USAGE = 'usage: opc config get [key] | set <key> <value> | unset <key> | add|remove <list-key> <value> | show [--effective] | validate | path   (edits accept --workspace and --tty-confirm)';
+const USAGE = 'usage: opc config get [key] | set <key> <value> | unset <key> | add|remove <list-key> <value> | show [--effective] | validate | path | init   (edits accept --workspace and --tty-confirm)';
 
 const shellQuote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
 const emit = (ctx, flags, view, render) => { if (flags.json) ctx.json(view); else ctx.out(render(view)); };
@@ -34,6 +35,7 @@ export async function run(ctx, argv) {
     case 'set': case 'unset': case 'add': case 'remove': return cmdEdit(ctx, flags, sub, rest);
     case 'show': return cmdShow(ctx, flags);
     case 'validate': return cmdValidate(ctx, flags);
+    case 'init': return cmdInit(ctx, flags);
     default: throw new UsageError('USAGE', USAGE);
   }
 }
@@ -193,4 +195,32 @@ async function cmdValidate(ctx, flags) {
   emit(ctx, flags, view, renderConfig);
   if (errors.length) return errors.every((e) => e.code === 'POLICY_DENIED') ? 4 : 2;
   return serverChecked ? 0 : 5;
+}
+
+async function cmdInit(ctx, flags) {
+  const prompter = createPrompter({ input: ctx.stdin, output: ctx.stderr });
+  try {
+    const deps = await serverDeps(ctx);
+    const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const result = await runInitWizard({
+      prompter,
+      ...deps,
+      existing: { global: loaded.global, workspace: loaded.workspace },
+      hasGlobal: loaded.hasGlobal,
+      dataDir: ctx.dataDir,
+      workspaceRoot: ctx.workspaceRoot,
+      log: (text) => ctx.err(text),
+    });
+    if (!result) {
+      ctx.out('Nada foi gravado.\n');
+      return 0;
+    }
+    emit(ctx, flags, { kind: 'commit', ...result }, renderOnboarding);
+    return 0;
+  } catch (err) {
+    if (err instanceof OpcError && err.code === 'TTY_CLOSED') throw new UsageError('TTY_CLOSED', 'wizard interrupted; nothing was written');
+    throw err;
+  } finally {
+    prompter.close();
+  }
 }
