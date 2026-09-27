@@ -190,7 +190,7 @@ setup.mjs:              reviewGateChange(flags)
 10. **Espera em foreground:** `opc review --wait` usa `--wait-timeout` padrão de 540 s, abaixo do teto de 600 s da ferramenta Bash; no estouro sai com exit 6 e o job continua (§4.1). Os slash commands chamam o Bash com `timeout: 600000`.
 11. **Estimativa de tamanho:** `opc review --estimate [--base] [--scope] [--json]` expõe `diffSizeEstimate` + recomendação (`nothing`|`wait`|`background`; `wait` só com ≤ 2 arquivos e ≤ 300 linhas). O slash command usa isso em vez de montar a estimativa com git; `Bash(git:*)` fica como fallback, como no codex.
 12. **`/opc:rescue --background`:** diferente do codex (que roda o subagente em background), aqui o subagente roda em foreground e repassa `--background` ao `opc task`, que devolve o id na hora — o job sobrevive ao subagente e aparece em `/opc:status`.
-13. **Texto livre por `--raw-args-stdin` (convenção única do projeto):** slash commands com texto livre (`/opc:review`, `/opc:adversarial-review`) chamam `opc <sub> [flags fixas] --raw-args-stdin <<'OPC_ARGS'` com `$ARGUMENTS`; o comando usa `readRawArgs` (F2a, `lib/args.mjs`): flags conhecidas são extraídas como palavras inteiras e o resto é o foco verbatim (aspas, apóstrofos, crases e `$()` chegam literais). O agente `opc-rescue` põe as flags que escolheu na linha de comando **antes** de `--raw-args-stdin`, e o heredoc `<<'OPC_ARGS'` começa com uma linha `--` seguida do texto exatamente como recebido — nada do texto vira flag. Assim apóstrofos no texto não passam pelo `splitArgString`.
+13. **Texto livre por `--raw-args-stdin` (convenção única do projeto):** slash commands com texto livre (`/opc:review`, `/opc:adversarial-review`) chamam `opc <sub> [flags fixas] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` com `$ARGUMENTS`; o comando usa `readRawArgs` (F2a, `lib/args.mjs`): flags conhecidas são extraídas como palavras inteiras e o resto é o foco verbatim (aspas, apóstrofos, crases e `$()` chegam literais). O agente `opc-rescue` põe as flags que escolheu na linha de comando **antes** de `--raw-args-stdin`, e o heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'` começa com uma linha `--` seguida do texto exatamente como recebido — nada do texto vira flag. Assim apóstrofos no texto não passam pelo `splitArgString`.
 14. **Conteúdo do `additionalContext`:** o mecanismo fica aqui; o texto (`DELEGATION_REMINDER`) é provisório e a F4a o finaliza.
 15. **`status` compacto** (§9.4, "no máximo 8 jobs, 4 linhas de progresso") é do `renderStatusList` da F2a; a F2b só garante que jobs `review`/`stop-gate` aparecem nele.
 16. **Construtores de erro:** as subclasses mantêm o construtor base `(code, message, opts)` (ex.: `new UsageError('INVALID_SCOPE', '…')`), coerente com `UsageError('NO_MODEL')` do mestre — confirmado no plano da F0 (`lib/opc-error.mjs`); a Task 1 só reconfere no código.
@@ -4610,7 +4610,7 @@ git commit -m "feat: toggle the stop review gate from setup and refuse stop-serv
 **Interfaces:**
 - Consumes: `opc review [--estimate] [--wait|--background] …` e `opc adversarial-review …` (Task 7); `opc task-resume-candidate --json` → `{ available, sessionId, candidate }` e `opc task [--write] [--resume-last|--fresh] [--background] [--model] [--variant] [--agent] [--wait-timeout s] --raw-args-stdin` com o texto no heredoc depois de uma linha `--` (F2a, premissa P13; convenção D3).
 - Produces: `/opc:review` e `/opc:adversarial-review` (`disable-model-invocation: true`; `allowed-tools: Bash(opc:*), Bash(git:*), AskUserQuestion`); `/opc:rescue` (`allowed-tools: Bash(opc:*), AskUserQuestion, Agent`); subagente `opc:opc-rescue` (`tools: Bash`, skills `opc-runtime`, `opc-prompting`).
-- Regras (spec §4, §8.4, §9.4, §10.4): argumentos sempre por `--raw-args-stdin` + heredoc com delimitador entre aspas (`<<'OPC_ARGS'`; no agente, flags na linha de comando e heredoc começando com `--`); uma única pergunta "Aguardar/Background" com a recomendada primeiro; saída verbatim; review não corrige nada; rescue pergunta "continuar/nova sessão" quando há candidato; o subagente é encaminhador Bash-only, usa `--write` por padrão, devolve a saída verbatim, nada em falha e nunca responde permissões; o comando traz a nota de não chamar a skill `rescue`.
+- Regras (spec §4, §8.4, §9.4, §10.4): argumentos sempre por `--raw-args-stdin` + heredoc com delimitador entre aspas (`<<'OPC_ARGS_5f1d0c7a_EOF'`; no agente, flags na linha de comando e heredoc começando com `--`); uma única pergunta "Aguardar/Background" com a recomendada primeiro; saída verbatim; review não corrige nada; rescue pergunta "continuar/nova sessão" quando há candidato; o subagente é encaminhador Bash-only, usa `--write` por padrão, devolve a saída verbatim, nada em falha e nunca responde permissões; o comando traz a nota de não chamar a skill `rescue`.
 
 - [ ] **Step 1: Escrever o teste estático (falha)**
 
@@ -4658,10 +4658,10 @@ for (const name of ['review', 'adversarial-review']) {
     assert.equal(data['disable-model-invocation'], 'true');
     assert.deepEqual(tools(data['allowed-tools']), ['Bash(opc:*)', 'Bash(git:*)', 'AskUserQuestion']);
     assert.match(data['argument-hint'], /--wait\|--background/);
-    assert.match(body, new RegExp(`opc ${name} --raw-args-stdin <<'OPC_ARGS'\\n\\$ARGUMENTS\\nOPC_ARGS`));
-    assert.match(body, new RegExp(`opc ${name} --estimate --json --raw-args-stdin <<'OPC_ARGS'\\n\\$ARGUMENTS\\nOPC_ARGS`));
-    assert.match(body, new RegExp(`opc ${name} --wait --raw-args-stdin <<'OPC_ARGS'\\n\\$ARGUMENTS\\nOPC_ARGS`));
-    assert.match(body, new RegExp(`opc ${name} --background --raw-args-stdin <<'OPC_ARGS'\\n\\$ARGUMENTS\\nOPC_ARGS`));
+    assert.match(body, new RegExp(`opc ${name} --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\\n\\$ARGUMENTS\\nOPC_ARGS`));
+    assert.match(body, new RegExp(`opc ${name} --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\\n\\$ARGUMENTS\\nOPC_ARGS`));
+    assert.match(body, new RegExp(`opc ${name} --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\\n\\$ARGUMENTS\\nOPC_ARGS`));
+    assert.match(body, new RegExp(`opc ${name} --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\\n\\$ARGUMENTS\\nOPC_ARGS`));
     assert.doesNotMatch(body, /\s--args-stdin\b/);
     assert.match(body, /AskUserQuestion` exactly once/);
     assert.match(body, /Aguardar o resultado/);
@@ -4693,7 +4693,7 @@ test('the opc-rescue agent is a Bash-only forwarder that never replies to permis
   assert.equal(data.tools, 'Bash');
   assert.deepEqual(data.skills, ['opc-runtime', 'opc-prompting']);
   assert.match(body, /exactly one `Bash` call/);
-  assert.match(body, /opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS'\n--\n<task text exactly as received>\nOPC_ARGS/);
+  assert.match(body, /opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n<task text exactly as received>\nOPC_ARGS/);
   assert.doesNotMatch(body, /OPC_PROMPT/);
   assert.match(body, /Never reply to permission requests/);
   assert.match(body, /return nothing/);
@@ -4736,18 +4736,16 @@ Execution mode rules:
 - If the raw arguments include `--wait` or `--background`, do not ask. Run this directly (foreground runs use the Bash tool with `timeout: 600000`):
 
 ```bash
-opc review --raw-args-stdin <<'OPC_ARGS'
+opc review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Otherwise, estimate the review size first:
 
 ```bash
-opc review --estimate --json --raw-args-stdin <<'OPC_ARGS'
+opc review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4760,10 +4758,9 @@ Foreground flow (user chose to wait):
 - Run with the Bash tool and `timeout: 600000`:
 
 ```bash
-opc review --wait --raw-args-stdin <<'OPC_ARGS'
+opc review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the review job continues: tell the user to run `/opc:status <job-id> --wait` with the id the command printed.
@@ -4772,10 +4769,9 @@ Background flow (user chose background):
 - Run:
 
 ```bash
-opc review --background --raw-args-stdin <<'OPC_ARGS'
+opc review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Return the command stdout verbatim (it has the job id and the `/opc:status` and `/opc:result` lines).
 
@@ -4816,18 +4812,16 @@ Execution mode rules:
 - If the raw arguments include `--wait` or `--background`, do not ask. Run this directly (foreground runs use the Bash tool with `timeout: 600000`):
 
 ```bash
-opc adversarial-review --raw-args-stdin <<'OPC_ARGS'
+opc adversarial-review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Otherwise, estimate the review size first:
 
 ```bash
-opc adversarial-review --estimate --json --raw-args-stdin <<'OPC_ARGS'
+opc adversarial-review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4840,10 +4834,9 @@ Foreground flow (user chose to wait):
 - Run with the Bash tool and `timeout: 600000`:
 
 ```bash
-opc adversarial-review --wait --raw-args-stdin <<'OPC_ARGS'
+opc adversarial-review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the job continues: tell the user to run `/opc:status <job-id> --wait`.
@@ -4852,10 +4845,9 @@ Background flow (user chose background):
 - Run:
 
 ```bash
-opc adversarial-review --background --raw-args-stdin <<'OPC_ARGS'
+opc adversarial-review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Return the command stdout verbatim.
 
@@ -4940,11 +4932,10 @@ Forwarding rules:
 - Use exactly one `Bash` call, with `timeout: 600000`, in this form: the flags you chose on the command line, before `--raw-args-stdin`; then the quoted heredoc, whose first line is `--` and the rest is the task text exactly as received. The shell never expands it, and nothing in the text is read as a flag.
 
 ```bash
-opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS'
+opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Keep `--write` by default. Drop it only when the user explicitly asks for read-only behavior or only wants review, diagnosis or research without edits.
 - `--resume` in the request → add `--resume-last`. `--fresh` → add `--fresh`. With neither: if the user is clearly continuing prior OpenCode work ("continue", "keep going", "resume", "apply the top fix", "dig deeper"), add `--resume-last`; otherwise start fresh.
@@ -5005,7 +4996,7 @@ for (const name of ['opc-runtime', 'opc-result-handling', 'opc-prompting']) {
 
 test('opc-runtime pins the single-task forwarding contract', () => {
   const { body } = readFrontmatter('skills/opc-runtime/SKILL.md');
-  assert.match(body, /opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS'\n--\n<task text exactly as received>\nOPC_ARGS/);
+  assert.match(body, /opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n<task text exactly as received>\nOPC_ARGS/);
   assert.doesNotMatch(body, /OPC_PROMPT/);
   assert.match(body, /exactly one `task` invocation/);
   assert.match(body, /Never run `opc permissions reply`/);
@@ -5067,11 +5058,10 @@ Execution rules:
 Command shape (the flags you chose on the command line, before `--raw-args-stdin`; the task text through a quoted heredoc whose first line is `--`, so the shell never expands quotes, apostrophes, backticks or `$()` and nothing in the text is read as a flag):
 
 ```bash
-opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS'
+opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Run it with the Bash tool `timeout: 600000`; `--wait-timeout 540` makes the companion return (exit 6, job still running) before that limit.
 

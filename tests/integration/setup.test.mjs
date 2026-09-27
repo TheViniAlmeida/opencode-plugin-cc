@@ -90,6 +90,11 @@ test('version below the minimum → UNSUPPORTED_VERSION, exit 5, no server', asy
   assert.equal(code, 5);
   assert.equal(report.opencode.supported, false);
   assert.equal(report.server.error.code, 'UNSUPPORTED_VERSION');
+  assert.equal(report.onboarding.opencodeInstalled, true);
+  assert.equal(report.onboarding.opencodeVersion, report.opencode.version);
+  assert.equal(report.onboarding.connectedProviders, null);
+  assert.equal(report.onboarding.providerChoices, null);
+  assert.match(report.onboarding.serverError, /não consultados.*falha no diagnóstico/i);
   assert.equal(readFakeState(env).bootAttempts, 0);
 });
 
@@ -101,6 +106,10 @@ test('auth-401 → AUTH_FAILED, exit 5, one single boot, no orphan server', asyn
   assert.equal(report.server.error.code, 'AUTH_FAILED');
   const fake = readFakeState(env);
   assert.equal(fake.bootAttempts, 1);
+  assert.equal(fake.boots.length, 1, 'diagnostic failure must not attempt another server boot for onboarding');
+  assert.equal(report.onboarding.opencodeInstalled, true);
+  assert.equal(report.onboarding.connectedProviders, null);
+  assert.match(report.onboarding.serverError, /não consultados.*falha no diagnóstico/i);
   assert.ok(fake.signals.some((s) => s.signal === 'SIGTERM'), 'spawned server was terminated');
   assert.equal(fs.existsSync(path.join(report.stateDir, 'server.json')), false);
 });

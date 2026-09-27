@@ -1,4 +1,8 @@
 // `opc setup`: diagnostic + start/reuse of the workspace server (F0); `--stop-server` (spec §4, §5.5).
+import { withLock } from '../lib/locks.mjs';
+import { redact } from '../lib/redact.mjs';
+import { providerEcho } from './models.mjs';
+import { f1Command, f1Error } from '../lib/f1-command.mjs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +12,7 @@ import { globalConfigPath, workspaceConfigPath } from '../lib/config.mjs';
 import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
 import { renderSetup } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, stopServer } from '../lib/server.mjs';
-import { listActiveJobs } from '../lib/state.mjs';
+import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SPEC = {
@@ -127,7 +131,7 @@ async function diagnose(ctx, flags) {
     } catch (err) {
       report.server = { status: 'error', error: { code: err.code ?? 'INTERNAL', message: err.message }, warnings: [] };
       if (NEXT_STEP_BY_CODE[err.code]) report.nextSteps.push(NEXT_STEP_BY_CODE[err.code]);
-      exitCode = toExitCode(err);
+      exitCode = toExitCode(f1Error(err));
     }
   }
   if (!report.config.hasGlobal) report.nextSteps.push('Ainda não há config global do opc; o onboarding guiado chega na F1.');
@@ -142,6 +146,7 @@ async function stop(ctx, flags) {
   const report = {
     mode: 'stop',
     stop: result,
+    warnings: ctx.configWarnings ?? [],
     activeJobs: result.reason === 'active-jobs'
       ? listActiveJobs(ctx.stateDir).map((j) => ({ id: j.id, kind: j.kind, status: j.status, title: j.title ?? null }))
       : [],
@@ -151,7 +156,7 @@ async function stop(ctx, flags) {
   return result.reason === 'active-jobs' ? ExitCode.USAGE : ExitCode.OK;
 }
 
-export async function run(ctx, argv) {
+async function runDiagnostics(ctx, argv) {
   const { flags } = parseArgs(argv, SPEC);
   if ((flags.force || flags['confirmed-by-user']) && !flags['stop-server']) {
     throw new UsageError('USAGE', '--force e --confirmed-by-user só valem junto com --stop-server.');
@@ -159,3 +164,202 @@ export async function run(ctx, argv) {
   if (flags['stop-server']) return stop(ctx, flags);
   return diagnose(ctx, flags);
 }
+
+// ---- F1: onboarding (spec §3.3). Only two new top-level names (`run`, `SetupOnboarding`);
+// dependencies are loaded with dynamic import so they never collide with F0's imports. ----
+const SETUP_PASSTHROUGH_FLAGS = ['--stop-server', '--enable-review-gate', '--disable-review-gate'];
+
+const SetupOnboarding = {
+  async deps() {
+    const mods = await Promise.all([
+      import('node:child_process'), import('../lib/args.mjs'), import('../lib/opc-error.mjs'), import('../lib/context.mjs'),
+      import('../lib/config.mjs'), import('../lib/models.mjs'), import('../lib/onboarding.mjs'), import('../lib/render.mjs'),
+    ]);
+    return Object.assign({}, ...mods);
+  },
+
+  existingOf(loaded) {
+    return { global: loaded.global, workspace: loaded.workspace };
+  },
+
+  probeBinary(d, command, args, env) {
+    const r = d.spawnSync(command, args, { env, encoding: 'utf8', shell: false, timeout: 15000 });
+    if (r.error || r.status !== 0) return { installed: false, version: null };
+    return { installed: true, version: String(r.stdout).trim().split('\n')[0] || null };
+  },
+
+  async discovery(d, ctx) {
+    const { api } = await d.connectApi(ctx);
+    const [providers, agents, opencodeConfig] = await Promise.all([api.providers(), api.agents(), api.getConfig()]);
+    return { catalog: d.buildCatalog(providers), agents, opencodeConfig };
+  },
+
+  policyFor(d, ctx) {
+    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const draft = d.loadDraft(ctx.dataDir);
+    const policy = draft ? d.draftEffectiveConfig(draft, this.existingOf(loaded)).policy : loaded.config.policy;
+    return { loaded, draft, policy };
+  },
+
+  emit(d, ctx, flags, view) {
+    if (flags.json) ctx.json(redact(view));
+    else ctx.out(d.renderOnboarding(view));
+    return 0;
+  },
+
+  async state(ctx, { reconfigure }) {
+    const d = await this.deps();
+    const opencode = this.probeBinary(d, 'opencode', ['--version'], ctx.env);
+    const npmAvailable = this.probeBinary(d, 'npm', ['--version'], ctx.env).installed;
+    const { loaded, draft, policy } = this.policyFor(d, ctx);
+    let catalog = null;
+    let serverError = null;
+    if (opencode.installed) {
+      try {
+        const { api } = await d.connectApi(ctx);
+        catalog = d.buildCatalog(await api.providers());
+      } catch (err) {
+        if (err.code === 'SERVER_ERROR') throw err;
+        serverError = `${err.code ?? 'ERROR'}: ${err.message}`;
+      }
+    }
+    const onboarding = d.onboardingSummary({ hasGlobal: loaded.hasGlobal, draft, catalog, policy, opencode, npmAvailable, reconfigure, workspaceRoot: ctx.workspaceRoot, serverError });
+    return { onboarding, text: d.renderOnboarding({ kind: 'state', onboarding }) };
+  },
+
+  async offlineState(ctx, { reconfigure, opencode }) {
+    const d = await this.deps();
+    const npmAvailable = this.probeBinary(d, 'npm', ['--version'], ctx.env).installed;
+    const { loaded, draft, policy } = this.policyFor(d, ctx);
+    const summary = d.onboardingSummary({
+      hasGlobal: loaded.hasGlobal,
+      draft,
+      catalog: null,
+      policy,
+      opencode: opencode ?? detectOpencode(ctx.env),
+      npmAvailable,
+      reconfigure,
+      workspaceRoot: ctx.workspaceRoot,
+      serverError: 'Dados do servidor e provedores não consultados devido à falha no diagnóstico.',
+    });
+    const onboarding = { ...summary, connectedProviders: null, providerChoices: null, needsOtherProvider: null };
+    return { onboarding, text: d.renderOnboarding({ kind: 'state', onboarding }) };
+  },
+
+  async models(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, {
+      flags: { provider: { type: 'string' }, top: { type: 'number', default: 3 }, query: { type: 'string' }, json: { type: 'boolean' }, cwd: { type: 'string' } },
+      allowPositionals: true,
+    });
+    if (!flags.provider || positionals.length) throw new d.UsageError('USAGE', 'uso: opc setup models --provider <id> [--top N] [--query texto|padrão] [--json]');
+    if (!Number.isInteger(flags.top) || flags.top < 1 || flags.top > 50) throw new d.UsageError('USAGE', '--top deve ser um inteiro entre 1 e 50');
+    const { catalog } = await this.discovery(d, ctx);
+    if (!catalog.connected.has(flags.provider)) throw new d.UsageError('UNKNOWN_PROVIDER', `o provedor "${providerEcho(flags.provider)}" não está conectado`);
+    const { policy } = this.policyFor(d, ctx);
+    const view = {
+      kind: 'models',
+      provider: flags.provider,
+      total: catalog.models.filter((m) => m.providerID === flags.provider).length,
+      suggestions: d.suggestModels(catalog, flags.provider, { top: flags.top, policy }),
+      aliases: d.suggestAliases(catalog, flags.provider, policy),
+      families: d.modelFamilies(catalog, flags.provider),
+    };
+    if (flags.query) {
+      view.query = flags.query;
+      view.matches = d.searchModels(catalog, flags.query, { providerID: flags.provider });
+    }
+    return this.emit(d, ctx, flags, view);
+  },
+
+  async apply(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, stdin: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+    if (flags.stdin && positionals.length) {
+      throw new d.UsageError('USAGE', "uso: opc setup apply [--json] ('<JSON parcial>' | --stdin); não combine --stdin com um payload posicional");
+    }
+    const text = flags.stdin ? await d.readStdin(ctx.stdin) : positionals.join(' ');
+    if (!text.trim()) throw new d.UsageError('USAGE', "uso: opc setup apply [--json] ('<JSON parcial>' | --stdin)");
+    let partial;
+    try { partial = JSON.parse(text); } catch { throw new d.UsageError('INVALID_JSON', 'O payload informado não contém JSON válido.'); }
+    const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+    const draft = d.loadDraft(ctx.dataDir) ?? d.buildDraft({ hasGlobal: loaded.hasGlobal });
+    const allowLocked = draft.mode === 'bootstrap' && !loaded.hasGlobal;
+    const { catalog, agents } = await this.discovery(d, ctx);
+    const result = d.applyDraftStep(draft, partial, { catalog, agents, existing: this.existingOf(loaded), allowLocked });
+    d.saveDraft(ctx.dataDir, result.draft);
+    return this.emit(d, ctx, flags, {
+      kind: 'apply',
+      draftPath: d.draftPath(ctx.dataDir),
+      applied: result.applied,
+      nextStep: result.nextStep,
+      remainingSteps: d.remainingSteps(result.draft, { allowLocked }),
+      warnings: result.warnings,
+      draft: { mode: result.draft.mode, scope: result.draft.scope, completed: result.draft.completed },
+    });
+  },
+
+  async commit(ctx, argv) {
+    const d = await this.deps();
+    const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+    if (positionals.length) throw new d.UsageError('USAGE', 'uso: opc setup commit [--json]');
+    ensurePrivateDir(ctx.dataDir);
+    return withLock(path.join(ctx.dataDir, 'config.lock'), { timeoutMs: 30000, purpose: 'setup-commit' }, async () => {
+      const draft = d.loadDraft(ctx.dataDir);
+      if (!draft) throw new d.UsageError('NO_DRAFT', 'nenhum rascunho de configuração para gravar; execute /opc:setup primeiro');
+      const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
+      const allowLocked = draft.mode === 'bootstrap' && !loaded.hasGlobal;
+      d.assertDraftComplete(draft, { allowLocked });
+      const deps = await this.discovery(d, ctx);
+      const result = d.commitDraft({
+        dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot, draft, ...deps,
+        existing: this.existingOf(loaded), allowLocked,
+      });
+      return this.emit(d, ctx, flags, { kind: 'commit', ...result });
+    });
+  },
+
+  async discard(ctx, argv) {
+    const d = await this.deps();
+    const { flags } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: false });
+    return this.emit(d, ctx, flags, { kind: 'discard', discarded: d.discardDraft(ctx.dataDir) });
+  },
+};
+
+async function runCommand(ctx, argv) {
+  const sub = argv[0];
+  if (['models', 'apply', 'commit', 'discard'].includes(sub)) return SetupOnboarding[sub](ctx, argv.slice(1));
+  if (argv.some((arg) => arg === '--enable-review-gate' || arg === '--disable-review-gate')) {
+    throw new UsageError('USAGE', 'Os flags de review gate estarão disponíveis na F2b.');
+  }
+  const reconfigure = argv.includes('--reconfigure');
+  const rest = argv.filter((a) => a !== '--reconfigure');
+  const isF0Control = rest.some((a) => SETUP_PASSTHROUGH_FLAGS.includes(a)
+    || a === '--force' || a === '--confirmed-by-user');
+  if (isF0Control) return runDiagnostics(ctx, rest);
+
+  // Run the F0 diagnostic exactly once before collecting optional onboarding details.
+  // In particular, failed version/auth checks must keep their original report and boot count.
+  let report;
+  let output = '';
+  const captured = {
+    ...ctx,
+    json: (value) => { report = value; },
+    out: (value) => { output += value; },
+  };
+  const exitCode = await runDiagnostics(captured, rest);
+  if (exitCode !== ExitCode.OK) {
+    const { onboarding, text } = await SetupOnboarding.offlineState(ctx, { reconfigure, opencode: report?.opencode });
+    if (report !== undefined) ctx.json({ ...report, onboarding });
+    else ctx.out(`${output}${text}`);
+    return exitCode;
+  }
+
+  const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
+  if (report !== undefined) ctx.json({ ...report, onboarding });
+  else ctx.out(`${output}${text}`);
+  return exitCode;
+}
+// ---- end F1 ----
+
+export const run = f1Command(runCommand);

@@ -5,6 +5,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import { CONFIG_USED_FIELDS, EVENT_TYPES, PROBES, diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
+import { fixtureData } from '../helpers.mjs';
 
 const agentItem = {
   name: 'synthetic-agent', mode: 'primary', permission: { model: { enabled: 'deny' } },
@@ -12,6 +13,31 @@ const agentItem = {
   description: 'synthetic description', hidden: false, color: '#123456', steps: 10,
   variant: 'default', temperature: 0.5,
 };
+
+test('F1 fixtures cover optional real-server provider model and agent fields', () => {
+  const provider = fixtureData('provider.json');
+  const models = provider.all.flatMap((entry) => Object.values(entry.models ?? {}));
+  assert.ok(models.some((model) => model.capabilities?.interleaved && typeof model.capabilities.interleaved.field === 'string'));
+  assert.ok(models.some((model) => {
+    const cost = model.cost;
+    return cost?.experimentalOver200K
+      && ['input', 'output'].every((key) => typeof cost.experimentalOver200K[key] === 'number')
+      && ['read', 'write'].every((key) => typeof cost.experimentalOver200K.cache?.[key] === 'number');
+  }));
+  assert.ok(models.some((model) => {
+    const tier = model.cost?.tiers?.[0];
+    return tier?.tier?.type === 'context' && typeof tier.tier.size === 'number'
+      && typeof tier.input === 'number' && typeof tier.output === 'number'
+      && ['read', 'write'].every((key) => typeof tier.cache?.[key] === 'number');
+  }));
+  assert.ok(models.some((model) => typeof model.limit?.input === 'number'));
+
+  const agents = fixtureData('agent.json');
+  assert.ok(agents.some((agent) => typeof agent.color === 'string'));
+  assert.ok(agents.some((agent) => typeof agent.steps === 'number'));
+  assert.ok(agents.some((agent) => typeof agent.temperature === 'number'));
+  assert.ok(agents.some((agent) => typeof agent.topP === 'number'));
+});
 
 test('agent array snapshots preserve all 12 known properties regardless of size', () => {
   assert.deepEqual(shapeOf([agentItem], 'agent'), [{
@@ -32,6 +58,27 @@ test('agent array snapshots collapse unknown names recursively and permission ma
     name: 'string', '*': 'boolean', options: { '*': { enabled: 'boolean' } },
     permission: { '*': { '*': 'string' } },
   }]);
+});
+
+test('F1 endpoint snapshots never expose provider, model, command, or skill names', () => {
+  const value = {
+    all: [{
+      id: 'synthetic-provider', name: 'Synthetic Provider',
+      models: { 'synthetic-provider/synthetic-model': { id: 'synthetic-model', name: 'Synthetic Model', limit: {} } },
+      options: { syntheticProviderOption: true },
+    }],
+    default: 'synthetic-provider',
+  };
+  const snapshots = [
+    shapeOf(value, 'provider'),
+    shapeOf({ 'synthetic-command': { name: 'synthetic-command', description: 'synthetic command' } }, 'command'),
+    shapeOf({ 'synthetic-skill': { name: 'synthetic-skill', description: 'synthetic skill' } }, 'skill'),
+    shapeOf({ 'synthetic-agent': { name: 'synthetic-agent', mode: 'primary' } }, 'agent'),
+  ];
+  const serialized = JSON.stringify(snapshots);
+  for (const personal of ['synthetic-provider', 'Synthetic Provider', 'synthetic-model', 'Synthetic Model', 'syntheticProviderOption', 'synthetic-command', 'synthetic-skill', 'synthetic-agent']) {
+    assert.equal(serialized.includes(personal), false, personal);
+  }
 });
 
 test('live collection prunes real and fake agent responses identically before diffing', async () => {

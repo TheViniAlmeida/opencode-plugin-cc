@@ -20,7 +20,11 @@ if (process.env.OPC_LIVE !== '1') {
 }
 
 const WANT_JSON = process.argv.includes('--json');
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
+const MODEL = process.env.OPC_LIVE_MODEL?.trim();
+if (!MODEL) {
+  console.log('OPC_LIVE_MODEL não definida; informe provider/model para executar a sondagem ao vivo.');
+  process.exit(0);
+}
 const [providerID, ...modelRest] = MODEL.split('/');
 const modelID = modelRest.join('/');
 const TURN_TIMEOUT_MS = 240000;

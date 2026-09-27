@@ -3277,7 +3277,7 @@ test('three members, one per model: own child session, own result, correct bodie
 test('prompt reaches every member intact (quotes, backticks, $(), newline, unicode)', async (t) => {
   const { cwd, env } = await setup(t);
   const prompt = 'line1\nline2 `tick` $(touch pwned) "q" ção 🚀';
-  // Same path as /opc:subagent: `--raw-args-stdin <<'OPC_ARGS'`; known flags leave the text, the rest is verbatim.
+  // Same path as /opc:subagent: `--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`; known flags leave the text, the rest is verbatim.
   const res = await runCli(['subagent', '--raw-args-stdin'], { env, cwd, stdin: `--agent general --model fast,strong -- ${prompt}\n` });
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(prompts(env).map((b) => b.parts[0].text), [prompt, prompt]);
@@ -3492,7 +3492,7 @@ function summaryOf(prompt, max = 56) {
 const logLine = (ctx) => (line) => ctx.err(line.endsWith('\n') ? line : `${line}\n`);
 
 export async function run(ctx, argv) {
-  // Free text (D3): /opc:subagent sends `--raw-args-stdin <<'OPC_ARGS'`; known flags are pulled out
+  // Free text (D3): /opc:subagent sends `--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`; known flags are pulled out
   // of the text, the rest is the prompt verbatim.
   const raw = await readRawArgs(argv, SPEC.flags, { stdin: ctx.stdin });
   const { flags, positionals } = parseArgs(raw.argv, SPEC);
@@ -4186,7 +4186,7 @@ export function textFromParts(parts) {
 }
 
 export async function run(ctx, argv) {
-  // Free text (D3): /opc:command sends `--raw-args-stdin <<'OPC_ARGS'`; the first word of the text is
+  // Free text (D3): /opc:command sends `--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`; the first word of the text is
   // the command name and the rest are its arguments, verbatim.
   const raw = await readRawArgs(argv, SPEC.flags, { stdin: ctx.stdin });
   const { flags, positionals } = parseArgs(raw.argv, SPEC);
@@ -4780,7 +4780,7 @@ for (const name of Object.keys(STDIN_FLAG)) {
     assert.ok(fields['argument-hint']);
     assert.match(fields['allowed-tools'], /Bash\(opc:\*\)/);
     assert.doesNotMatch(fields['allowed-tools'], /Bash\((node|npm|git|rm|sh)/);
-    assert.ok(body.includes(`opc ${name} ${STDIN_FLAG[name]} <<'OPC_ARGS'\n$ARGUMENTS\nOPC_ARGS`));
+    assert.ok(body.includes(`opc ${name} ${STDIN_FLAG[name]} <<'OPC_ARGS_5f1d0c7a_EOF'\n$ARGUMENTS\nOPC_ARGS`));
     assert.doesNotMatch(body, /--dangerously|--no-verify/);
   });
 }
@@ -4829,10 +4829,9 @@ allowed-tools: Bash(opc:*)
 Execute exatamente:
 
 ```bash
-opc sessions --args-stdin <<'OPC_ARGS'
+opc sessions --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Apresente a saída como veio (tabela Markdown), sem resumir.
 - `--refresh` descarta a instância do servidor do opc para reler o storage; só use se o usuário pedir.
@@ -4850,10 +4849,9 @@ allowed-tools: Bash(opc:*), AskUserQuestion
 Execute exatamente:
 
 ```bash
-opc session --args-stdin <<'OPC_ARGS'
+opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Regras:
 - Apresente a saída ao usuário sem resumir. Em `show`, preserve os IDs de mensagem (são eles que `fork` e `revert` usam).
@@ -4873,10 +4871,9 @@ allowed-tools: Bash(opc:*)
 Execute exatamente (o heredoc com delimitador entre aspas não expande nada; não edite, cite nem escape os argumentos — as flags conhecidas são extraídas do texto e o resto vira o prompt, sem mudança):
 
 ```bash
-opc subagent --raw-args-stdin <<'OPC_ARGS'
+opc subagent --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Apresente o resultado de **cada** membro separadamente (agente, modelo, sessão, texto ou erro); não funda as respostas numa só sem avisar.
 - Exit 3: um membro pediu permissão ou fez pergunta. Siga a skill `opc-result-handling` (pergunte ao usuário antes de qualquer `/opc:permissions reply`).
@@ -4895,10 +4892,9 @@ allowed-tools: Bash(opc:*)
 Execute exatamente (o heredoc com delimitador entre aspas não expande nada; não edite, cite nem escape os argumentos — a primeira palavra é o command, o resto são os argumentos dele, sem mudança):
 
 ```bash
-opc command --raw-args-stdin <<'OPC_ARGS'
+opc command --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Apresente a saída sem resumir.
 - Exit 4: o command fixa um modelo ou agente negado pela política; explique e não tente contornar.
@@ -4918,10 +4914,9 @@ allowed-tools: Bash(opc:*), Bash(tmux:*)
 Execute exatamente:
 
 ```bash
-opc attach --args-stdin <<'OPC_ARGS'
+opc attach --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Apresente a saída como veio. A linha impressa lê a senha de um arquivo de modo 600 para a variável de ambiente; nunca peça, mostre ou copie a senha.
 - `--pane` precisa do tmux; se falhar, mostre a linha impressa para o usuário rodar num terminal.

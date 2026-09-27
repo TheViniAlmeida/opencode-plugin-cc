@@ -2,7 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import { loadConfig } from './config.mjs';
+import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { redact, redactText } from './redact.mjs';
 import { defaultDataDir, ensurePrivateDir, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
 
@@ -27,7 +27,22 @@ export async function createContext({
   const workspaceRoot = resolveWorkspaceRoot(path.resolve(cwd));
   ensurePrivateDir(path.join(dataDir, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(dataDir, workspaceRoot));
-  const loaded = loadConfig({ dataDir, workspaceRoot });
+  let loaded;
+  try {
+    loaded = loadConfig({ dataDir, workspaceRoot });
+  } catch (err) {
+    const args = argv.map(String);
+    const validatingConfig = args[0] === 'validate' || (args[0] === 'config' && args[1] === 'validate');
+    const stoppingServer = args.includes('--stop-server');
+    if (err.code !== 'CONFIG_INVALID' || (!validatingConfig && !stoppingServer)) throw err;
+    // Let `config validate` render the structured CONFIG_INVALID details itself.
+    loaded = {
+      config: DEFAULT_CONFIG,
+      warnings: stoppingServer ? ['Config inválida; usando defaults para parar o servidor.'] : [],
+      hasGlobal: false,
+      workspace: null,
+    };
+  }
   return {
     argv,
     env,
@@ -56,3 +71,14 @@ export async function createContext({
     },
   };
 }
+
+// ---- F1: connection helper for discovery/config commands ----
+export async function connectApi(ctx) {
+  const { ensureServer, clientFor } = await import('./server.mjs');
+  const { createApi } = await import('./api.mjs');
+  const serverCtx = { stateDir: ctx.stateDir, workspaceRoot: ctx.workspaceRoot, config: ctx.config, env: ctx.env };
+  const server = await ensureServer(serverCtx);
+  const client = clientFor(serverCtx, server);
+  return { api: createApi(client), server, client };
+}
+// ---- end F1 ----

@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { getProcessIdentity, identityMatches, spawnDetached, terminateProcessGroup } from '../../plugins/opc/scripts/lib/process.mjs';
-import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor } from '../helpers.mjs';
+import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor, writeGlobalConfig, stopAllWorkspaces } from '../helpers.mjs';
 
 test('waitFor uses a monotonic clock instead of Date.now', async () => {
   const original = Date.now;
@@ -14,6 +14,16 @@ test('waitFor uses a monotonic clock instead of Date.now', async () => {
   } finally {
     Date.now = original;
   }
+});
+
+test('writeGlobalConfig repairs an existing data directory to mode 700 and writes mode 600', (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-helper-config-'));
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { mode: 0o777 });
+  fs.chmodSync(dataDir, 0o777);
+  const file = writeGlobalConfig({ OPC_DATA_DIR: dataDir }, { theme: 'dark' });
+  assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
 
 test('registry closes an external fake and preserves recovery directories when another stopper fails', async (outer) => {
@@ -152,6 +162,26 @@ test('requireStopped rejects not-running with a live recorded fake boot and pres
   } finally {
     stderr.mock.restore();
   }
+});
+
+test('workspace cleanup attempts every workspace in one env before checking recorded fake boots', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-helper-order-'));
+  const env = { FAKE_OPENCODE_STATE: path.join(dir, 'fake-state.json') };
+  const fakeBin = path.join(FAKE_BIN_DIR, 'opencode');
+  const proc = await spawnDetached(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', fakeBin, 'serve'], {
+    env: process.env, cwd: dir, logFile: path.join(dir, 'child.log'),
+  });
+  const matcher = (argv) => argv.includes(fakeBin) && argv.includes('serve');
+  registerStopper(t, async () => { await terminateProcessGroup(proc, matcher, { graceMs: 500 }); });
+  fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({ boots: [{ pid: proc.pid }] }));
+  const calls = [];
+  const errors = await stopAllWorkspaces(env, [`${dir}/one`, `${dir}/two`], async (_env, ws) => {
+    calls.push(ws);
+    return { code: 0, stdout: JSON.stringify({ stop: { stopped: false, reason: 'not-running' } }), stderr: '' };
+  });
+  assert.deepEqual(calls, [`${dir}/one`, `${dir}/two`]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /live fake server/);
 });
 
 test('requireStopped accepts not-running with no live fake boot', async (t) => {

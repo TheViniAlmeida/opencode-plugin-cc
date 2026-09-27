@@ -48,7 +48,6 @@ function registry(t) {
           const result = await stop();
           if (result && typeof result === 'object') {
             requireStopped(result);
-            for (const env of reg.envs) requireStopped(result, env);
           }
         } catch (err) {
           errors.push(err);
@@ -56,19 +55,7 @@ function registry(t) {
       }
       if (fs.existsSync(COMPANION)) {
         for (const env of reg.envs) {
-          for (const ws of reg.workspaces) {
-            if (!fs.existsSync(ws)) continue;
-            try {
-              const result = await stopAllServers(env, ws);
-              if (result.code !== 0) {
-                errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
-              } else {
-                requireStopped(parseJsonOutput(result.stdout).stop, env);
-              }
-            } catch (err) {
-              errors.push(err);
-            }
-          }
+          errors.push(...await stopAllWorkspaces(env, reg.workspaces.filter((ws) => fs.existsSync(ws))));
         }
       }
       for (const dir of reg.dirs) {
@@ -264,7 +251,7 @@ export function makeServerCtx(t, { scenario = 'ok', extraEnv = {}, config = {} }
   ensurePrivateDir(path.join(env.OPC_DATA_DIR, 'state'));
   const stateDir = ensurePrivateDir(workspaceStateDir(env.OPC_DATA_DIR, ws));
   const ctx = { stateDir, workspaceRoot: ws, config: mergeConfig(config, null).config, env, hasActiveJobs: () => false };
-  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true }), env));
+  registerStopper(t, async () => requireStopped(await stopServer({ ...ctx, hasActiveJobs: () => false }, { force: true, confirmedByUser: true })));
   return { ctx, env, ws, stateDir };
 }
 
@@ -286,6 +273,25 @@ export function requireStopped(result, env) {
     return result;
   }
   throw new Error(`server stop not confirmed: ${result?.reason ?? 'missing result'}`);
+}
+
+export async function stopAllWorkspaces(env, workspaces, stop = stopAllServers) {
+  const errors = [];
+  for (const ws of workspaces) {
+    try {
+      const result = await stop(env, ws);
+      if (result.code !== 0) {
+        errors.push(new Error(`stopAllServers failed (code ${result.code}) for ${ws}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`));
+      } else {
+        requireStopped(parseJsonOutput(result.stdout).stop);
+      }
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  try { requireStopped({ stopped: false, reason: 'not-running' }, env); }
+  catch (err) { errors.push(err); }
+  return errors;
 }
 
 // Shared by standalone live scripts. Remember failures even when a retry succeeds,
@@ -324,3 +330,77 @@ export function createServerCleanup(dir, { stop = stopServer } = {}) {
   };
   return cleanup;
 }
+
+// ---- F1 additions (aliased imports so they never collide with F0's) ----
+import { PassThrough as F1PassThrough, Writable as F1Writable } from 'node:stream';
+import * as fsF1 from 'node:fs';
+import * as pathF1 from 'node:path';
+import { pathToFileURL as pathToFileURLF1 } from 'node:url';
+
+export function scriptedTTY(lines) {
+  const input = new F1PassThrough();
+  input.isTTY = true;
+  input.end(lines.map((line) => `${line}\n`).join(''));
+  return input;
+}
+
+export function pipedStdin(text = '') {
+  const input = new F1PassThrough();
+  input.isTTY = false;
+  input.end(text);
+  return input;
+}
+
+export function captureStream({ isTTY = false } = {}) {
+  const chunks = [];
+  const stream = new F1Writable({ write(chunk, _enc, cb) { chunks.push(String(chunk)); cb(); } });
+  stream.isTTY = isTTY;
+  stream.text = () => chunks.join('');
+  return stream;
+}
+
+export function fixtureData(name) {
+  return JSON.parse(fsF1.readFileSync(pathF1.join(REPO_ROOT, 'tests', 'fixtures', 'data', name), 'utf8'));
+}
+
+// Canonical writer of <OPC_DATA_DIR>/config.json for every phase (mode 600) → file path.
+export function writeGlobalConfig(env, cfg) {
+  fsF1.mkdirSync(env.OPC_DATA_DIR, { recursive: true, mode: 0o700 });
+  fsF1.chmodSync(env.OPC_DATA_DIR, 0o700);
+  const file = pathF1.join(env.OPC_DATA_DIR, 'config.json');
+  fsF1.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
+  fsF1.chmodSync(file, 0o600);
+  return file;
+}
+
+export function readGlobalConfig(env) {
+  const file = pathF1.join(env.OPC_DATA_DIR, 'config.json');
+  return fsF1.existsSync(file) ? JSON.parse(fsF1.readFileSync(file, 'utf8')) : null;
+}
+
+// Canonical writer of <ws>/.opc.json → file path.
+export function writeWorkspaceConfig(ws, cfg) {
+  const file = pathF1.join(ws, '.opc.json');
+  fsF1.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
+  return file;
+}
+
+export async function runInProcess(sub, argv, { env, cwd, stdin = pipedStdin('') }) {
+  const lib = (m) => pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'lib', m)).href;
+  const { createContext } = await import(lib('context.mjs'));
+  const { toExitCode } = await import(lib('opc-error.mjs'));
+  const { renderError } = await import(lib('render.mjs'));
+  const stdout = captureStream();
+  const stderr = captureStream();
+  let code;
+  try {
+    const ctx = await createContext({ argv, env, cwd, stdin, stdout, stderr });
+    const mod = await import(pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'commands', `${sub}.mjs`)).href);
+    code = await mod.run(ctx, argv);
+  } catch (err) {
+    stderr.write(renderError(err));
+    code = toExitCode(err);
+  }
+  return { code, stdout: stdout.text(), stderr: stderr.text() };
+}
+// ---- end F1 additions ----
