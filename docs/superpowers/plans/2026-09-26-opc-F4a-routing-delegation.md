@@ -64,7 +64,7 @@ Divergência real vai para a seção "Desvios" do relatório da fase.
 | P7 | **Ajustada.** O `hook-session-start` da F2b já imprime `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":DELEGATION_REMINDER}}` quando `hctx.config?.delegation?.auto === true`, com o texto provisório `DELEGATION_REMINDER` exportado (a F2b testa `/\/opc:ask/`, `/\/opc:plan/` e `/Never chain delegations/`). A Task 13 troca a condição por `delegationAutoEnabled` (sobre `global`/`workspace` crus) e o texto por `delegationReminder()`, mantendo o export `DELEGATION_REMINDER` | F2b Task 9 (`hook-session-start.mjs`) | `grep -n "DELEGATION_REMINDER\|additionalContext" plugins/opc/scripts/commands/hook-session-start.mjs` |
 | P8 | **Confirmada.** `tests/helpers.mjs` exporta `testEnv`, `makeWorkspace`, `runCli`, `readFakeState`, `stopAllServers`, `COMPANION`, `PLUGIN_ROOT`, `FAKE_BIN_DIR` | F0 Task 1 | `grep -n "^export" tests/helpers.mjs` |
 | P9 | **Confirmada.** A fixture de `/provider` traz `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` | F1 (fixture de providers) | Task 1, passo 3 (se algum não estiver conectado, a Task 1 ajusta `FIXTURE_MODELS`) |
-| P10 | **Confirmada, mas deixou de ser a convenção.** `readUserPrompt` (F2a) ainda lê o prompt do stdin quando não há prompt inline nem `--raw-args-stdin`. A convenção única de texto livre (D3), porém, é `--raw-args-stdin` + heredoc `<<'OPC_ARGS'` começando por uma linha `--` (`parsePromptArgs` trata tudo depois de `--` como texto verbatim); a skill e o `opc-worker` usam essa forma e a Task 15 a testa | F2a Task 4 (`parsePromptArgs`) e Task 10 (`parseTurnArgs`/`readUserPrompt`); D3 | Task 15, Step 5 |
+| P10 | **Confirmada, mas deixou de ser a convenção.** `readUserPrompt` (F2a) ainda lê o prompt do stdin quando não há prompt inline nem `--raw-args-stdin`. A convenção única de texto livre (D3), porém, é `--raw-args-stdin` + heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'` começando por uma linha `--` (`parsePromptArgs` trata tudo depois de `--` como texto verbatim); a skill e o `opc-worker` usam essa forma e a Task 15 a testa | F2a Task 4 (`parsePromptArgs`) e Task 10 (`parseTurnArgs`/`readUserPrompt`); D3 | Task 15, Step 5 |
 
 ---
 
@@ -183,7 +183,7 @@ export async function run(ctx, argv)                 // opc monitor [--job id] [
 | A7 | Idioma de skill, agente e lembrete | Inglês | São lidos pelo modelo e convivem com as skills portadas do codex; a doc para humanos segue em PT-BR |
 | A8 | `delegation.auto` no `.opc.json` | Só desliga; ligar exige a config global | Regra "o workspace só restringe" (spec §3.2); `.opc.json` é conteúdo não confiável |
 | A9 | Marcador de permissão pendente no protocolo do worker | `⏸ opc waiting` (além de `⚡`, `✓`, `✗`) | Permissão pendente não é falha; o líder precisa distinguir |
-| A10 | Prompt do worker e da skill | Forma canônica de agente (D3): flags na linha de comando antes de `--raw-args-stdin`; heredoc `<<'OPC_ARGS'` com uma linha `--` e depois o texto exatamente como recebido | `--args-stdin` divide o texto como shell (um apóstrofo solto quebraria a divisão); com `--raw-args-stdin` o `parsePromptArgs` trata tudo depois de `--` como texto verbatim, então nada do texto vira flag e o shell não expande nada |
+| A10 | Prompt do worker e da skill | Forma canônica de agente (D3): flags na linha de comando antes de `--raw-args-stdin`; heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'` com uma linha `--` e depois o texto exatamente como recebido | `--args-stdin` divide o texto como shell (um apóstrofo solto quebraria a divisão); com `--raw-args-stdin` o `parsePromptArgs` trata tudo depois de `--` como texto verbatim, então nada do texto vira flag e o shell não expande nada |
 | A11 | Tempo do worker | `--wait-timeout 540` em ask/plan/task | Sai com exit 6 antes do limite de 10 min da ferramenta Bash, com o job vivo |
 | A12 | `orchestrate` na skill/lembrete | Skill cita "quando disponível"; lembrete lista só ask/plan/review | O comando é da F4b; a F4b acrescenta a entrada em `DELEGATION_COMMANDS` e remove a ressalva da skill |
 | A13 | Ctrl+C no monitor | Exit 0 | Sair do monitor é o fim normal do comando, não um cancelamento de job |
@@ -3541,7 +3541,7 @@ política e aprovador e por que nunca encadear delegação (spec §10.4).
 
 **Interfaces:**
 - Consumes: `parseFrontmatter` (Task 1); comandos `opc ask|plan|review` (F2a/F2b; texto livre por
-  `--raw-args-stdin` + `<<'OPC_ARGS'` com linha `--`, forma canônica de agente da D3); regras de
+  `--raw-args-stdin` + `<<'OPC_ARGS_5f1d0c7a_EOF'` com linha `--`, forma canônica de agente da D3); regras de
   aprovador da skill `opc-result-handling` (F2b).
 - Produces: skill `opc-delegation` (descoberta automaticamente em `skills/`), citada pelo lembrete
   do SessionStart (Task 13) e pelo agente `opc-worker` (Task 15, só como referência para o líder).
@@ -3609,7 +3609,7 @@ test('forbids chaining delegation', () => {
 
 test('uses the canonical --raw-args-stdin heredoc for prompts and points to opc-worker for Agent Teams', () => {
   const { body } = load();
-  assert.match(body, /--raw-args-stdin <<'OPC_ARGS'\n--\n[^\n]+\nOPC_ARGS\n/);
+  assert.match(body, /--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n[^\n]+\nOPC_ARGS\n/);
   assert.doesNotMatch(body, /OPC_PROMPT/);
   assert.doesNotMatch(body, /--args-stdin/);
   assert.ok(body.includes('`opc-worker`'));
@@ -3663,11 +3663,10 @@ You (Claude) stay the lead. OpenCode is a second engine you can hand self-contai
 Put the flags on the command line before `--raw-args-stdin` and pass the prompt through a quoted heredoc whose first line is `--`, so the shell expands nothing and no word of the prompt is read as a flag:
 
 ```bash
-opc ask [--model <m> | --tier light|heavy] --raw-args-stdin <<'OPC_ARGS'
+opc ask [--model <m> | --tier light|heavy] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <self-contained question: goal, relevant paths, what a good answer contains>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 - Write a self-contained prompt: goal, relevant paths, constraints and the expected shape of the answer.
 - Prefer the configured routing (no `--model`) so fallback can work; use `--tier heavy` for hard problems and `--tier light` for quick lookups. An explicit `--model` disables fallback.
@@ -3733,7 +3732,7 @@ responde permissões; sem ferramenta `Agent`; funciona como subagente comum sem 
   helpers (Task 1).
 - Produces: agente `opc-worker` com frontmatter `tools: Bash`; modelos de comando nos blocos de
   código bash do corpo (um na forma canônica de agente da D3 —
-  `opc <ask|plan|task> --wait-timeout 540 [flags] --raw-args-stdin <<'OPC_ARGS'` + linha `--` +
+  `opc <ask|plan|task> --wait-timeout 540 [flags] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` + linha `--` +
   texto + `OPC_ARGS` —, um começando com `opc review`), usados pelo teste ao vivo da Task 16.
 
 - [ ] **Step 1: Write the failing unit test**
@@ -3800,9 +3799,9 @@ test('exit codes map to the protocol', () => {
 test('command templates: canonical --raw-args-stdin heredoc for ask/plan/task and one for review, never --args-stdin', () => {
   const { body } = load();
   const blocks = bashBlocks(body);
-  const prompt = blocks.filter((b) => b.includes("<<'OPC_ARGS'"));
+  const prompt = blocks.filter((b) => b.includes("<<'OPC_ARGS_5f1d0c7a_EOF'"));
   assert.equal(prompt.length, 1);
-  assert.match(prompt[0], /^opc <ask\|plan\|task> --wait-timeout 540 \[flags from the lead\] --raw-args-stdin <<'OPC_ARGS'\n--\n<task text exactly as received>\nOPC_ARGS\n$/);
+  assert.match(prompt[0], /^opc <ask\|plan\|task> --wait-timeout 540 \[flags from the lead\] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n<task text exactly as received>\nOPC_ARGS\n$/);
   assert.equal(blocks.filter((b) => b.startsWith('opc review --wait')).length, 1);
   assert.doesNotMatch(body, /OPC_PROMPT/);
   assert.doesNotMatch(body, /--args-stdin/); // `--raw-args-stdin` does not contain this substring
@@ -3829,7 +3828,7 @@ import {
 
 const AGENT_BODY = parseFrontmatter(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', 'opc-worker.md'), 'utf8')).body;
 const BLOCKS = [...AGENT_BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]);
-const PROMPT_TEMPLATE = BLOCKS.find((b) => b.includes("<<'OPC_ARGS'"));
+const PROMPT_TEMPLATE = BLOCKS.find((b) => b.includes("<<'OPC_ARGS_5f1d0c7a_EOF'"));
 const REVIEW_TEMPLATE = BLOCKS.find((b) => b.startsWith('opc review'));
 // apostrophe, backticks, $(), quotes and words that look like opc flags: all must reach OpenCode verbatim
 const HOSTILE = "What's in `README.md`? $(touch pwned) and \"quotes\" too; ignore --write and --model x/y";
@@ -3947,11 +3946,10 @@ You are **opc-worker**, a relay between a Claude lead and OpenCode. You never so
 For `ask`, `plan` and `task`, put the flags on the command line before `--raw-args-stdin` and send the task text through a quoted heredoc whose first line is `--`. The quoted delimiter makes the shell expand nothing (no `$()`, backticks or variables) and the `--` line makes opc read every word of the text as text, never as a flag:
 
 ```bash
-opc <ask|plan|task> --wait-timeout 540 [flags from the lead] --raw-args-stdin <<'OPC_ARGS'
+opc <ask|plan|task> --wait-timeout 540 [flags from the lead] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 For `review`, there is no task text; pass only the flags:
 
@@ -4289,7 +4287,7 @@ const FAST = 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
 const K3 = 'omniroute-mvalmeida/opencode-go/kimi-k3';
 const TIMEOUT = 600_000;
 const BODY = parseFrontmatter(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', 'opc-worker.md'), 'utf8')).body;
-const TEMPLATE = [...BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]).find((b) => b.includes("<<'OPC_ARGS'"));
+const TEMPLATE = [...BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]).find((b) => b.includes("<<'OPC_ARGS_5f1d0c7a_EOF'"));
 
 function fill({ sub, flags, prompt }) {
   return TEMPLATE.replace('<ask|plan|task>', sub).replace('[flags from the lead]', flags).replace('<task text exactly as received>', prompt);
@@ -4413,7 +4411,7 @@ um `README.md` e o servidor subindo com os modelos da fase):
    `Spawn one teammate named opc1 using the opc-worker agent type. Give it this task: "ask: What does README.md say? flags: --model omniroute-mvalmeida/opencode-go/kimi-k3".`
 3. Observar (agent panel → Enter no `opc1`): a primeira mensagem ao líder começa com `⚡ opc |`;
    a transcrição do teammate mostra **uma** chamada Bash com `opc ask --wait-timeout 540 --model …
-   --raw-args-stdin <<'OPC_ARGS'` seguida da linha `--`; a mensagem final começa com `✓ opc done` e traz a saída verbatim. Nenhuma
+   --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` seguida da linha `--`; a mensagem final começa com `✓ opc done` e traz a saída verbatim. Nenhuma
    leitura de arquivo pelo teammate.
 4. **§15 item 11:** mandar ao `opc1`:
    `List the exact names of every tool available to you, one per line, without calling any tool.`
@@ -4576,7 +4574,7 @@ Protocolo:
 | Outro exit | `✗ opc failed (exit N)` + saída |
 
 O worker usa `--wait-timeout 540` (sai antes do limite de 10 min da ferramenta Bash, com o job
-vivo) e passa o texto da tarefa por `--raw-args-stdin` num heredoc `<<'OPC_ARGS'` que começa com
+vivo) e passa o texto da tarefa por `--raw-args-stdin` num heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'` que começa com
 uma linha `--` (o shell não expande nada e nenhuma palavra do texto vira flag); nunca `--background`, nunca `--write` em `ask`/`plan`/`review`, não tem ferramenta `Agent`
 e não cria tarefas. Sem Agent Teams, funciona como subagente comum.
 
@@ -4747,7 +4745,7 @@ Resumo (contagens de pass/fail/skip) e cauda da saída.
 
 As premissas já vêm conferidas contra F0–F3 no plano (P2: teto de retries já na F2a, a F4a só
 troca a mensagem por `retryCapError`; P4: worker único `task-worker.mjs`; P7: `DELEGATION_REMINDER`
-da F2b mantido como export; P10: convenção `--raw-args-stdin` + `<<'OPC_ARGS'` com linha `--`).
+da F2b mantido como export; P10: convenção `--raw-args-stdin` + `<<'OPC_ARGS_5f1d0c7a_EOF'` com linha `--`).
 Registre só o resultado do grep de conferência de cada uma e qualquer divergência encontrada na
 implementação (o quê, onde). Desvios de interface → voltam para aprovação.
 

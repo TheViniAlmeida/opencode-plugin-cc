@@ -13,6 +13,23 @@
 
 ---
 
+## Ajustes pós-F0 (26/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+A F0 foi implementada e revisada (merge `de234b4`). As rodadas de revisão mudaram comportamentos em relação ao código original do plano da F0. Onde o código desta fase conflitar com a lista abaixo, **vale o código real da `main`** (leia o módulo antes de estendê-lo) e esta lista:
+
+- **Heredoc:** o delimitador canônico é `OPC_ARGS_5f1d0c7a_EOF` (e `OPC_JSON_5f1d0c7a_EOF` para JSON). Todas as ocorrências deste plano já foram trocadas.
+- **`args`:** flag de valor seguida de outra flag → `UsageError`; flag desconhecida com um só hífen (`-x`) → `UsageError`; lookup via `Object.hasOwn`; mensagens de erro ecoam no máximo 12 caracteres do token + `…`.
+- **`state.readJson(file, fallback)`:** só `ENOENT` devolve o fallback; JSON inválido → `OpcError INVALID_JSON` (exit 2); outro erro de I/O → `READ_FAILED` (exit 5). `loadState` pode trazer `rebuildWarnings` e faz backup+reconstrução também para estrutura inválida. `resolveWorkspaceRoot` lança `WORKSPACE_UNRESOLVED` em falhas de git que não sejam "não é repositório"/git ausente.
+- **`config.loadConfig`:** arquivo existente cujo conteúdo não é objeto → `CONFIG_INVALID`; arquivo ilegível → erro (não é ignorado). `validateConfigShape` valida os tipos dos contêineres de `policy`. O merge de `allow` da F0 usa contenção de globs (conservador); a decisão D desta fase (allow + allowWorkspace) o substitui.
+- **`redact`:** substituição do segredo mais longo para o mais curto; `Error.code`/`Error.name` também são redigidos. `renderTable` redige cada célula **antes** de qualquer transformação.
+- **`http`:** só falhas genuínas de conexão viram `SERVER_DOWN` (e disparam `onServerDown`); outras exceções viram `RequestError CLIENT_ERROR`. O token Basic (base64) também é segredo registrado.
+- **`process`/`locks`:** `spawnDetached` lança `SPAWN_FAILED` se não conseguir ler a identidade; `terminateProcessGroup` confirma o grupo inteiro (`KILL_UNCONFIRMED`); locks publicados por `link()` com recuperação serializada por `<lock>.break` (`LOCK_RESTORE_FAILED`).
+- **`server`:** falha ou corpo inválido em `GET /config` bloqueia sessões (`world.shareBlocked`, `world.shareReason: 'config-unavailable'`), reavaliado a cada `ensureServer`; `server.json` sem senha é inválido; `stopServer` encerra por identidade mesmo sem senha.
+- **Companion:** erros em modo `--json` sempre saem como objeto JSON, mesmo erros de parsing; subcomando desconhecido é ecoado truncado.
+- **Testes:** `makeServerCtx(t, …)` em `tests/helpers.mjs`; a limpeza exige parada confirmada (`stopped`, `attached` ou `not-running` verificado pelos boots do fake) e preserva o diretório se falhar; o scanner aceita o marcador `scan-secrets:allow` na linha.
+- **Contrato:** `tests/fixtures/contract-shapes.mjs` usa `CONFIG_USED_FIELDS` e a allowlist `KNOWN_CONFIG_PROPS`; mapas de permissão sempre colapsados. Ao acrescentar as sondas desta fase (`/provider`, `/command`, `/skill`), **colapse sempre as chaves de mapas de IDs** (`provider.*.models`, catálogos de agentes/commands/skills) para `*` — nomes de modelos/agentes do operador nunca podem entrar no snapshot público.
+- **Execução:** implementadores rodam no sandbox do Codex (sem `listen` em sockets, `.git` somente leitura); o controlador roda a suíte completa fora do sandbox e faz os commits.
+
 ## Global Constraints
 
 - Node ≥ 20 (`engines: {"node": ">=20"}`); CI em Node 20 e 22.
@@ -23,7 +40,7 @@
 - O plugin nunca escreve em `~/.config/opencode/` nem no `auth.json` do OpenCode.
 - Diretórios de estado com modo 700 e arquivos com modo 600 (inclui `config.json` e `config.draft.json`).
 - Exit codes conforme a spec, §4.1: `0, 2, 3, 4, 5, 6, 7, 130` (na F1: 0, 2, 4, 5).
-- Namespace de comandos `/opc:`; executável `opc`; argumentos do usuário sempre por heredoc com delimitador entre aspas, conforme a convenção única entre fases: comandos só de flags/ids (todos os da F1: `setup`, `config`, `providers`, `models`, `agents`, `catalog`) → `--args-stdin <<'OPC_ARGS'` (divisão tipo shell sem expansão); JSON do `setup apply` → `--stdin <<'OPC_JSON'` (D5); texto livre (a partir da F2a: `task`, `ask`, `plan`, …) → `--raw-args-stdin <<'OPC_ARGS'`, fora do escopo da F1.
+- Namespace de comandos `/opc:`; executável `opc`; argumentos do usuário sempre por heredoc com delimitador entre aspas, conforme a convenção única entre fases: comandos só de flags/ids (todos os da F1: `setup`, `config`, `providers`, `models`, `agents`, `catalog`) → `--args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` (divisão tipo shell sem expansão); JSON do `setup apply` → `--stdin <<'OPC_JSON_5f1d0c7a_EOF'` (D5); texto livre (a partir da F2a: `task`, `ask`, `plan`, …) → `--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`, fora do escopo da F1.
 - Todo JSON e todo log passam por redação (`redact`): por isso **nenhuma view JSON usa uma propriedade chamada `key`** (o `redact()` do F0 mascara qualquer campo `key`); o nome de uma chave de config vai em `setting`.
 - Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelo da F1: `omniroute-mvalmeida/opencode-go/kimi-k3`.
 - Git: branch `feat/opc-f1`; Conventional Commits; **sem** `Co-Authored-By`/`Signed-off-by`/"Generated with"; commit, push e PR só com autorização explícita do operador na sessão de execução. Sem ela, os passos "Commit" ficam pendentes e o trabalho segue acumulado na branch.
@@ -95,7 +112,7 @@ Nenhum arquivo fora da estrutura congelada do mestre.
 | D2 | `allow` do `.opc.json` é "interseção" com o global, mas duas listas de globs não viram uma lista só | A config efetiva guarda `policy.<tipo>.allow` (global) e `policy.<tipo>.allowWorkspace` (workspace); `evaluate` exige as duas. Entrada do workspace fora do allow global gera aviso |
 | D3 | `policy` inteira é travada, mas a spec também une `deny` e intersecta `allow` do `.opc.json` | No `.opc.json` valem só `policy.{providers,models,agents}.{allow,deny}`, `policy.tools.deny`, `policy.sensitivePaths` e `policy.destructiveBash` (todos só restringem); `approver`, `permissionTimeoutSec`, `permissionProfiles` e `server.*` são ignorados com aviso. **Escrever** qualquer `policy.*` pelo companion (global ou workspace) exige `--tty-confirm` num TTY |
 | D4 | A lista de escalares sobrescrevíveis por workspace omite `defaultProvider`, `defaultVariant`, `defaultAgent` | Entram como preferência de workspace; `stopGate.enabled`, `delegation`, `jobs` e `server.*` ficam só globais |
-| D5 | Formato do `setup apply --json '<partial>'` e risco de aspas no heredoc | O payload é uma config parcial aninhada (mais a pseudochave `scope`); o slash command manda por `--stdin` em heredoc `<<'OPC_JSON'` (JSON cru, sem `splitArgString`); no terminal também aceita o JSON posicional |
+| D5 | Formato do `setup apply --json '<partial>'` e risco de aspas no heredoc | O payload é uma config parcial aninhada (mais a pseudochave `scope`); o slash command manda por `--stdin` em heredoc `<<'OPC_JSON_5f1d0c7a_EOF'` (JSON cru, sem `splitArgString`); no terminal também aceita o JSON posicional |
 | D6 | Mapas (`aliases`) no onboarding: substituir ou mesclar | Mesclam com o arquivo; `null` remove um alias; valores já gravados não são renormalizados |
 | D7 | O assistente de terminal pode editar chaves travadas; o rascunho não pode virar escada de privilégio | `allowLocked` nunca é gravado no rascunho: `setup apply/commit` calculam `bootstrap && !existe config global`; `config init` passa `true`. O `config init` usa rascunho só em memória (interrupção não grava nada) |
 | D8 | `setup --json` precisa do estado de onboarding sem conhecer o formato do relatório do F0 | O `run` do F1 envolve o do F0 (renomeado `runDiagnostics`) e acrescenta `onboarding` ao JSON (ou uma seção ao texto) interceptando `ctx.json`/`ctx.out`; se o diagnóstico lançar erro com `--json`, imprime `{error, onboarding}` com o exit code do erro |
@@ -104,7 +121,7 @@ Nenhum arquivo fora da estrutura congelada do mestre.
 | D11 | Exit code do `config validate` | erros → 2; só erros de política → 4; servidor inacessível → 5 (com o resultado da checagem de forma impresso); válido → 0 |
 | D12 | Texto das instruções dos slash commands | `description` em PT-BR (visível ao usuário), corpo em inglês (instruções ao modelo), perguntas do AskUserQuestion em PT-BR |
 | D13 | Onde mora o assistente de terminal | `runInitWizard` em `onboarding.mjs` recebe o `prompter` injetado (o TTY é só interface das mesmas etapas); `config.mjs` (comando) só o conecta ao `ctx` |
-| D14 | Como os argumentos do usuário chegam ao `opc` (convenção entre fases) | Comandos da F1 recebem só flags/ids → slash commands usam `--args-stdin <<'OPC_ARGS'` (inalterado); `setup apply` recebe JSON por `--stdin <<'OPC_JSON'` (D5); `--raw-args-stdin` (texto livre verbatim) é da F2a em diante e não aparece na F1. Valores com apóstrofo em `config set` funcionam sem aspas porque o `splitArgString` da F0 trata `'` entre letras/dígitos como literal |
+| D14 | Como os argumentos do usuário chegam ao `opc` (convenção entre fases) | Comandos da F1 recebem só flags/ids → slash commands usam `--args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` (inalterado); `setup apply` recebe JSON por `--stdin <<'OPC_JSON_5f1d0c7a_EOF'` (D5); `--raw-args-stdin` (texto livre verbatim) é da F2a em diante e não aparece na F1. Valores com apóstrofo em `config set` funcionam sem aspas porque o `splitArgString` da F0 trata `'` entre letras/dígitos como literal |
 
 ---
 
@@ -4481,7 +4498,7 @@ git commit -m "feat(setup): add guided onboarding subcommands (models, apply, co
 
 **Interfaces:**
 - Consumes: os subcomandos das Tasks 10–13; o `bin/opc` do F0 (no PATH do Bash do Claude).
-- Produces: frontmatter conforme spec §4/§8.4 — `allowed-tools` mínimos (`Bash(opc:*)`; `Bash(npm:*)` e `AskUserQuestion` só no `setup`); `disable-model-invocation: true` só no `config`; toda invocação com `$ARGUMENTS` via heredoc `<<'OPC_ARGS'`; o payload do onboarding via `opc setup apply --json --stdin <<'OPC_JSON'`; nenhum bloco bash com `--tty-confirm`, `--dangerously*`, `--no-verify` ou `$(`.
+- Produces: frontmatter conforme spec §4/§8.4 — `allowed-tools` mínimos (`Bash(opc:*)`; `Bash(npm:*)` e `AskUserQuestion` só no `setup`); `disable-model-invocation: true` só no `config`; toda invocação com `$ARGUMENTS` via heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'`; o payload do onboarding via `opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'`; nenhum bloco bash com `--tty-confirm`, `--dangerously*`, `--no-verify` ou `$(`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4524,10 +4541,10 @@ for (const [name, expected] of Object.entries(F1)) {
     const tools = front['allowed-tools'].split(',').map((s) => s.trim());
     assert.deepEqual(tools, expected.tools);
     assert.equal(front['disable-model-invocation'] === 'true', expected.disableModel);
-    assert.match(body, /opc \S+ (--json )?--args-stdin <<'OPC_ARGS'\n\$ARGUMENTS\nOPC_ARGS/);
+    assert.match(body, /opc \S+ (--json )?--args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n\$ARGUMENTS\nOPC_ARGS/);
     for (const block of bashBlocks) {
       assert.doesNotMatch(block, /--tty-confirm|--dangerously|--no-verify|\$\(/, `${name}.md bash block is safe`);
-      if (block.includes('$ARGUMENTS')) assert.match(block, /<<'OPC_ARGS'/, 'user arguments only through the quoted heredoc');
+      if (block.includes('$ARGUMENTS')) assert.match(block, /<<'OPC_ARGS_5f1d0c7a_EOF'/, 'user arguments only through the quoted heredoc');
     }
   });
 }
@@ -4535,7 +4552,7 @@ for (const [name, expected] of Object.entries(F1)) {
 test('setup.md: install offer, heredoc payloads, commit', () => {
   const { body, bashBlocks } = parse('setup');
   assert.ok(bashBlocks.some((b) => b.trim() === 'npm install -g opencode-ai'));
-  assert.ok(bashBlocks.some((b) => b.includes("opc setup apply --json --stdin <<'OPC_JSON'")));
+  assert.ok(bashBlocks.some((b) => b.includes("opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'")));
   assert.ok(bashBlocks.some((b) => b.includes('opc setup commit --json')));
   assert.ok(bashBlocks.some((b) => b.includes('--stop-server --force --confirmed-by-user')));
   for (const step of ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']) {
@@ -4563,10 +4580,9 @@ allowed-tools: Bash(opc:*), Bash(npm:*), AskUserQuestion
 Run:
 
 ```bash
-opc setup --json --args-stdin <<'OPC_ARGS'
+opc setup --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Read the JSON. The diagnostic fields come from the server check; the `onboarding` object drives everything below. Follow the first branch that applies.
 
@@ -4606,10 +4622,9 @@ Present the diagnostic output (including the terminal alias line), then run `opc
 2. Start at `onboarding.nextStep`. Ask **one** `AskUserQuestion` per step, build the JSON payload described below and apply it:
 
 ```bash
-opc setup apply --json --stdin <<'OPC_JSON'
+opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'
 {"defaultProvider":"<id>"}
-OPC_JSON
-```
+OPC_JSON_5f1d0c7a_EOF```
 
    The result carries the next `nextStep`. Continue until `nextStep` is `null`. Text typed by the user goes **only** inside the heredoc, never on the command line.
 3. Steps (`AskUserQuestion` always offers "Other" for free text; use it as the "Outro" option):
@@ -4631,18 +4646,16 @@ OPC_JSON
 4. Model suggestions for `defaultModel` and `reviewModels`:
 
 ```bash
-opc setup models --json --args-stdin <<'OPC_ARGS'
+opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --top 3
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
    When the user types a name or glob in "Other", search it and confirm the match with one more `AskUserQuestion` (up to 4 matches as options):
 
 ```bash
-opc setup models --json --args-stdin <<'OPC_ARGS'
+opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --query <typed text>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 5. Errors while applying: exit code 2 (invalid, unknown or ambiguous model, invalid variant) → show the message and ask the same step again. Exit code 4 with `POLICY_DENIED` → explain the rule and ask again. Exit code 4 with `LOCKED_KEY` (reconfigure) → show the terminal command from the message and move on to the next step.
 6. When `nextStep` is `null`, commit:
@@ -4676,10 +4689,9 @@ disable-model-invocation: true
 Run:
 
 ```bash
-opc config --args-stdin <<'OPC_ARGS'
+opc config --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4702,10 +4714,9 @@ allowed-tools: Bash(opc:*)
 Run:
 
 ```bash
-opc providers --args-stdin <<'OPC_ARGS'
+opc providers --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Output rules:
 - Present the command output to the user verbatim (it is already Markdown).
@@ -4726,10 +4737,9 @@ allowed-tools: Bash(opc:*)
 Run:
 
 ```bash
-opc models --args-stdin <<'OPC_ARGS'
+opc models --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4750,10 +4760,9 @@ allowed-tools: Bash(opc:*)
 Run:
 
 ```bash
-opc agents --args-stdin <<'OPC_ARGS'
+opc agents --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4773,10 +4782,9 @@ allowed-tools: Bash(opc:*)
 Run:
 
 ```bash
-opc catalog --args-stdin <<'OPC_ARGS'
+opc catalog --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Output rules:
 - Present the command output to the user verbatim.

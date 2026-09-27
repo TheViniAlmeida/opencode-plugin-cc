@@ -64,7 +64,7 @@ Se algum desses nomes divergir no código real, ajuste só a cola (imports/uma l
 | D1 | `PATCH /session/:id {permission}` (§15 item 3) | **Anexa** (não substitui). `PATCH_PERMISSION_MODE = 'append'`. No resume, trocar para um perfil que começa com `* * deny` (read-only, custom) é seguro via PATCH; trocar para `write` é recusado antes do PATCH (exit 2, `PROFILE_SWITCH_UNSUPPORTED`). O probe ao vivo confirma e, se divergir, a constante muda no ajuste pós-portão | binário 1.18.32: `setPermission({permission: merge(e.permission, payload.permission)})` com `merge(...j) = j.flat()` |
 | D2 | Formato do `messageID` (§15 item 6) | `newMessageId()` replica `Identifier.ascending`: `msg_` + 12 hex (48 bits de `ms*4096+contador`) + 14 base62. Probe ao vivo confirma | binário 1.18.32, módulo `Identifier` |
 | D3 | Ferramenta `StructuredOutput` | Não conta como "ferramenta executada" (senão todo `StructuredOutputError` viraria `fatal`); vira fase `finalizing` | binário: `le.StructuredOutput = createStructuredOutputTool(...)`; sondagem §1.4 (`parts: step-start,reasoning,tool,step-finish`) |
-| D4 | Convenção única de passagem de argumentos | **Texto livre ⇒ `--raw-args-stdin`** + heredoc `<<'OPC_ARGS'`, lido por `readRawArgs` (Tarefa 4) sobre `parsePromptArgs`: flags conhecidas só como palavras inteiras, texto verbatim, `--` isolado encerra as flags (agentes escrevem as flags na linha de comando e começam o heredoc com `--`). Aqui: `task`/`ask`/`plan`; nas fases seguintes, `review`/`adversarial-review`, `subagent`, `command`, `orchestrate`, `conclave` e os agentes `opc-rescue`/`opc-worker` usam o mesmo helper. **Só flags/ids ⇒ `--args-stdin`** (divisão tipo shell da F0): `status`, `result`, `cancel` e também `permissions` — exceção justificada pela fronteira por pergunta de `permissions answer` (um argumento por pergunta, aspas para respostas com espaço); apóstrofos em prosa (`don't`) já não quebram ali porque o `splitArgString` da F0 trata `'` entre letras/dígitos como literal | Texto livre não pode depender de aspas balanceadas nem virar flag; `permissions answer` precisa da divisão por argumento (spec §8.3) |
+| D4 | Convenção única de passagem de argumentos | **Texto livre ⇒ `--raw-args-stdin`** + heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'`, lido por `readRawArgs` (Tarefa 4) sobre `parsePromptArgs`: flags conhecidas só como palavras inteiras, texto verbatim, `--` isolado encerra as flags (agentes escrevem as flags na linha de comando e começam o heredoc com `--`). Aqui: `task`/`ask`/`plan`; nas fases seguintes, `review`/`adversarial-review`, `subagent`, `command`, `orchestrate`, `conclave` e os agentes `opc-rescue`/`opc-worker` usam o mesmo helper. **Só flags/ids ⇒ `--args-stdin`** (divisão tipo shell da F0): `status`, `result`, `cancel` e também `permissions` — exceção justificada pela fronteira por pergunta de `permissions answer` (um argumento por pergunta, aspas para respostas com espaço); apóstrofos em prosa (`don't`) já não quebram ali porque o `splitArgString` da F0 trata `'` entre letras/dígitos como literal | Texto livre não pode depender de aspas balanceadas nem virar flag; `permissions answer` precisa da divisão por argumento (spec §8.3) |
 | D5 | Sessões filhas | O OpenCode só herda do pai as regras `deny` e `external_directory`; o runner aplica o perfil do job à filha (`PATCH`) no `session.created` (defesa em profundidade; janela curta documentada) | binário: `lt({parentSessionPermission})` filtra `external_directory` e `action==="deny"` |
 | D6 | `pendingRequest` | É uma **lista** (pode haver irmãos e perguntas ao mesmo tempo); `null` quando vazia | spec §8.2 fala em "remover esses pedidos do `pendingRequest`" |
 | D7 | Aprovador `user` | O companion também exige `--confirmed-by-user` para `reply once` (não só a skill); `reject` é sempre livre; `always` → exit 2; recusa do aprovador → exit 4 | spec §8.3 + defesa em profundidade |
@@ -4693,10 +4693,9 @@ allowed-tools: Bash(opc:*), AskUserQuestion
 Run exactly this with the Bash tool (use `timeout: 600000`). The user's arguments go through a quoted heredoc, so the shell expands nothing in them; do not edit, quote or escape them.
 
 ```bash
-opc task --raw-args-stdin <<'OPC_ARGS'
+opc task --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Then act on the exit code:
 
@@ -4720,10 +4719,9 @@ allowed-tools: Bash(opc:*), AskUserQuestion
 Run exactly this with the Bash tool (use `timeout: 600000`). The user's arguments go through a quoted heredoc, so the shell expands nothing in them; do not edit, quote or escape them.
 
 ```bash
-opc ask --raw-args-stdin <<'OPC_ARGS'
+opc ask --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Then act on the exit code:
 
@@ -4745,10 +4743,9 @@ allowed-tools: Bash(opc:*), AskUserQuestion
 Run exactly this with the Bash tool (use `timeout: 600000`). The user's arguments go through a quoted heredoc, so the shell expands nothing in them; do not edit, quote or escape them.
 
 ```bash
-opc plan --raw-args-stdin <<'OPC_ARGS'
+opc plan --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Then act on the exit code:
 
@@ -5079,10 +5076,9 @@ allowed-tools: Bash(opc:*)
 Run exactly this with the Bash tool (use `timeout: 600000` when `--wait` is present). The arguments go through a quoted heredoc; do not edit them.
 
 ```bash
-opc status --args-stdin <<'OPC_ARGS'
+opc status --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 If the user did not pass a job id, render the output as one compact Markdown table of the current and recent jobs; keep job id, kind, status, phase, time, summary and the follow-up commands, without extra prose.
 
@@ -5102,10 +5098,9 @@ allowed-tools: Bash(opc:*)
 Run exactly this with the Bash tool. The arguments go through a quoted heredoc; do not edit them.
 
 ```bash
-opc result --args-stdin <<'OPC_ARGS'
+opc result --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Present the full output verbatim: the final text, structured output, errors, touched files, file paths and line numbers exactly as printed, and follow-up commands such as `/opc:task --resume <id>`. Exit code `2` with "still running" means the job is active: suggest `/opc:status <id> --wait`.
 ````
@@ -5123,10 +5118,9 @@ allowed-tools: Bash(opc:*)
 Run exactly this with the Bash tool. The arguments go through a quoted heredoc; do not edit them.
 
 ```bash
-opc cancel --args-stdin <<'OPC_ARGS'
+opc cancel --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Present the output verbatim. If several jobs are active the command lists them and exits `2`: show the list and ask which one to cancel.
 ````
@@ -5638,10 +5632,9 @@ Follow the `opc-result-handling` skill before replying to anything.
 Run with the Bash tool, passing the arguments (plus `--confirmed-by-user` when the user confirmed) through the quoted heredoc:
 
 ```bash
-opc permissions --args-stdin <<'OPC_ARGS'
+opc permissions --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Show the output verbatim, including the `/opc:status <job> --wait` line.
 ````
@@ -5924,7 +5917,7 @@ for (const [file, expected] of Object.entries(EXPECT)) {
     assert.match(fields['allowed-tools'], /Bash\(opc:\*\)/);
     assert.equal(/AskUserQuestion/.test(fields['allowed-tools']), expected.ask);
     assert.doesNotMatch(fields['allowed-tools'], /Bash\(node|dangerously|no-verify/);
-    assert.ok(body.includes(`opc ${expected.sub} <<'OPC_ARGS'\n$ARGUMENTS\nOPC_ARGS`), `${file} heredoc`);
+    assert.ok(body.includes(`opc ${expected.sub} <<'OPC_ARGS_5f1d0c7a_EOF'\n$ARGUMENTS\nOPC_ARGS`), `${file} heredoc`);
   });
 }
 ```
@@ -6498,11 +6491,10 @@ Delega uma tarefa ao OpenCode. Sem `--write`, o perfil é `read-only`.
   para que nada do texto vire flag:
 
   ```
-  opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS'
+  opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
   --
   <texto exatamente como recebido>
-  OPC_ARGS
-  ```
+  OPC_ARGS_5f1d0c7a_EOF  ```
 - Se `project` estiver configurado, o prompt começa com um bloco `<project_context>`.
 - Dentro do servidor do plugin (`OPC_INSIDE_SERVER=1`) o opc recusa criar jobs (exit 4).
 

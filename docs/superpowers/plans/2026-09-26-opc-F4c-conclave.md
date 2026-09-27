@@ -4417,7 +4417,7 @@ test('/opc:conclave is model-invocable and passes arguments through a quoted her
   assert.match(fm['argument-hint'], /--allow-judge-member/);
   assert.match(fm['allowed-tools'], /Bash\(opc:\*\)/);
   assert.equal(fm['disable-model-invocation'], undefined);
-  assert.match(text, /opc conclave --raw-args-stdin <<'OPC_ARGS'\n\$ARGUMENTS\nOPC_ARGS/);
+  assert.match(text, /opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n\$ARGUMENTS\nOPC_ARGS/);
   assert.match(text, /opc-conclave/);
   assert.doesNotMatch(text, /opc conclave \$ARGUMENTS/);
 });
@@ -4471,14 +4471,13 @@ Argumentos do usuário: `$ARGUMENTS`
    `$ARGUMENTS` na linha de comando):
 
 ```bash
-opc conclave --raw-args-stdin <<'OPC_ARGS'
+opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
    O texto do heredoc chega verbatim (aspas, crases e apóstrofos não são interpretados); as
    flags conhecidas são reconhecidas como palavras inteiras em qualquer posição. Se o usuário
-   escolheu Background no passo 2, use `opc conclave --background --raw-args-stdin <<'OPC_ARGS'`
+   escolheu Background no passo 2, use `opc conclave --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`
    (a flag fica na linha de comando, antes de `--raw-args-stdin`).
 4. Leia a saída inteira:
    - **Background:** mostre o id do job e as linhas `/opc:status <id>` e `/opc:result <id>`.

@@ -3664,7 +3664,7 @@ test('/opc:transfer is user-only and passes arguments through a quoted heredoc',
   const md = fs.readFileSync(path.join(PLUGIN_ROOT, 'commands', 'transfer.md'), 'utf8');
   assert.match(md, /^disable-model-invocation: true$/m);
   assert.match(md, /^allowed-tools: Bash\(opc:\*\)$/m);
-  assert.match(md, /opc transfer --args-stdin <<'OPC_ARGS'\n\$ARGUMENTS\nOPC_ARGS/);
+  assert.match(md, /opc transfer --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n\$ARGUMENTS\nOPC_ARGS/);
 });
 ```
 
@@ -3900,10 +3900,9 @@ allowed-tools: Bash(opc:*)
 Transfira a conversa para o OpenCode executando exatamente:
 
 ```bash
-opc transfer --args-stdin <<'OPC_ARGS'
+opc transfer --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Regras:
 

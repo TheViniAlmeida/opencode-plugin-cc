@@ -3276,7 +3276,7 @@ test('/opc:orchestrate is model-invocable and passes arguments through a quoted 
   assert.equal(fm['disable-model-invocation'], undefined, 'model may invoke /opc:orchestrate');
   assert.match(fm['allowed-tools'], /Bash\(opc:\*\)/);
   assert.ok(!/Bash\(\*\)|--dangerously|--no-verify/.test(text));
-  assert.ok(text.includes("opc orchestrate --raw-args-stdin <<'OPC_ARGS'\n$ARGUMENTS\nOPC_ARGS\n"));
+  assert.ok(text.includes("opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n$ARGUMENTS\nOPC_ARGS\n"));
   assert.ok(!text.includes('--args-stdin <<'), 'free text never goes through --args-stdin (shell-like split)');
   for (const code of ['**0**', '**3**', '**6**', '**7**']) assert.ok(text.includes(code), `documents exit ${code}`);
 });
@@ -3284,7 +3284,7 @@ test('/opc:orchestrate is model-invocable and passes arguments through a quoted 
 test('opc-delegation skill carries the orchestration synthesis guidance', () => {
   const text = read('plugins/opc/skills/opc-delegation/SKILL.md');
   assert.ok(text.includes('## Orquestração (`/opc:orchestrate`)'));
-  for (const phrase of ['invalid_plan', 'dependency_failed', 'Síntese a cargo do Claude', 'Arquivos tocados', 'opc-result-handling', "--raw-args-stdin <<'OPC_ARGS'\n--\n"]) {
+  for (const phrase of ['invalid_plan', 'dependency_failed', 'Síntese a cargo do Claude', 'Arquivos tocados', 'opc-result-handling', "--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n"]) {
     assert.ok(text.includes(phrase), `mentions ${phrase}`);
   }
   assert.ok(!text.includes('when that command is available'), 'orchestrate is available from F4b on');
@@ -3322,10 +3322,9 @@ conhecidas são reconhecidas como palavras inteiras e o resto é a tarefa, verba
 Execute exatamente um comando:
 
 ```bash
-opc orchestrate --raw-args-stdin <<'OPC_ARGS'
+opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 Regras:
 
@@ -3364,11 +3363,10 @@ mapear o código, revisar um módulo e planejar testes. **Não use** para uma pe
 texto chega verbatim; a linha `--` impede que palavras da tarefa virem flags):
 
 ```bash
-opc orchestrate [--max N] [--synthesizer claude|<modelo>] [--background] --raw-args-stdin <<'OPC_ARGS'
+opc orchestrate [--max N] [--synthesizer claude|<modelo>] [--background] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <tarefa autocontida: objetivo, caminhos relevantes, o que cada parte deve entregar>
-OPC_ARGS
-```
+OPC_ARGS_5f1d0c7a_EOF```
 
 **Ao receber o resultado:**
 
@@ -3735,7 +3733,7 @@ O modelo pode invocar este comando.
 ```
 /opc:orchestrate <tarefa> [--planner <modelo>] [--max N] [--synthesizer claude|<modelo>] [--write] [--background]
 opc orchestrate  <tarefa> [mesmas flags] [--timeout s] [--wait-timeout s] [--json] [--cwd dir]
-opc orchestrate  [flags] --raw-args-stdin <<'OPC_ARGS'   # tarefa verbatim pelo stdin (forma usada pelo slash command)
+opc orchestrate  [flags] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'   # tarefa verbatim pelo stdin (forma usada pelo slash command)
 ```
 
 | Flag | Padrão | Efeito |
