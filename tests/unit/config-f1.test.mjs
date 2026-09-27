@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_CONFIG, CONFIG_SCHEMA, validateConfigShape, mergeConfig, findSecretLikeKeys, isLockedKey, isWorkspaceKey,
-  schemaFor, keyNeedsServer,
+  schemaFor, keyNeedsServer, isSecretLikeSetting,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -43,7 +43,12 @@ test('validateConfigShape: non-object config is an error', () => {
 });
 
 test('findSecretLikeKeys: token/password/secret/apikey at any depth', () => {
-  assert.deepEqual(findSecretLikeKeys({ a: { API_KEY: 1, b: [{ password: 2 }] }, secretSauce: 3, fine: 4, key: 5, server: { key: 6 }, provider: { privateKey: 7 }, x: { api_key: 8 } }).sort(), ['a.API_KEY', 'a.b.0.password', 'key', 'provider.privateKey', 'secretSauce', 'server.key', 'x.api_key']);
+  assert.deepEqual(findSecretLikeKeys({ a: { API_KEY: 1, b: [{ password: 2 }] }, secretSauce: 3, fine: 4, key: 5, server: { key: 6 }, provider: { privateKey: 7 }, x: { api_key: 8 }, authToken: 9, dbPassword: 10, keybinds: 11, keyboard: 12, keymap: 13, monkey: 14 }).sort(), ['a.API_KEY', 'a.b.0.password', 'authToken', 'dbPassword', 'key', 'provider.privateKey', 'secretSauce', 'server.key', 'x.api_key']);
+});
+
+test('isSecretLikeSetting: matches the final path segment with key boundaries', () => {
+  for (const setting of ['key', 'server.key', 'provider.privateKey', 'x.api_key', 'authToken', 'dbPassword']) assert.equal(isSecretLikeSetting(setting), true, setting);
+  for (const setting of ['keybinds', 'keyboard', 'keymap', 'defaultModel', 'monkey', 'turkey', 'keys']) assert.equal(isSecretLikeSetting(setting), false, setting);
 });
 
 test('isLockedKey / isWorkspaceKey', () => {

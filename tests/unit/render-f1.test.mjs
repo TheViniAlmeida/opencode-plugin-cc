@@ -45,6 +45,7 @@ test('renderConfig: redacts secret-looking values and renders all kinds', () => 
     assert.match(renderConfig({ kind: 'edit', setting, value: 'sensitive-value', op: 'set', scope: 'global', path: '/d' }), /Valor: `"\*\*\*"`/, `${setting} edit`);
   }
   assert.equal(renderConfig({ kind: 'get', setting: 'defaultModel', value: 'public-model' }), 'defaultModel = "public-model"\n');
+  assert.equal(renderConfig({ kind: 'get', setting: 'server.configOverride.keybinds', value: ['vim'] }), 'server.configOverride.keybinds = ["vim"]\n');
   const secret = 'registered-secret-warning-value';
   registerSecret(secret);
   assert.ok(!renderConfig({ kind: 'edit', setting: 'defaultModel', value: 'm', op: 'set', scope: 'global', path: '/d', warnings: [`warning ${secret}`] }).includes(secret));
