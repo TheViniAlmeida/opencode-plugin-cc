@@ -38,6 +38,7 @@ test('write: only invariants + destructive asks (builtin then policy) + doom_loo
   const asks = [...BUILTIN_DESTRUCTIVE_BASH, 'make nuke*'].map((p) => r('bash', p, 'ask'));
   assert.deepEqual(rules, [...INVARIANTS, ...asks, r('doom_loop', '*', 'ask')]);
   assert.equal(BUILTIN_DESTRUCTIVE_BASH.length, 28);
+  assert.ok(!rules.some((x) => x.permission === 'grep' && x.pattern === '*' && x.action === 'deny'));
 });
 
 test('custom: read-only base + custom rules + invariants; bash allow brings destructive asks', () => {
@@ -83,6 +84,19 @@ test('requiresUser: destructive bash, external_directory, sensitive paths', () =
   assert.equal(requiresUser(null, policy), true);
 });
 
+test('requiresUser: detects destructive commands in compound and wrapped segments', () => {
+  for (const command of [
+    'echo ok && rm -rf /x',
+    'true; git push --force',
+    'cat x | xargs rm -rf',
+    'sudo rm -rf /x',
+    '$(rm -rf /x)',
+  ]) {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }, policy), true, command);
+  }
+  assert.equal(requiresUser({ permission: 'bash', patterns: ['npm test && git status'] }, policy), false);
+});
+
 test('checkReply: never always; approver user needs confirmation; claude only for destructive', () => {
   const destructive = { permission: 'bash', patterns: ['rm -rf build'] };
   const benign = { permission: 'bash', patterns: ['ls'] };
@@ -94,6 +108,20 @@ test('checkReply: never always; approver user needs confirmation; claude only fo
   assert.equal(checkReply({ approver: 'claude', request: benign, reply: 'once', policy }).ok, true);
   assert.equal(checkReply({ approver: 'claude', request: destructive, reply: 'once', policy }).code, 'NEEDS_USER');
   assert.equal(checkReply({ approver: 'claude', request: destructive, reply: 'once', confirmedByUser: true, policy }).ok, true);
+});
+
+test('policy errors and approval reasons are PT-BR and truncate echoed values', () => {
+  assert.throws(() => buildPermissionRules('custom:abcdefghijklmnop', { policy, permissionProfiles: {} }), (err) => {
+    assert.match(err.message, /não está definido/);
+    assert.match(err.message, /abcdefghijkl…/);
+    return true;
+  });
+  const invalid = checkReply({ approver: 'user', request: {}, reply: 'abcdefghijklmnop', policy });
+  assert.match(invalid.reason, /resposta inválida/);
+  assert.match(invalid.reason, /abcdefghijkl…/);
+  const needsUser = checkReply({ approver: 'claude', request: { permission: 'bash', patterns: ['sudo rm -rf /x'] }, reply: 'once', policy });
+  assert.match(needsUser.reason, /destrutiva/);
+  assert.match(needsUser.reason, /--confirmed-by-user/);
 });
 
 test('planPermissionSwitch: none when tail matches; patch only with leading catch-all under append', () => {

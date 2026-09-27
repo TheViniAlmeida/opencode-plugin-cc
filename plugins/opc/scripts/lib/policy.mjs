@@ -122,6 +122,11 @@ export const PATCH_PERMISSION_MODE = 'append';
 const RULE_ACTIONS = new Set(['allow', 'deny', 'ask']);
 const rule = (permission, pattern, action) => ({ permission, pattern, action });
 
+function displayValue(value) {
+  const text = String(value);
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+}
+
 export function sensitivePathsOf(policy = {}) {
   return Array.isArray(policy.sensitivePaths) ? policy.sensitivePaths : [...DEFAULT_SENSITIVE_PATHS];
 }
@@ -135,15 +140,15 @@ export function parseProfile(profile) {
   if (typeof profile === 'string' && profile.startsWith('custom:') && profile.length > 'custom:'.length) {
     return { kind: 'custom', name: profile.slice('custom:'.length) };
   }
-  throw new UsageError('UNKNOWN_PROFILE', `unknown permission profile "${profile}" (use read-only, write or custom:<name>)`);
+  throw new UsageError('UNKNOWN_PROFILE', `perfil de permissões desconhecido "${displayValue(profile)}" (use read-only, write ou custom:<nome>)`);
 }
 
 function customRulesOf(name, permissionProfiles = {}) {
   const rules = permissionProfiles?.[name];
-  if (!Array.isArray(rules)) throw new UsageError('UNKNOWN_PROFILE', `permissionProfiles.${name} is not defined in the global config`);
+  if (!Array.isArray(rules)) throw new UsageError('UNKNOWN_PROFILE', `permissionProfiles.${displayValue(name)} não está definido na configuração global`);
   return rules.map((r, i) => {
     if (!r || typeof r.permission !== 'string' || typeof r.pattern !== 'string' || !RULE_ACTIONS.has(r.action)) {
-      throw new UsageError('INVALID_PROFILE', `permissionProfiles.${name}[${i}] must be {permission, pattern, action: allow|deny|ask}`);
+      throw new UsageError('INVALID_PROFILE', `permissionProfiles.${displayValue(name)}[${i}] deve ser {permission, pattern, action: allow|deny|ask}`);
     }
     return rule(r.permission, r.pattern, r.action);
   });
@@ -192,7 +197,8 @@ export function requiresUser(request, policy = {}) {
   if (request.permission === 'bash') {
     const commands = [...patterns];
     if (typeof request.metadata?.command === 'string') commands.push(request.metadata.command);
-    return commands.some((command) => matchesAny(command.trim(), destructiveBashOf(policy)));
+    const destructive = destructiveBashOf(policy);
+    return commands.some((command) => bashSegments(command).some((segment) => matchesAny(stripBashPrefixes(segment), destructive)));
   }
   if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || request.permission === 'edit') {
     return patterns.some((pattern) => matchesAny(pattern, sensitivePathsOf(policy)));
@@ -200,12 +206,35 @@ export function requiresUser(request, policy = {}) {
   return false;
 }
 
+function bashSegments(command) {
+  // Separators are deliberately treated lexically: detecting a possible destructive
+  // command is safer than trying to emulate shell quoting and expansion here.
+  return String(command)
+    .replace(/\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, (_, inner) => `;${inner};`)
+    .replace(/`([^`]*)`/g, (_, inner) => `;${inner};`)
+    .split(/&&|\|\||[;|\n\r]/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function stripBashPrefixes(segment) {
+  let command = segment.trim();
+  let previous;
+  do {
+    previous = command;
+    command = command.replace(/^sudo\s+/, '').replace(/^nice(?:\s+-n\s+\S+)?\s+/, '');
+    command = command.replace(/^env\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)+/, '');
+    command = command.replace(/^xargs\s+(?:-[^\s]+\s+)*?(?=(?:sudo|env|nice|rm|git|docker|kubectl|mkfs|dd|shred|truncate|find|shutdown|reboot|poweroff|systemctl)\b)/, '');
+  } while (command !== previous);
+  return command.trim();
+}
+
 export function checkReply({ approver = 'user', request, reply, confirmedByUser = false, policy = {} }) {
-  if (reply === 'always') return { ok: false, code: 'INVALID_REPLY', reason: '"always" is never sent: in OpenCode it applies to the whole directory and overrides the session deny rules; use once or reject' };
-  if (reply !== 'once' && reply !== 'reject') return { ok: false, code: 'INVALID_REPLY', reason: `invalid reply "${reply}" (use once or reject)` };
+  if (reply === 'always') return { ok: false, code: 'INVALID_REPLY', reason: '"always" nunca é enviado: no OpenCode, aplica-se ao diretório inteiro e substitui as regras de negação da sessão; use once ou reject' };
+  if (reply !== 'once' && reply !== 'reject') return { ok: false, code: 'INVALID_REPLY', reason: `resposta inválida "${displayValue(reply)}" (use once ou reject)` };
   if (reply === 'reject') return { ok: true };
-  if (approver !== 'claude' && !confirmedByUser) return { ok: false, code: 'NEEDS_USER', reason: 'approver is "user": present the request, ask the user (AskUserQuestion) and pass --confirmed-by-user' };
-  if (approver === 'claude' && !confirmedByUser && requiresUser(request, policy)) return { ok: false, code: 'NEEDS_USER', reason: 'destructive, external_directory or sensitive-path request: it always needs the user (--confirmed-by-user after AskUserQuestion)' };
+  if (approver !== 'claude' && !confirmedByUser) return { ok: false, code: 'NEEDS_USER', reason: `o aprovador "${displayValue(approver)}" exige confirmação do usuário: apresente a solicitação, pergunte ao usuário (AskUserQuestion) e passe --confirmed-by-user` };
+  if (approver === 'claude' && !confirmedByUser && requiresUser(request, policy)) return { ok: false, code: 'NEEDS_USER', reason: 'solicitação destrutiva, external_directory ou de caminho sensível: sempre exige confirmação do usuário (--confirmed-by-user após AskUserQuestion)' };
   return { ok: true };
 }
 
@@ -224,5 +253,5 @@ export function planPermissionSwitch(current, desired, mode = PATCH_PERMISSION_M
   if (mode === 'replace') return 'patch';
   const first = desired[0];
   if (first && first.permission === '*' && first.pattern === '*') return 'patch';
-  throw new UsageError('PROFILE_SWITCH_UNSUPPORTED', 'this session was created with another permission profile and OpenCode 1.18.32 appends (does not replace) session rules on PATCH, so switching to this profile would not take effect; start a new session with --fresh');
+  throw new UsageError('PROFILE_SWITCH_UNSUPPORTED', 'esta sessão foi criada com outro perfil de permissões e o OpenCode 1.18.32 acrescenta (não substitui) regras ao PATCH; a troca não terá efeito. Inicie uma nova sessão com --fresh');
 }
