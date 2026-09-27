@@ -61,14 +61,25 @@ test('validate renders structured errors for a config shape rejected during load
 
 test('setup --stop-server works with invalid config and reports the defaults fallback', async (t) => {
   const { ws, env } = setup(t, { config: { project: { goal: 42 } } });
-  const r = await runInProcess('setup', ['--stop-server', '--json'], { env, cwd: ws });
-  assert.equal(r.code, 0, r.stderr);
-  const view = JSON.parse(r.stdout);
-  assert.equal(view.mode, 'stop');
-  assert.match(view.warnings?.join(' ') ?? '', /defaults/i);
+  for (const argv of [['--stop-server', '--json'], ['--json', '--stop-server']]) {
+    const r = await runInProcess('setup', argv, { env, cwd: ws });
+    assert.equal(r.code, 0, `${argv.join(' ')}: ${r.stderr}`);
+    const view = JSON.parse(r.stdout);
+    assert.equal(view.mode, 'stop');
+    assert.match(view.warnings?.join(' ') ?? '', /defaults/i);
+  }
   const text = await runInProcess('setup', ['--stop-server'], { env, cwd: ws });
   assert.equal(text.code, 0, text.stderr);
   assert.match(text.stdout, /Avisos:[\s\S]*defaults/i);
+});
+
+test('offline policy check rejects a policy edit that denies an effective model', async (t) => {
+  const { ws, env, cli } = setup(t, { config: { defaultModel: `${EQ}/opencode-go/kimi-k3` } });
+  const r = await cli(['config', 'add', 'policy.providers.deny', EQ, '--workspace']);
+  assert.equal(r.code, 4, all(r));
+  assert.match(all(r), /policy\.providers\.deny: omniroute-work/);
+  assert.equal(fs.existsSync(path.join(ws, '.opc.json')), false, 'denied policy edit is not written');
+  assert.equal(readGlobalConfig(env).defaultModel, `${EQ}/opencode-go/kimi-k3`);
 });
 
 test('unset of workspace override checks the resulting effective policy before writing', async (t) => {

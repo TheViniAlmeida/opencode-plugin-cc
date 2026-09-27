@@ -101,8 +101,9 @@ async function cmdEdit(ctx, flags, op, rest) {
   const base = (scope === 'workspace' ? loaded.workspace : loaded.global) ?? {};
   const warnings = [];
   let next;
+  let deps = { catalog: undefined, agents: [] };
   if (keyNeedsServer(key)) {
-    const deps = await serverDeps(ctx);
+    deps = await serverDeps(ctx);
     if (value !== undefined && value !== null) {
       const normOpts = { catalog: deps.catalog, aliases: loaded.config.aliases ?? {}, defaultProvider: key === 'defaultProvider' ? null : loaded.config.defaultProvider };
       try {
@@ -123,6 +124,11 @@ async function cmdEdit(ctx, flags, op, rest) {
     for (const e of checked.errors.filter((x) => !touches(key)(x))) warnings.push({ path: e.path, code: e.code, message: e.message });
   } else {
     next = applyConfigEdit(base, op, key, value);
+    const effective = scope === 'workspace' ? mergeConfig(loaded.global ?? {}, next) : mergeConfig(next, loaded.workspace ?? {});
+    const before = mergeConfig(loaded.global ?? {}, loaded.workspace ?? {});
+    const existingViolations = new Set(policyViolations(before.config, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
+    const denied = policyViolations(effective.config, deps).filter((e) => !existingViolations.has(`${e.path}|${e.code}|${e.message}`));
+    if (denied.length) throw new PolicyError('POLICY_DENIED', denied.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: denied } });
   }
   const shape = validateConfigShape(next, { source: scope });
   if (shape.errors.length) throw new UsageError('INVALID_VALUE', shape.errors.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: shape.errors } });

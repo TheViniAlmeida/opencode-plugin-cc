@@ -33,7 +33,7 @@ export async function createContext({
   } catch (err) {
     const args = argv.map(String);
     const validatingConfig = args[0] === 'validate' || (args[0] === 'config' && args[1] === 'validate');
-    const stoppingServer = args.includes('--stop-server') && (args[0] === 'setup' || args[0] === '--stop-server');
+    const stoppingServer = args.includes('--stop-server');
     if (err.code !== 'CONFIG_INVALID' || (!validatingConfig && !stoppingServer)) throw err;
     // Let `config validate` render the structured CONFIG_INVALID details itself.
     loaded = {
