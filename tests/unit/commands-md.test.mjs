@@ -48,7 +48,20 @@ test('setup.md: install offer, heredoc payloads, commit', () => {
   assert.ok(bashBlocks.some((b) => b.includes("opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'")));
   assert.ok(bashBlocks.some((b) => b.includes('opc setup commit --json')));
   assert.ok(bashBlocks.some((b) => b.includes('--stop-server --force --confirmed-by-user')));
+  assert.match(body, /AskUserQuestion[\s\S]*--stop-server --force --confirmed-by-user/);
+  assert.match(body, /AskUserQuestion[\s\S]*scope[\s\S]*opc setup apply/);
+  assert.match(body, /--query '[^']*<typed text>[^']*'/);
   for (const step of ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']) {
     assert.match(body, new RegExp('\\| `' + step + '` \\|'), `step ${step} documented`);
   }
+});
+
+test('models search quotes a free-text query with spaces as one argument', () => {
+  const { body } = parse('setup');
+  assert.match(body, /--query 'deepseek v4'/);
+});
+
+test('providers output format documents the --json exception', () => {
+  const { body } = parse('providers');
+  assert.match(body, /Markdown unless `--json` is passed/i);
 });

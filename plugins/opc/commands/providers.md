@@ -13,7 +13,7 @@ OPC_ARGS_5f1d0c7a_EOF
 ```
 
 Output rules:
-- Present the command output to the user verbatim (it is already Markdown).
+- Present the command output to the user verbatim; it is Markdown unless `--json` is passed.
 - Do not add providers, keys or credentials that are not in the output.
 - If the output says no provider is connected, tell the user to run `!opencode auth login` and then `/opc:providers` again.
 - Exit code 5 means the OpenCode server is unavailable: suggest `/opc:setup`.

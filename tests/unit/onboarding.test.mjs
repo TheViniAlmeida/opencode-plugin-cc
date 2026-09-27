@@ -25,10 +25,10 @@ test('steps are the spec §3.3 list in order', () => {
   assert.deepEqual(ONBOARDING_STEPS.map((s) => s.id), ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']);
 });
 
-test('buildDraft: bootstrap skips scope; reconfigure starts at scope', () => {
+test('buildDraft: bootstrap and reconfigure offer scope selection', () => {
   const boot = buildDraft({ hasGlobal: false, now: NOW });
   assert.equal(boot.mode, 'bootstrap');
-  assert.equal(nextStep(boot, { allowLocked: true }), 'defaultProvider');
+  assert.equal(nextStep(boot, { allowLocked: true }), 'scope');
   const re = buildDraft({ hasGlobal: true, now: NOW });
   assert.equal(re.mode, 'reconfigure');
   assert.equal(nextStep(re), 'scope');
@@ -52,7 +52,8 @@ test('draft persistence: save (0600), load, discard; corrupt draft reads as null
 });
 
 test('applyDraftStep: provider, short model name normalized, variant validated', () => {
-  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { defaultProvider: MV }, deps());
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
+  ({ draft } = applyDraftStep(draft, { defaultProvider: MV }, deps()));
   let r = applyDraftStep(draft, { defaultModel: 'opencode-go/kimi-k3' }, deps());
   assert.equal(r.draft.values.defaultModel, `${MV}/opencode-go/kimi-k3`);
   assert.equal(r.nextStep, 'reviewModels');
@@ -64,11 +65,12 @@ test('applyDraftStep: provider, short model name normalized, variant validated',
 });
 
 test('applyDraftStep: ambiguity, unknown provider, unknown key', () => {
-  const { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { defaultProvider: MV }, deps());
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
+  ({ draft } = applyDraftStep(draft, { defaultProvider: MV }, deps()));
   assert.throws(() => applyDraftStep(draft, { defaultModel: 'opencode/big-pickle' }, deps()), (e) => e.code === 'AMBIGUOUS_MODEL');
   assert.throws(() => applyDraftStep(draft, { defaultProvider: 'openai' }, deps()), (e) => e.code === 'UNKNOWN_PROVIDER');
   assert.throws(() => applyDraftStep(draft, { nonsense: 1 }, deps()), (e) => e.code === 'UNKNOWN_KEY');
-  assert.throws(() => applyDraftStep(draft, { scope: 'workspace' }, deps()), (e) => e.code === 'INVALID_VALUE');
+  assert.equal(applyDraftStep(draft, { scope: 'workspace' }, deps()).draft.scope, 'workspace');
   assert.throws(() => applyDraftStep(draft, 'x', deps()), (e) => e.code === 'INVALID_VALUE');
 });
 
@@ -84,7 +86,8 @@ test('applyDraftStep: locked keys need allowLocked; error carries the terminal c
 });
 
 test('applyDraftStep: policy applied in the same draft denies a new default (exit 4)', () => {
-  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { policy: { providers: { deny: [EQ] } } }, deps());
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
+  ({ draft } = applyDraftStep(draft, { policy: { providers: { deny: [EQ] } } }, deps()));
   assert.throws(() => applyDraftStep(draft, { defaultModel: `${EQ}/opencode-go/kimi-k3` }, deps()), (e) => e.code === 'POLICY_DENIED' && e.exitCode === 4);
   ({ draft } = applyDraftStep(draft, { defaultModel: `${MV}/opencode-go/kimi-k3` }, deps()));
   const r = applyDraftStep(draft, { policy: { models: { allow: ['anthropic/*'] } } }, deps());
@@ -99,7 +102,8 @@ test('applyDraftStep: aliases merge with the existing file and null removes', ()
 });
 
 test('applyDraftStep: reviewModel accepts an alias defined earlier in the draft', () => {
-  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { defaultProvider: MV, aliases: { strong: 'opencode-go/qwen3.8-max' } }, deps());
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
+  ({ draft } = applyDraftStep(draft, { defaultProvider: MV, aliases: { strong: 'opencode-go/qwen3.8-max' } }, deps()));
   ({ draft } = applyDraftStep(draft, { reviewModel: 'strong', stopGate: { model: null } }, deps()));
   assert.equal(draft.values.reviewModel, 'strong');
   assert.ok(draft.completed.includes('reviewModels'));
@@ -112,10 +116,18 @@ test('workspace scope: global-only keys refused', () => {
   assert.ok(!remainingSteps(draft).includes('behaviour'));
 });
 
+test('fresh bootstrap can select workspace scope', () => {
+  const { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'workspace' }, deps());
+  assert.equal(draft.scope, 'workspace');
+  assert.equal(draft.completed.includes('scope'), true);
+  assert.equal(nextStep(draft), 'defaultProvider');
+});
+
 test('commitDraft: writes atomically, removes draft, returns effective config', (t) => {
   const dataDir = tmp(t);
   const ws = tmp(t);
-  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { defaultProvider: MV, defaultModel: 'opencode-go/kimi-k3', policy: { providers: { deny: [EQ] }, agents: { deny: ['work-*'] } } }, deps());
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'global' }, deps());
+  ({ draft } = applyDraftStep(draft, { defaultProvider: MV, defaultModel: 'opencode-go/kimi-k3', policy: { providers: { deny: [EQ] }, agents: { deny: ['work-*'] } } }, deps()));
   saveDraft(dataDir, draft);
   const r = commitDraft({ dataDir, workspaceRoot: ws, draft, catalog, agents, existing: NONE, allowLocked: true });
   assert.equal(r.path, path.join(dataDir, 'config.json'));

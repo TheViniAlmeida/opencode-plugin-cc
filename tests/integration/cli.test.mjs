@@ -40,19 +40,22 @@ test('heredoc --args-stdin never expands $() or backticks (slash command invocat
   const env = testEnv(t);
   const ws = makeWorkspace(t);
   const commandDoc = fs.readFileSync(new URL('../../plugins/opc/commands/setup.md', import.meta.url), 'utf8');
-  const delimiter = commandDoc.match(/<<'([^']+)'/)?.[1];
-  assert.ok(delimiter, 'setup command must quote its heredoc delimiter');
-  const script = [
-    `opc setup --json --args-stdin <<'${delimiter}'`,
-    'OPC_ARGS',
-    'touch pwned',
-    '$(touch pwned-dollar) `touch pwned-backtick` "$(touch pwned-quoted)"',
-    delimiter,
-  ].join('\n');
-  const res = spawnSync('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws, stdio: 'ignore' });
-  assert.equal(res.status, 2, res.error?.message);
-  for (const f of ['pwned', 'pwned-dollar', 'pwned-backtick', 'pwned-quoted']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
-  assert.equal((commandDoc.match(/<<'OPC_ARGS_5f1d0c7a_EOF'/g) ?? []).length, 2);
+  const heredocs = [...commandDoc.matchAll(/^([^\n]*?)<<'([^']+)'\n([\s\S]*?)^\2$/gm)];
+  assert.ok(heredocs.length > 0, 'setup command must contain bash heredoc blocks');
+  for (const [, command, delimiter] of heredocs) {
+    assert.ok(['OPC_ARGS_5f1d0c7a_EOF', 'OPC_JSON_5f1d0c7a_EOF'].includes(delimiter), `canonical quoted delimiter: ${delimiter}`);
+    assert.equal(delimiter, command.includes('--stdin') ? 'OPC_JSON_5f1d0c7a_EOF' : 'OPC_ARGS_5f1d0c7a_EOF', `${command.trim()} uses its canonical delimiter`);
+    const script = [
+      `opc setup --json --args-stdin <<'${delimiter}'`,
+      'OPC_ARGS',
+      'touch pwned',
+      '$(touch pwned-dollar) `touch pwned-backtick` "$(touch pwned-quoted)"',
+      delimiter,
+    ].join('\n');
+    const res = spawnSync('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws, stdio: 'ignore' });
+    assert.equal(res.status, 2, `${command.trim()}: ${res.error?.message}`);
+    for (const f of ['pwned', 'pwned-dollar', 'pwned-backtick', 'pwned-quoted']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
+  }
 });
 
 test('--args-stdin feeds flags from stdin and --cwd selects the workspace', async (t) => {

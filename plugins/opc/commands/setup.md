@@ -4,7 +4,13 @@ argument-hint: '[--reconfigure] [--stop-server [--force]]'
 allowed-tools: Bash(opc:*), Bash(npm:*), AskUserQuestion
 ---
 
-Run:
+If `$ARGUMENTS` contains `--stop-server --force`, use `AskUserQuestion` **before running any command**: "Encerrar o servidor do OpenCode mesmo com jobs ativos? Os jobs serão interrompidos." Options: `Encerrar agora`, `Cancelar`. On `Cancelar`, stop. Only on `Encerrar agora`, run:
+
+```bash
+opc setup --stop-server --force --confirmed-by-user
+```
+
+For all other arguments, run:
 
 ```bash
 opc setup --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
@@ -17,11 +23,7 @@ Read the JSON. The diagnostic fields come from the server check; the `onboarding
 ## A. Stop server (`--stop-server` in the arguments)
 
 - Without `--force`: present the output. If it refuses because of active jobs, show the list and stop.
-- With `--force`: before anything else, use `AskUserQuestion` once: "Encerrar o servidor do OpenCode mesmo com jobs ativos? Os jobs serão interrompidos." Options: `Encerrar agora`, `Cancelar`. Only on `Encerrar agora` run:
-
-```bash
-opc setup --stop-server --force --confirmed-by-user --json
-```
+- With `--force`, follow the confirmation-first instructions above; do not run the diagnostic command first.
 
 ## B. OpenCode not installed (`onboarding.opencodeInstalled` is false)
 
@@ -47,7 +49,7 @@ Present the diagnostic output (including the terminal alias line), then run `opc
 ## E. Onboarding
 
 1. If `onboarding.draft.exists` is true, use `AskUserQuestion`: "Existe um onboarding pela metade (próxima etapa: `<nextStep>`). Retomar?" Options: `Retomar (Recomendado)`, `Recomeçar do zero`. On `Recomeçar do zero`, run `opc setup discard --json` and then rerun the first command of this file.
-2. Start at `onboarding.nextStep`. Ask **one** `AskUserQuestion` per step, build the JSON payload described below and apply it:
+2. On first configuration, ask the scope choice before applying any other step. Start at `onboarding.nextStep`; ask **one** `AskUserQuestion` per step, build the JSON payload described below and apply it:
 
 ```bash
 opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'
@@ -60,7 +62,7 @@ OPC_JSON_5f1d0c7a_EOF
 
 | Step | Question (PT-BR) | Options | Payload |
 |---|---|---|---|
-| `scope` | "Onde gravar a config?" | `Global — todas as pastas (Recomendado)`, `Só este workspace (.opc.json)` | `{"scope":"global"}` or `{"scope":"workspace"}` |
+| `scope` | "Onde gravar a config?" | `Global — todas as pastas (Recomendado)`, `Só este workspace (.opc.json)` | `{"scope":"global"}` or `{"scope":"workspace"}`; a fresh workspace scope is available when a global config already exists |
 | `defaultProvider` | "Qual provider padrão?" | `onboarding.providerChoices` (label `<id> (<modelCount> modelos)`, from `connectedProviders`) | `{"defaultProvider":"<id>"}` |
 | `defaultModel` | "Qual modelo padrão?" | the 3 `suggestions` of `opc setup models` (below); label = model ID, description = name + variants | `{"defaultModel":"<full id>"}` |
 | `reviewModels` | "Modelo do review?" then "Modelo do stop gate?" (two separate calls) | `Mesmo do padrão (Recomendado)`, the `aliases.strong` suggestion, one more suggestion | `{"reviewModel":<id or null>,"stopGate":{"model":<id or null>}}` |
@@ -80,11 +82,11 @@ opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 OPC_ARGS_5f1d0c7a_EOF
 ```
 
-   When the user types a name or glob in "Other", search it and confirm the match with one more `AskUserQuestion` (up to 4 matches as options):
+   When the user types a name or glob in "Other", search it and confirm the match with one more `AskUserQuestion` (up to 4 matches as options). The free-text query is one argument; quote it when it contains spaces (for example, `--query 'deepseek v4'`):
 
 ```bash
 opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
---provider <defaultProvider> --query <typed text>
+--provider <defaultProvider> --query '<typed text>'
 OPC_ARGS_5f1d0c7a_EOF
 ```
 

@@ -66,6 +66,10 @@ test('setup models: top suggestions, aliases, families and search', async (t) =>
   assert.deepEqual(v.aliases, { fast: `${MV}/opencode-go/qwen3.8-flash`, strong: `${MV}/opencode-go/qwen3.8-max` });
   assert.equal(v.families[0].glob, `${MV}/opencode-go/*`);
   assert.deepEqual(v.matches.map((m) => m.full), [`${MV}/opencode-go/qwen3.8-flash`, `${MV}/opencode-go/qwen3.8-max`]);
+  const multiword = await cli(['setup', 'models', '--args-stdin', '--json'], { stdin: `--provider ${MV} --query 'deepseek v4'` });
+  assert.equal(multiword.code, 0, multiword.stderr);
+  assert.equal(JSON.parse(multiword.stdout).query, 'deepseek v4');
+  assert.ok(JSON.parse(multiword.stdout).matches.some((m) => /deepseek-v4/i.test(m.full)));
   assert.equal((await cli(['setup', 'models', '--provider', 'openai'])).code, 2);
   assert.equal((await cli(['setup', 'models'])).code, 2);
 });
@@ -73,6 +77,7 @@ test('setup models: top suggestions, aliases, families and search', async (t) =>
 test('guided flow: apply every step, commit atomically, effective config shown', async (t) => {
   const { ws, env, cli, apply, draftFile } = setup(t);
   const steps = [
+    [{ scope: 'global' }, 'defaultProvider'],
     [{ defaultProvider: MV }, 'defaultModel'],
     [{ defaultModel: 'opencode-go/kimi-k3' }, 'reviewModels'],
     [{ reviewModel: null, stopGate: { model: null } }, 'defaultVariant'],
