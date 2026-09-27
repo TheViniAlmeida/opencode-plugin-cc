@@ -56,3 +56,14 @@ export async function createContext({
     },
   };
 }
+
+// ---- F1: connection helper for discovery/config commands ----
+export async function connectApi(ctx) {
+  const { ensureServer, clientFor } = await import('./server.mjs');
+  const { createApi } = await import('./api.mjs');
+  const serverCtx = { stateDir: ctx.stateDir, workspaceRoot: ctx.workspaceRoot, config: ctx.config, env: ctx.env };
+  const server = await ensureServer(serverCtx);
+  const client = clientFor(serverCtx, server);
+  return { api: createApi(client), server, client };
+}
+// ---- end F1 ----
