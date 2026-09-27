@@ -4,7 +4,10 @@ import path from 'node:path';
 
 import { OpcError } from './opc-error.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
-import { matchesAny } from './models.mjs';
+import { join as joinPathF1 } from 'node:path';
+import { UsageError } from './opc-error.mjs';
+import { matchesAny, resolveModelRef, normalizeModelId, validateVariant } from './models.mjs';
+import { evaluate, evaluateAgent } from './policy.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
 export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
@@ -392,3 +395,196 @@ export function saveGlobalConfig(dataDir, cfg) {
 export function saveWorkspaceConfig(workspaceRoot, cfg) {
   writeFileAtomic(workspaceConfigPath(workspaceRoot), cfg, { mode: 0o644 });
 }
+
+// ---- F1 (part B): edits, coercion, normalization, server validation ----
+export function unsetPath(obj, dotted) {
+  const [head, ...rest] = dotted.split('.');
+  if (!isObj(obj) || !(head in obj)) return obj;
+  const out = { ...obj };
+  if (rest.length === 0) delete out[head];
+  else out[head] = unsetPath(obj[head], rest.join('.'));
+  return out;
+}
+
+function parseList(raw) {
+  const text = String(raw).trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean);
+    } catch { /* fall back to comma split (quotes may have been stripped by the shell splitter) */ }
+    return text.replace(/^\[|\]$/g, '').split(',').map((v) => v.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+  }
+  return text === '' ? [] : text.split(',').map((v) => v.trim()).filter(Boolean);
+}
+
+export function coerceValue(dotted, raw) {
+  const desc = schemaFor(dotted);
+  if (!desc) throw new UsageError('UNKNOWN_KEY', `unknown config key "${dotted}"`);
+  const text = String(raw).trim();
+  if (desc.nullable && text === 'null') return null;
+  switch (desc.type) {
+    case 'boolean':
+      if (['true', 'yes', 'on', '1'].includes(text.toLowerCase())) return true;
+      if (['false', 'no', 'off', '0'].includes(text.toLowerCase())) return false;
+      throw new UsageError('INVALID_VALUE', `${dotted} must be true or false`);
+    case 'integer': {
+      if (!/^-?\d+$/.test(text)) throw new UsageError('INVALID_VALUE', `${dotted} must be an integer`);
+      const n = Number(text);
+      const problem = checkValue(desc, n);
+      if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
+      return n;
+    }
+    case 'enum':
+      if (!desc.values.includes(text)) throw new UsageError('INVALID_VALUE', `${dotted} must be one of: ${desc.values.join(', ')}`);
+      return text;
+    case 'string-list': case 'modelref-list': case 'enum-list': {
+      const list = parseList(text);
+      const problem = checkValue(desc, list);
+      if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
+      return list;
+    }
+    case 'model-map': case 'modelref-list-map': case 'rules-map': case 'rules': case 'object': case 'json': {
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { throw new UsageError('INVALID_VALUE', `${dotted} expects JSON`); }
+      const problem = checkValue(desc, parsed);
+      if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
+      return parsed;
+    }
+    default:
+      if (text === '') throw new UsageError('INVALID_VALUE', `${dotted} must not be empty`);
+      return text;
+  }
+}
+
+export function isListKey(dotted) {
+  const desc = schemaFor(dotted);
+  return Boolean(desc && desc.type.endsWith('-list'));
+}
+
+export function applyConfigEdit(cfg, op, dotted, value) {
+  const base = isObj(cfg) ? cfg : {};
+  if (op === 'set') return setPath(base, dotted, value);
+  if (op === 'unset') return unsetPath(base, dotted);
+  if (!isListKey(dotted)) throw new UsageError('NOT_A_LIST', `${dotted} is not a list key (use set)`);
+  const current = Array.isArray(getPath(base, dotted)) ? getPath(base, dotted) : [];
+  const items = Array.isArray(value) ? value : [value];
+  if (op === 'add') return setPath(base, dotted, unionList(current, items));
+  if (op === 'remove') {
+    const missing = items.filter((v) => !current.includes(v));
+    if (missing.length) throw new UsageError('NOT_IN_LIST', `${dotted} does not contain: ${missing.join(', ')}`);
+    return setPath(base, dotted, current.filter((v) => !items.includes(v)));
+  }
+  throw new UsageError('USAGE', `unknown config operation "${op}"`);
+}
+
+export function normalizeEditValue(dotted, value, { catalog, aliases = {}, defaultProvider = null }) {
+  const desc = schemaFor(dotted);
+  if (!desc || value === null) return value;
+  const ref = (v, allowClaude = false) => resolveModelRef(v, { catalog, aliases, defaultProvider, allowClaude }).value;
+  switch (desc.type) {
+    case 'model': return normalizeModelId(value, { catalog, aliases, defaultProvider }).full;
+    case 'modelref': return ref(value);
+    case 'modelref-or-claude': return ref(value, true);
+    case 'modelref-list': return value.map((v) => ref(v));
+    case 'model-map': return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalizeModelId(v, { catalog, defaultProvider }).full]));
+    case 'modelref-list-map': return Object.fromEntries(Object.entries(value).map(([k, list]) => [k, list.map((v) => ref(v))]));
+    default: return value;
+  }
+}
+
+export function modelRefsIn(cfg) {
+  const out = [];
+  const push = (path, value, kind) => { if (typeof value === 'string' && value !== '') out.push({ path, value, kind }); };
+  push('defaultModel', cfg.defaultModel, 'model');
+  push('reviewModel', cfg.reviewModel, 'modelref');
+  push('stopGate.model', cfg.stopGate?.model, 'modelref');
+  push('orchestrate.planner', cfg.orchestrate?.planner, 'modelref');
+  push('orchestrate.synthesizer', cfg.orchestrate?.synthesizer, 'modelref-or-claude');
+  push('conclave.judge', cfg.conclave?.judge, 'modelref-or-claude');
+  for (const [name, target] of Object.entries(cfg.aliases ?? {})) push(`aliases.${name}`, target, 'model');
+  for (const group of ['routing.tasks', 'routing.tiers', 'conclave.pools']) {
+    for (const [name, list] of Object.entries(getPath(cfg, group) ?? {})) {
+      (Array.isArray(list) ? list : []).forEach((v, i) => push(`${group}.${name}[${i}]`, v, 'modelref'));
+    }
+  }
+  return out;
+}
+
+function resolveStored(ref, cfg, catalog) {
+  if (ref.kind === 'modelref-or-claude' && ref.value === 'claude') return { full: null };
+  if (ref.kind !== 'model' && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value)) {
+    const target = cfg.aliases[ref.value];
+    return { full: normalizeModelId(target, { catalog, fullOnly: true }).full };
+  }
+  return { full: normalizeModelId(ref.value, { catalog, fullOnly: true }).full };
+}
+
+export function validateAgainstServer(cfg, { catalog, agents = [], opencodeConfig = null }) {
+  const errors = [];
+  const warnings = [];
+  for (const ref of modelRefsIn(cfg)) {
+    if (ref.path.startsWith('aliases.') && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value)) {
+      errors.push({ path: ref.path, code: 'BROKEN_ALIAS', message: `alias points to another alias "${ref.value}" (only 1 level is allowed)` });
+      continue;
+    }
+    try {
+      resolveStored(ref, cfg, catalog);
+    } catch (err) {
+      const viaAlias = ref.kind !== 'model' && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value);
+      errors.push({ path: ref.path, code: viaAlias ? 'BROKEN_ALIAS' : (err.code ?? 'UNKNOWN_MODEL'), message: viaAlias ? `alias "${ref.value}" is broken: ${err.message}` : err.message });
+    }
+  }
+  if (cfg.defaultProvider && !catalog.connected.has(cfg.defaultProvider)) {
+    errors.push({ path: 'defaultProvider', code: 'UNKNOWN_PROVIDER', message: `provider "${cfg.defaultProvider}" is not connected` });
+  }
+  if (cfg.defaultVariant) {
+    const modelId = cfg.defaultModel ?? opencodeConfig?.model ?? null;
+    const entry = modelId ? catalog.byFull.get(modelId) : null;
+    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant needs a valid defaultModel (or OpenCode default model)' });
+    else {
+      try { validateVariant(entry, cfg.defaultVariant); } catch (err) { errors.push({ path: 'defaultVariant', code: err.code, message: err.message }); }
+    }
+  }
+  if (cfg.defaultAgent) {
+    const agent = agents.find((a) => a.name === cfg.defaultAgent);
+    if (!agent) errors.push({ path: 'defaultAgent', code: 'UNKNOWN_AGENT', message: `agent "${cfg.defaultAgent}" not found in /agent` });
+    else if (agent.mode === 'subagent') errors.push({ path: 'defaultAgent', code: 'AGENT_MODE', message: `agent "${cfg.defaultAgent}" is subagent-only and cannot be a session agent` });
+  }
+  if (cfg.conclave?.defaultPool && !Object.prototype.hasOwnProperty.call(cfg.conclave.pools ?? {}, cfg.conclave.defaultPool)) {
+    errors.push({ path: 'conclave.defaultPool', code: 'UNKNOWN_POOL', message: `pool "${cfg.conclave.defaultPool}" is not defined in conclave.pools` });
+  }
+  return { errors, warnings };
+}
+
+export function policyViolations(cfg, { catalog, agents = [] }) {
+  const errors = [];
+  const deny = (path, value, rule) => errors.push({ path, code: 'POLICY_DENIED', message: `"${value}" denied by ${rule}`, rule });
+  for (const ref of modelRefsIn(cfg)) {
+    let full;
+    try { full = resolveStored(ref, cfg, catalog).full; } catch { continue; }
+    if (!full) continue;
+    const r = evaluate('model', full, cfg.policy);
+    if (!r.allowed) deny(ref.path, full, r.rule);
+  }
+  if (cfg.defaultProvider) {
+    const r = evaluate('provider', cfg.defaultProvider, cfg.policy);
+    if (!r.allowed) deny('defaultProvider', cfg.defaultProvider, r.rule);
+  }
+  if (cfg.defaultAgent) {
+    const agent = agents.find((a) => a.name === cfg.defaultAgent) ?? { name: cfg.defaultAgent };
+    const r = evaluateAgent(agent, cfg.policy);
+    if (!r.allowed) deny('defaultAgent', cfg.defaultAgent, r.rule);
+  }
+  return errors;
+}
+
+export function configPaths({ dataDir, workspaceRoot }) {
+  return {
+    dataDir,
+    global: joinPathF1(dataDir, 'config.json'),
+    workspace: joinPathF1(workspaceRoot, '.opc.json'),
+    draft: joinPathF1(dataDir, 'config.draft.json'),
+  };
+}
+// ---- end F1 ----
