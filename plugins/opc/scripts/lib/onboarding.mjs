@@ -89,7 +89,7 @@ export function remainingSteps(draft, { allowLocked = false } = {}) {
 }
 
 function flattenPartial(partial) {
-  if (!isPlainObject(partial)) throw new UsageError('INVALID_VALUE', 'onboarding payload must be a JSON object');
+  if (!isPlainObject(partial)) throw new UsageError('INVALID_VALUE', 'os dados do assistente devem ser um objeto JSON');
   const out = [];
   const walk = (node, prefix) => {
     for (const [key, value] of Object.entries(node)) {
@@ -131,7 +131,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
   const warnings = [];
   for (const [key, rawValue] of flattenPartial(partial)) {
     if (key === 'scope') {
-      if (!['global', 'workspace'].includes(rawValue)) throw new UsageError('INVALID_VALUE', 'scope must be "global" or "workspace"');
+      if (!['global', 'workspace'].includes(rawValue)) throw new UsageError('INVALID_VALUE', 'scope deve ser "global" ou "workspace"');
       if (next.mode === 'bootstrap' && rawValue !== 'global') throw new UsageError('INVALID_VALUE', 'a configuração inicial deve usar o escopo global (ainda não existe configuração global)');
       next.scope = rawValue;
       applied.push('scope');
@@ -147,7 +147,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
     const defaultProvider = key === 'defaultProvider' ? null : effectiveValue(next, existing, 'defaultProvider');
     let value;
     if (key === 'aliases') {
-      if (!isPlainObject(rawValue)) throw new UsageError('INVALID_VALUE', 'aliases must map names to model IDs');
+      if (!isPlainObject(rawValue)) throw new UsageError('INVALID_VALUE', 'aliases deve associar nomes a IDs de modelo');
       const merged = { ...(getPath(candidateConfig(next, existing), 'aliases') ?? {}) };
       for (const [name, target] of Object.entries(rawValue)) {
         if (target === null) delete merged[name];
@@ -165,7 +165,7 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
     }
     if (key === 'defaultAgent' && value !== null) {
       const agent = agents.find((a) => a.name === value);
-      if (!agent) throw new UsageError('UNKNOWN_AGENT', `agent "${value}" not found`);
+      if (!agent) throw new UsageError('UNKNOWN_AGENT', `agent "${value}" não encontrado`);
     }
     if (key === 'defaultVariant' && value !== null) {
       const model = effectiveValue(next, existing, 'defaultModel');
@@ -357,7 +357,7 @@ export async function runInitWizard({ prompter, catalog, agents, opencodeConfig 
       result.warnings.forEach((w) => log(`[opc] aviso: ${w.path}: ${w.message}\n`));
     } catch (err) {
       if (!(err.exitCode === 2 || err.exitCode === 4) || err.code === 'NO_PROVIDER') throw err;
-      log(`[opc] ${err.message}\n`);
+      log(`[opc] ${err.code}: ${err.message}\n`);
     }
   }
   log(`\n${JSON.stringify(redact(candidateConfig(draft, existing)), null, 2)}\n`);

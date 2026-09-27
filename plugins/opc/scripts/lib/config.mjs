@@ -151,42 +151,42 @@ export function keyNeedsServer(dotted) {
 }
 
 function checkValue(desc, value) {
-  if (value === null) return desc.nullable ? null : 'must not be null';
+  if (value === null) return desc.nullable ? null : 'não pode ser nulo';
   switch (desc.type) {
     case 'string': case 'model': case 'modelref': case 'modelref-or-claude':
-      return typeof value === 'string' && value.trim() !== '' ? null : 'must be a non-empty string';
+      return typeof value === 'string' && value.trim() !== '' ? null : 'deve ser um texto não vazio';
     case 'boolean':
-      return typeof value === 'boolean' ? null : 'must be true or false';
+      return typeof value === 'boolean' ? null : 'deve ser verdadeiro ou falso';
     case 'integer':
-      if (!Number.isInteger(value)) return 'must be an integer';
-      if (value < desc.min || value > desc.max) return `must be between ${desc.min} and ${desc.max}`;
+      if (!Number.isInteger(value)) return 'deve ser um número inteiro';
+      if (value < desc.min || value > desc.max) return `deve estar entre ${desc.min} e ${desc.max}`;
       return null;
     case 'enum':
-      return desc.values.includes(value) ? null : `must be one of: ${desc.values.join(', ')}`;
+      return desc.values.includes(value) ? null : `deve ser um destes valores: ${desc.values.join(', ')}`;
     case 'string-list': case 'modelref-list':
-      return Array.isArray(value) && value.every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'must be a list of non-empty strings';
+      return Array.isArray(value) && value.every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'deve ser uma lista de textos não vazios';
     case 'enum-list':
-      if (!Array.isArray(value)) return 'must be a list';
-      return value.every((v) => desc.values.includes(v)) ? null : `items must be in: ${desc.values.join(', ')}`;
+      if (!Array.isArray(value)) return 'deve ser uma lista';
+      return value.every((v) => desc.values.includes(v)) ? null : `os itens devem estar entre: ${desc.values.join(', ')}`;
     case 'model-map':
-      return isObj(value) && Object.values(value).every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'must map names to model IDs';
+      return isObj(value) && Object.values(value).every((v) => typeof v === 'string' && v.trim() !== '') ? null : 'deve associar nomes a IDs de modelo';
     case 'modelref-list-map':
-      return isObj(value) && Object.values(value).every((v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.trim() !== '')) ? null : 'must map names to lists of models';
+      return isObj(value) && Object.values(value).every((v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.trim() !== '')) ? null : 'deve associar nomes a listas de modelos';
     case 'rules': return checkRules(value);
     case 'rules-map':
-      if (!isObj(value)) return 'must map profile names to rule lists';
+      if (!isObj(value)) return 'deve associar nomes de perfis a listas de regras';
       for (const rules of Object.values(value)) { const e = checkRules(rules); if (e) return e; }
       return null;
-    case 'object': return isObj(value) ? null : 'must be an object';
+    case 'object': return isObj(value) ? null : 'deve ser um objeto';
     case 'json': return null;
-    default: return `unknown schema type ${desc.type}`;
+    default: return `tipo de esquema desconhecido: ${desc.type}`;
   }
 }
 
 function checkRules(rules) {
-  if (!Array.isArray(rules)) return 'rules must be a list';
+  if (!Array.isArray(rules)) return 'as regras devem ser uma lista';
   const ok = rules.every((r) => isObj(r) && typeof r.permission === 'string' && typeof r.pattern === 'string' && ['allow', 'deny', 'ask'].includes(r.action));
-  return ok ? null : 'each rule needs {permission, pattern, action: allow|deny|ask}';
+  return ok ? null : 'cada regra precisa de {permission, pattern, action: allow|deny|ask}';
 }
 
 export function findSecretLikeKeys(obj, prefix = '') {
@@ -212,7 +212,7 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
   const errors = [];
   const warnings = [];
   if (obj === null || obj === undefined) return { errors, warnings };
-  if (!isObj(obj)) return { errors: [{ path: '', code: 'INVALID_VALUE', message: `${source} config must be a JSON object` }], warnings };
+  if (!isObj(obj)) return { errors: [{ path: '', code: 'INVALID_VALUE', message: `a configuração ${source} deve ser um objeto JSON` }], warnings };
   const walk = (node, prefix) => {
     for (const [key, value] of Object.entries(node)) {
       const p = prefix ? `${prefix}.${key}` : key;
@@ -222,20 +222,20 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
         if (problem) errors.push({ path: p, code: 'INVALID_VALUE', message: problem });
       } else if (GROUPS.has(p)) {
         if (isObj(value)) walk(value, p);
-        else errors.push({ path: p, code: 'INVALID_VALUE', message: 'must be an object' });
+        else errors.push({ path: p, code: 'INVALID_VALUE', message: 'deve ser um objeto' });
       } else {
-        warnings.push({ path: p, code: 'UNKNOWN_KEY', message: `unknown key (ignored) in ${source} config` });
+        warnings.push({ path: p, code: 'UNKNOWN_KEY', message: `chave desconhecida (ignorada) na configuração ${source}` });
       }
     }
   };
   walk(obj, '');
   if (source === 'workspace') {
     for (const key of LOCKED_KEYS) {
-      if (getPath(obj, key) !== undefined) warnings.push({ path: key, code: 'UNKNOWN_KEY', message: 'locked key (global only)' });
+      if (getPath(obj, key) !== undefined) warnings.push({ path: key, code: 'UNKNOWN_KEY', message: 'chave travada (somente global)' });
     }
   }
   for (const p of findSecretLikeKeys(obj)) {
-    warnings.push({ path: p, code: 'SECRET_LIKE_KEY', message: 'key looks like a secret; config files must never hold secrets (use env vars or the vault)' });
+    warnings.push({ path: p, code: 'SECRET_LIKE_KEY', message: 'a chave parece ser um segredo; arquivos de configuração não devem conter segredos (use variáveis de ambiente ou o cofre)' });
   }
   return { errors, warnings };
 }
@@ -264,31 +264,31 @@ export function mergeConfig(globalCfg, workspaceCfg) {
   let ws = isObj(workspaceCfg) ? cloneJson(workspaceCfg) : {};
   const { errors: wsErrors } = validateConfigShape(ws, { source: 'workspace' });
   for (const error of wsErrors) {
-    warnings.push({ path: error.path, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${error.message}; ignored` });
+    warnings.push({ path: error.path, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${error.message}; ignorado` });
     if (error.path) ws = unsetConfigPath(ws, error.path);
   }
-  const ignore = (p, why) => warnings.push({ path: p, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${why}; ignored` });
-  ws = dropUnknownConfigKeys(ws, '', (p) => ignore(p, 'unknown key'));
+  const ignore = (p, why) => warnings.push({ path: p, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${why}; ignorado` });
+  ws = dropUnknownConfigKeys(ws, '', (p) => ignore(p, 'chave desconhecida'));
   for (const [key, value] of Object.entries(ws)) {
     if (key === 'policy') {
-      if (!isObj(value)) { ignore('policy', 'must be an object'); continue; }
+      if (!isObj(value)) { ignore('policy', 'deve ser um objeto'); continue; }
       mergeWorkspacePolicy(config, value, ignore, warnings);
     } else if (key === 'stopGate' && isObj(value)) {
       for (const [sub, v] of Object.entries(value)) {
         if (sub === 'model') config.stopGate.model = cloneJson(v);
-        else ignore(`stopGate.${sub}`, 'not overridable per workspace');
+        else ignore(`stopGate.${sub}`, 'não pode ser substituído no workspace');
       }
     } else if (WORKSPACE_PREFERENCE_KEYS.includes(key)) {
       // A cleared workspace defaultModel inherits the global model, like unset.
       if (key === 'defaultModel' && value === null) continue;
       config[key] = isObj(value) && isObj(config[key]) ? mergeDeep(config[key], value) : cloneJson(value);
     } else if (isLockedKey(key) || key === 'server') {
-      ignore(key, 'locked key (global only)');
-      if (key === 'server' && isObj(value) && Object.hasOwn(value, 'configOverride')) ignore('server.configOverride', 'locked key (global only)');
+      ignore(key, 'chave travada (somente global)');
+      if (key === 'server' && isObj(value) && Object.hasOwn(value, 'configOverride')) ignore('server.configOverride', 'chave travada (somente global)');
     } else if (key in DEFAULT_CONFIG) {
-      ignore(key, 'not overridable per workspace');
+      ignore(key, 'não pode ser substituída no workspace');
     } else {
-      ignore(key, 'unknown key');
+      ignore(key, 'chave desconhecida');
     }
   }
   return { config, warnings };
@@ -315,7 +315,7 @@ function mergeWorkspacePolicy(config, wsPolicy, ignore, warnings) {
     if (['providers', 'models', 'agents', 'tools'].includes(sub) && isObj(value)) {
       for (const [listName, list] of Object.entries(value)) {
         const lp = `${p}.${listName}`;
-        if (!Array.isArray(list)) { ignore(lp, 'must be a list'); continue; }
+        if (!Array.isArray(list)) { ignore(lp, 'deve ser uma lista'); continue; }
         if (listName === 'deny') {
           config.policy[sub].deny = unionList(config.policy[sub].deny, list);
         } else if (listName === 'allow' && sub !== 'tools') {
@@ -323,18 +323,18 @@ function mergeWorkspacePolicy(config, wsPolicy, ignore, warnings) {
           const globalAllow = config.policy[sub].allow;
           if (globalAllow.length > 0) {
             for (const entry of list) {
-              if (!matchesAny(entry, globalAllow)) warnings.push({ path: lp, code: 'WORKSPACE_ALLOW_NARROWED', message: `.opc.json: "${entry}" is outside the global allow list; only the intersection applies` });
+              if (!matchesAny(entry, globalAllow)) warnings.push({ path: lp, code: 'WORKSPACE_ALLOW_NARROWED', message: `.opc.json: "${entry}" está fora da lista global de permissões; somente a interseção se aplica` });
             }
           }
           config.policy[sub].allowWorkspace = [...list];
         } else {
-          ignore(lp, 'only allow/deny lists can be set per workspace');
+          ignore(lp, 'somente listas allow/deny podem ser definidas no workspace');
         }
       }
     } else if ((sub === 'sensitivePaths' || sub === 'destructiveBash') && Array.isArray(value)) {
       config.policy[sub] = unionList(config.policy[sub], value);
     } else {
-      ignore(p, 'locked key (global only)');
+      ignore(p, 'chave travada (somente global)');
     }
   }
 }
@@ -430,23 +430,23 @@ function parseList(raw) {
 
 export function coerceValue(dotted, raw) {
   const desc = schemaFor(dotted);
-  if (!desc) throw new UsageError('UNKNOWN_KEY', `unknown config key "${dotted}"`);
+  if (!desc) throw new UsageError('UNKNOWN_KEY', `chave de configuração desconhecida: "${dotted}"`);
   const text = String(raw).trim();
   if (desc.nullable && text === 'null') return null;
   switch (desc.type) {
     case 'boolean':
       if (['true', 'yes', 'on', '1'].includes(text.toLowerCase())) return true;
       if (['false', 'no', 'off', '0'].includes(text.toLowerCase())) return false;
-      throw new UsageError('INVALID_VALUE', `${dotted} must be true or false`);
+      throw new UsageError('INVALID_VALUE', `${dotted} deve ser verdadeiro ou falso`);
     case 'integer': {
-      if (!/^-?\d+$/.test(text)) throw new UsageError('INVALID_VALUE', `${dotted} must be an integer`);
+      if (!/^-?\d+$/.test(text)) throw new UsageError('INVALID_VALUE', `${dotted} deve ser um número inteiro`);
       const n = Number(text);
       const problem = checkValue(desc, n);
       if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
       return n;
     }
     case 'enum':
-      if (!desc.values.includes(text)) throw new UsageError('INVALID_VALUE', `${dotted} must be one of: ${desc.values.join(', ')}`);
+      if (!desc.values.includes(text)) throw new UsageError('INVALID_VALUE', `${dotted} deve ser um destes valores: ${desc.values.join(', ')}`);
       return text;
     case 'string-list': case 'modelref-list': case 'enum-list': {
       const list = parseList(text);
@@ -456,13 +456,13 @@ export function coerceValue(dotted, raw) {
     }
     case 'model-map': case 'modelref-list-map': case 'rules-map': case 'rules': case 'object': case 'json': {
       let parsed;
-      try { parsed = JSON.parse(text); } catch { throw new UsageError('INVALID_VALUE', `${dotted} expects JSON`); }
+      try { parsed = JSON.parse(text); } catch { throw new UsageError('INVALID_VALUE', `${dotted} espera um JSON válido`); }
       const problem = checkValue(desc, parsed);
       if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
       return parsed;
     }
     default:
-      if (text === '') throw new UsageError('INVALID_VALUE', `${dotted} must not be empty`);
+      if (text === '') throw new UsageError('INVALID_VALUE', `${dotted} não pode ficar vazio`);
       return text;
   }
 }
@@ -476,16 +476,16 @@ export function applyConfigEdit(cfg, op, dotted, value) {
   const base = isObj(cfg) ? cfg : {};
   if (op === 'set') return setPath(base, dotted, value);
   if (op === 'unset') return unsetPath(base, dotted);
-  if (!isListKey(dotted)) throw new UsageError('NOT_A_LIST', `${dotted} is not a list key (use set)`);
+  if (!isListKey(dotted)) throw new UsageError('NOT_A_LIST', `${dotted} não é uma chave de lista (use set)`);
   const current = Array.isArray(getPath(base, dotted)) ? getPath(base, dotted) : [];
   const items = Array.isArray(value) ? value : [value];
   if (op === 'add') return setPath(base, dotted, unionList(current, items));
   if (op === 'remove') {
     const missing = items.filter((v) => !current.includes(v));
-    if (missing.length) throw new UsageError('NOT_IN_LIST', `${dotted} does not contain: ${missing.join(', ')}`);
+    if (missing.length) throw new UsageError('NOT_IN_LIST', `${dotted} não contém: ${missing.join(', ')}`);
     return setPath(base, dotted, current.filter((v) => !items.includes(v)));
   }
-  throw new UsageError('USAGE', `unknown config operation "${op}"`);
+  throw new UsageError('USAGE', `operação de configuração desconhecida: "${op}"`);
 }
 
 export function normalizeEditValue(dotted, value, { catalog, aliases = {}, defaultProvider = null }) {
@@ -535,41 +535,41 @@ export function validateAgainstServer(cfg, { catalog, agents = [], opencodeConfi
   const warnings = [];
   for (const ref of modelRefsIn(cfg)) {
     if (ref.path.startsWith('aliases.') && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value)) {
-      errors.push({ path: ref.path, code: 'BROKEN_ALIAS', message: `alias points to another alias "${ref.value}" (only 1 level is allowed)` });
+      errors.push({ path: ref.path, code: 'BROKEN_ALIAS', message: `o alias aponta para outro alias "${ref.value}" (só é permitido 1 nível)` });
       continue;
     }
     try {
       resolveStored(ref, cfg, catalog);
     } catch (err) {
       const viaAlias = ref.kind !== 'model' && Object.prototype.hasOwnProperty.call(cfg.aliases ?? {}, ref.value);
-      errors.push({ path: ref.path, code: viaAlias ? 'BROKEN_ALIAS' : (err.code ?? 'UNKNOWN_MODEL'), message: viaAlias ? `alias "${ref.value}" is broken: ${err.message}` : err.message });
+      errors.push({ path: ref.path, code: viaAlias ? 'BROKEN_ALIAS' : (err.code ?? 'UNKNOWN_MODEL'), message: viaAlias ? `o alias "${ref.value}" está inválido: ${err.message}` : err.message });
     }
   }
   if (cfg.defaultProvider && !catalog.connected.has(cfg.defaultProvider)) {
-    errors.push({ path: 'defaultProvider', code: 'UNKNOWN_PROVIDER', message: `provider "${cfg.defaultProvider}" is not connected` });
+    errors.push({ path: 'defaultProvider', code: 'UNKNOWN_PROVIDER', message: `o provider "${cfg.defaultProvider}" não está conectado` });
   }
   if (cfg.defaultVariant) {
     const modelId = cfg.defaultModel ?? opencodeConfig?.model ?? null;
     const entry = modelId ? catalog.byFull.get(modelId) : null;
-    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant needs a valid defaultModel (or OpenCode default model)' });
+    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant precisa de um defaultModel válido (ou do modelo padrão do OpenCode)' });
     else {
       try { validateVariant(entry, cfg.defaultVariant); } catch (err) { errors.push({ path: 'defaultVariant', code: err.code, message: err.message }); }
     }
   }
   if (cfg.defaultAgent) {
     const agent = agents.find((a) => a.name === cfg.defaultAgent);
-    if (!agent) errors.push({ path: 'defaultAgent', code: 'UNKNOWN_AGENT', message: `agent "${cfg.defaultAgent}" not found in /agent` });
-    else if (agent.mode === 'subagent') errors.push({ path: 'defaultAgent', code: 'AGENT_MODE', message: `agent "${cfg.defaultAgent}" is subagent-only and cannot be a session agent` });
+    if (!agent) errors.push({ path: 'defaultAgent', code: 'UNKNOWN_AGENT', message: `o agent "${cfg.defaultAgent}" não foi encontrado em /agent` });
+    else if (agent.mode === 'subagent') errors.push({ path: 'defaultAgent', code: 'AGENT_MODE', message: `o agent "${cfg.defaultAgent}" só pode ser subagent e não pode ser usado na sessão` });
   }
   if (cfg.conclave?.defaultPool && !Object.prototype.hasOwnProperty.call(cfg.conclave.pools ?? {}, cfg.conclave.defaultPool)) {
-    errors.push({ path: 'conclave.defaultPool', code: 'UNKNOWN_POOL', message: `pool "${cfg.conclave.defaultPool}" is not defined in conclave.pools` });
+    errors.push({ path: 'conclave.defaultPool', code: 'UNKNOWN_POOL', message: `o pool "${cfg.conclave.defaultPool}" não está definido em conclave.pools` });
   }
   return { errors, warnings };
 }
 
 export function policyViolations(cfg, { catalog, agents = [] }) {
   const errors = [];
-  const deny = (path, value, rule) => errors.push({ path, code: 'POLICY_DENIED', message: `"${value}" denied by ${rule}`, rule });
+  const deny = (path, value, rule) => errors.push({ path, code: 'POLICY_DENIED', message: `"${value}" negado pela regra ${rule}`, rule });
   for (const ref of modelRefsIn(cfg)) {
     let full;
     try { full = resolveStored(ref, cfg, catalog).full; } catch {

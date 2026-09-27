@@ -53,7 +53,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
   assert.equal(cfg.stopGate.enabled, true);
   assert.deepEqual(cfg.project, { goal: null, scope: [], taskTypes: ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'] });
   assert.deepEqual(cfg.aliases, { strong: `${MV}/opencode-go/qwen3.8-max` });
-  assert.match(log.text(), /AMBIGUOUS|ambiguous/);
+  assert.match(log.text(), /AMBIGUOUS_MODEL: o modelo .* é ambíguo/);
 });
 
 test('reconfigure wizard asks the scope first and may decline saving', async (t) => {

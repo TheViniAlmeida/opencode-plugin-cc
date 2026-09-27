@@ -94,7 +94,7 @@ test('workspace allow is retained separately for restrictive intersection', () =
   const widen = mergeConfig(g, { policy: { models: { allow: ['prov-b/*'] } } });
   assert.deepEqual(widen.config.policy.models.allow, ['prov-a/*', 'anthropic/claude-x']);
   assert.deepEqual(widen.config.policy.models.allowWorkspace, ['prov-b/*']);
-  assert.ok(widen.warnings.some((w) => w.path === 'policy.models.allow' && /intersection/.test(w.message)));
+  assert.ok(widen.warnings.some((w) => w.path === 'policy.models.allow' && /interseção/.test(w.message)));
   const openGlobal = mergeConfig({}, { policy: { models: { allow: ['prov-a/*'] } } });
   assert.deepEqual(openGlobal.config.policy.models.allow, []);
   assert.deepEqual(openGlobal.config.policy.models.allowWorkspace, ['prov-a/*']);

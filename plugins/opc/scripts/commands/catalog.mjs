@@ -10,7 +10,7 @@ const SPEC = { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, al
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   const kind = positionals[0];
-  if (positionals.length !== 1 || !['commands', 'skills'].includes(kind)) throw new UsageError('USAGE', 'usage: opc catalog commands|skills [--json]');
+  if (positionals.length !== 1 || !['commands', 'skills'].includes(kind)) throw new UsageError('USAGE', 'uso: opc catalog commands|skills [--json]');
   const { api } = await connectApi(ctx);
   let items;
   if (kind === 'commands') {

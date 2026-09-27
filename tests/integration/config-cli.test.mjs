@@ -214,7 +214,8 @@ test('pinned-denied-model: an agent whose pinned model is denied cannot become t
   const { cli } = setup(t, { config: WORLD, scenario: 'pinned-denied-model' });
   const r = await cli(['config', 'set', 'defaultAgent', 'pinned-reviewer']);
   assert.equal(r.code, 4, all(r));
-  assert.match(all(r), /pinned model omniroute-work\/opencode-go\/kimi-k3/);
+  assert.match(all(r), /POLICY_DENIED/);
+  assert.match(all(r), /modelo fixado omniroute-work\/opencode-go\/kimi-k3/);
   assert.equal((await cli(['config', 'set', 'defaultAgent', 'docs-writer'])).code, 2, 'subagent-only agent cannot be the session agent');
   assert.equal((await cli(['config', 'set', 'defaultAgent', 'build'])).code, 0);
 });
@@ -228,7 +229,8 @@ test('locked keys are refused without a TTY (exit 4) and nothing is written', as
   assert.doesNotMatch(all(r), /'x\/\*'/);
   r = await cli(['config', 'set', 'policy.models.deny', 'x/*', '--tty-confirm']);
   assert.equal(r.code, 4);
-  assert.match(all(r), /not a TTY/);
+  assert.match(all(r), /LOCKED_KEY/);
+  assert.match(all(r), /--tty-confirm exige um terminal interativo/);
   r = await cli(['config', 'unset', 'policy.approver']);
   assert.equal(r.code, 4, 'unset of a locked key is locked too');
   r = await cli(['config', 'set', 'server.configOverride', '{"share":"auto"}']);

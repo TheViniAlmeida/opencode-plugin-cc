@@ -84,9 +84,13 @@ function suggestionsFor(catalog, text) {
     .map((m) => m.full);
 }
 
+function modelEcho(value) {
+  return value.length > 12 ? `${value.slice(0, 12)}…` : value;
+}
+
 export function normalizeModelId(input, { catalog, defaultProvider = null, aliases = {}, fullOnly = false } = {}) {
   const raw = typeof input === 'string' ? input.trim() : '';
-  if (!raw) throw new UsageError('UNKNOWN_MODEL', 'empty model id');
+  if (!raw) throw new UsageError('UNKNOWN_MODEL', 'identificador de modelo vazio');
   let text = raw;
   let forceFull = fullOnly;
   if (text.startsWith('=')) {
@@ -102,16 +106,16 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
     : null;
   if (fullReading && shortReading) {
     throw new UsageError('AMBIGUOUS_MODEL',
-      `model "${raw}" is ambiguous: "${fullReading.full}" or "${shortReading.full}". Use "=${fullReading.full}" or "${shortReading.full}".`,
+      `o modelo "${modelEcho(raw)}" é ambíguo: "${fullReading.full}" ou "${shortReading.full}". Use "=${fullReading.full}" ou "${shortReading.full}".`,
       { details: { input: raw, candidates: [fullReading.full, shortReading.full] } });
   }
   const hit = fullReading ?? shortReading;
   if (hit) return { providerID: hit.providerID, modelID: hit.modelID, full: hit.full, entry: hit };
   const known = providerID ? catalog.byFull.get(expanded) : null;
   const reason = known && !catalog.connected.has(known.providerID)
-    ? `provider "${known.providerID}" is not connected (run: opencode auth login)`
-    : 'not found in /provider';
-  throw new UsageError('UNKNOWN_MODEL', `unknown model "${raw}": ${reason}`,
+    ? `o provider "${known.providerID}" não está conectado (execute: opencode auth login)`
+    : 'não encontrado em /provider';
+  throw new UsageError('UNKNOWN_MODEL', `modelo desconhecido "${modelEcho(raw)}": ${reason}`,
     { details: { input: raw, suggestions: suggestionsFor(catalog, expanded) } });
 }
 
@@ -130,7 +134,7 @@ export function validateVariant(entry, variant) {
   if (variant === null || variant === undefined || variant === '') return null;
   if (!entry.variants.includes(variant)) {
     throw new UsageError('UNKNOWN_VARIANT',
-      `variant "${variant}" is not valid for ${entry.full} (valid: ${entry.variants.join(', ') || 'none'})`,
+      `a variante "${variant}" não é válida para ${entry.full} (válidas: ${entry.variants.join(', ') || 'nenhuma'})`,
       { details: { model: entry.full, variant, valid: entry.variants } });
   }
   return variant;

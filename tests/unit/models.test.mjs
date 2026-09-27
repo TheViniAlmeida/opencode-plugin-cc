@@ -85,9 +85,34 @@ test('normalizeModelId: alias expands and resolves as full id', () => {
 });
 
 test('normalizeModelId: unknown model and disconnected provider', () => {
-  assert.throws(() => normalizeModelId('nope-model', { catalog, defaultProvider: MV }), (err) => err.code === 'UNKNOWN_MODEL' && err.exitCode === 2);
-  assert.throws(() => normalizeModelId('openai/gpt-5.6', { catalog, defaultProvider: MV }), (err) => err.code === 'UNKNOWN_MODEL' && /not connected/.test(err.message));
-  assert.throws(() => normalizeModelId('   ', { catalog }), (err) => err.code === 'UNKNOWN_MODEL');
+  assert.throws(() => normalizeModelId('nope-model', { catalog, defaultProvider: MV }), (err) => {
+    assert.equal(err.code, 'UNKNOWN_MODEL');
+    assert.match(err.message, /modelo desconhecido/);
+    return err.exitCode === 2;
+  });
+  assert.throws(() => normalizeModelId('openai/gpt-5.6', { catalog }), (err) => {
+    assert.equal(err.code, 'UNKNOWN_MODEL');
+    assert.match(err.message, /não está conectado/);
+    assert.doesNotMatch(err.message, /not connected/);
+    return true;
+  });
+  assert.throws(() => normalizeModelId('   ', { catalog }), (err) => err.code === 'UNKNOWN_MODEL' && /identificador de modelo vazio/.test(err.message));
+  const oversized = 'x'.repeat(80);
+  assert.throws(() => normalizeModelId(oversized, { catalog }), (err) => {
+    assert.equal(err.code, 'UNKNOWN_MODEL');
+    assert.match(err.message, /modelo desconhecido "xxxxxxxxxxxx…"/);
+    assert.equal(err.message.includes(oversized), false);
+    return true;
+  });
+});
+
+test('validateVariant: invalid variant message is Brazilian Portuguese', () => {
+  const entry = catalog.byFull.get(`${MV}/opencode-go/kimi-k3`);
+  assert.throws(() => validateVariant(entry, 'turbo'), (err) => {
+    assert.equal(err.code, 'UNKNOWN_VARIANT');
+    assert.match(err.message, /variante .* não é válida/);
+    return true;
+  });
 });
 
 test('normalizeModelId: suggestions on unknown model', () => {

@@ -10,7 +10,7 @@ const SPEC = { flags: { all: { type: 'boolean' }, json: { type: 'boolean' }, cwd
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
-  if (positionals.length) throw new UsageError('USAGE', 'usage: opc providers [--all] [--json]');
+  if (positionals.length) throw new UsageError('USAGE', 'uso: opc providers [--all] [--json]');
   const { api } = await connectApi(ctx);
   const catalog = buildCatalog(await api.providers());
   const providers = catalog.providers

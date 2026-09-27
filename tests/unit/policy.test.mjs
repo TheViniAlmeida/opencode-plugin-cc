@@ -57,10 +57,27 @@ test('assertAllowed: throws PolicyError (exit 4) with the rule', () => {
   assert.throws(() => assertAllowed('agent', 'work-reviewer', WORLD), (err) => {
     assert.equal(err.exitCode, 4);
     assert.equal(err.code, 'POLICY_DENIED');
+    assert.match(err.message, /agente "work-reviewer" negado pela regra/);
     assert.equal(err.details.rule, 'policy.agents.deny: work-*');
     return true;
   });
   assert.deepEqual(assertAllowed('agent', 'build', WORLD), { allowed: true });
+});
+
+test('policy assertion messages are Brazilian Portuguese for agent, command and generic checks', () => {
+  const agents = new Map([['work-deploy', { name: 'work-deploy' }]]);
+  for (const invoke of [
+    () => assertAllowed('agent', 'work-deploy', WORLD),
+    () => assertAgentUsable({ name: 'work-deploy' }, WORLD),
+    () => assertCommandUsable({ name: 'ship', agent: 'work-deploy' }, WORLD, agents),
+  ]) {
+    assert.throws(invoke, (err) => {
+      assert.equal(err.code, 'POLICY_DENIED');
+      assert.match(err.message, /negad[oa] pela regra/);
+      assert.doesNotMatch(err.message, /denied by/);
+      return true;
+    });
+  }
 });
 
 test('evaluateAgent: pinned model goes through the policy', () => {
@@ -68,7 +85,7 @@ test('evaluateAgent: pinned model goes through the policy', () => {
   assert.equal(pinnedModelOf(pinned), `${EQ}/opencode-go/kimi-k3`);
   const r = evaluateAgent(pinned, WORLD);
   assert.equal(r.allowed, false);
-  assert.match(r.rule, /^pinned model omniroute-work\/opencode-go\/kimi-k3/);
+  assert.match(r.rule, /^modelo fixado omniroute-work\/opencode-go\/kimi-k3/);
   assert.equal(evaluateAgent({ name: 'docs-writer', model: { providerID: MV, modelID: 'opencode-go/qwen3.8-max' } }, WORLD).allowed, true);
   assert.throws(() => assertAgentUsable(pinned, WORLD), (err) => err.exitCode === 4);
 });
@@ -79,7 +96,7 @@ test('evaluateCommand: pinned model and pinned agent', () => {
   assert.equal(evaluateCommand({ name: 'work-release', model: `${EQ}/cx/gpt-5.5` }, WORLD).allowed, false);
   const r = evaluateCommand({ name: 'ship', agent: 'work-deploy' }, WORLD, agents);
   assert.equal(r.allowed, false);
-  assert.match(r.rule, /pinned agent work-deploy/);
+  assert.match(r.rule, /agente fixado work-deploy/);
   assert.throws(() => assertCommandUsable({ name: 'ship', agent: 'work-deploy' }, WORLD, agents), (err) => err.exitCode === 4);
 });
 
@@ -88,7 +105,7 @@ test('pinned models also go through the provider policy (agent and command)', ()
   const helper = { name: 'helper', model: { providerID: 'acme', modelID: 'm-1' } };
   const r = evaluateAgent(helper, p);
   assert.equal(r.allowed, false);
-  assert.match(r.rule, /^pinned model acme\/m-1: policy\.providers\.allow \(global\)/);
+  assert.match(r.rule, /^modelo fixado acme\/m-1: policy\.providers\.allow \(global\)/);
   assert.throws(() => assertAgentUsable(helper, p), (err) => err.exitCode === 4);
   assert.equal(evaluateCommand({ name: 'c', model: 'acme/m-1' }, p).allowed, false);
   assert.equal(evaluateCommand({ name: 'c2', agent: 'helper' }, p, new Map([['helper', helper]])).allowed, false);

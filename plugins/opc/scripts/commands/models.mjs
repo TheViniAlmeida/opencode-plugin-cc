@@ -17,14 +17,14 @@ export function providerEcho(provider) {
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
-  if (positionals.length > 1) throw new UsageError('USAGE', 'usage: opc models [provider] [--verbose] [--allowed] [--all] [--json]');
+  if (positionals.length > 1) throw new UsageError('USAGE', 'uso: opc models [provider] [--verbose] [--allowed] [--all] [--json]');
   const provider = positionals[0] ?? null;
   const { api } = await connectApi(ctx);
   const catalog = buildCatalog(await api.providers());
   if (provider) {
     const known = catalog.providers.find((p) => p.id === provider);
     if (!known) throw new UsageError('UNKNOWN_PROVIDER', `provider desconhecido "${providerEcho(provider)}" (conhecidos: ${catalog.providers.map((p) => p.id).join(', ')})`);
-    if (!known.connected && !flags.all) throw new UsageError('UNKNOWN_PROVIDER', `provider "${provider}" is not connected; use --all to list its catalog or run: opencode auth login`);
+    if (!known.connected && !flags.all) throw new UsageError('UNKNOWN_PROVIDER', `provider "${providerEcho(provider)}" não está conectado; use --all para listar o catálogo ou execute: opencode auth login`);
   }
   const models = catalog.models
     .filter((m) => (flags.all || m.connected) && (!provider || m.providerID === provider))

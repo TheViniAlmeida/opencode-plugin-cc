@@ -3,6 +3,7 @@ import { PolicyError } from './opc-error.mjs';
 import { matchesAny, parseFullId } from './models.mjs';
 
 const SECTION = { provider: 'providers', model: 'models', agent: 'agents', tool: 'tools' };
+const LABEL = { provider: 'provider', model: 'modelo', agent: 'agente', tool: 'ferramenta' };
 
 function lists(policy, kind) {
   const section = policy?.[SECTION[kind]] ?? {};
@@ -18,7 +19,7 @@ function firstMatch(value, globs) {
 }
 
 export function evaluate(kind, value, policy) {
-  if (!SECTION[kind]) throw new TypeError(`unknown policy kind: ${kind}`);
+  if (!SECTION[kind]) throw new TypeError(`tipo de política desconhecido: ${kind}`);
   const name = SECTION[kind];
   if (kind === 'model') {
     const { providerID } = parseFullId(value);
@@ -31,8 +32,8 @@ export function evaluate(kind, value, policy) {
   const denied = firstMatch(value, deny);
   if (denied) return { allowed: false, rule: `policy.${name}.deny: ${denied}` };
   if (kind !== 'tool') {
-    if (allow.length > 0 && !matchesAny(value, allow)) return { allowed: false, rule: `policy.${name}.allow (global): not listed` };
-    if (allowWorkspace.length > 0 && !matchesAny(value, allowWorkspace)) return { allowed: false, rule: `policy.${name}.allow (.opc.json): not listed` };
+    if (allow.length > 0 && !matchesAny(value, allow)) return { allowed: false, rule: `policy.${name}.allow (global): não consta na lista` };
+    if (allowWorkspace.length > 0 && !matchesAny(value, allowWorkspace)) return { allowed: false, rule: `policy.${name}.allow (.opc.json): não consta na lista` };
   }
   return { allowed: true };
 }
@@ -40,7 +41,7 @@ export function evaluate(kind, value, policy) {
 export function assertAllowed(kind, value, policy) {
   const result = evaluate(kind, value, policy);
   if (!result.allowed) {
-    throw new PolicyError('POLICY_DENIED', `${kind} "${value}" denied by ${result.rule}`, { details: { kind, value, rule: result.rule } });
+    throw new PolicyError('POLICY_DENIED', `${LABEL[kind]} "${value}" negado pela regra ${result.rule}`, { details: { kind, value, rule: result.rule } });
   }
   return result;
 }
@@ -55,10 +56,10 @@ export function pinnedModelOf(agentInfo) {
 function evaluatePinnedModel(full, policy, providerID = parseFullId(full).providerID) {
   if (providerID) {
     const byProvider = evaluate('provider', providerID, policy);
-    if (!byProvider.allowed) return { allowed: false, rule: `pinned model ${full}: ${byProvider.rule}` };
+    if (!byProvider.allowed) return { allowed: false, rule: `modelo fixado ${full}: ${byProvider.rule}` };
   }
   const byModel = evaluate('model', full, policy);
-  if (!byModel.allowed) return { allowed: false, rule: `pinned model ${full}: ${byModel.rule}` };
+  if (!byModel.allowed) return { allowed: false, rule: `modelo fixado ${full}: ${byModel.rule}` };
   return { allowed: true };
 }
 
@@ -81,7 +82,7 @@ export function evaluateCommand(commandInfo, policy, agentsByName = new Map()) {
   if (commandInfo.agent) {
     const agent = agentsByName.get(commandInfo.agent) ?? { name: commandInfo.agent };
     const byAgent = evaluateAgent(agent, policy);
-    if (!byAgent.allowed) return { allowed: false, rule: `pinned agent ${commandInfo.agent}: ${byAgent.rule}` };
+    if (!byAgent.allowed) return { allowed: false, rule: `agente fixado ${commandInfo.agent}: ${byAgent.rule}` };
   }
   return { allowed: true };
 }
@@ -89,7 +90,7 @@ export function evaluateCommand(commandInfo, policy, agentsByName = new Map()) {
 export function assertAgentUsable(agentInfo, policy) {
   const result = evaluateAgent(agentInfo, policy);
   if (!result.allowed) {
-    throw new PolicyError('POLICY_DENIED', `agent "${agentInfo.name}" denied by ${result.rule}`, { details: { kind: 'agent', value: agentInfo.name, rule: result.rule } });
+    throw new PolicyError('POLICY_DENIED', `agente "${agentInfo.name}" negado pela regra ${result.rule}`, { details: { kind: 'agent', value: agentInfo.name, rule: result.rule } });
   }
   return result;
 }
@@ -97,7 +98,7 @@ export function assertAgentUsable(agentInfo, policy) {
 export function assertCommandUsable(commandInfo, policy, agentsByName = new Map()) {
   const result = evaluateCommand(commandInfo, policy, agentsByName);
   if (!result.allowed) {
-    throw new PolicyError('POLICY_DENIED', `command "${commandInfo.name}" denied by ${result.rule}`, { details: { kind: 'command', value: commandInfo.name, rule: result.rule } });
+    throw new PolicyError('POLICY_DENIED', `comando "${commandInfo.name}" negado pela regra ${result.rule}`, { details: { kind: 'command', value: commandInfo.name, rule: result.rule } });
   }
   return result;
 }

@@ -26,8 +26,8 @@ function agentRow(agent, policy) {
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
-  if (positionals.length) throw new UsageError('USAGE', 'usage: opc agents [--mode primary|subagent|all] [--verbose] [--allowed] [--json]');
-  if (!MODES.includes(flags.mode)) throw new UsageError('USAGE', `--mode must be one of: ${MODES.join(', ')}`);
+  if (positionals.length) throw new UsageError('USAGE', 'uso: opc agents [--mode primary|subagent|all] [--verbose] [--allowed] [--json]');
+  if (!MODES.includes(flags.mode)) throw new UsageError('USAGE', `--mode deve ser um de: ${MODES.join(', ')}`);
   const { api } = await connectApi(ctx);
   const agents = (await api.agents())
     .filter((a) => flags.verbose || !a.hidden)

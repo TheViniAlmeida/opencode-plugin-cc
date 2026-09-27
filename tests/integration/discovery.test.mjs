@@ -50,7 +50,8 @@ test('models: listing, provider filter, --all, --verbose, no model headers leak'
   assert.equal(all.models.length, 15);
   const notConnected = await runCli(['models', 'openai'], { env, cwd: ws });
   assert.equal(notConnected.code, 2);
-  assert.match(notConnected.stdout + notConnected.stderr, /not connected; use --all/);
+  assert.match(notConnected.stdout + notConnected.stderr, /UNKNOWN_PROVIDER/);
+  assert.match(notConnected.stdout + notConnected.stderr, /não está conectado; use --all/);
   const unknown = await runCli(['models', 'nope'], { env, cwd: ws });
   assert.equal(unknown.code, 2);
   const longUnknown = 'a-very-long-unrecognized-provider-name';
@@ -90,13 +91,13 @@ test('scenario pinned-denied-model: agent and command pinning a denied model are
   const verbose = JSON.parse((await runCli(['agents', '--verbose', '--json'], { env, cwd: ws })).stdout).agents;
   const pinned = verbose.find((a) => a.name === 'pinned-reviewer');
   assert.equal(pinned.allowed, false);
-  assert.match(pinned.rule, /^pinned model omniroute-work\/opencode-go\/kimi-k3/);
+  assert.match(pinned.rule, /^modelo fixado omniroute-work\/opencode-go\/kimi-k3/);
   const allowed = JSON.parse((await runCli(['agents', '--allowed', '--json'], { env, cwd: ws })).stdout).agents;
   assert.ok(!allowed.some((a) => a.name === 'pinned-reviewer'));
   const commands = JSON.parse((await runCli(['catalog', 'commands', '--json'], { env, cwd: ws })).stdout).items;
   const release = commands.find((c) => c.name === 'work-release');
   assert.equal(release.allowed, false);
-  assert.match(release.rule, /pinned model omniroute-work\/cx\/gpt-5\.5/);
+  assert.match(release.rule, /modelo fixado omniroute-work\/cx\/gpt-5\.5/);
 });
 
 test('catalog lists commands and skills (never skill content)', async (t) => {

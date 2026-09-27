@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_CONFIG, CONFIG_SCHEMA, validateConfigShape, mergeConfig, findSecretLikeKeys, isLockedKey, isWorkspaceKey,
-  schemaFor, keyNeedsServer, isSecretLikeSetting,
+  schemaFor, keyNeedsServer, isSecretLikeSetting, coerceValue, applyConfigEdit,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -33,13 +33,37 @@ test('validateConfigShape: type errors, unknown keys and secret-looking keys', (
   assert.ok(warnPaths.includes('mystery'));
   assert.ok(warnPaths.includes('githubToken'));
   assert.ok(warnPaths.includes('server.configOverride.provider.p.options.apiKey'));
-  assert.ok(warnings.find((w) => w.path === 'githubToken' && w.code === 'SECRET_LIKE_KEY').message.includes('secret'));
+  assert.equal(warnings.find((w) => w.path === 'githubToken' && w.code === 'SECRET_LIKE_KEY').code, 'SECRET_LIKE_KEY');
+  assert.match(warnings.find((w) => w.path === 'githubToken' && w.code === 'SECRET_LIKE_KEY').message, /segredo/);
   assert.ok(warnings.find((w) => w.path === 'mystery').code === 'UNKNOWN_KEY');
 });
 
 test('validateConfigShape: non-object config is an error', () => {
   assert.equal(validateConfigShape([], { source: 'workspace' }).errors.length, 1);
   assert.deepEqual(validateConfigShape(null), { errors: [], warnings: [] });
+});
+
+test('config validation and edits use Brazilian Portuguese messages while retaining error codes', () => {
+  assert.throws(() => coerceValue('unknown.path', 'x'), (err) => {
+    assert.equal(err.code, 'UNKNOWN_KEY');
+    assert.match(err.message, /chave de configuração desconhecida/);
+    return true;
+  });
+  assert.throws(() => coerceValue('stopGate.enabled', 'maybe'), (err) => {
+    assert.equal(err.code, 'INVALID_VALUE');
+    assert.match(err.message, /deve ser verdadeiro ou falso/);
+    return true;
+  });
+  assert.throws(() => applyConfigEdit({}, 'rename', 'policy.models.deny', 'x'), (err) => {
+    assert.equal(err.code, 'USAGE');
+    assert.match(err.message, /operação de configuração desconhecida/);
+    return true;
+  });
+  assert.throws(() => applyConfigEdit({}, 'add', 'aliases', 'x'), (err) => {
+    assert.equal(err.code, 'NOT_A_LIST');
+    assert.match(err.message, /não é uma chave de lista/);
+    return true;
+  });
 });
 
 test('findSecretLikeKeys: token/password/secret/apikey at any depth', () => {
@@ -101,7 +125,7 @@ test('mergeConfig: global over defaults; restrictive workspace merge', () => {
   assert.equal(config.stopGate.model, 'fast');
   const w = warnings.map((x) => x.path);
   for (const p of ['policy.approver', 'permissionProfiles', 'server', 'server.configOverride', 'jobs', 'stopGate.enabled', 'policy.models.allow']) assert.ok(w.includes(p), `warning for ${p}`);
-  assert.match(warnings.find((x) => x.path === 'policy.models.allow').message, /anthropic\/\*.*intersection/);
+  assert.match(warnings.find((x) => x.path === 'policy.models.allow').message, /anthropic\/\*.*interseção/);
   assert.equal(validateConfigShape(config, { source: 'effective' }).errors.length, 0);
 });
 

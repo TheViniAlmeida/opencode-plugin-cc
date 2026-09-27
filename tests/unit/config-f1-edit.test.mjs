@@ -120,7 +120,7 @@ test('policyViolations: denied defaults, aliases and pinned agent models', () =>
   const v = policyViolations(cfg, { catalog, agents });
   const paths = v.map((e) => e.path).sort();
   assert.deepEqual(paths, ['aliases.eqk3', 'defaultAgent', 'defaultModel', 'defaultProvider', 'reviewModel']);
-  assert.match(v.find((e) => e.path === 'defaultAgent').rule, /pinned model/);
+  assert.match(v.find((e) => e.path === 'defaultAgent').rule, /modelo fixado/);
   assert.ok(v.every((e) => e.code === 'POLICY_DENIED'));
 });
 
