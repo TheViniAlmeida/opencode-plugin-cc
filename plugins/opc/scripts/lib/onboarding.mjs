@@ -73,7 +73,7 @@ export function discardDraft(dataDir) {
 }
 
 function stepApplies(step, draft, allowLocked) {
-  if (step.id === 'scope') return true;
+  if (step.id === 'scope') return draft.mode === 'reconfigure';
   if (step.locked) return allowLocked && draft.scope === 'global';
   if (step.globalOnly) return draft.scope === 'global';
   return true;
@@ -127,6 +127,9 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
   for (const [key, rawValue] of flattenPartial(partial)) {
     if (key === 'scope') {
       if (!['global', 'workspace'].includes(rawValue)) throw new UsageError('INVALID_VALUE', 'scope deve ser "global" ou "workspace"');
+      if (next.mode === 'bootstrap' && rawValue !== 'global') {
+        throw new UsageError('INVALID_VALUE', 'a configuração inicial deve ser global');
+      }
       next.scope = rawValue;
       applied.push('scope');
       continue;

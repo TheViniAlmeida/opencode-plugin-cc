@@ -37,24 +37,28 @@ test('bin/opc runs the companion through sh', async (t) => {
 });
 
 test('heredoc --args-stdin never expands $() or backticks (slash command invocation)', async (t) => {
-  const env = testEnv(t);
-  const ws = makeWorkspace(t);
   const commandDoc = fs.readFileSync(new URL('../../plugins/opc/commands/setup.md', import.meta.url), 'utf8');
-  const heredocs = [...commandDoc.matchAll(/^([^\n]*?)<<'([^']+)'\n([\s\S]*?)^\2$/gm)];
+  const blocks = [...commandDoc.matchAll(/```bash\n([\s\S]*?)```/g)].map(([, block]) => block);
+  const heredocs = blocks.flatMap((block) => {
+    const match = block.match(/^(opc setup[^\n]*?) <<'([^']+)'\n[\s\S]*?^\2$/m);
+    return match ? [{ command: match[1], delimiter: match[2] }] : [];
+  });
   assert.ok(heredocs.length > 0, 'setup command must contain bash heredoc blocks');
-  for (const [, command, delimiter] of heredocs) {
-    assert.ok(['OPC_ARGS_5f1d0c7a_EOF', 'OPC_JSON_5f1d0c7a_EOF'].includes(delimiter), `canonical quoted delimiter: ${delimiter}`);
-    assert.equal(delimiter, command.includes('--stdin') ? 'OPC_JSON_5f1d0c7a_EOF' : 'OPC_ARGS_5f1d0c7a_EOF', `${command.trim()} uses its canonical delimiter`);
-    const script = [
-      `opc setup --json --args-stdin <<'${delimiter}'`,
-      'OPC_ARGS',
-      'touch pwned',
-      '$(touch pwned-dollar) `touch pwned-backtick` "$(touch pwned-quoted)"',
-      delimiter,
-    ].join('\n');
-    const res = spawnSync('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws, stdio: 'ignore' });
-    assert.equal(res.status, 2, `${command.trim()}: ${res.error?.message}`);
-    for (const f of ['pwned', 'pwned-dollar', 'pwned-backtick', 'pwned-quoted']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
+  assert.ok(heredocs.some(({ command }) => command.includes('--args-stdin')));
+  assert.ok(heredocs.some(({ command }) => command.includes('--stdin')));
+  for (const { command, delimiter } of heredocs) {
+    const json = command.includes('--stdin');
+    const expectedDelimiter = json ? 'OPC_JSON_5f1d0c7a_EOF' : 'OPC_ARGS_5f1d0c7a_EOF';
+    assert.equal(delimiter, expectedDelimiter, `${command} uses its canonical delimiter`);
+    const ws = makeWorkspace(t);
+    const env = testEnv(t);
+    const hostile = json
+      ? JSON.stringify({ project: { goal: '$(touch pwned-dollar) `touch pwned-backtick`' } })
+      : "--bogus '$(touch pwned-dollar)' `touch pwned-backtick`";
+    const script = `${command} <<'${delimiter}'\n${hostile}\n${delimiter}`;
+    const res = spawnSync('bash', ['-c', script], { env: { ...env, PATH: `${PLUGIN_BIN_DIR}${path.delimiter}${env.PATH}` }, cwd: ws, encoding: 'utf8' });
+    assert.equal(res.status, json ? 0 : 2, `${command}: ${res.error?.message ?? ''}\n${res.stdout}\n${res.stderr}`);
+    for (const f of ['pwned-dollar', 'pwned-backtick']) assert.equal(fs.existsSync(path.join(ws, f)), false, f);
   }
 });
 

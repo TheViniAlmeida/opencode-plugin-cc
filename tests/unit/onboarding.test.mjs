@@ -25,10 +25,11 @@ test('steps are the spec §3.3 list in order', () => {
   assert.deepEqual(ONBOARDING_STEPS.map((s) => s.id), ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']);
 });
 
-test('buildDraft: bootstrap and reconfigure offer scope selection', () => {
+test('buildDraft: bootstrap is global-first; only reconfigure offers scope selection', () => {
   const boot = buildDraft({ hasGlobal: false, now: NOW });
   assert.equal(boot.mode, 'bootstrap');
-  assert.equal(nextStep(boot, { allowLocked: true }), 'scope');
+  assert.equal(boot.scope, 'global');
+  assert.equal(nextStep(boot, { allowLocked: true }), 'defaultProvider');
   const re = buildDraft({ hasGlobal: true, now: NOW });
   assert.equal(re.mode, 'reconfigure');
   assert.equal(nextStep(re), 'scope');
@@ -70,7 +71,6 @@ test('applyDraftStep: ambiguity, unknown provider, unknown key', () => {
   assert.throws(() => applyDraftStep(draft, { defaultModel: 'opencode/big-pickle' }, deps()), (e) => e.code === 'AMBIGUOUS_MODEL');
   assert.throws(() => applyDraftStep(draft, { defaultProvider: 'openai' }, deps()), (e) => e.code === 'UNKNOWN_PROVIDER');
   assert.throws(() => applyDraftStep(draft, { nonsense: 1 }, deps()), (e) => e.code === 'UNKNOWN_KEY');
-  assert.equal(applyDraftStep(draft, { scope: 'workspace' }, deps()).draft.scope, 'workspace');
   assert.throws(() => applyDraftStep(draft, 'x', deps()), (e) => e.code === 'INVALID_VALUE');
 });
 
@@ -116,11 +116,11 @@ test('workspace scope: global-only keys refused', () => {
   assert.ok(!remainingSteps(draft).includes('behaviour'));
 });
 
-test('fresh bootstrap can select workspace scope', () => {
-  const { draft } = applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'workspace' }, deps());
-  assert.equal(draft.scope, 'workspace');
-  assert.equal(draft.completed.includes('scope'), true);
-  assert.equal(nextStep(draft), 'defaultProvider');
+test('fresh bootstrap rejects workspace scope because locked policy is written globally', () => {
+  assert.throws(
+    () => applyDraftStep(buildDraft({ hasGlobal: false, now: NOW }), { scope: 'workspace' }, deps()),
+    (error) => error.code === 'INVALID_VALUE' && /global/.test(error.message),
+  );
 });
 
 test('commitDraft: writes atomically, removes draft, returns effective config', (t) => {

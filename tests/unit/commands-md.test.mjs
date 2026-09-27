@@ -49,10 +49,15 @@ test('setup.md: install offer, heredoc payloads, commit', () => {
   assert.ok(bashBlocks.some((b) => b.includes('opc setup commit --json')));
   assert.ok(bashBlocks.some((b) => b.includes('--stop-server --force --confirmed-by-user')));
   assert.match(body, /AskUserQuestion[\s\S]*--stop-server --force --confirmed-by-user/);
-  assert.match(body, /AskUserQuestion[\s\S]*scope[\s\S]*opc setup apply/);
+  assert.match(body, /A primeira configuração é global, para todas as pastas\./);
+  assert.match(body, /Do not ask for scope\./i);
+  assert.match(body, /onboarding\.configExists` is true, offer the scope choice/i);
+  assert.match(body, /workspace[\s\S]*\/opc:setup --reconfigure/i);
+  assert.doesNotMatch(body, /On first configuration, ask the scope choice/);
   assert.match(body, /--query '[^']*<typed text>[^']*'/);
   for (const step of ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']) {
-    assert.match(body, new RegExp('\\| `' + step + '` \\|'), `step ${step} documented`);
+    const row = step === 'scope' ? '\\| `scope` \\(somente quando' : '\\| `' + step + '` \\|';
+    assert.match(body, new RegExp(row), `step ${step} documented`);
   }
 });
 

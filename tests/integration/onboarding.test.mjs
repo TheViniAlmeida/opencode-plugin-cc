@@ -77,7 +77,6 @@ test('setup models: top suggestions, aliases, families and search', async (t) =>
 test('guided flow: apply every step, commit atomically, effective config shown', async (t) => {
   const { ws, env, cli, apply, draftFile } = setup(t);
   const steps = [
-    [{ scope: 'global' }, 'defaultProvider'],
     [{ defaultProvider: MV }, 'defaultModel'],
     [{ defaultModel: 'opencode-go/kimi-k3' }, 'reviewModels'],
     [{ reviewModel: null, stopGate: { model: null } }, 'defaultVariant'],

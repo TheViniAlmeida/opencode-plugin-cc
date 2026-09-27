@@ -49,7 +49,7 @@ Present the diagnostic output (including the terminal alias line), then run `opc
 ## E. Onboarding
 
 1. If `onboarding.draft.exists` is true, use `AskUserQuestion`: "Existe um onboarding pela metade (próxima etapa: `<nextStep>`). Retomar?" Options: `Retomar (Recomendado)`, `Recomeçar do zero`. On `Recomeçar do zero`, run `opc setup discard --json` and then rerun the first command of this file.
-2. On first configuration, ask the scope choice before applying any other step. Start at `onboarding.nextStep`; ask **one** `AskUserQuestion` per step, build the JSON payload described below and apply it:
+2. When `onboarding.configExists` is false, state in PT-BR: "A primeira configuração é global, para todas as pastas. Depois dela, o escopo deste workspace (`.opc.json`) fica disponível em `/opc:setup --reconfigure`." Do not ask for scope. When `onboarding.configExists` is true, offer the scope choice at the `scope` step. Start at `onboarding.nextStep`; ask **one** `AskUserQuestion` per step, build the JSON payload described below and apply it:
 
 ```bash
 opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'
@@ -62,7 +62,7 @@ OPC_JSON_5f1d0c7a_EOF
 
 | Step | Question (PT-BR) | Options | Payload |
 |---|---|---|---|
-| `scope` | "Onde gravar a config?" | `Global — todas as pastas (Recomendado)`, `Só este workspace (.opc.json)` | `{"scope":"global"}` or `{"scope":"workspace"}`; a fresh workspace scope is available when a global config already exists |
+| `scope` (somente quando `onboarding.configExists` for `true`) | "Onde gravar a config?" | `Global — todas as pastas (Recomendado)`, `Só este workspace (.opc.json)` | `{"scope":"global"}` or `{"scope":"workspace"}` |
 | `defaultProvider` | "Qual provider padrão?" | `onboarding.providerChoices` (label `<id> (<modelCount> modelos)`, from `connectedProviders`) | `{"defaultProvider":"<id>"}` |
 | `defaultModel` | "Qual modelo padrão?" | the 3 `suggestions` of `opc setup models` (below); label = model ID, description = name + variants | `{"defaultModel":"<full id>"}` |
 | `reviewModels` | "Modelo do review?" then "Modelo do stop gate?" (two separate calls) | `Mesmo do padrão (Recomendado)`, the `aliases.strong` suggestion, one more suggestion | `{"reviewModel":<id or null>,"stopGate":{"model":<id or null>}}` |

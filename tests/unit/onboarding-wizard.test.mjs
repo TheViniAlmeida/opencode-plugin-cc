@@ -42,7 +42,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
     'n', 's',            // aliases: skip fast, create strong
     's',                 // save
   ];
-  const { run, dataDir, log } = wizard(t, answers);
+  const { run, dataDir, log, output } = wizard(t, answers);
   const result = await run;
   assert.equal(result.scope, 'global');
   const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
@@ -54,6 +54,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
   assert.deepEqual(cfg.project, { goal: null, scope: [], taskTypes: ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'] });
   assert.deepEqual(cfg.aliases, { strong: `${MV}/opencode-go/qwen3.8-max` });
   assert.match(log.text(), /AMBIGUOUS_MODEL: o modelo .* é ambíguo/);
+  assert.doesNotMatch(output.text(), /Onde gravar\?/);
 });
 
 test('reconfigure wizard asks the scope first and may decline saving', async (t) => {
