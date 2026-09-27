@@ -39,12 +39,12 @@ export function createPrompter({ input, output }) {
   });
   rl.on('close', () => {
     closed = true;
-    while (waiters.length) waiters.shift().reject(new OpcError('TTY_CLOSED', 'input closed before the answer', { exitCode: 2 }));
+    while (waiters.length) waiters.shift().reject(new OpcError('TTY_CLOSED', 'a entrada foi encerrada antes da resposta', { exitCode: 2 }));
   });
   const write = (text) => output.write(text);
   const nextLine = () => {
     if (queue.length) return Promise.resolve(queue.shift());
-    if (closed) return Promise.reject(new OpcError('TTY_CLOSED', 'input closed before the answer', { exitCode: 2 }));
+    if (closed) return Promise.reject(new OpcError('TTY_CLOSED', 'a entrada foi encerrada antes da resposta', { exitCode: 2 }));
     return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
   };
   const ask = async (question) => {

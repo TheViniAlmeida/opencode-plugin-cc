@@ -105,5 +105,24 @@ test('text with default and validation; confirm s/n', async () => {
 
 test('closed input rejects with TTY_CLOSED', async () => {
   const p = createPrompter({ input: scriptedTTY([]), output: captureStream() });
-  await assert.rejects(p.text('x? '), (err) => err.code === 'TTY_CLOSED' && err.exitCode === 2);
+  await assert.rejects(p.text('x? '), (err) => {
+    assert.equal(err.code, 'TTY_CLOSED');
+    assert.equal(err.exitCode, 2);
+    assert.match(err.message, /a entrada foi encerrada antes da resposta/i);
+    return true;
+  });
+});
+
+test('input closed while waiting rejects with translated TTY_CLOSED', async () => {
+  const input = new PassThrough();
+  input.isTTY = true;
+  const p = createPrompter({ input, output: captureStream() });
+  const prompt = p.text('x? ');
+  input.end();
+  await assert.rejects(prompt, (err) => {
+    assert.equal(err.code, 'TTY_CLOSED');
+    assert.equal(err.exitCode, 2);
+    assert.match(err.message, /a entrada foi encerrada antes da resposta/i);
+    return true;
+  });
 });
