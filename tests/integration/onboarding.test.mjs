@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeWorkspace, makeTempDir, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig,
+  makeWorkspace, makeTempDir, testEnv, runCli, runInProcess, pipedStdin, stopAllServers, writeGlobalConfig, readGlobalConfig,
 } from '../helpers.mjs';
 
 const MV = 'omniroute-mvalmeida';
@@ -126,9 +126,22 @@ test('interruption leaves only the draft and setup resumes from the next step', 
   assert.equal((await cli(['setup', 'commit'])).code, 2);
 });
 
-test('invalid payloads: bad JSON, unknown key, ambiguous and unknown models (exit 2)', async (t) => {
+test('setup apply rejects malformed or conflicting payload sources without echoing input', async (t) => {
+  const { ws, env } = setup(t);
+  const invoke = (args, stdin = '') => runInProcess('setup', args, { env, cwd: ws, stdin: pipedStdin(stdin) });
+  const secret = 'FAKE_SECRET_DO_NOT_ECHO';
+  const malformed = await invoke(['apply', '--stdin'], `{"token":"${secret}",`);
+  assert.equal(malformed.code, 2);
+  assert.doesNotMatch(all(malformed), new RegExp(secret));
+  assert.match(all(malformed), /JSON.*inválido|JSON.*válido/i, JSON.stringify(malformed));
+  const conflicting = await invoke(['apply', '--stdin', '{"defaultProvider":"ignored"}'], '{}');
+  assert.equal(conflicting.code, 2);
+  assert.match(all(conflicting), /USAGE|uso:/i);
+  assert.doesNotMatch(all(conflicting), /ignored/);
+});
+
+test('invalid payloads: unknown key, ambiguous and unknown models (exit 2)', async (t) => {
   const { cli, apply } = setup(t);
-  assert.equal((await cli(['setup', 'apply', '--stdin'], { stdin: '{not json' })).code, 2);
   assert.equal((await apply({ nonsense: true })).code, 2);
   await apply({ defaultProvider: MV });
   const amb = await apply({ defaultModel: 'opencode/big-pickle' });
@@ -136,6 +149,16 @@ test('invalid payloads: bad JSON, unknown key, ambiguous and unknown models (exi
   assert.match(all(amb), /AMBIGUOUS_MODEL/);
   assert.equal((await apply({ defaultModel: 'opencode-go/nope' })).code, 2);
   assert.equal((await apply({ defaultVariant: 'ultra' })).code, 2);
+});
+
+test('review-gate flags are recognized and deferred to F2b', async (t) => {
+  const { ws, env } = setup(t);
+  for (const flag of ['--enable-review-gate', '--disable-review-gate']) {
+    const r = await runInProcess('setup', [flag], { env, cwd: ws });
+    assert.equal(r.code, 2, all(r));
+    assert.match(all(r), /disponíveis na F2b/i);
+    assert.doesNotMatch(all(r), /unknown|desconhecid/i);
+  }
 });
 
 test('after bootstrap: locked keys refused from Claude with the terminal command', async (t) => {

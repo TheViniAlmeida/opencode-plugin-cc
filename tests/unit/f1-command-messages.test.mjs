@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import { run as runProviders } from '../../plugins/opc/scripts/commands/providers.mjs';
 import { run as runModels } from '../../plugins/opc/scripts/commands/models.mjs';
 import { run as runAgents } from '../../plugins/opc/scripts/commands/agents.mjs';
@@ -23,6 +24,38 @@ test('F1 command usage errors keep codes and use Brazilian Portuguese', async ()
       assert.equal(err.code, 'USAGE', name);
       assert.match(err.message, /uso:|deve ser um de|só valem junto/, name);
       assert.doesNotMatch(err.message, /usage:|must be/, name);
+      return true;
+    });
+  }
+});
+
+test('setup apply errors redact malformed JSON and reject simultaneous stdin and positional input', async () => {
+  const secret = 'FAKE_SECRET_DO_NOT_ECHO';
+  await assert.rejects(
+    runSetup({ stdin: Readable.from([`{"token":"${secret}",`]) }, ['apply', '--stdin']),
+    (err) => {
+      assert.equal(err.code, 'INVALID_JSON');
+      assert.match(err.message, /JSON.*válido/i);
+      assert.doesNotMatch(err.message, new RegExp(secret));
+      return true;
+    },
+  );
+  await assert.rejects(
+    runSetup({ stdin: Readable.from(['{}']) }, ['apply', '--stdin', '{"value":"ignored"}']),
+    (err) => {
+      assert.equal(err.code, 'USAGE');
+      assert.match(err.message, /uso:/i);
+      assert.doesNotMatch(err.message, /ignored/);
+      return true;
+    },
+  );
+});
+
+test('setup review-gate flags are deferred to F2b with a clear usage error', async () => {
+  for (const flag of ['--enable-review-gate', '--disable-review-gate']) {
+    await assert.rejects(runSetup({}, [flag]), (err) => {
+      assert.equal(err.code, 'USAGE');
+      assert.match(err.message, /disponíveis na F2b/i);
       return true;
     });
   }

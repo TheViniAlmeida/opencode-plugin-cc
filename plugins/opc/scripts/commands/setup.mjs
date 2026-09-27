@@ -251,10 +251,13 @@ const SetupOnboarding = {
   async apply(ctx, argv) {
     const d = await this.deps();
     const { flags, positionals } = d.parseArgs(argv, { flags: { json: { type: 'boolean' }, stdin: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+    if (flags.stdin && positionals.length) {
+      throw new d.UsageError('USAGE', "uso: opc setup apply [--json] ('<JSON parcial>' | --stdin); não combine --stdin com um payload posicional");
+    }
     const text = flags.stdin ? await d.readStdin(ctx.stdin) : positionals.join(' ');
     if (!text.trim()) throw new d.UsageError('USAGE', "usage: opc setup apply [--json] ('<partial config JSON>' | --stdin)");
     let partial;
-    try { partial = JSON.parse(text); } catch (err) { throw new d.UsageError('INVALID_JSON', `payload is not valid JSON: ${err.message}`); }
+    try { partial = JSON.parse(text); } catch { throw new d.UsageError('INVALID_JSON', 'O payload informado não contém JSON válido.'); }
     const loaded = d.loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
     const draft = d.loadDraft(ctx.dataDir) ?? d.buildDraft({ hasGlobal: loaded.hasGlobal });
     const allowLocked = draft.mode === 'bootstrap' && !loaded.hasGlobal;
@@ -297,26 +300,34 @@ const SetupOnboarding = {
 export async function run(ctx, argv) {
   const sub = argv[0];
   if (['models', 'apply', 'commit', 'discard'].includes(sub)) return SetupOnboarding[sub](ctx, argv.slice(1));
+  if (argv.some((arg) => arg === '--enable-review-gate' || arg === '--disable-review-gate')) {
+    throw new UsageError('USAGE', 'Os flags de review gate estarão disponíveis na F2b.');
+  }
   const reconfigure = argv.includes('--reconfigure');
   const rest = argv.filter((a) => a !== '--reconfigure');
-  if (rest.some((a) => SETUP_PASSTHROUGH_FLAGS.includes(a))) return runDiagnostics(ctx, rest);
-  const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
-  let emitted = false;
-  const wrapped = {
+  const isF0Control = rest.some((a) => SETUP_PASSTHROUGH_FLAGS.includes(a)
+    || a === '--force' || a === '--confirmed-by-user');
+  if (isF0Control) return runDiagnostics(ctx, rest);
+
+  // Run the F0 diagnostic exactly once before collecting optional onboarding details.
+  // In particular, failed version/auth checks must keep their original report and boot count.
+  let report;
+  let output = '';
+  const captured = {
     ...ctx,
-    json: (obj) => { emitted = true; ctx.json({ ...obj, onboarding }); },
-    out: (chunk) => {
-      ctx.out(emitted ? chunk : `${chunk}${text}`);
-      emitted = true;
-    },
+    json: (value) => { report = value; },
+    out: (value) => { output += value; },
   };
-  try {
-    return await runDiagnostics(wrapped, rest);
-  } catch (err) {
-    if (emitted || !rest.includes('--json')) throw err;
-    const { toExitCode } = await import('../lib/opc-error.mjs');
-    ctx.json({ error: { code: err.code ?? 'ERROR', message: err.message }, onboarding });
-    return toExitCode(err);
+  const exitCode = await runDiagnostics(captured, rest);
+  if (exitCode !== ExitCode.OK) {
+    if (report !== undefined) ctx.json(report);
+    else ctx.out(output);
+    return exitCode;
   }
+
+  const { onboarding, text } = await SetupOnboarding.state(ctx, { reconfigure });
+  if (report !== undefined) ctx.json({ ...report, onboarding });
+  else ctx.out(`${output}${text}`);
+  return exitCode;
 }
 // ---- end F1 ----
