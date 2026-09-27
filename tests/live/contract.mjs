@@ -25,6 +25,7 @@ async function collect(client, sseClient) {
   const shapes = {};
   for (const probe of PROBES) {
     const body = await client.request(probe.method, probe.path);
+    // Both real and fake responses pass through this same pruning before snapshots/diffs.
     shapes[probe.name] = shapeOf(body, probe.name);
   }
   const hub = new EventHub({ client: sseClient });

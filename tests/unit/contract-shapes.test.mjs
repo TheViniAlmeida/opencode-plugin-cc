@@ -2,8 +2,60 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
 
-import { CONFIG_USED_FIELDS, diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
+import { CONFIG_USED_FIELDS, EVENT_TYPES, PROBES, diffShapes, evidenceVerdict, lookup, mergeVerdict, shapeOf, toolAttempted } from '../fixtures/contract-shapes.mjs';
+
+const agentItem = {
+  name: 'synthetic-agent', mode: 'primary', permission: { model: { enabled: 'deny' } },
+  options: { temperature: 0.5 }, model: 'synthetic/model', prompt: 'synthetic prompt',
+  description: 'synthetic description', hidden: false, color: '#123456', steps: 10,
+  variant: 'default', temperature: 0.5,
+};
+
+test('agent array snapshots preserve all 12 known properties regardless of size', () => {
+  assert.deepEqual(shapeOf([agentItem], 'agent'), [{
+    name: 'string', mode: 'string', permission: { '*': { '*': 'string' } },
+    options: { temperature: 'number' }, model: 'string', prompt: 'string',
+    description: 'string', hidden: 'boolean', color: 'string', steps: 'number',
+    variant: 'string', temperature: 'number',
+  }]);
+  const manyKeys = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`key${i}`, i]));
+  assert.deepEqual(shapeOf(manyKeys), Object.fromEntries(Object.keys(manyKeys).map((key) => [key, 'number'])));
+});
+
+test('agent array snapshots collapse unknown names recursively and permission maps always', () => {
+  assert.deepEqual(shapeOf([{
+    name: 'alice', alice: true, options: { alice: { enabled: true } },
+    permission: { model: { enabled: 'deny' } },
+  }], 'agent'), [{
+    name: 'string', '*': 'boolean', options: { '*': { enabled: 'boolean' } },
+    permission: { '*': { '*': 'string' } },
+  }]);
+});
+
+test('live collection prunes real and fake agent responses identically before diffing', async () => {
+  const source = fs.readFileSync(path.resolve('tests/live/contract.mjs'), 'utf8');
+  const collectSource = source.slice(source.indexOf('async function collect('), source.indexOf('\nconst base ='));
+  const collect = vm.runInNewContext(`(${collectSource})`, {
+    PROBES, EVENT_TYPES, shapeOf, performance,
+    EventHub: class {
+      onAny(callback) { this.callback = callback; }
+      async start() { for (const type of EVENT_TYPES) this.callback({ id: 'synthetic', type, properties: {} }); }
+      stop() {}
+    },
+  });
+  const client = (unknown) => ({ request: async (_method, endpoint) => endpoint === '/agent'
+    ? [{ ...agentItem, options: { [unknown]: true } }] : {} });
+  const real = await collect(client('alice'), {});
+  const fake = await collect(client('bob'), {});
+  const probe = PROBES.find((entry) => entry.name === 'agent');
+  assert.deepEqual(diffShapes(real.agent, fake.agent, probe.used, probe.optionalUsed), []);
+  assert.deepEqual(real.agent, shapeOf([{ ...agentItem, options: { alice: true } }], 'agent'));
+  assert.deepEqual(fake.agent, real.agent);
+  assert.equal(lookup(real.agent, '[].name'), 'string');
+  assert.deepEqual(lookup(fake.agent, '[].options'), { '*': 'boolean' });
+});
 
 test('shapeOf records types, first array element and collapses user-data maps', () => {
   assert.deepEqual(shapeOf({ b: 1, a: 'x', n: null, l: [{ k: true }] }), { a: 'string', b: 'number', l: [{ k: 'boolean' }], n: 'null' });
@@ -84,7 +136,7 @@ test('config snapshots preserve allowlisted properties regardless of object size
 test('lookup walks dotted paths with [] for array elements', () => {
   const shape = shapeOf([{ name: 'build', permission: [{ action: 'allow' }] }]);
   assert.equal(lookup(shape, '[].name'), 'string');
-  assert.deepEqual(lookup(shape, '[].permission'), [{ action: 'string' }]);
+  assert.deepEqual(lookup(shape, '[].permission'), [{ '*': 'string' }]);
   assert.equal(lookup(shape, '[].missing'), undefined);
   assert.equal(lookup({ a: 'string' }, '[].a'), undefined);
 });

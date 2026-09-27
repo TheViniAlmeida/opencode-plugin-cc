@@ -1,0 +1,93 @@
+{
+  "health": {
+    "healthy": "boolean",
+    "version": "string"
+  },
+  "agent": [
+    {
+      "*": "mixed"
+    }
+  ],
+  "config": {
+    "share": "string",
+    "mcp": {
+      "*": {
+        "*": "boolean",
+        "command": [
+          "string"
+        ],
+        "enabled": "boolean",
+        "headers": {
+          "*": "string"
+        },
+        "type": "string",
+        "url": "string"
+      }
+    },
+    "agent": {
+      "*": {
+        "*": "number",
+        "color": "string",
+        "description": "string",
+        "hidden": "boolean",
+        "mode": "string",
+        "model": "string",
+        "name": "string",
+        "options": {},
+        "permission": {
+          "*": "mixed"
+        },
+        "prompt": "string",
+        "steps": "number",
+        "variant": "string"
+      }
+    },
+    "provider": {
+      "*": {
+        "models": {
+          "*": {
+            "*": "mixed",
+            "headers": {
+              "*": "string"
+            },
+            "name": "string",
+            "variants": {
+              "*": {
+                "options": {
+                  "*": "mixed"
+                }
+              }
+            }
+          }
+        },
+        "name": "string",
+        "npm": "string",
+        "options": {
+          "*": "string"
+        }
+      }
+    },
+    "permission": {
+      "*": "string"
+    }
+  },
+  "session.status": {
+    "*": "empty"
+  },
+  "permission": [
+    "empty"
+  ],
+  "question": [
+    "empty"
+  ],
+  "event:server.connected": {
+    "id": "string",
+    "properties": {},
+    "type": "string"
+  },
+  "event:server.heartbeat": {
+    "id": "string",
+    "properties": {},
+    "type": "string"
+  }
+}
