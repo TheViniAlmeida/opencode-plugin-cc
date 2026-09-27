@@ -28,7 +28,7 @@
 - `revert`/`unrevert` só executam com `--confirmed-by-user`; sem ele, exit 2 com o diff afetado e a instrução.
 - `/opc:attach` com `disable-model-invocation: true`; `Bash(tmux:*)` só nesse comando.
 - Política aplicada a **todo** modelo e agente usados, inclusive os fixados por agente ou por command do OpenCode, **antes** de criar sessão (spec §6.4, §6.7).
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; modelos `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; modelos `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
 - Nada de exclusão de sessão, `share` ou `--auto-approve` (spec D15).
 
 ## Review Focus
@@ -317,7 +317,7 @@ test('f3 fake: seeded sessions are listed newest first', async (t) => {
 
 test('f3 fake: POST /session stores parentID, agent and model; children lists it', async (t) => {
   const { call } = await boot(t);
-  const created = await call('POST', '/session', { parentID: SEED.session, title: 'OPC: sub: x', agent: 'general', model: { id: 'opencode-go/kimi-k3', providerID: 'omniroute-mvalmeida' } });
+  const created = await call('POST', '/session', { parentID: SEED.session, title: 'OPC: sub: x', agent: 'general', model: { id: 'opencode-go/kimi-k3', providerID: 'omniroute-personal' } });
   assert.equal(created.status, 200);
   assert.match(created.body.id, /^ses/);
   assert.equal(created.body.parentID, SEED.session);
@@ -352,7 +352,7 @@ test('f3 fake: revert sets session.revert with a diff; unrevert clears it', asyn
 test('f3 fake: summarize requires providerID and modelID', async (t) => {
   const { call } = await boot(t);
   assert.equal((await call('POST', `/session/${SEED.session}/summarize`, {})).status, 400);
-  const res = await call('POST', `/session/${SEED.session}/summarize`, { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/qwen3.8-max' });
+  const res = await call('POST', `/session/${SEED.session}/summarize`, { providerID: 'omniroute-personal', modelID: 'opencode-go/qwen3.8-max' });
   assert.equal(res.status, 200);
   assert.equal(res.body, true);
   const msgs = await call('GET', `/session/${SEED.session}/message`);
@@ -378,7 +378,7 @@ test('f3 fake: diff (with and without messageID), todo, dispose and catalogs', a
   assert.equal((await call('POST', '/instance/dispose')).body, true);
   assert.equal(fake.state.f3.disposed, 1);
   const providers = await call('GET', '/provider');
-  assert.deepEqual(providers.body.connected, ['omniroute-mvalmeida', 'omniroute-work']);
+  assert.deepEqual(providers.body.connected, ['omniroute-personal', 'omniroute-work']);
   assert.ok((await call('GET', '/agent')).body.some((a) => a.name === 'explore' && a.mode === 'subagent'));
   assert.ok((await call('GET', '/command')).body.some((c) => c.name === 'pinned-model'));
 });
@@ -402,9 +402,9 @@ Expected: FAIL com `Cannot find module '../fixtures/f3-fake.mjs'` (ou cenário i
 // Used only through F3 scenarios (withF3), so F0–F2b scenarios keep their behavior.
 
 export const F3_MODELS = Object.freeze({
-  deepseek: 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash',
-  qwen: 'omniroute-mvalmeida/opencode-go/qwen3.8-max',
-  kimi: 'omniroute-mvalmeida/opencode-go/kimi-k3',
+  deepseek: 'omniroute-personal/opencode-go/deepseek-v4.1-flash',
+  qwen: 'omniroute-personal/opencode-go/qwen3.8-max',
+  kimi: 'omniroute-personal/opencode-go/kimi-k3',
   denied: 'omniroute-work/cx/gpt-5.5',
 });
 
@@ -441,11 +441,11 @@ function fakeProvider(id, modelIDs) {
 
 export const F3_PROVIDERS = {
   all: [
-    fakeProvider('omniroute-mvalmeida', ['opencode-go/deepseek-v4.1-flash', 'opencode-go/qwen3.8-max', 'opencode-go/kimi-k3']),
+    fakeProvider('omniroute-personal', ['opencode-go/deepseek-v4.1-flash', 'opencode-go/qwen3.8-max', 'opencode-go/kimi-k3']),
     fakeProvider('omniroute-work', ['cx/gpt-5.5']),
   ],
-  default: { 'omniroute-mvalmeida': 'opencode-go/deepseek-v4.1-flash', 'omniroute-work': 'cx/gpt-5.5' },
-  connected: ['omniroute-mvalmeida', 'omniroute-work'],
+  default: { 'omniroute-personal': 'opencode-go/deepseek-v4.1-flash', 'omniroute-work': 'cx/gpt-5.5' },
+  connected: ['omniroute-personal', 'omniroute-work'],
 };
 
 const agent = (name, mode, extra = {}) => ({ name, mode, native: false, permission: [], options: {}, ...extra });
@@ -470,7 +470,7 @@ export const F3_OPENCODE_CONFIG = { model: F3_MODELS.deepseek, share: 'manual' }
 
 // Global opc config used by F3 integration tests (written to <OPC_DATA_DIR>/config.json).
 export const F3_TEST_CONFIG = {
-  defaultProvider: 'omniroute-mvalmeida',
+  defaultProvider: 'omniroute-personal',
   defaultModel: F3_MODELS.deepseek,
   aliases: { fast: F3_MODELS.deepseek, strong: F3_MODELS.qwen, k3: F3_MODELS.kimi },
   policy: {
@@ -507,12 +507,12 @@ function nextId(fake, prefix) {
 
 export function userMessage(sessionID, id, text, created = Date.now()) {
   return {
-    info: { id, sessionID, role: 'user', time: { created }, agent: 'build', model: { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/deepseek-v4.1-flash' } },
+    info: { id, sessionID, role: 'user', time: { created }, agent: 'build', model: { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' } },
     parts: [{ id: `prt_${id.slice(4)}`, sessionID, messageID: id, type: 'text', text }],
   };
 }
 
-export function assistantMessage(sessionID, id, parentID, text, { providerID = 'omniroute-mvalmeida', modelID = 'opencode-go/deepseek-v4.1-flash', agent: agentName = 'build', summary = false, error = undefined, created = Date.now() } = {}) {
+export function assistantMessage(sessionID, id, parentID, text, { providerID = 'omniroute-personal', modelID = 'opencode-go/deepseek-v4.1-flash', agent: agentName = 'build', summary = false, error = undefined, created = Date.now() } = {}) {
   return {
     info: {
       id, sessionID, role: 'assistant', time: { created, completed: created }, parentID, modelID, providerID,
@@ -1878,7 +1878,7 @@ test('session new: title prefix, agent, model {id, providerID} and read-only rul
   const body = posts(env, '/session').at(-1).body;
   assert.equal(body.title, 'OPC: session: meu teste');
   assert.equal(body.agent, 'build');
-  assert.deepEqual(body.model, { id: 'opencode-go/qwen3.8-max', providerID: 'omniroute-mvalmeida' });
+  assert.deepEqual(body.model, { id: 'opencode-go/qwen3.8-max', providerID: 'omniroute-personal' });
   assert.deepEqual(body.permission[0], { permission: '*', pattern: '*', action: 'deny' });
 });
 
@@ -2312,10 +2312,10 @@ test('summarize: model from --model (alias) or routing; denied model refused', a
   const { cwd, env } = await setup(t);
   const res = await runCli(['session', 'summarize', SEED.session, '--model', 'strong', '--json'], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
-  assert.deepEqual(posts(env, `/session/${SEED.session}/summarize`)[0].body, { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/qwen3.8-max' });
-  assert.equal(JSON.parse(res.stdout).model, 'omniroute-mvalmeida/opencode-go/qwen3.8-max');
+  assert.deepEqual(posts(env, `/session/${SEED.session}/summarize`)[0].body, { providerID: 'omniroute-personal', modelID: 'opencode-go/qwen3.8-max' });
+  assert.equal(JSON.parse(res.stdout).model, 'omniroute-personal/opencode-go/qwen3.8-max');
   assert.equal((await runCli(['session', 'summarize', SEED.session], { env, cwd })).code, 0);
-  assert.deepEqual(posts(env, `/session/${SEED.session}/summarize`)[1].body, { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/deepseek-v4.1-flash' });
+  assert.deepEqual(posts(env, `/session/${SEED.session}/summarize`)[1].body, { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' });
   assert.equal((await runCli(['session', 'summarize', SEED.session, '--model', 'omniroute-work/cx/gpt-5.5'], { env, cwd })).code, 4);
   assert.equal(posts(env, `/session/${SEED.session}/summarize`).length, 2);
 });
@@ -3370,7 +3370,7 @@ test('falls back to a subtask part when the agent mode is refused', async (t) =>
   assert.equal(part.type, 'subtask');
   assert.equal(part.agent, 'explore');
   assert.ok(part.description.length > 0);
-  assert.deepEqual(part.model, { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/deepseek-v4.1-flash' });
+  assert.deepEqual(part.model, { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' });
   const carrier = created(env).find((b) => b.parentID && !b.agent && / \(subtask\)$/.test(b.title));
   assert.deepEqual(carrier.permission.at(-1), { permission: 'task', pattern: 'explore', action: 'allow' });
 });
@@ -5246,7 +5246,7 @@ Em `CHANGELOG.md`, sob `## [Unreleased]`:
 - Data do portão: DD/MM/AAAA
 - Branch / PR: `feat/opc-f3` / #
 - OpenCode: 1.18.32 · Node: (versão) · tmux: (versão)
-- Modelos ao vivo: `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`
+- Modelos ao vivo: `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`
 
 Legenda: `PASSOU` (executado e conferido), `N/A` (não se aplica, com motivo),
 `NÃO VALIDADO` (não foi possível verificar, com motivo). Nenhum item fica sem status.
@@ -5348,7 +5348,7 @@ import { workspaceStateDir, resolveWorkspaceRoot } from '../../plugins/opc/scrip
 
 export const LIVE = process.env.OPC_LIVE === '1';
 export const SKIP = LIVE ? false : 'OPC_LIVE!=1 (teste ao vivo)';
-const PREFIX = 'omniroute-mvalmeida/opencode-go/';
+const PREFIX = 'omniroute-personal/opencode-go/';
 export const MODELS = Object.freeze({ deepseek: `${PREFIX}deepseek-v4.1-flash`, qwen: `${PREFIX}qwen3.8-max`, kimi: `${PREFIX}kimi-k3` });
 export const REPORT = join(REPO_ROOT, 'docs/phases/F3-live-output.md');
 
@@ -5766,7 +5766,7 @@ test('F3 contract: real 1.18.32 vs fake for fork/revert/unrevert/summarize/diff/
 
   const server = JSON.parse(readFileSync(join(stateDir(), 'server.json'), 'utf8'));
   registerSecret(server.password);
-  const model = { providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/deepseek-v4.1-flash' };
+  const model = { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' };
   const real = await capture(createApi(createClient({ baseUrl: server.url, password: server.password, directory: resolveWorkspaceRoot(ws) })), sid, model);
 
   const fakePassword = 'contract-fake-password-000';
@@ -5812,7 +5812,7 @@ Expected: 100% verde. Anexe a contagem e o trecho final à seção 1 do relatór
 - [ ] **Step 2: Testes ao vivo (três modelos)**
 
 Pré-requisitos: `opencode --version` → `1.18.32`; `opencode auth` com o provider
-`omniroute-mvalmeida` conectado; nenhum `OPC_SERVER_URL` exportado.
+`omniroute-personal` conectado; nenhum `OPC_SERVER_URL` exportado.
 
 Se `docs/phases/F3-live-output.md` já existir de uma execução anterior, renomeie-o antes
 (`mv docs/phases/F3-live-output.md docs/phases/F3-live-output.prev-DDMMYY.md`); os testes

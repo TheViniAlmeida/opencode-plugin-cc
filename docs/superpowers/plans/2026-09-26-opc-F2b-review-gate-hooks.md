@@ -29,7 +29,7 @@
 - Perfil `read-only` para review, adversarial-review e stop gate: sem bash; a coleta do diff é **sempre** do companion (§8.1, §9.4).
 - SessionEnd: orçamento total de 1,5 s → o hook sai em **< 1 s** (§9.3).
 - Stop hook: `timeout: 900` no `hooks.json`; bloqueio só com `{"decision":"block","reason":...}` e exit 0; falha de infraestrutura **permite** com `systemMessage` (§9.3, §14.3).
-- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável, modelo da fase `omniroute-mvalmeida/opencode-go/qwen3.8-max` (`OPC_LIVE_MODEL` sobrescreve).
+- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável, modelo da fase `omniroute-personal/opencode-go/qwen3.8-max` (`OPC_LIVE_MODEL` sobrescreve).
 - Licença Apache-2.0; arquivos portados com o cabeçalho de modificação; nada copiado do `swarm-code-plugin`.
 - Git: branch `feat/opc-f2b`; Conventional Commits; **sem trailers** (`Co-Authored-By`, `Signed-off-by`, "Generated with"); commit/push/PR só com autorização explícita do operador na sessão de execução (mestre, "Regras de git").
 
@@ -5270,7 +5270,7 @@ import { spawnSync } from 'node:child_process';
 import { runCli } from '../helpers.mjs';
 
 export const SKIP = process.env.OPC_LIVE === '1' ? false : 'OPC_LIVE != 1';
-export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/qwen3.8-max';
+export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/qwen3.8-max';
 export const LIVE_TIMEOUT_MS = 20 * 60 * 1000;
 
 export const MATH_BASE = [
@@ -5608,7 +5608,7 @@ Expected: 100% verde. Anexe o resumo (`# tests`, `# pass`, `# fail 0`) ao relat�
 - [ ] **Step 7: Rodar o checklist ao vivo com `qwen3.8-max`**
 
 ```bash
-OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-mvalmeida/opencode-go/qwen3.8-max \
+OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-personal/opencode-go/qwen3.8-max \
   node --test tests/live/f2b-review.mjs tests/live/f2b-adversarial.mjs tests/live/f2b-stop-gate.mjs \
   tests/live/f2b-rescue.mjs tests/live/f2b-session-end.mjs 2>&1 | tee "$TMPDIR/opc-f2b-live.txt"
 ```
@@ -5667,7 +5667,7 @@ $ opc review --wait
 # OPC Review
 
 Target: working tree diff
-Model: omniroute-mvalmeida/opencode-go/qwen3.8-max
+Model: omniroute-personal/opencode-go/qwen3.8-max
 Job: review-<id>
 Verdict: needs-attention
 
@@ -5806,7 +5806,7 @@ Crie com este conteúdo e preencha **cada** linha com `PASSOU`, `N/A` (justifica
 - **Data:** DD/MM/AAAA
 - **Branch/commit:** `feat/opc-f2b` @ `<sha>`
 - **Ambiente:** Node `<versão>`, OpenCode `<versão>`, Linux `<kernel>`
-- **Modelo ao vivo:** `omniroute-mvalmeida/opencode-go/qwen3.8-max`
+- **Modelo ao vivo:** `omniroute-personal/opencode-go/qwen3.8-max`
 
 ## Premissas do F2a (Task 1)
 

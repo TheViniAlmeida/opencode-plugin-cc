@@ -12,6 +12,33 @@
 
 ---
 
+## Ajustes pós-F0 e pós-F1 (27/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+F0 (merge `de234b4`) e F1 (merge `619c5b7`) foram implementadas e revisadas. As rodadas de revisão mudaram comportamentos em relação ao código original do plano da F0. Onde o código desta fase conflitar com a lista abaixo, **vale o código real da `main`** (leia o módulo antes de estendê-lo) e esta lista:
+
+- **Heredoc:** o delimitador canônico é `OPC_ARGS_5f1d0c7a_EOF` (e `OPC_JSON_5f1d0c7a_EOF` para JSON). Todas as ocorrências deste plano já foram trocadas.
+- **`args`:** flag de valor seguida de outra flag → `UsageError`; flag desconhecida com um só hífen (`-x`) → `UsageError`; lookup via `Object.hasOwn`; mensagens de erro ecoam no máximo 12 caracteres do token + `…`.
+- **`state.readJson(file, fallback)`:** só `ENOENT` devolve o fallback; JSON inválido → `OpcError INVALID_JSON` (exit 2); outro erro de I/O → `READ_FAILED` (exit 5). `loadState` pode trazer `rebuildWarnings` e faz backup+reconstrução também para estrutura inválida. `resolveWorkspaceRoot` lança `WORKSPACE_UNRESOLVED` em falhas de git que não sejam "não é repositório"/git ausente.
+- **`config.loadConfig`:** arquivo existente cujo conteúdo não é objeto → `CONFIG_INVALID`; arquivo ilegível → erro (não é ignorado). `validateConfigShape` valida os tipos dos contêineres de `policy`. O merge de `allow` da F0 usa contenção de globs (conservador); a decisão D desta fase (allow + allowWorkspace) o substitui.
+- **`redact`:** substituição do segredo mais longo para o mais curto; `Error.code`/`Error.name` também são redigidos. `renderTable` redige cada célula **antes** de qualquer transformação.
+- **`http`:** só falhas genuínas de conexão viram `SERVER_DOWN` (e disparam `onServerDown`); outras exceções viram `RequestError CLIENT_ERROR`. O token Basic (base64) também é segredo registrado.
+- **`process`/`locks`:** `spawnDetached` lança `SPAWN_FAILED` se não conseguir ler a identidade; `terminateProcessGroup` confirma o grupo inteiro (`KILL_UNCONFIRMED`); locks publicados por `link()` com recuperação serializada por `<lock>.break` (`LOCK_RESTORE_FAILED`).
+- **`server`:** falha ou corpo inválido em `GET /config` bloqueia sessões (`world.shareBlocked`, `world.shareReason: 'config-unavailable'`), reavaliado a cada `ensureServer`; `server.json` sem senha é inválido; `stopServer` encerra por identidade mesmo sem senha.
+- **Companion:** erros em modo `--json` sempre saem como objeto JSON, mesmo erros de parsing; subcomando desconhecido é ecoado truncado.
+- **Testes:** `makeServerCtx(t, …)` em `tests/helpers.mjs`; a limpeza exige parada confirmada (`stopped`, `attached` ou `not-running` verificado pelos boots do fake) e preserva o diretório se falhar; o scanner aceita o marcador `scan-secrets:allow` na linha.
+- **Contrato:** `tests/fixtures/contract-shapes.mjs` usa `CONFIG_USED_FIELDS` e a allowlist `KNOWN_CONFIG_PROPS`; mapas de permissão sempre colapsados. Ao acrescentar as sondas desta fase (`/provider`, `/command`, `/skill`), **colapse sempre as chaves de mapas de IDs** (`provider.*.models`, catálogos de agentes/commands/skills) para `*` — nomes de modelos/agentes do operador nunca podem entrar no snapshot público.
+- **Execução:** implementadores rodam no sandbox do Codex (sem `listen` em sockets, `.git` somente leitura); o controlador roda a suíte completa fora do sandbox e faz os commits.
+
+Acréscimos da F1 (valem além da lista acima):
+
+- **Leia o código real da `main`** de `lib/api.mjs`, `lib/models.mjs`, `lib/policy.mjs`, `lib/config.mjs`, `lib/onboarding.mjs`, `lib/context.mjs` e `commands/*.mjs` antes de estendê-los. `connectApi(ctx)` devolve `{ api, server, client }`.
+- **Redação:** `redact()` mascara valores de qualquer configuração cujo nome case com `isSecretLikeSetting` (em `lib/config.mjs`), além de `SECRET_KEYS`. Use o mesmo predicado em qualquer saída nova.
+- **Exit codes na fronteira dos comandos:** `RequestError SERVER_ERROR` (HTTP 5xx) sai com **5** (mapeamento em `commands/f1-command.mjs`); preserve isso nos comandos novos.
+- **Mensagens:** todo texto ao usuário em PT-BR na origem; eco de entrada do usuário truncado a 12 caracteres + `…` e **nunca** guardado inteiro em `details`; comandos de recuperação sugeridos usam `<valor>`.
+- **Fixtures:** o provider pessoal nas fixtures é `omniroute-personal` (o plano foi atualizado); o de trabalho é `omniroute-work` / agentes `work-*`. **Testes ao vivo exigem `OPC_LIVE_MODEL`** (sem default com IDs do operador) e são executados um a um pelo controlador.
+- **Config:** `.opc.json` tem modo 0644 (versionável); a primeira configuração é sempre global; checagem de política em toda edição (config efetiva antes × depois); bootstrap sob `config.lock`.
+- **Perfil read-only — plano B do §8.1 (achado §15.4a da F0):** os padrões de permissão de `grep`/`glob` são o termo buscado/o glob, **não** caminhos. Portanto o perfil `read-only` deve **negar `grep`** (`{permission:'grep', pattern:'*', action:'deny'}`) — `read` (com `sensitivePaths` negados), `glob` e `list` continuam permitidos. Aplique também às invariantes: `grep` só é permitido no perfil `write`/`custom` se o usuário liberar explicitamente.
+
 ## Global Constraints
 
 Copiadas do mestre; valem para toda tarefa desta fase.
@@ -27,7 +54,7 @@ Copiadas do mestre; valem para toda tarefa desta fase.
 - `always` nunca é enviado em `permission reply`.
 - Exit codes conforme a spec §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Namespace `/opc:`; executável `opc`; título das sessões com o prefixo `OPC: `.
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelo desta fase: `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelo desta fase: `omniroute-personal/opencode-go/deepseek-v4.1-flash`.
 - Arquivos derivados do codex-plugin-cc levam no cabeçalho `Adapted from openai/codex-plugin-cc (Apache-2.0); modified.`
 - Git: branch `feat/opc-f2a`; Conventional Commits; **sem trailer de atribuição** (`Co-Authored-By`, `Signed-off-by`, "Generated with"); commit/push/PR só com autorização explícita do operador na sessão de execução (regra 1 do mestre). Reler cada mensagem antes de `git commit`.
 
@@ -53,7 +80,7 @@ Esta fase assume que F0 e F1 entregaram **exatamente** o contrato do mestre. Pon
 - `ctx.out(text)` e `ctx.err(text)` escrevem o texto como recebido (o plano sempre passa texto terminado em `\n`).
 - O dispatcher (`opc-companion.mjs`) resolve `scripts/commands/<sub>.mjs` dinamicamente; subcomandos novos não exigem mudança nele.
 - Helpers de teste da F0: `REPO_ROOT`, `PLUGIN_ROOT`, `COMPANION`, `makeTempDir`, `makeWorkspace`, `testEnv`, `runCli`, `readFakeState`, `stopAllServers`; fake com `startFake(...)` e cenário `{ setup?, onPromptAsync?, routes? }`; cenário `auth-401` da F0.
-- Fixture de `/provider` da F1 com o provider conectado `omniroute-mvalmeida` e o modelo `opencode-go/deepseek-v4.1-flash` com a variant `high` (a Tarefa 9 tem o teste de pré-condição e o trecho de fixture a acrescentar se faltar).
+- Fixture de `/provider` da F1 com o provider conectado `omniroute-personal` e o modelo `opencode-go/deepseek-v4.1-flash` com a variant `high` (a Tarefa 9 tem o teste de pré-condição e o trecho de fixture a acrescentar se faltar).
 
 Se algum desses nomes divergir no código real, ajuste só a cola (imports/uma linha) e registre no relatório da fase; mudança de interface congelada exige atualizar o mestre e avisar o operador.
 
@@ -572,7 +599,7 @@ import { kindSpecificModel, resolveCandidates, validateSelection } from '../../p
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 import { PolicyError, UsageError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 
-const P = 'omniroute-mvalmeida';
+const P = 'omniroute-personal';
 const catalog = buildCatalog({
   connected: [P, 'anthropic'],
   default: {},
@@ -827,9 +854,9 @@ const SPEC = {
 };
 
 test('prompt kept verbatim: quotes, apostrophes, backticks, $(), ${}, unicode, newlines, backslash', () => {
-  const raw = `--write -m omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash fix "it" don't \`whoami\` $(touch pwned) \${HOME} ção 🚀\nsecond line \\ end\n`;
+  const raw = `--write -m omniroute-personal/opencode-go/deepseek-v4.1-flash fix "it" don't \`whoami\` $(touch pwned) \${HOME} ção 🚀\nsecond line \\ end\n`;
   const r = parsePromptArgs(raw, SPEC);
-  assert.deepEqual(r.argv, ['--write', '-m', 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash']);
+  assert.deepEqual(r.argv, ['--write', '-m', 'omniroute-personal/opencode-go/deepseek-v4.1-flash']);
   assert.equal(r.prompt, `fix "it" don't \`whoami\` $(touch pwned) \${HOME} ção 🚀\nsecond line \\ end`);
 });
 
@@ -3107,13 +3134,13 @@ test('fake session API: question reply validates string[][]; abort ends a busy t
 - [ ] **Step 2: Rodar e ver falhar**
 
 Run: `node --test tests/integration/f2a-fixtures.test.mjs tests/integration/f2a-fake-session.test.mjs`
-Expected: `f2a-fake-session` FAIL (rotas `/session` inexistentes → 404; cenários ausentes). `f2a-fixtures` pode já passar; se falhar, acrescentar a variant na fixture de `/provider` da F1 (arquivo servido pela rota `GET /provider` em `tests/fixtures/data/`), dentro do modelo `opencode-go/deepseek-v4.1-flash` do provider `omniroute-mvalmeida`:
+Expected: `f2a-fake-session` FAIL (rotas `/session` inexistentes → 404; cenários ausentes). `f2a-fixtures` pode já passar; se falhar, acrescentar a variant na fixture de `/provider` da F1 (arquivo servido pela rota `GET /provider` em `tests/fixtures/data/`), dentro do modelo `opencode-go/deepseek-v4.1-flash` do provider `omniroute-personal`:
 
 ```json
 "variants": { "high": {}, "low": {} }
 ```
 
-(se o provider ou o modelo não existirem na fixture, copiar a entrada real de `opencode models --verbose` do operador, redigida, mantendo `connected` com `omniroute-mvalmeida`).
+(se o provider ou o modelo não existirem na fixture, copiar a entrada real de `opencode models --verbose` do operador, redigida, mantendo `connected` com `omniroute-personal`).
 
 - [ ] **Step 3: Implementar a API de sessão do fake**
 
@@ -3583,7 +3610,7 @@ export default {
   async onPromptAsync(fake, sessionID) {
     fake.setStatus(sessionID, { type: 'busy' });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    fake.event('session.error', { sessionID, error: { name: 'ProviderAuthError', data: { providerID: 'omniroute-mvalmeida', message: 'invalid credentials for provider' } } });
+    fake.event('session.error', { sessionID, error: { name: 'ProviderAuthError', data: { providerID: 'omniroute-personal', message: 'invalid credentials for provider' } } });
     fake.setStatus(sessionID, { type: 'idle' });
     fake.event('session.idle', { sessionID });
   },
@@ -3644,7 +3671,7 @@ Anexar ao fim de `tests/helpers.mjs` (usa `makeWorkspace`, `testEnv`, `runCli`, 
 import { resolveWorkspaceRoot as f2aResolveWorkspaceRoot, workspaceStateDir as f2aWorkspaceStateDir } from '../plugins/opc/scripts/lib/state.mjs';
 import { listJobs as f2aListJobs, readJob as f2aReadJob } from '../plugins/opc/scripts/lib/jobs.mjs';
 
-export const F2A_PROVIDER = 'omniroute-mvalmeida';
+export const F2A_PROVIDER = 'omniroute-personal';
 export const F2A_MODEL_ID = 'opencode-go/deepseek-v4.1-flash';
 export const F2A_MODEL = `${F2A_PROVIDER}/${F2A_MODEL_ID}`;
 export const F2A_POLICY = Object.freeze({
@@ -5937,7 +5964,7 @@ test('exit codes (spec §4.1): 0, 2, 3, 4, 5, 6, 7, 130', async (t) => {
   const perm = setupF2a(t, { scenario: 'permission-ask' });
   assert.equal((await opc(perm, ['task', '--write', 'clean'])).code, 3);
 
-  const denied = setupF2a(t, { scenario: 'ok', config: { policy: { ...F2A_POLICY, models: { allow: [], deny: ['omniroute-mvalmeida/*'] } } } });
+  const denied = setupF2a(t, { scenario: 'ok', config: { policy: { ...F2A_POLICY, models: { allow: [], deny: ['omniroute-personal/*'] } } } });
   assert.equal((await opc(denied, ['task', 'x'])).code, 4);
 
   const auth = setupF2a(t, { scenario: 'auth-401' });
@@ -6057,7 +6084,7 @@ import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 import { readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 export const LIVE = process.env.OPC_LIVE === '1';
-export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
+export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
 export const LIVE_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Servers are stopped (and the temp dirs removed) by the F0 per-test cleanup: workspace via makeWorkspace,
@@ -6400,7 +6427,7 @@ Expected: 100% verde. Guardar a saída para o relatório.
 
 - [ ] **Step 3: Checklist ao vivo**
 
-Pré-requisitos: OpenCode 1.18.32 instalado, provider `omniroute-mvalmeida` autenticado (`opencode auth list`), nenhum `opencode serve` do operador será tocado (o opc só sinaliza processos com identidade conferida).
+Pré-requisitos: OpenCode 1.18.32 instalado, provider `omniroute-personal` autenticado (`opencode auth list`), nenhum `opencode serve` do operador será tocado (o opc só sinaliza processos com identidade conferida).
 
 Run:
 
@@ -6502,13 +6529,13 @@ Exemplo (primeiro plano):
 
 ```
 $ opc task "explique o que o runner faz quando o SSE cai"
-[opc] job task-mfx3k2a1-9q7w2e started (omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash); follow it with /opc:status task-mfx3k2a1-9q7w2e
+[opc] job task-mfx3k2a1-9q7w2e started (omniroute-personal/opencode-go/deepseek-v4.1-flash); follow it with /opc:status task-mfx3k2a1-9q7w2e
 [opc] session ses_0dde6c1f9a2bQm8sX1LwZ0pR7c
 [opc] read: plugins/opc/scripts/lib/runner.mjs
 O runner ressincroniza depois de cada reconexão: consulta /session/status, as filhas, …
 
 ---
-Job: task-mfx3k2a1-9q7w2e · Session: ses_0dde6c1f9a2bQm8sX1LwZ0pR7c · Model: omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash
+Job: task-mfx3k2a1-9q7w2e · Session: ses_0dde6c1f9a2bQm8sX1LwZ0pR7c · Model: omniroute-personal/opencode-go/deepseek-v4.1-flash
 Continue: /opc:task --resume task-mfx3k2a1-9q7w2e
 ```
 
@@ -6516,7 +6543,7 @@ Exemplo (escrita em segundo plano):
 
 ```
 $ opc task --write --background "crie docs/exemplo.md com um parágrafo sobre o opc"
-opc job task-mfx3m0c4-a81kd2 queued in background (task, omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash).
+opc job task-mfx3m0c4-a81kd2 queued in background (task, omniroute-personal/opencode-go/deepseek-v4.1-flash).
 - Status: /opc:status task-mfx3m0c4-a81kd2
 - Wait: /opc:status task-mfx3m0c4-a81kd2 --wait
 - Result: /opc:result task-mfx3m0c4-a81kd2
@@ -6789,7 +6816,7 @@ Criar `docs/phases/F2a-report.md` com o modelo abaixo e preencher cada célula c
 - **Branch / PR:** `feat/opc-f2a` / —
 - **OpenCode:** — (`opencode --version`; alvo 1.18.32)
 - **Node:** — · **SO:** Linux
-- **Modelo ao vivo:** `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`
+- **Modelo ao vivo:** `omniroute-personal/opencode-go/deepseek-v4.1-flash`
 - **Legenda:** `PASSOU` · `N/A` (com justificativa) · `NÃO VALIDADO` (com motivo) · `DESVIO`
 
 ## 1. `npm test`

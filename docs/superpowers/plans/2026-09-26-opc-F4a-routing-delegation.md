@@ -23,7 +23,7 @@
 - Exit codes da spec §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Backoff do fallback: 2 s / 4 s / 8 s (spec §10.2); o override `OPC_FALLBACK_BACKOFF_MS` existe só para testes e diagnóstico.
 - Defaults de `routing.fallback`: `enabled: true`, `maxAttempts: 3`, `maxProviderRetries: 3`, `maxRetryWaitSec: 60` (spec §3.2).
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; modelos da fase `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash` e `omniroute-mvalmeida/opencode-go/kimi-k3`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; modelos da fase `omniroute-personal/opencode-go/deepseek-v4.1-flash` e `omniroute-personal/opencode-go/kimi-k3`.
 - Nada copiado do `swarm-code-plugin` (sem licença): skill, agente e docs têm texto original.
 - Git: branch `feat/opc-f4a`; Conventional Commits; **sem** `Co-Authored-By`, `Signed-off-by` ou "Generated with"; commit/push/PR só com autorização explícita do operador; nada de `--no-verify`, `push --force` ou `reset --hard`.
 
@@ -63,7 +63,7 @@ Divergência real vai para a seção "Desvios" do relatório da fase.
 | P6 | **Confirmada.** O fake expõe `fake.emitTurn(sessionID, { text, structured, tools, error, delayMs, … })` e `abortSession`, grava `state.requests` e atende `POST /session/:id/abort`; a Task 5 só acrescenta cenários (eventos crus por `fake.emit` da F0) | F2a Task 9 (`installSessionApi`) | `grep -n "emitTurn\|abort" tests/fixtures/fake-session-api.mjs` |
 | P7 | **Ajustada.** O `hook-session-start` da F2b já imprime `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":DELEGATION_REMINDER}}` quando `hctx.config?.delegation?.auto === true`, com o texto provisório `DELEGATION_REMINDER` exportado (a F2b testa `/\/opc:ask/`, `/\/opc:plan/` e `/Never chain delegations/`). A Task 13 troca a condição por `delegationAutoEnabled` (sobre `global`/`workspace` crus) e o texto por `delegationReminder()`, mantendo o export `DELEGATION_REMINDER` | F2b Task 9 (`hook-session-start.mjs`) | `grep -n "DELEGATION_REMINDER\|additionalContext" plugins/opc/scripts/commands/hook-session-start.mjs` |
 | P8 | **Confirmada.** `tests/helpers.mjs` exporta `testEnv`, `makeWorkspace`, `runCli`, `readFakeState`, `stopAllServers`, `COMPANION`, `PLUGIN_ROOT`, `FAKE_BIN_DIR` | F0 Task 1 | `grep -n "^export" tests/helpers.mjs` |
-| P9 | **Confirmada.** A fixture de `/provider` traz `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` | F1 (fixture de providers) | Task 1, passo 3 (se algum não estiver conectado, a Task 1 ajusta `FIXTURE_MODELS`) |
+| P9 | **Confirmada.** A fixture de `/provider` traz `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` | F1 (fixture de providers) | Task 1, passo 3 (se algum não estiver conectado, a Task 1 ajusta `FIXTURE_MODELS`) |
 | P10 | **Confirmada, mas deixou de ser a convenção.** `readUserPrompt` (F2a) ainda lê o prompt do stdin quando não há prompt inline nem `--raw-args-stdin`. A convenção única de texto livre (D3), porém, é `--raw-args-stdin` + heredoc `<<'OPC_ARGS_5f1d0c7a_EOF'` começando por uma linha `--` (`parsePromptArgs` trata tudo depois de `--` como texto verbatim); a skill e o `opc-worker` usam essa forma e a Task 15 a testa | F2a Task 4 (`parsePromptArgs`) e Task 10 (`parseTurnArgs`/`readUserPrompt`); D3 | Task 15, Step 5 |
 
 ---
@@ -236,7 +236,7 @@ grep -l "kimi-k3" tests/fixtures/data/*.json && grep -o '"opencode-go/[a-z0-9.-]
 ```
 
 Expected: aparecem `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` e
-`opencode-go/kimi-k3` no arquivo de `/provider`, com o provider `omniroute-mvalmeida` em
+`opencode-go/kimi-k3` no arquivo de `/provider`, com o provider `omniroute-personal` em
 `connected`. Se os IDs forem outros, use no Step 6 três modelos conectados que existam na
 fixture (e anote no relatório).
 
@@ -321,9 +321,9 @@ arquivo já tem; `readFakeState` e `REPO_ROOT` já são exportados pelo próprio
 // ---- F4a helpers (appended; reuses writeGlobalConfig/writeWorkspaceConfig F1, stateDirFor/jobsIn/requestsTo F2a,
 // waitFor F0 — never redefined) ----
 export const FIXTURE_MODELS = Object.freeze({
-  fast: 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash',
-  strong: 'omniroute-mvalmeida/opencode-go/qwen3.8-max',
-  k3: 'omniroute-mvalmeida/opencode-go/kimi-k3',
+  fast: 'omniroute-personal/opencode-go/deepseek-v4.1-flash',
+  strong: 'omniroute-personal/opencode-go/qwen3.8-max',
+  k3: 'omniroute-personal/opencode-go/kimi-k3',
 });
 
 export function promptModels(env) {
@@ -1145,7 +1145,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const scenarioUrl = (name) => new URL(`../fixtures/scenarios/${name}.mjs`, import.meta.url);
-const P = 'omniroute-mvalmeida';
+const P = 'omniroute-personal';
 const FAST = `${P}/opencode-go/deepseek-v4.1-flash`;
 const K3 = `${P}/opencode-go/kimi-k3`;
 
@@ -1191,7 +1191,7 @@ test('without FAKE_FAIL_MODELS the first model seen is the failing one', async (
 test('successTurn returns review-shaped structured output when a format is requested', async () => {
   const { successTurn } = await import(`${scenarioUrl('_model-select')}?case=success`);
   assert.deepEqual(successTurn(body(K3, { format: { type: 'json_schema' } })).structured, { verdict: 'approve', summary: 'No material findings.', findings: [], next_steps: [] });
-  assert.match(successTurn(body(K3)).text, /fake answer from omniroute-mvalmeida\/opencode-go\/kimi-k3/);
+  assert.match(successTurn(body(K3)).text, /fake answer from omniroute-personal\/opencode-go\/kimi-k3/);
 });
 
 test('model-429 fails the selected model with a retryable APIError 429', async (t) => {
@@ -1440,7 +1440,7 @@ import {
 
 function config(fallback) {
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M.fast,
     routing: {
       tasks: { ask: [M.fast, M.k3] },
@@ -1894,7 +1894,7 @@ import {
 
 function config({ fallback = {}, tasks = {} } = {}) {
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M.fast,
     reviewModel: null,
     routing: {
@@ -2266,7 +2266,7 @@ import {
   jobsIn, promptModels, requestsTo,
 } from '../helpers.mjs';
 
-const NO_SUCH_MODEL = 'omniroute-mvalmeida/opencode-go/no-such-model-f4a';
+const NO_SUCH_MODEL = 'omniroute-personal/opencode-go/no-such-model-f4a';
 
 const BASE_POLICY = {
   providers: { allow: [], deny: [] },
@@ -2281,7 +2281,7 @@ const BASE_POLICY = {
 
 function config({ tasks = {}, tiers = {}, modelDeny = [], reviewModel = null } = {}) {
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M.fast,
     reviewModel,
     policy: { ...BASE_POLICY, models: { allow: [], deny: modelDeny } },
@@ -2471,7 +2471,7 @@ test('result and foreground output show the attempts after a fallback', async (t
   const env = testEnv(t, { scenario: 'model-429', extra: { FAKE_FAIL_MODELS: M.fast, OPC_FALLBACK_BACKOFF_MS: '50' } });
   const ws = makeWorkspace(t);
   writeGlobalConfig(env, {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M.fast,
     routing: { tasks: { ask: [M.fast, M.k3] }, tiers: { light: [M.fast], heavy: [M.k3] }, fallback: { enabled: true, maxAttempts: 3, maxProviderRetries: 3, maxRetryWaitSec: 60 } },
   });
@@ -2488,7 +2488,7 @@ test('result and foreground output show the attempts after a fallback', async (t
 test('no attempts section without fallback', async (t) => {
   const env = testEnv(t, { scenario: 'ok' });
   const ws = makeWorkspace(t);
-  writeGlobalConfig(env, { defaultProvider: 'omniroute-mvalmeida', defaultModel: M.fast });
+  writeGlobalConfig(env, { defaultProvider: 'omniroute-personal', defaultModel: M.fast });
   const fg = await runCli(['ask', 'Which file defines the entry point?'], { env, cwd: ws });
   assert.equal(fg.code, 0, fg.stderr);
   assert.doesNotMatch(fg.stdout, /Tentativas/);
@@ -3861,9 +3861,9 @@ function bash(script, { env, cwd }) {
 
 function setup(t, scenario = 'model-429') {
   // model-429 com um FAKE_FAIL_MODELS inexistente: todo modelo responde, com saída de review estruturada quando pedida
-  const env = testEnv(t, { scenario, extra: { FAKE_FAIL_MODELS: 'omniroute-mvalmeida/none' } });
+  const env = testEnv(t, { scenario, extra: { FAKE_FAIL_MODELS: 'omniroute-personal/none' } });
   const ws = makeWorkspace(t);
-  writeGlobalConfig(env, { defaultProvider: 'omniroute-mvalmeida', defaultModel: M.fast, reviewModel: null });
+  writeGlobalConfig(env, { defaultProvider: 'omniroute-personal', defaultModel: M.fast, reviewModel: null });
   return { env, ws };
 }
 
@@ -4049,9 +4049,9 @@ import { makeTempDir, makeWorkspace, runCli, trackEnv, trackTempDir, writeGlobal
 
 const LIVE = process.env.OPC_LIVE === '1';
 const SKIP = LIVE ? false : 'OPC_LIVE != 1';
-const FAST = 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
-const K3 = 'omniroute-mvalmeida/opencode-go/kimi-k3';
-const INVALID = 'omniroute-mvalmeida/opencode-go/does-not-exist-f4a';
+const FAST = 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
+const K3 = 'omniroute-personal/opencode-go/kimi-k3';
+const INVALID = 'omniroute-personal/opencode-go/does-not-exist-f4a';
 const PROMPT = 'Reply with exactly the word PONG and nothing else. Do not use any tool.';
 const TIMEOUT = 600_000;
 
@@ -4068,7 +4068,7 @@ const BASE_POLICY = {
 
 function config({ ask = [FAST, K3], modelDeny = [] } = {}) {
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: FAST,
     reviewModel: null,
     policy: { ...BASE_POLICY, models: { allow: [], deny: modelDeny } },
@@ -4148,7 +4148,7 @@ import path from 'node:path';
 import { makeTempDir, makeWorkspace, runCli, trackEnv, trackTempDir, writeGlobalConfig, jobsIn } from '../helpers.mjs';
 
 const FAILING = process.env.OPC_LIVE_FAILING_MODEL ?? '';
-const FAST = 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
+const FAST = 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
 const SKIP = process.env.OPC_LIVE !== '1'
   ? 'OPC_LIVE != 1'
   : (FAILING ? false : 'NÃO VALIDADO: sem OPC_LIVE_FAILING_MODEL (rode tests/live/probe-failing-model.mjs)');
@@ -4160,7 +4160,7 @@ function liveSetup(t) {
   const env = trackEnv(t, { ...process.env, OPC_DATA_DIR: dataDir }); // F0 per-test cleanup stops the server
   const ws = makeWorkspace(t);
   writeGlobalConfig(env, {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: FAST,
     routing: {
       tasks: { ask: [FAILING, FAST] },
@@ -4214,9 +4214,9 @@ if (process.env.OPC_LIVE !== '1') {
 }
 
 const PHASE_MODELS = new Set([
-  'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash',
-  'omniroute-mvalmeida/opencode-go/qwen3.8-max',
-  'omniroute-mvalmeida/opencode-go/kimi-k3',
+  'omniroute-personal/opencode-go/deepseek-v4.1-flash',
+  'omniroute-personal/opencode-go/qwen3.8-max',
+  'omniroute-personal/opencode-go/kimi-k3',
 ]);
 const SUSPICIOUS = /(preview|exp|experimental|beta|alpha|deprecated|legacy|old|test)/i;
 const LIMIT = Number(process.env.OPC_LIVE_PROBE_LIMIT ?? 8);
@@ -4283,8 +4283,8 @@ import { spawn } from 'node:child_process';
 import { PLUGIN_ROOT, makeTempDir, makeWorkspace, trackEnv, trackTempDir, writeGlobalConfig, jobsIn, parseFrontmatter } from '../helpers.mjs';
 
 const SKIP = process.env.OPC_LIVE === '1' ? false : 'OPC_LIVE != 1';
-const FAST = 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
-const K3 = 'omniroute-mvalmeida/opencode-go/kimi-k3';
+const FAST = 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
+const K3 = 'omniroute-personal/opencode-go/kimi-k3';
 const TIMEOUT = 600_000;
 const BODY = parseFrontmatter(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', 'opc-worker.md'), 'utf8')).body;
 const TEMPLATE = [...BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]).find((b) => b.includes("<<'OPC_ARGS_5f1d0c7a_EOF'"));
@@ -4309,7 +4309,7 @@ function liveSetup(t) {
   const env = trackEnv(t, { ...process.env, OPC_DATA_DIR: dataDir }); // F0 per-test cleanup stops the server
   const ws = makeWorkspace(t);
   fs.writeFileSync(path.join(ws, 'README.md'), '# Demo\n\nThis project prints hello.\n');
-  writeGlobalConfig(env, { defaultProvider: 'omniroute-mvalmeida', defaultModel: FAST });
+  writeGlobalConfig(env, { defaultProvider: 'omniroute-personal', defaultModel: FAST });
   return { env, ws };
 }
 
@@ -4408,7 +4408,7 @@ um `README.md` e o servidor subindo com os modelos da fase):
 1. Habilitar Agent Teams para a sessão: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude` (ou o
    `env` do `settings.json`). Iniciar a sessão.
 2. Pedir ao líder, literalmente:
-   `Spawn one teammate named opc1 using the opc-worker agent type. Give it this task: "ask: What does README.md say? flags: --model omniroute-mvalmeida/opencode-go/kimi-k3".`
+   `Spawn one teammate named opc1 using the opc-worker agent type. Give it this task: "ask: What does README.md say? flags: --model omniroute-personal/opencode-go/kimi-k3".`
 3. Observar (agent panel → Enter no `opc1`): a primeira mensagem ao líder começa com `⚡ opc |`;
    a transcrição do teammate mostra **uma** chamada Bash com `opc ask --wait-timeout 540 --model …
    --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` seguida da linha `--`; a mensagem final começa com `✓ opc done` e traz a saída verbatim. Nenhuma
@@ -4421,12 +4421,12 @@ um `README.md` e o servidor subindo com os modelos da fase):
    "Protocol"/"Next task") e o teste unitário da Task 15 numa correção
    `fix: align opc-worker with Agent Teams tool names`.
 5. Permissão devolvida ao líder: mandar ao `opc1` a tarefa
-   `task: Delete the build directory with rm -rf build. flags: --write --model omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`.
+   `task: Delete the build directory with rm -rf build. flags: --write --model omniroute-personal/opencode-go/deepseek-v4.1-flash`.
    Esperado: o teammate responde `⏸ opc waiting` com o bloco do pedido (`/opc:permissions reply …
    once|reject`) e **não** roda `opc permissions`. O operador rejeita pelo líder
    (`/opc:permissions reply <id> reject`).
 6. Sem Agent Teams (subagente comum): em sessão sem a variável, pedir
-   `Use the opc-worker agent to ask OpenCode: "What does README.md say?" with --model omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`.
+   `Use the opc-worker agent to ask OpenCode: "What does README.md say?" with --model omniroute-personal/opencode-go/deepseek-v4.1-flash`.
    Esperado: a resposta do subagente começa com `✓ opc done`.
 7. Registrar no relatório, para cada passo: `PASSOU`/`NÃO VALIDADO`/`N/A`, a data e trechos
    redigidos das mensagens.
@@ -4702,7 +4702,7 @@ redigidas dos Steps 2–7 e 10:
 - **Data:** DD/MM/AAAA
 - **Branch / PR:** `feat/opc-f4a` / #N
 - **OpenCode:** versão (`opencode --version`)
-- **Modelos ao vivo:** `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`, `omniroute-mvalmeida/opencode-go/kimi-k3`
+- **Modelos ao vivo:** `omniroute-personal/opencode-go/deepseek-v4.1-flash`, `omniroute-personal/opencode-go/kimi-k3`
 
 ## 1. `npm test`
 
