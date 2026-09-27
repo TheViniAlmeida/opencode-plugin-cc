@@ -125,7 +125,7 @@ function effectiveValue(draft, existing, key) {
   return getPath(effectiveOf(draft, candidateConfig(draft, existing), existing).config, key);
 }
 
-export function applyDraftStep(draft, partial, { catalog, agents = [], existing = { global: null, workspace: null }, allowLocked = false, now = new Date() }) {
+export function applyDraftStep(draft, partial, { catalog, agents = [], existing = { global: null, workspace: null }, allowLocked = false, deferModelPolicy = false, now = new Date() }) {
   const next = { ...draft, values: { ...draft.values }, completed: [...draft.completed] };
   const applied = [];
   const warnings = [];
@@ -180,6 +180,11 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
   const effective = effectiveOf(next, candidate, existing).config;
   for (const violation of policyViolations(effective, { catalog, agents })) {
     const touched = applied.some((k) => violation.path === k || violation.path.startsWith(`${k}.`) || violation.path.startsWith(`${k}[`));
+    const deferredModel = deferModelPolicy && touched && ['defaultModel', 'reviewModel', 'stopGate.model'].some((key) => violation.path === key || violation.path.startsWith(`${key}.`));
+    if (deferredModel) {
+      warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (a etapa de política precisa permitir este modelo)` });
+      continue;
+    }
     if (touched) throw new PolicyError('POLICY_DENIED', `${violation.path}: ${violation.message}`, { details: violation });
     warnings.push({ path: violation.path, code: violation.code, message: `${violation.message} (commit will be refused until fixed)` });
   }
@@ -267,7 +272,7 @@ const modelChoice = (m) => ({ label: m.full, hint: `${m.name}${m.variants.length
 async function askStep(prompter, stepId, { draft, catalog, agents, existing, workspaceRoot }) {
   const eff = draftEffectiveConfig(draft, existing);
   const provider = eff.defaultProvider;
-  const allowedOf = (p) => suggestModels(catalog, p, { top: Infinity, policy: eff.policy });
+  const allowedOf = (p) => suggestModels(catalog, p, { top: Infinity });
   const pickModel = async (question, { allowNone }) => {
     const choices = [...(allowNone ? [{ label: 'Nenhum (usar o modelo padrão)', value: null }] : []), ...(provider ? allowedOf(provider) : []).map(modelChoice)];
     const answer = await prompter.select(question, choices, { allowOther: true });
@@ -278,7 +283,7 @@ async function askStep(prompter, stepId, { draft, catalog, agents, existing, wor
       return { scope: await prompter.select('Onde gravar?', [{ label: 'Global (todas as pastas)', value: 'global' }, { label: 'Só este workspace (.opc.json)', value: 'workspace' }]) };
     case 'defaultProvider': {
       const ranked = rankProviders(catalog, eff.policy).filter((p) => p.allowed);
-      if (!ranked.length) throw new UsageError('NO_PROVIDER', 'no connected provider allowed by the policy; run: opencode auth login');
+      if (!ranked.length) throw new UsageError('NO_PROVIDER', 'nenhum provider conectado disponível; execute: opencode auth login');
       return { defaultProvider: await prompter.select('Provider padrão?', ranked.map((p) => ({ label: p.id, hint: `${p.modelCount} modelos`, value: p.id }))) };
     }
     case 'defaultModel':
@@ -347,7 +352,7 @@ export async function runInitWizard({ prompter, catalog, agents, opencodeConfig 
   for (let step = nextStep(draft, { allowLocked: true }); step; step = nextStep(draft, { allowLocked: true })) {
     const partial = await askStep(prompter, step, { draft, catalog, agents, existing, workspaceRoot });
     try {
-      const result = applyDraftStep(draft, partial, deps);
+      const result = applyDraftStep(draft, partial, { ...deps, deferModelPolicy: ['defaultModel', 'reviewModels'].includes(step) });
       draft = result.draft;
       result.warnings.forEach((w) => log(`[opc] aviso: ${w.path}: ${w.message}\n`));
     } catch (err) {

@@ -212,13 +212,14 @@ async function cmdInit(ctx, flags) {
       log: (text) => ctx.err(text),
     });
     if (!result) {
-      ctx.out('Nada foi gravado.\n');
+      if (flags.json) ctx.json({ ok: true, saved: false, message: 'Nada foi gravado.' });
+      else ctx.out('Nada foi gravado.\n');
       return 0;
     }
     emit(ctx, flags, { kind: 'commit', ...result }, renderOnboarding);
     return 0;
   } catch (err) {
-    if (err instanceof OpcError && err.code === 'TTY_CLOSED') throw new UsageError('TTY_CLOSED', 'wizard interrupted; nothing was written');
+    if (err instanceof OpcError && err.code === 'TTY_CLOSED') throw new UsageError('TTY_CLOSED', 'assistente interrompido; nada foi gravado');
     throw err;
   } finally {
     prompter.close();

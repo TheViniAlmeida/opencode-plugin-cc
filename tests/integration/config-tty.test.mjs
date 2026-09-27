@@ -81,3 +81,14 @@ test('config init: interrupted input writes nothing (exit 2)', async (t) => {
   assert.match(r.stderr, /TTY_CLOSED|interrupted/);
   assert.equal(readGlobalConfig(env), null);
 });
+
+test('config init --json: declining to save returns a JSON result', async (t) => {
+  const { ws, env } = setup(t, { git: false });
+  const answers = [
+    '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', '', '', 'n', 'n', 'n',
+  ];
+  const r = await runInProcess('config', ['init', '--json'], { env, cwd: ws, stdin: scriptedTTY(answers) });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { ok: true, saved: false, message: 'Nada foi gravado.' });
+  assert.equal(readGlobalConfig(env), null);
+});

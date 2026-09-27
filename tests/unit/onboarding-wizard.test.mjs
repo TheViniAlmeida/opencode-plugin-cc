@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInitWizard } from '../../plugins/opc/scripts/lib/onboarding.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 import { createPrompter } from '../../plugins/opc/scripts/lib/tty.mjs';
-import { scriptedTTY, captureStream } from '../helpers.mjs';
+import { scriptedTTY, captureStream, makeTempDir, trackTempDir } from '../helpers.mjs';
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
@@ -15,7 +14,7 @@ const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
 const MV = 'omniroute-mvalmeida';
 const EQ = 'omniroute-work';
-const tmp = (t) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-wiz-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+const tmp = (t) => trackTempDir(t, makeTempDir('opc-wiz-'));
 
 function wizard(t, answers, { existing = { global: null, workspace: null }, hasGlobal = false } = {}) {
   const dataDir = tmp(t);
@@ -75,4 +74,30 @@ test('reconfigure wizard asks the scope first and may decline saving', async (t)
   const { run, dataDir } = wizard(t, answers, { existing, hasGlobal: true });
   assert.equal(await run, null);
   assert.equal(fs.existsSync(path.join(dataDir, 'config.json')), false);
+});
+
+test('wizard can select a model denied by the existing policy and allow it in the draft', async (t) => {
+  const existing = { global: { defaultProvider: MV, policy: { models: { allow: ['unmatched/*'] } } }, workspace: null };
+  const answers = [
+    '1', '1', 'kimi-k3', '1', '1', '1', '1', 'o', `${MV}/*`, '',
+    '1', '', '1', 'n', 'n', '', '', 'n', 'n', 's',
+  ];
+  const { run, dataDir, output, log } = wizard(t, answers, { existing, hasGlobal: true });
+  const result = await run;
+  assert.equal(result.scope, 'global');
+  const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+  assert.equal(cfg.defaultModel, `${MV}/opencode-go/kimi-k3`);
+  assert.deepEqual(cfg.policy.models.allow, [`${MV}/*`]);
+  assert.match(output.text(), /kimi-k3/);
+  assert.match(log.text(), /etapa de política precisa permitir este modelo/);
+});
+
+test('wizard refuses commit when the new policy still denies the chosen model', async (t) => {
+  const existing = { global: { defaultProvider: MV }, workspace: null };
+  const answers = [
+    '1', '1', 'kimi-k3', '1', '1', '1', '1', 'o', 'unmatched/*', '',
+    '1', '', '1', 'n', 'n', '', '', 's',
+  ];
+  const { run } = wizard(t, answers, { existing, hasGlobal: true });
+  await assert.rejects(run, { code: 'POLICY_DENIED' });
 });
