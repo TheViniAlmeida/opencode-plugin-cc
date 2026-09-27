@@ -71,7 +71,17 @@ test('reconfigure wizard asks the scope first and may decline saving', async (t)
     'n', 'n',            // aliases
     'n',                 // do not save
   ];
-  const { run, dataDir } = wizard(t, answers, { existing, hasGlobal: true });
+  const { run, dataDir, output } = wizard(t, answers, { existing, hasGlobal: true });
+  await run;
+  for (const label of [
+    'Só esta área de trabalho (.opc.json)', 'Provedor padrão?', 'variantes:',
+    'Modelo da revisão?', 'Modelo da verificação de parada?', 'Variante padrão?',
+    'Todos do provedor padrão', 'Provedores a negar (padrões separados por vírgula',
+    'Só nativos', 'Agentes a negar (padrões separados por vírgula',
+    'Ligar a verificação de parada (revisão ao parar)?',
+    'Perguntar', 'Planejar', 'Revisar', 'Executar tarefa', 'Orquestrar', 'Conclave',
+    'Criar apelido "fast"', 'Criar apelido "strong"', 'Gravar esta configuração?',
+  ]) assert.ok(output.text().includes(label), `missing PT-BR label: ${label}`);
   assert.equal(await run, null);
   assert.equal(fs.existsSync(path.join(dataDir, 'config.json')), false);
 });
@@ -110,4 +120,13 @@ test('wizard refuses commit when the new policy still denies the chosen model', 
   ];
   const { run } = wizard(t, answers, { existing, hasGlobal: true });
   await assert.rejects(run, { code: 'POLICY_DENIED' });
+});
+
+test('wizard without connected providers reports a Portuguese warning', async (t) => {
+  const dir = tmp(t);
+  await assert.rejects(runInitWizard({
+    prompter: {}, catalog: buildCatalog({}), agents: [],
+    existing: { global: null, workspace: null }, hasGlobal: false,
+    dataDir: dir, workspaceRoot: dir,
+  }), { code: 'NO_PROVIDER', message: 'nenhum provedor conectado disponível; execute: opencode auth login' });
 });

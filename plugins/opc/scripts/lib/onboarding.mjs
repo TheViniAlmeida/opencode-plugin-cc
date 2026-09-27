@@ -161,11 +161,11 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
       value = normalizeEditValue(key, rawValue, { catalog, aliases, defaultProvider });
     }
     if (key === 'defaultProvider' && value !== null && !catalog.connected.has(value)) {
-      throw new UsageError('UNKNOWN_PROVIDER', `o provider "${value}" não está conectado (conectados: ${[...catalog.connected].join(', ')})`);
+      throw new UsageError('UNKNOWN_PROVIDER', `o provedor "${value}" não está conectado (conectados: ${[...catalog.connected].join(', ')})`);
     }
     if (key === 'defaultAgent' && value !== null) {
       const agent = agents.find((a) => a.name === value);
-      if (!agent) throw new UsageError('UNKNOWN_AGENT', `agent "${value}" não encontrado`);
+      if (!agent) throw new UsageError('UNKNOWN_AGENT', `agente "${value}" não encontrado`);
     }
     if (key === 'defaultVariant' && value !== null) {
       const model = effectiveValue(next, existing, 'defaultModel');
@@ -199,7 +199,7 @@ export function commitDraft({ dataDir, workspaceRoot, draft, catalog, agents = [
   if (draft.scope === 'workspace') {
     const disallowed = Object.keys(draft.values).filter((key) => !isWorkspaceKey(key));
     if (disallowed.length) {
-      throw new UsageError('GLOBAL_ONLY_KEY', `Chaves não permitidas no escopo workspace: ${disallowed.join(', ')}`);
+      throw new UsageError('GLOBAL_ONLY_KEY', `Chaves não permitidas no escopo da área de trabalho: ${disallowed.join(', ')}`);
     }
   }
   const base = (draft.scope === 'workspace' ? existing.workspace : existing.global) ?? {};
@@ -265,9 +265,9 @@ export function suggestAliases(catalog, providerID, policy) {
 }
 
 // ---- F1 Task 12: terminal wizard (the TTY is only an interface over the same steps) ----
-const TASK_TYPE_CHOICES = ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'].map((t) => ({ label: t, value: t }));
+const TASK_TYPE_CHOICES = Object.entries({ ask: 'Perguntar', plan: 'Planejar', review: 'Revisar', task: 'Executar tarefa', orchestrate: 'Orquestrar', conclave: 'Conclave' }).map(([value, label]) => ({ label, value }));
 const splitGlobs = (text) => String(text ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-const modelChoice = (m) => ({ label: m.full, hint: `${m.name}${m.variants.length ? ` · variants: ${m.variants.join(', ')}` : ''}`, value: m.full });
+const modelChoice = (m) => ({ label: m.full, hint: `${m.name}${m.variants.length ? ` · variantes: ${m.variants.join(', ')}` : ''}`, value: m.full });
 
 async function askStep(prompter, stepId, { draft, catalog, agents, existing, workspaceRoot }) {
   const eff = draftEffectiveConfig(draft, existing);
@@ -280,50 +280,50 @@ async function askStep(prompter, stepId, { draft, catalog, agents, existing, wor
   };
   switch (stepId) {
     case 'scope':
-      return { scope: await prompter.select('Onde gravar?', [{ label: 'Global (todas as pastas)', value: 'global' }, { label: 'Só este workspace (.opc.json)', value: 'workspace' }]) };
+      return { scope: await prompter.select('Onde gravar?', [{ label: 'Global (todas as pastas)', value: 'global' }, { label: 'Só esta área de trabalho (.opc.json)', value: 'workspace' }]) };
     case 'defaultProvider': {
       const ranked = rankProviders(catalog, eff.policy).filter((p) => p.allowed);
-      if (!ranked.length) throw new UsageError('NO_PROVIDER', 'nenhum provider conectado disponível; execute: opencode auth login');
-      return { defaultProvider: await prompter.select('Provider padrão?', ranked.map((p) => ({ label: p.id, hint: `${p.modelCount} modelos`, value: p.id }))) };
+      if (!ranked.length) throw new UsageError('NO_PROVIDER', 'nenhum provedor conectado disponível; execute: opencode auth login');
+      return { defaultProvider: await prompter.select('Provedor padrão?', ranked.map((p) => ({ label: p.id, hint: `${p.modelCount} modelos`, value: p.id }))) };
     }
     case 'defaultModel':
       return { defaultModel: await pickModel('Modelo padrão? (número, texto para filtrar ou "o" para digitar)', { allowNone: false }) };
     case 'reviewModels': {
-      const reviewModel = await pickModel('Modelo do review?', { allowNone: true });
-      const stopGateModel = await pickModel('Modelo do stop gate?', { allowNone: true });
+      const reviewModel = await pickModel('Modelo da revisão?', { allowNone: true });
+      const stopGateModel = await pickModel('Modelo da verificação de parada?', { allowNone: true });
       return { reviewModel, stopGate: { model: stopGateModel } };
     }
     case 'defaultVariant': {
       const entry = eff.defaultModel ? catalog.byFull.get(eff.defaultModel) : null;
       const variants = entry ? entry.variants : [];
-      return { defaultVariant: await prompter.select('Variant padrão?', [{ label: 'Nenhuma', value: null }, ...variants.map((v) => ({ label: v, value: v }))]) };
+      return { defaultVariant: await prompter.select('Variante padrão?', [{ label: 'Nenhuma', value: null }, ...variants.map((v) => ({ label: v, value: v }))]) };
     }
     case 'allowedModels': {
       const families = provider ? modelFamilies(catalog, provider).slice(0, 3) : [];
       const answer = await prompter.select('Modelos permitidos?', [
         { label: 'Sem restrição', value: [] },
-        ...(provider ? [{ label: `Todos do provider padrão (${provider}/*)`, value: [`${provider}/*`] }] : []),
+        ...(provider ? [{ label: `Todos do provedor padrão (${provider}/*)`, value: [`${provider}/*`] }] : []),
         ...families.map((f) => ({ label: `Só ${f.glob}`, hint: `${f.count} modelos`, value: [f.glob] })),
       ], { allowOther: true });
       const allow = Array.isArray(answer) ? answer : splitGlobs(answer.other);
-      const denyProviders = splitGlobs(await prompter.text('Providers a negar (globs separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
+      const denyProviders = splitGlobs(await prompter.text('Provedores a negar (padrões separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
       return { policy: { models: { allow }, providers: { deny: denyProviders } } };
     }
     case 'allowedAgents': {
       const builtIn = agents.filter((a) => a.native && !a.hidden).map((a) => a.name);
       const answer = await prompter.select('Agentes permitidos?', [
         { label: 'Todos', value: [] },
-        { label: `Só built-in (${builtIn.join(', ')})`, value: builtIn },
+        { label: `Só nativos (${builtIn.join(', ')})`, value: builtIn },
       ], { allowOther: true });
       const allow = Array.isArray(answer) ? answer : splitGlobs(answer.other);
-      const deny = splitGlobs(await prompter.text('Agentes a negar (globs separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
+      const deny = splitGlobs(await prompter.text('Agentes a negar (padrões separados por vírgula; vazio = nenhum): ', { defaultValue: '' }));
       return { policy: { agents: { allow, deny } } };
     }
     case 'approver':
       return { policy: { approver: await prompter.select('Quem aprova pedidos de permissão?', [{ label: 'Eu (usuário) — recomendado', value: 'user' }, { label: 'O Claude (exceto destrutivos, fora do diretório e caminhos sensíveis)', value: 'claude' }]) } };
     case 'behaviour':
       return {
-        stopGate: { enabled: await prompter.confirm('Ligar o stop gate (review ao parar)?', { defaultValue: false }) },
+        stopGate: { enabled: await prompter.confirm('Ligar a verificação de parada (revisão ao parar)?', { defaultValue: false }) },
         delegation: { auto: await prompter.confirm('Ligar a delegação automática?', { defaultValue: false }) },
       };
     case 'project': {
@@ -337,7 +337,7 @@ async function askStep(prompter, stepId, { draft, catalog, agents, existing, wor
       const suggested = provider ? suggestAliases(catalog, provider, eff.policy) : { fast: null, strong: null };
       const aliases = {};
       for (const name of ['fast', 'strong']) {
-        if (suggested[name] && await prompter.confirm(`Criar alias "${name}" → ${suggested[name]}?`, { defaultValue: true })) aliases[name] = suggested[name];
+        if (suggested[name] && await prompter.confirm(`Criar apelido "${name}" → ${suggested[name]}?`, { defaultValue: true })) aliases[name] = suggested[name];
       }
       return { aliases };
     }
@@ -361,7 +361,7 @@ export async function runInitWizard({ prompter, catalog, agents, opencodeConfig 
     }
   }
   log(`\n${JSON.stringify(redact(candidateConfig(draft, existing)), null, 2)}\n`);
-  if (!(await prompter.confirm('Gravar esta config?', { defaultValue: true }))) return null;
+  if (!(await prompter.confirm('Gravar esta configuração?', { defaultValue: true }))) return null;
   return commitDraft({ dataDir, workspaceRoot, draft, catalog, agents, opencodeConfig, existing, allowLocked: true });
 }
 

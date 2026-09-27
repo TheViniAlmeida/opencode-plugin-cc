@@ -68,6 +68,8 @@ test('normalizeModelId: both readings valid is AMBIGUOUS_MODEL', () => {
   assert.throws(() => normalizeModelId('opencode/big-pickle', { catalog, defaultProvider: MV }), (err) => {
     assert.equal(err.code, 'AMBIGUOUS_MODEL');
     assert.equal(err.exitCode, 2);
+    assert.equal(err.details.inputPreview, 'opencode/big…');
+    assert.equal(Object.hasOwn(err.details, 'input'), false);
     assert.deepEqual(err.details.candidates, ['opencode/big-pickle', `${MV}/opencode/big-pickle`]);
     return true;
   });
@@ -102,6 +104,8 @@ test('normalizeModelId: unknown model and disconnected provider', () => {
     assert.equal(err.code, 'UNKNOWN_MODEL');
     assert.match(err.message, /modelo desconhecido "xxxxxxxxxxxx…"/);
     assert.equal(err.message.includes(oversized), false);
+    assert.deepEqual(err.details, { inputPreview: 'xxxxxxxxxxxx…', suggestions: [] });
+    assert.equal(JSON.stringify({ error: { code: err.code, message: err.message, details: err.details } }).includes(oversized), false);
     return true;
   });
 });
@@ -141,4 +145,15 @@ test('searchModels: glob and substring, provider filter', () => {
   assert.deepEqual(searchModels(catalog, 'opencode-go/qwen*', { providerID: MV }).map((m) => m.full), [`${MV}/opencode-go/qwen3.8-flash`, `${MV}/opencode-go/qwen3.8-max`]);
   assert.ok(searchModels(catalog, 'kimi').every((m) => m.connected));
   assert.equal(searchModels(catalog, 'gpt-5.6', { connectedOnly: false }).some((m) => m.providerID === 'openai'), true);
+});
+
+test('invalid variant keeps only a preview of user input', () => {
+  const entry = catalog.byFull.get(`${MV}/opencode-go/kimi-k3`);
+  const input = 'invalid-variant-' + 'x'.repeat(60);
+  assert.throws(() => validateVariant(entry, input), (err) => {
+    assert.equal(err.code, 'UNKNOWN_VARIANT');
+    assert.deepEqual(err.details, { model: entry.full, variantPreview: 'invalid-vari…', valid: entry.variants });
+    assert.equal(JSON.stringify({ message: err.message, details: err.details }).includes(input), false);
+    return true;
+  });
 });

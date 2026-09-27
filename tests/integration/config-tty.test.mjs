@@ -17,9 +17,10 @@ function setup(t, { config = null, git = true } = {}) {
 }
 
 test('--tty-confirm on a TTY: typed key confirms; mismatch refuses (exit 4)', async (t) => {
-  const { ws, env } = setup(t, { config: { defaultProvider: MV } });
+  const { ws, env } = setup(t, { config: { defaultProvider: MV }, git: false });
   const wrong = await runInProcess('config', ['set', 'policy.approver', 'claude', '--tty-confirm'], { env, cwd: ws, stdin: scriptedTTY(['policy.aprover']) });
   assert.equal(wrong.code, 4);
+  assert.match(wrong.stderr, /# opc error\nLOCKED_KEY:/);
   assert.match(wrong.stderr, /a confirmação não correspondeu; nada foi alterado/);
   assert.equal(readGlobalConfig(env).policy, undefined);
   const ok = await runInProcess('config', ['set', 'policy.approver', 'claude', '--tty-confirm', '--json'], { env, cwd: ws, stdin: scriptedTTY(['policy.approver']) });

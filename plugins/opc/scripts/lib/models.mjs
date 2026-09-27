@@ -107,7 +107,7 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
   if (fullReading && shortReading) {
     throw new UsageError('AMBIGUOUS_MODEL',
       `o modelo "${modelEcho(raw)}" é ambíguo: "${fullReading.full}" ou "${shortReading.full}". Use "=${fullReading.full}" ou "${shortReading.full}".`,
-      { details: { input: raw, candidates: [fullReading.full, shortReading.full] } });
+      { details: { inputPreview: modelEcho(raw), candidates: [fullReading.full, shortReading.full] } });
   }
   const hit = fullReading ?? shortReading;
   if (hit) return { providerID: hit.providerID, modelID: hit.modelID, full: hit.full, entry: hit };
@@ -116,7 +116,7 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
     ? `o provider "${known.providerID}" não está conectado (execute: opencode auth login)`
     : 'não encontrado em /provider';
   throw new UsageError('UNKNOWN_MODEL', `modelo desconhecido "${modelEcho(raw)}": ${reason}`,
-    { details: { input: raw, suggestions: suggestionsFor(catalog, expanded) } });
+    { details: { inputPreview: modelEcho(raw), suggestions: suggestionsFor(catalog, expanded) } });
 }
 
 export function resolveModelRef(value, { catalog, defaultProvider = null, aliases = {}, allowClaude = false } = {}) {
@@ -134,8 +134,8 @@ export function validateVariant(entry, variant) {
   if (variant === null || variant === undefined || variant === '') return null;
   if (!entry.variants.includes(variant)) {
     throw new UsageError('UNKNOWN_VARIANT',
-      `a variante "${variant}" não é válida para ${entry.full} (válidas: ${entry.variants.join(', ') || 'nenhuma'})`,
-      { details: { model: entry.full, variant, valid: entry.variants } });
+      `a variante "${modelEcho(String(variant))}" não é válida para ${entry.full} (válidas: ${entry.variants.join(', ') || 'nenhuma'})`,
+      { details: { model: entry.full, variantPreview: modelEcho(String(variant)), valid: entry.variants } });
   }
   return variant;
 }
