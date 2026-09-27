@@ -23,7 +23,7 @@ test('providers: connected by default, --all shows the catalog, keys never print
   const def = await runCli(['providers', '--json'], { env, cwd: ws });
   assert.equal(def.code, 0, def.stderr);
   const view = JSON.parse(def.stdout);
-  assert.deepEqual(view.providers.map((p) => p.id), ['anthropic', EQ, MV, 'opencode']);
+  assert.deepEqual(view.providers.map((p) => p.id), ['anthropic', MV, EQ, 'opencode']);
   assert.equal(view.providers.find((p) => p.id === MV).modelCount, 7);
   assert.equal(view.providers.find((p) => p.id === MV).defaultModel, `${MV}/opencode-go/deepseek-v4.1-flash`);
   const all = await runCli(['providers', '--all', '--json'], { env, cwd: ws });
@@ -53,6 +53,11 @@ test('models: listing, provider filter, --all, --verbose, no model headers leak'
   assert.match(notConnected.stdout + notConnected.stderr, /not connected; use --all/);
   const unknown = await runCli(['models', 'nope'], { env, cwd: ws });
   assert.equal(unknown.code, 2);
+  const longUnknown = 'a-very-long-unrecognized-provider-name';
+  const longUnknownResult = await runCli(['models', longUnknown], { env, cwd: ws });
+  assert.equal(longUnknownResult.code, 2);
+  assert.match(longUnknownResult.stdout + longUnknownResult.stderr, /unknown provider "a-very-long…"/);
+  assert.doesNotMatch(longUnknownResult.stdout + longUnknownResult.stderr, /unrecognized-provider-name/);
   for (const r of [mv, verboseText]) noSecrets(r);
 });
 
@@ -70,9 +75,9 @@ test('--allowed hides denied entries and marks them with the rule', async (t) =>
 test('agents: hidden only with --verbose, mode filter, pinned model shown', async (t) => {
   const { ws, env } = setup(t);
   const def = JSON.parse((await runCli(['agents', '--json'], { env, cwd: ws })).stdout).agents.map((a) => a.name);
-  assert.deepEqual(def, ['build', 'docs-writer', 'work-deploy', 'work-reviewer', 'explore', 'general', 'plan']);
+  assert.deepEqual(def, ['build', 'docs-writer', 'explore', 'general', 'plan', 'work-deploy', 'work-reviewer']);
   const primary = JSON.parse((await runCli(['agents', '--mode', 'primary', '--json'], { env, cwd: ws })).stdout).agents.map((a) => a.name);
-  assert.deepEqual(primary, ['build', 'work-reviewer', 'plan']);
+  assert.deepEqual(primary, ['build', 'plan', 'work-reviewer']);
   const verbose = JSON.parse((await runCli(['agents', '--verbose', '--json'], { env, cwd: ws })).stdout).agents;
   assert.ok(verbose.some((a) => a.name === 'title' && a.hidden));
   assert.equal(verbose.find((a) => a.name === 'docs-writer').pinnedModel, `${MV}/opencode-go/qwen3.8-max`);
@@ -99,6 +104,9 @@ test('catalog lists commands and skills (never skill content)', async (t) => {
   const commands = JSON.parse((await runCli(['catalog', 'commands', '--json'], { env, cwd: ws })).stdout).items;
   assert.deepEqual(commands.map((c) => c.name), ['brainstorm', 'docs', 'gitlab:list-mrs', 'init', 'review']);
   assert.equal(commands.find((c) => c.name === 'docs').model, `${MV}/opencode-go/qwen3.8-max`);
+  const skillsJson = await runCli(['catalog', 'skills', '--json'], { env, cwd: ws });
+  assert.equal(skillsJson.code, 0);
+  assert.ok(JSON.parse(skillsJson.stdout).items.every((item) => !Object.hasOwn(item, 'content')));
   const skills = await runCli(['catalog', 'skills'], { env, cwd: ws });
   assert.equal(skills.code, 0);
   assert.match(skills.stdout, /release-notes/);
