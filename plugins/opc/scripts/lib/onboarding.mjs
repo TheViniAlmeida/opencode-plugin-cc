@@ -48,7 +48,13 @@ export function buildDraft({ hasGlobal, now = new Date() }) {
 }
 
 export function loadDraft(dataDir) {
-  const draft = readJson(draftPath(dataDir), null);
+  let draft;
+  try {
+    draft = readJson(draftPath(dataDir), null);
+  } catch (error) {
+    if (error.code === 'INVALID_JSON') return null;
+    throw error;
+  }
   if (!isPlainObject(draft) || draft.schemaVersion !== DRAFT_SCHEMA_VERSION || !isPlainObject(draft.values)) return null;
   return draft;
 }
@@ -184,6 +190,12 @@ export function applyDraftStep(draft, partial, { catalog, agents = [], existing 
 }
 
 export function commitDraft({ dataDir, workspaceRoot, draft, catalog, agents = [], opencodeConfig = null, existing, allowLocked = false }) {
+  if (draft.scope === 'workspace') {
+    const disallowed = Object.keys(draft.values).filter((key) => !isWorkspaceKey(key));
+    if (disallowed.length) {
+      throw new UsageError('GLOBAL_ONLY_KEY', `Chaves não permitidas no escopo workspace: ${disallowed.join(', ')}`);
+    }
+  }
   const base = (draft.scope === 'workspace' ? existing.workspace : existing.global) ?? {};
   if (!allowLocked) {
     const changedLocked = Object.keys(draft.values).filter((k) => isLockedKey(k) && JSON.stringify(draft.values[k]) !== JSON.stringify(getPath(base, k)));

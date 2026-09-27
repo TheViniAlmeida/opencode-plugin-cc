@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import {
   ONBOARDING_STEPS, buildDraft, loadDraft, saveDraft, discardDraft, draftPath, nextStep, remainingSteps, applyDraftStep,
   commitDraft, lockedCommand, rankProviders, suggestModels, suggestAliases, modelFamilies, projectDirs, onboardingSummary,
@@ -17,7 +17,7 @@ const agents = load('agent.json');
 const MV = 'omniroute-mvalmeida';
 const EQ = 'omniroute-work';
 const NOW = new Date('2026-09-26T12:00:00Z');
-const tmp = (t) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-onb-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+const tmp = (t) => trackTempDir(t, makeTempDir('opc-onb-'));
 const NONE = { global: null, workspace: null };
 const deps = (extra = {}) => ({ catalog, agents, existing: NONE, allowLocked: true, now: NOW, ...extra });
 
@@ -46,6 +46,8 @@ test('draft persistence: save (0600), load, discard; corrupt draft reads as null
   assert.equal(loadDraft(dir), null);
   assert.equal(discardDraft(dir), false);
   fs.writeFileSync(draftPath(dir), '{"schemaVersion":99}');
+  assert.equal(loadDraft(dir), null);
+  fs.writeFileSync(draftPath(dir), 'not json');
   assert.equal(loadDraft(dir), null);
 });
 
@@ -143,6 +145,23 @@ test('commitDraft: invalid model refused (exit 2); locked change refused without
     assert.deepEqual(e.details.commands, [`opc config set policy.approver 'claude' --tty-confirm`]);
     return true;
   });
+});
+
+test('commitDraft: changing scope cannot write accumulated global-only keys to workspace', (t) => {
+  const dataDir = tmp(t);
+  const ws = tmp(t);
+  let { draft } = applyDraftStep(buildDraft({ hasGlobal: true, now: NOW }), {
+    scope: 'global', stopGate: { enabled: true }, delegation: { auto: true },
+  }, deps());
+  ({ draft } = applyDraftStep(draft, { scope: 'workspace' }, deps()));
+  assert.throws(() => commitDraft({ dataDir, workspaceRoot: ws, draft, catalog, agents, existing: NONE, allowLocked: true }), (e) => {
+    assert.equal(e.exitCode, 2);
+    assert.match(e.message, /stopGate\.enabled/);
+    assert.match(e.message, /delegation\.auto/);
+    return true;
+  });
+  assert.equal(fs.existsSync(path.join(ws, '.opc.json')), false);
+  assert.equal(fs.existsSync(path.join(dataDir, 'config.json')), false);
 });
 
 test('lockedCommand quotes single quotes safely', () => {
