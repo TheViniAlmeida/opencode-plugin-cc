@@ -1,5 +1,6 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
+import { shellQuote } from './args.mjs';
 import { redact, redactText, redactOutput, redactTurnOutput } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
 
@@ -631,4 +632,211 @@ export function renderReviewEstimate(estimate) {
 
 export function renderReviewGate({ enabled, changed }) {
   return redactText(`Gate de parada: ${enabled ? 'ativado' : 'desativado'}${changed ? ' (atualizado)' : ''}\n`);
+}
+
+// --- F3 renderers -----------------------------------------------------------------
+const F3_ACTIVE = ['queued', 'running', 'waiting_permission'];
+const F3_MAX_INLINE_DIFF = 400 * 1024;
+
+function fmtTime(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function oneLine(text, max = 100) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function fenceFor(text) {
+  const runs = String(text).match(/`+/g) ?? [];
+  const longest = runs.reduce((n, run) => Math.max(n, run.length), 0);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+const f3Table = (headers, rows) => renderTable(headers, rows).trimEnd();
+
+function messageText(message) {
+  return (message.parts ?? []).filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text ?? '').join(' ');
+}
+
+function modelLabel(model) {
+  if (!model) return '-';
+  if (typeof model === 'string') return model;
+  const id = model.modelID ?? model.id;
+  return model.providerID && id ? `${model.providerID}/${id}` : '-';
+}
+
+function truncateBytes(text, maxBytes) {
+  const buf = Buffer.from(String(text), 'utf8');
+  if (buf.length <= maxBytes) return { text: String(text), truncated: false };
+  return { text: buf.subarray(0, maxBytes).toString('utf8'), truncated: true };
+}
+
+function diffBody(diffs, maxInlineBytes) {
+  const lines = [f3Table(['Arquivo', 'Status', '+', '-'], diffs.map((d) => [d.file ?? '(desconhecido)', d.status ?? '-', String(d.additions ?? 0), String(d.deletions ?? 0)]))];
+  const ordered = diffs.filter((d) => typeof d.patch === 'string' && d.patch.length > 0).sort((a, b) => a.patch.length - b.patch.length);
+  let used = 0;
+  let omitted = 0;
+  const chunks = [];
+  for (const d of ordered) {
+    const size = Buffer.byteLength(d.patch, 'utf8');
+    if (used + size > maxInlineBytes) {
+      omitted += 1;
+      continue;
+    }
+    used += size;
+    chunks.push(d.patch.endsWith('\n') ? d.patch : `${d.patch}\n`);
+  }
+  if (chunks.length) {
+    const body = chunks.join('').trimEnd();
+    const fence = fenceFor(body);
+    lines.push('', `${fence}diff`, body, fence);
+  }
+  if (omitted) lines.push('', `(${omitted} arquivo(s) fora do diff inline: limite de ${Math.round(maxInlineBytes / 1024)} KB)`);
+  return lines;
+}
+
+export function renderSessions(sessions, { statusMap = {}, title = 'Sessões OPC', hiddenCount = 0 } = {}) {
+  if (!sessions.length) return `# ${title}\n\nNenhuma sessão encontrada.\n`;
+  const rows = sessions.map((s) => [s.id, s.title ?? '', statusMap[s.id]?.type ?? 'idle', fmtTime(s.time?.updated), s.parentID ?? '-']);
+  const lines = [`# ${title}`, '', f3Table(['ID', 'Título', 'Status', 'Atualizada (UTC)', 'Pai'], rows)];
+  if (hiddenCount > 0) lines.push('', `(${hiddenCount} sessão(ões) omitida(s); use --limit para ver mais)`);
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderSession(session, { status = null, messages = [], note = null } = {}) {
+  const lines = [`# Sessão ${session.id}`, ''];
+  lines.push(`- Título: ${session.title ?? '-'}`);
+  lines.push(`- Status: ${status ?? '-'}`);
+  lines.push(`- Diretório: ${session.directory ?? '-'}`);
+  lines.push(`- Agente: ${session.agent ?? '-'} · Modelo: ${modelLabel(session.model)}`);
+  if (session.parentID) lines.push(`- Pai: ${session.parentID}`);
+  lines.push(`- Criada: ${fmtTime(session.time?.created)} · Atualizada: ${fmtTime(session.time?.updated)} (UTC)`);
+  if (session.summary) lines.push(`- Alterações: +${session.summary.additions} -${session.summary.deletions} em ${session.summary.files} arquivo(s)`);
+  if (session.revert?.messageID) {
+    lines.push(`- Revert ativo: a partir de ${session.revert.messageID} (desfazer: opc session unrevert ${session.id} --confirmed-by-user)`);
+  }
+  if (note) lines.push('', note);
+  if (messages.length) {
+    lines.push('', `## Mensagens (${messages.length})`, '');
+    lines.push(f3Table(['#', 'ID', 'Papel', 'Agente/Modelo', 'Texto'], messages.map((m, i) => [
+      String(i + 1),
+      m.info?.id ?? '-',
+      m.info?.role ?? '-',
+      m.info?.role === 'assistant' ? `${m.info.agent ?? '-'} · ${m.info.providerID ?? '-'}/${m.info.modelID ?? '-'}${m.info.summary ? ' (resumo)' : ''}` : (m.info?.agent ?? '-'),
+      oneLine(messageText(m), 100),
+    ])));
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderSessionDiff(diffs, { maxInlineBytes = F3_MAX_INLINE_DIFF, title = 'Diff da sessão' } = {}) {
+  if (!diffs.length) return `# ${title}\n\nNenhuma alteração registrada.\n`;
+  return `${[`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)].join('\n')}\n`;
+}
+
+export function renderTodos(todos, { sessionID = null } = {}) {
+  const heading = `# Todos${sessionID ? ` da sessão ${sessionID}` : ''}`;
+  if (!todos.length) return `${heading}\n\nNenhum todo.\n`;
+  return `${heading}\n\n${f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))}\n`;
+}
+
+export function renderRevertPreview({ action, sessionID, messageID = null, affected = [], rawDiff = null, command }) {
+  const lines = [`# opc: confirmação necessária (${action})`, ''];
+  if (action === 'revert') {
+    lines.push(`Sessão ${sessionID} · a partir da mensagem ${messageID}.`);
+    lines.push('O revert remove do histórico as mensagens a partir dessa e restaura os arquivos abaixo ao estado anterior:', '');
+    if (affected.length) lines.push(...diffBody(affected, F3_MAX_INLINE_DIFF));
+    else lines.push('(nenhuma alteração de arquivo registrada para essas mensagens; só o histórico muda)');
+  } else {
+    lines.push(`Sessão ${sessionID} · revert ativo a partir de ${messageID ?? '-'}.`);
+    lines.push('O unrevert devolve as mensagens e reaplica nos arquivos o diff abaixo:', '');
+    if (rawDiff) {
+      const { text, truncated } = truncateBytes(rawDiff, F3_MAX_INLINE_DIFF);
+      const fence = fenceFor(text);
+      lines.push(`${fence}diff`, text.trimEnd(), fence);
+      if (truncated) lines.push('(diff truncado em 400 KB)');
+    } else {
+      lines.push('(o OpenCode não informou o diff do revert)');
+    }
+  }
+  lines.push('', 'Nada foi alterado. Confirme com o usuário e só então rode:', '', `    ${command}`);
+  return `${lines.join('\n')}\n`;
+}
+
+// job.pendingRequest is a list (F2a); in a group each item carries memberId.
+export function renderPendingLines(job) {
+  return (job?.pendingRequest ?? []).flatMap((req) => {
+    const owner = req.memberId ?? job.id;
+    if (req.type === 'question') {
+      const questions = (req.questions ?? []).map((q) => oneLine(q.question ?? q.header ?? '', 80)).join(' | ');
+      return [`- ${owner}: pergunta ${req.id} (${questions || 'sem texto'})`, `  /opc:permissions answer ${req.id} <resposta...>`];
+    }
+    const patterns = (req.patterns ?? []).join(', ');
+    return [
+      `- ${owner}: permissão ${req.permission ?? '?'} [${patterns}] (pedido ${req.id}, sessão ${req.sessionID ?? '-'})`,
+      `  /opc:permissions reply ${req.id} once`,
+      `  /opc:permissions reply ${req.id} reject`,
+    ];
+  });
+}
+
+export function renderGroupStatus(group, members) {
+  const lines = [`# Grupo ${group.id} (${group.kind})`, '', `Status: ${group.status} · ${group.phase ?? '-'} · sessão pai ${group.sessionID ?? '-'}`, ''];
+  lines.push(f3Table(['#', 'Job', 'Agente', 'Modelo', 'Status', 'Fase', 'Sessão'], members.map((m, i) => [
+    String(i + 1), m.id, m.agent ?? '-', modelLabel(m.model), m.status, m.phase ?? '-', m.sessionID ?? '-',
+  ])));
+  const pending = members.flatMap((m) => renderPendingLines(m));
+  if (pending.length) lines.push('', 'Pedidos pendentes:', ...pending);
+  const warnings = group.result?.warnings ?? [];
+  if (warnings.length) lines.push('', `Avisos: ${warnings.join('; ')}`);
+  lines.push('', `Cancelar um membro: /opc:cancel <job> · o grupo inteiro: /opc:cancel ${group.id}`);
+  if (F3_ACTIVE.includes(group.status)) lines.push(`Acompanhar: /opc:status ${group.id} --wait`);
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderGroupResult(group, members) {
+  const counts = group.result?.counts ?? {};
+  const countText = ['completed', 'failed', 'cancelled'].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`).join(', ') || '-';
+  const lines = [`# Resultado do grupo ${group.id}`, '', `Status: ${group.status} · ${members.length} membro(s): ${countText}`];
+  const warnings = group.result?.warnings ?? [];
+  if (warnings.length) lines.push(`Avisos: ${warnings.join('; ')}`);
+  members.forEach((m, i) => {
+    const r = m.result ?? {};
+    lines.push('', `## #${i + 1} ${m.agent ?? '-'} · ${modelLabel(m.model)} — ${m.status}`);
+    lines.push(`Sessão: ${r.sessionID ?? m.sessionID ?? '-'} (mecanismo ${r.mechanism ?? '-'}${r.fellBack ? ', fallback de child-session' : ''})`);
+    if (m.status === 'completed') lines.push('', String(r.finalText ?? '').trim() || '(sem texto final)');
+    else if (m.status === 'cancelled') lines.push('', 'Cancelado.');
+    else lines.push('', `Erro: ${m.errorType ?? r.errorType ?? m.errorCode ?? 'erro'}: ${m.errorMessage ?? r.errorMessage ?? '(sem mensagem)'}`);
+  });
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderCommandResult(result) {
+  const lines = [`# opc command /${result.command}`, ''];
+  lines.push(`Argumentos: ${result.arguments ? `\`${result.arguments}\`` : '(nenhum)'}`);
+  lines.push(`Sessão: ${result.sessionID ?? '-'} · modelo ${result.model ?? '-'} · agente ${result.agent ?? '(padrão)'}`, '');
+  if (result.error) lines.push(`Erro: ${result.error.name ?? 'Error'}: ${result.error.data?.message ?? result.error.message ?? ''}`);
+  else lines.push(String(result.finalText ?? '').trim() || '(sem texto final)');
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderAttach(info) {
+  const args = ['opencode', 'attach', info.url, ...(info.sessionID ? ['-s', info.sessionID] : []), '--dir', info.directory].map(shellQuote).join(' ');
+  const secret = info.credential?.type === 'file'
+    ? `OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(info.credential.path)})"`
+    : `OPENCODE_SERVER_PASSWORD="$${info.credential?.name ?? 'OPC_SERVER_PASSWORD'}"`;
+  const lines = ['# opc attach', ''];
+  lines.push(`Servidor: ${info.url} (${info.attached ? 'externo, via OPC_SERVER_URL' : 'gerenciado pelo opc'})`);
+  lines.push(`Sessão: ${info.sessionID ?? '(nenhuma: a TUI abre o seletor)'}`);
+  lines.push(`Diretório: ${info.directory}`, '');
+  if (info.pane) {
+    lines.push(`Pane aberto: ${info.pane.id}. A senha foi lida do arquivo 0600 dentro do pane (não passa por argv).`);
+    return `${lines.join('\n')}\n`;
+  }
+  lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.credential?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
+  lines.push(`    ${secret} ${args}`, '');
+  if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
+  return `${lines.join('\n')}\n`;
 }
