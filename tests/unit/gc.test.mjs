@@ -34,6 +34,62 @@ test('findStaleStates: returns only old, inactive, non-excluded state dirs with 
   assert.deepEqual(stale.map((s) => s.dir), [old]);
 });
 
+test('findStaleStates: missing data root returns an empty result with skipped states', (t) => {
+  const root = rootFor(t);
+  const stale = findStaleStates(root, { olderThanMs: 30 * 86400000 });
+  assert.deepEqual(stale, []);
+  assert.deepEqual(stale.skipped, []);
+});
+
+test('gc removes old candidates after taking locks, but preserves a non-lock file touched after listing', async (t) => {
+  const root = rootFor(t);
+  const old = makeState(root, 'old-0123456789abcdef', 40);
+  const touched = makeState(root, 'touched-0123456789abcdee', 40);
+  const dataFile = join(touched, 'state.json');
+  let stdout = '';
+  const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: true }, stderr: {}, out: (v) => { stdout += v; }, err() {} };
+  await run(ctx, [], { confirm: async () => {
+    const now = new Date();
+    utimesSync(dataFile, now, now);
+    return true;
+  } });
+  assert.equal(existsSync(old), false, 'lock entries must not make an old candidate appear fresh');
+  assert.equal(existsSync(touched), true, 'a recently touched non-lock file must preserve the candidate');
+  assert.match(stdout, /Removidos 1/);
+  assert.match(stdout, /old-0123456789abcdef/);
+  assert.match(stdout, /Preservados:[\s\S]*touched-0123456789abcdee: Estado atualizado após a listagem/);
+  assert.doesNotMatch(stdout.split('Preservados:')[0], /touched-0123456789abcdee/);
+});
+
+test('gc reports only removed states in its count and table', async (t) => {
+  const root = rootFor(t);
+  const removed = makeState(root, 'removed-0123456789abcdef', 40);
+  const skipped = makeState(root, 'skipped-0123456789abcdee', 40);
+  let stdout = '';
+  const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: true }, stderr: {}, out: (v) => { stdout += v; }, err() {} };
+  await run(ctx, [], { confirm: async () => {
+    const now = new Date();
+    utimesSync(join(skipped, 'state.json'), now, now);
+    return true;
+  } });
+  const [removedSection, skippedSection = ''] = stdout.split('Preservados:');
+  assert.match(removedSection, /Removidos 1/);
+  assert.match(removedSection, /removed-0123456789abcdef/);
+  assert.doesNotMatch(removedSection, /skipped-0123456789abcdee/);
+  assert.match(skippedSection, /skipped-0123456789abcdee: Estado atualizado após a listagem/);
+  assert.equal(existsSync(removed), false);
+  assert.equal(existsSync(skipped), true);
+});
+
+test('gc with a missing data root exits successfully with nothing to remove', async (t) => {
+  const root = rootFor(t);
+  let stdout = '';
+  const ctx = { dataDir: join(root, 'missing'), stateDir: null, stdin: { isTTY: false }, out: (v) => { stdout += v; }, err() {} };
+  const result = await run(ctx, []);
+  assert.equal(result, 0);
+  assert.match(stdout, /nada a remover/i);
+});
+
 test('findStaleStates: unreadable state root fails closed; unreadable child is excluded', async (t) => {
   const root = rootFor(t);
   const stateRoot = join(root, 'state');

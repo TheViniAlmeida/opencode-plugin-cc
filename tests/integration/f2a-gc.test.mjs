@@ -19,7 +19,7 @@ test('gc: lista e exige confirmação sem TTY; remove com --confirmed-by-user', 
   const fresh = oldState(ctx.env, 'fresh-ws-0123456789abcdee', 2);
   const dry = await opc(ctx, ['gc']);
   assert.equal(dry.code, 2);
-  assert.match(dry.stdout, /old-ws-0123456789abcdef/);
+  assert.match(dry.stdout, /old-ws-0123456789abcdef/, `stdout=${JSON.stringify(dry.stdout)} stderr=${JSON.stringify(dry.stderr)}`);
   assert.doesNotMatch(dry.stdout, /fresh-ws/);
   assert.ok(existsSync(stale));
   const done = await opc(ctx, ['gc', '--confirmed-by-user']);

@@ -1,5 +1,5 @@
 // opc gc: removes workspace states unused for more than N days, only on explicit command (spec §3.2).
-import { lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
 import { ConnectionError, ExitCode, UsageError } from '../lib/opc-error.mjs';
@@ -14,18 +14,24 @@ const STATE_DIR_RE = /^.+-[0-9a-f]{16}$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function newestMtime(dir) {
-  let newest = statSync(dir).mtimeMs;
-  const visit = (path, depth) => {
+  let newest = 0;
+  const visit = (path) => {
     const entries = readdirSync(path, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === 'state.lock' || entry.name === 'server.lock' || entry.name.includes('.lock.')) continue;
+      if (entry.name.endsWith('.lock') || entry.name.endsWith('.break') || entry.name.includes('.lock.')) continue;
       const full = join(path, entry.name);
-      newest = Math.max(newest, lstatSync(full).mtimeMs);
-      if (entry.isDirectory() && depth < 1) visit(full, depth + 1);
+      const info = lstatSync(full);
+      if (info.isFile()) newest = Math.max(newest, info.mtimeMs);
+      else if (info.isDirectory()) visit(full);
     }
   };
-  visit(dir, 0);
+  visit(dir);
   return newest;
+}
+
+function staleResults(candidates = []) {
+  Object.defineProperty(candidates, 'skipped', { value: [], enumerable: false });
+  return candidates;
 }
 
 function serverStatus(dir, deps) {
@@ -68,12 +74,11 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch (err) {
-    if (err.code === 'ENOENT') return [];
+    if (err.code === 'ENOENT') return staleResults();
     throw new ConnectionError('GC_READ_FAILED', `Não foi possível ler o diretório de estados do opc (${err.code ?? 'erro de leitura'}).`, { cause: err });
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-  const stale = [];
-  Object.defineProperty(stale, 'skipped', { value: [], enumerable: false });
+  const stale = staleResults();
   for (const entry of entries) {
     if (!entry.isDirectory() || !STATE_DIR_RE.test(entry.name)) continue;
     const dir = join(root, entry.name);
@@ -109,7 +114,7 @@ export async function run(ctx, argv, overrides = {}) {
   if (stale.length === 0) {
     if (flags.json) ctx.json({ removed: [], candidates: [], skipped: stale.skipped });
     else if (stale.skipped.length) ctx.out(`# opc gc\n\nNenhum candidato removido. Estados preservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n`);
-    else ctx.out(`opc gc: nenhum estado de workspace sem uso há mais de ${days} dias.\n`);
+    else ctx.out(`opc gc: nada a remover; nenhum estado de workspace sem uso há mais de ${days} dias.\n`);
     return ExitCode.OK;
   }
   const table = renderTable(['Estado', 'Último uso'], stale.map((s) => [s.name, s.lastUsed]));
@@ -136,6 +141,7 @@ export async function run(ctx, argv, overrides = {}) {
     }
   }
   const removed = [];
+  const removedStates = [];
   const skipped = [...stale.skipped];
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   for (const s of stale) {
@@ -192,6 +198,7 @@ export async function run(ctx, argv, overrides = {}) {
       }
       rmSync(s.dir, { recursive: true, force: false });
       removed.push(s.name);
+      removedStates.push(s);
     } catch (err) {
       skipped.push({ dir: s.dir, name: s.name, reason: `Não foi possível remover o estado; candidato preservado (${err.code ?? 'erro'}).` });
     } finally {
@@ -199,7 +206,13 @@ export async function run(ctx, argv, overrides = {}) {
     }
   }
   if (flags.json) ctx.json({ removed, candidates: stale.map(publicCandidate), skipped });
-  else ctx.out(`# opc gc\n\nRemovidos ${removed.length} diretórios de estado:\n\n${table}\n${skipped.length ? `\nPreservados:\n${skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n` : ''}`);
+  else {
+    const removedTable = renderTable(['Estado', 'Último uso'], removedStates.map((s) => [s.name, s.lastUsed]));
+    const summary = removed.length
+      ? `Removidos ${removed.length} diretórios de estado:\n\n${removedTable}`
+      : 'Nenhum diretório de estado foi removido.';
+    ctx.out(`# opc gc\n\n${summary}${skipped.length ? `\n\nPreservados:\n${skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n` : '\n'}`);
+  }
   return ExitCode.OK;
 }
 
