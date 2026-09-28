@@ -44,6 +44,19 @@ test('revert with --confirmed-by-user posts {messageID, partID?} and shows the r
   assert.match(withPart.stdout, /Revert aplicado/);
 });
 
+test('revert JSON masks runtime-built pattern tokens in patch previews and returned sessions', async (t) => {
+  const { cwd, env } = await setup(t);
+  const token = `sk-proj-${'Z'.repeat(24)}`;
+  env.FAKE_SESSION_CONTENT = token;
+  const preview = await runCli(['session', 'revert', SEED.session, SEED.m1, '--json'], { env, cwd });
+  assert.equal(preview.code, 2);
+  assert.ok(!preview.stdout.includes(token));
+  assert.match(preview.stdout, /\*\*\*/);
+  const done = await runCli(['session', 'revert', SEED.session, SEED.m1, '--confirmed-by-user', '--json'], { env, cwd });
+  assert.equal(done.code, 0, done.stderr);
+  assert.ok(!done.stdout.includes(token));
+});
+
 test('unknown message is refused before any revert', async (t) => {
   const { cwd, env } = await setup(t);
   const res = await runCli(['session', 'revert', SEED.session, 'msg_not_here', '--confirmed-by-user'], { env, cwd });
@@ -100,4 +113,3 @@ test('summarize: model from --model (alias) or routing; denied model refused', a
   assert.equal((await runCli(['session', 'summarize', SEED.session, '--model', 'omniroute-work/cx/gpt-5.5'], { env, cwd })).code, 4);
   assert.equal(posts(env, `/session/${SEED.session}/summarize`).length, 2);
 });
-

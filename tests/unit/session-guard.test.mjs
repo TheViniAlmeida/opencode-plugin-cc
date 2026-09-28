@@ -58,3 +58,21 @@ test('collectAffectedDiff merges per-file diffs from the target message onward',
   await assert.rejects(collectAffectedDiff(api, 'ses_a', 'msg_9'), (e) => e.code === 'UNKNOWN_MESSAGE' && e.exitCode === 2);
 });
 
+test('collectAffectedDiff validates a message directly when message listing hits the OpenCode bug', async () => {
+  const api = {
+    messages: async () => { throw Object.assign(new Error('bad list'), { code: 'BAD_REQUEST', details: { body: { message: 'OutputFormatJsonSchema' } } }); },
+    message: async (_sessionID, id) => id === 'msg_1' ? { info: { id, role: 'user' } } : Promise.reject(Object.assign(new Error('missing'), { code: 'NOT_FOUND' })),
+    diff: async (_id, { messageID }) => [{ file: 'a.txt', patch: `diff ${messageID}` }],
+  };
+  const preview = await collectAffectedDiff(api, 'ses_a', 'msg_1');
+  assert.equal(preview[0].patch, 'diff msg_1');
+  assert.match(preview.listBugNotice, /OpenCode 1\.18\.32/);
+  await assert.rejects(collectAffectedDiff(api, 'ses_a', 'msg_missing'), (e) => e.code === 'UNKNOWN_MESSAGE');
+});
+
+test('collectAffectedDiff marks previews capped at 50 user messages', async () => {
+  const messages = Array.from({ length: 51 }, (_, i) => ({ info: { id: `msg_${i}`, role: 'user' } }));
+  const api = { messages: async () => messages, diff: async () => [] };
+  const preview = await collectAffectedDiff(api, 'ses_a', 'msg_0');
+  assert.equal(preview.previewTruncated, true);
+});

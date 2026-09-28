@@ -6,7 +6,7 @@ import { assertId } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderTodos, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages } from '../lib/session-messages.mjs';
-import { redactText, maskSecretPatterns } from '../lib/redact.mjs';
+import { maskDeep } from '../lib/redact.mjs';
 
 const SPEC = {
   flags: {
@@ -41,7 +41,7 @@ async function actionNew(ctx, api, { flags }) {
     body.model = { id: model.modelID, providerID: model.providerID };
   }
   const session = await api.createSession(body);
-  if (flags.json) ctx.json({ session });
+  if (flags.json) ctx.json(maskDeep({ session }));
   else ctx.out(renderSession(session, { note: `Continue com: /opc:task --resume ${session.id} <prompt> · veja na TUI: /opc:attach ${session.id}` }));
   return ExitCode.OK;
 }
@@ -54,9 +54,9 @@ async function actionShow(ctx, api, { flags, sessionID }) {
   ]);
   const status = statusMap?.[sessionID]?.type ?? 'idle';
   const unavailable = messages?.messagesUnavailable === true;
-  const safeSession = maskContent(session);
-  const safeMessages = maskContent(messages ?? []);
-  if (flags.json) ctx.json({ session: safeSession, status, messages: safeMessages, ...(unavailable ? { messagesUnavailable: true, reason: 'OPENCODE_LIST_BUG' } : {}) });
+  const safeSession = maskDeep(session);
+  const safeMessages = maskDeep(messages ?? []);
+  if (flags.json) ctx.json(maskDeep({ session: safeSession, status, messages: safeMessages, ...(unavailable ? { messagesUnavailable: true, reason: 'OPENCODE_LIST_BUG' } : {}) }));
   else {
     if (unavailable) ctx.out('As mensagens desta sessão não podem ser listadas por um defeito do OpenCode 1.18.32 com saída estruturada; o diff e os filhos continuam disponíveis.\n');
     ctx.out(renderSession(safeSession, { status, messages: safeMessages }));
@@ -67,14 +67,14 @@ async function actionShow(ctx, api, { flags, sessionID }) {
 async function actionFork(ctx, api, { flags, sessionID, rest }) {
   const messageID = rest[1] ? assertId('msg', rest[1], 'mensagem') : undefined;
   const forked = await api.fork(sessionID, { messageID });
-  if (flags.json) ctx.json({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } });
+  if (flags.json) ctx.json(maskDeep({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } }));
   else ctx.out(renderSession(forked, { note: `Fork de ${sessionID}${messageID ? `, com o histórico anterior a ${messageID}` : ''}.` }));
   return ExitCode.OK;
 }
 
 async function actionChildren(ctx, api, { flags, sessionID }) {
   const children = (await api.children(sessionID)) ?? [];
-  if (flags.json) ctx.json({ sessionID, children });
+  if (flags.json) ctx.json(maskDeep({ sessionID, children }));
   else ctx.out(renderSessions(children, { title: `Filhas de ${sessionID}` }));
   return ExitCode.OK;
 }
@@ -82,15 +82,15 @@ async function actionChildren(ctx, api, { flags, sessionID }) {
 async function actionDiff(ctx, api, { flags, sessionID }) {
   const messageID = flags.message !== undefined ? assertId('msg', flags.message, 'mensagem') : undefined;
   const diffs = (await api.diff(sessionID, { messageID })) ?? [];
-  const safeDiffs = maskContent(diffs);
-  if (flags.json) ctx.json({ sessionID, messageID: messageID ?? null, diffs: safeDiffs });
+  const safeDiffs = maskDeep(diffs);
+  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, diffs: safeDiffs }));
   else ctx.out(renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` }));
   return ExitCode.OK;
 }
 
 async function actionTodo(ctx, api, { flags, sessionID }) {
   const todos = (await api.todo(sessionID)) ?? [];
-  if (flags.json) ctx.json({ sessionID, todos });
+  if (flags.json) ctx.json(maskDeep({ sessionID, todos }));
   else ctx.out(renderTodos(todos, { sessionID }));
   return ExitCode.OK;
 }
@@ -112,6 +112,18 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
 
 export async function collectAffectedDiff(api, sessionID, messageID) {
   const messages = (await readSessionMessages(api, sessionID)) ?? [];
+  if (messages.messagesUnavailable) {
+    let target;
+    try { target = await api.message(sessionID, messageID); }
+    catch (err) {
+      if (err?.code === 'NOT_FOUND') throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
+      throw err;
+    }
+    if (!target) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
+    const diffs = (await api.diff(sessionID, { messageID })) ?? [];
+    diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
+    return diffs;
+  }
   const index = messages.findIndex((m) => m.info?.id === messageID);
   if (index < 0) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
   const target = messages[index].info;
@@ -120,6 +132,7 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
   for (const message of messages.slice(index)) {
     if (message.info?.role === 'user' && !ids.includes(message.info.id)) ids.push(message.info.id);
   }
+  const previewTruncated = ids.length > MAX_DIFF_MESSAGES;
   const byFile = new Map();
   for (const id of ids.slice(0, MAX_DIFF_MESSAGES)) {
     for (const diff of (await api.diff(sessionID, { messageID: id })) ?? []) {
@@ -138,7 +151,9 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
       });
     }
   }
-  return [...byFile.values()];
+  const result = [...byFile.values()];
+  if (previewTruncated) result.previewTruncated = true;
+  return result;
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
@@ -149,12 +164,12 @@ async function actionRevert(ctx, api, { flags, sessionID, rest }) {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
     if (!flags['confirmed-by-user']) {
       const command = `opc session revert ${sessionID} ${messageID}${partID ? ` --part ${partID}` : ''} --confirmed-by-user`;
-      if (flags.json) ctx.json({ confirmed: false, action: 'revert', sessionID, messageID, affected, command });
-      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command }));
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, command, ...(affected.previewTruncated ? { previewTruncated: true, notice: 'Prévia limitada às 50 mensagens do usuário mais recentes; o revert pode afetar mais arquivos.' } : {}), ...(affected.listBugNotice ? { notice: affected.listBugNotice } : {}) }));
+      else ctx.out(`${renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command })}${affected.previewTruncated ? '\nPrévia limitada às 50 mensagens do usuário mais recentes; o revert pode afetar mais arquivos.\n' : ''}${affected.listBugNotice ? `\n${affected.listBugNotice}\n` : ''}`);
       return ExitCode.USAGE;
     }
     const session = await api.revert(sessionID, { messageID, partID });
-    if (flags.json) ctx.json({ confirmed: true, action: 'revert', session });
+    if (flags.json) ctx.json(maskDeep({ confirmed: true, action: 'revert', session }));
     else ctx.out(renderSession(session, { note: `Revert aplicado a partir de ${messageID}. Para desfazer: opc session unrevert ${sessionID} --confirmed-by-user` }));
     return ExitCode.OK;
   });
@@ -167,12 +182,12 @@ async function actionUnrevert(ctx, api, { flags, sessionID }) {
     if (!flags['confirmed-by-user']) {
       const command = `opc session unrevert ${sessionID} --confirmed-by-user`;
       const rawDiff = current.revert.diff ?? null;
-      if (flags.json) ctx.json({ confirmed: false, action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command });
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
       else ctx.out(renderRevertPreview({ action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
       return ExitCode.USAGE;
     }
     const session = await api.unrevert(sessionID);
-    if (flags.json) ctx.json({ confirmed: true, action: 'unrevert', session });
+    if (flags.json) ctx.json(maskDeep({ confirmed: true, action: 'unrevert', session }));
     else ctx.out(renderSession(session, { note: 'Unrevert aplicado: mensagens e arquivos restaurados.' }));
     return ExitCode.OK;
   });
@@ -187,7 +202,7 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
       modelID: model.modelID,
       timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000,
     });
-    if (flags.json) ctx.json({ sessionID, model: model.full, summarized: true });
+    if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true }));
     else ctx.out(`# Sessão ${sessionID} resumida\n\nModelo: ${model.full}\nVeja o resultado: opc session show ${sessionID}\n`);
     return ExitCode.OK;
   });
@@ -214,13 +229,6 @@ function validateIds(action, rest, flags) {
   if (flags.message !== undefined) assertId('msg', flags.message, 'mensagem');
   if (flags.part) assertId('prt', flags.part, 'parte');
   return sessionID;
-}
-
-function maskContent(value) {
-  if (typeof value === 'string') return redactText(maskSecretPatterns(value));
-  if (Array.isArray(value)) return value.map(maskContent);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskContent(item)]));
-  return value;
 }
 
 export async function run(ctx, argv) {
