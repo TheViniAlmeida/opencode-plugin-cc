@@ -10,7 +10,7 @@ import { runTurn } from '../lib/runner.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { redact } from '../lib/redact.mjs';
-import { acquireSessionLock, appendJobLog, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
+import { acquireSessionLock, appendJobLog, clearJobRequests, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
 
 const FINAL_LOG_LIMIT = 64 * 1024;
 const METADATA_LIMIT = 4000;
@@ -44,7 +44,7 @@ export function queueProgressUpdate(jobUpdates, patch, log) {
   });
 }
 
-export function createRequestBridge({ update, api, profileKind, policy = {}, timeoutMs = 600000, log = () => {} }) {
+export function createRequestBridge({ update, jobId, stateDir, api, profileKind, policy = {}, timeoutMs = 600000, log = () => {} }) {
   const timers = new Map();
   const autoReject = profileKind === 'read-only';
   const clearTimer = (id) => {
@@ -56,11 +56,7 @@ export function createRequestBridge({ update, api, profileKind, policy = {}, tim
     phase: 'waiting_permission',
     pendingRequest: [...(job.pendingRequest ?? []).filter((r) => r.id !== entry.id), entry],
   }));
-  const removePending = (id) => update((job) => {
-    const remaining = (job.pendingRequest ?? []).filter((r) => r.id !== id);
-    if (job.status !== 'waiting_permission') return { pendingRequest: remaining.length ? remaining : null };
-    return remaining.length ? { pendingRequest: remaining } : { pendingRequest: null, status: 'running', phase: 'running' };
-  });
+  const removePending = (id) => clearJobRequests(stateDir, jobId, [id]);
   const arm = (id, onTimeout) => {
     timers.set(id, setTimeout(() => {
       timers.delete(id);
@@ -170,6 +166,8 @@ export async function run(ctx, argv) {
     await hub.start();
     bridge = createRequestBridge({
       update: (patch) => jobUpdates.update(patch),
+      jobId,
+      stateDir: ctx.stateDir,
       api,
       profileKind: request.profileKind,
       policy: ctx.config?.policy ?? {},

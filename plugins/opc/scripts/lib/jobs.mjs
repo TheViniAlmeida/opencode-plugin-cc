@@ -188,6 +188,20 @@ export async function updateJob(stateDir, id, patch) {
   return updated;
 }
 
+// Idempotently remove permission/question ids from a job and resume it when clear.
+export async function clearJobRequests(stateDir, id, requestIds) {
+  const ids = new Set(requestIds);
+  return updateJob(stateDir, id, (job) => {
+    const pending = job.pendingRequest ?? [];
+    const remaining = pending.filter((request) => !ids.has(request.id));
+    if (remaining.length === pending.length) return {};
+    if (job.status === 'waiting_permission' && remaining.length === 0) {
+      return { pendingRequest: null, status: 'running', phase: 'running' };
+    }
+    return { pendingRequest: remaining.length ? remaining : null };
+  });
+}
+
 export async function reconcileJob(stateDir, job) {
   if (!workerLost(job)) return job;
   return updateJob(stateDir, job.id, lostPatch());

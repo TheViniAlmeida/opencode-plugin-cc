@@ -12,9 +12,9 @@ test('permission-ask foreground: exit 3 with ready lines; approver user needs --
   const id = jobIdFrom(r.stderr);
   const perId = permissionIdFrom(r.stdout);
   assert.ok(perId, r.stdout);
-  assert.match(r.stdout, /Tool: bash/);
+  assert.match(r.stdout, /Ferramenta: bash/);
   assert.match(r.stdout, /rm -rf build/);
-  assert.match(r.stdout, /Needs the user: yes/);
+  assert.match(r.stdout, /Exige o usuário: sim/);
   assert.match(r.stdout, new RegExp(`/opc:permissions reply ${perId} reject`));
   assert.match(r.stdout, new RegExp(`/opc:status ${id} --wait`));
   const job = jobIn(ctx.env, ctx.cwd, id);
@@ -27,6 +27,7 @@ test('permission-ask foreground: exit 3 with ready lines; approver user needs --
   assert.match(refused.stdout + refused.stderr, /NEEDS_USER/);
   const ok = await opc(ctx, ['permissions', 'reply', perId, 'once', '--confirmed-by-user']);
   assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, new RegExp(`/opc:status ${id} --wait`));
   const waited = await opc(ctx, ['status', id, '--wait', '--timeout-ms', '30000', '--poll-interval-ms', '200']);
   assert.equal(waited.code, 0, waited.stdout);
   const result = await opc(ctx, ['result', id]);
@@ -42,6 +43,7 @@ test('permission-ask background: waits, reply reject with message, completes', a
   const perId = permissionIdFrom(waiting.stdout);
   const reply = await opc(ctx, ['permissions', 'reply', perId, 'reject', 'not', 'today']);
   assert.equal(reply.code, 0, reply.stderr);
+  assert.match(reply.stdout, new RegExp(`/opc:status ${bg.jobId} --wait`));
   const done = await opc(ctx, ['status', bg.jobId, '--wait', '--timeout-ms', '30000', '--poll-interval-ms', '200']);
   assert.equal(done.code, 0);
   assert.match((await opc(ctx, ['result', bg.jobId])).stdout, /rejected: not today/);
@@ -53,8 +55,8 @@ test('permission timeout in background → reject "opc: no approver available"',
   const done = await opc(ctx, ['status', bg.jobId, '--wait', '--timeout-ms', '30000', '--poll-interval-ms', '200']);
   assert.ok([0, 3].includes(done.code));
   await waitFor(() => jobIn(ctx.env, ctx.cwd, bg.jobId)?.status === 'completed', { timeoutMs: 20000, intervalMs: 100, message: 'completion after timeout' });
-  assert.deepEqual(readFakeState(ctx.env).permissionReplies.map((x) => [x.reply, x.message]), [['reject', 'opc: no approver available']]);
-  assert.match((await opc(ctx, ['result', bg.jobId])).stdout, /rejected: opc: no approver available/);
+  assert.deepEqual(readFakeState(ctx.env).permissionReplies.map((x) => [x.reply, x.message]), [['reject', 'opc: nenhum aprovador disponível']]);
+  assert.match((await opc(ctx, ['result', bg.jobId])).stdout, /rejected: opc: nenhum aprovador disponível/);
 });
 
 test('child-permission-ask reaches the job (child session marked)', async (t) => {
@@ -64,7 +66,7 @@ test('child-permission-ask reaches the job (child session marked)', async (t) =>
   const job = jobIn(ctx.env, ctx.cwd, jobIdFrom(r.stderr));
   const [pending] = job.pendingRequest;
   assert.notEqual(pending.sessionID, job.sessionID);
-  assert.match(r.stdout, /\(child session\)/);
+  assert.match(r.stdout, /\(sessão filha\)/);
   assert.equal((await opc(ctx, ['permissions', 'reply', pending.id, 'reject'])).code, 0);
   const done = await opc(ctx, ['status', job.id, '--wait', '--timeout-ms', '30000', '--poll-interval-ms', '200']);
   assert.equal(done.code, 0);
@@ -95,11 +97,12 @@ test('question-ask: answer with several questions (string[][]); multiple and cus
   const r = await opc(ctx, ['task', '--write', 'ask me']);
   assert.equal(r.code, 3, r.stderr);
   const queId = questionIdFrom(r.stdout);
-  assert.match(r.stdout, /Options: Postgres \| SQLite/);
+  assert.match(r.stdout, /Opções: Postgres \| SQLite/);
   const bad = await opc(ctx, ['permissions', '--args-stdin'], { stdin: `answer ${queId} MySQL A svc` });
   assert.equal(bad.code, 2);
   const ok = await opc(ctx, ['permissions', '--args-stdin'], { stdin: `answer ${queId} postgres "A|C" "my service"` });
   assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, new RegExp(`/opc:status ${jobIdFrom(r.stderr)} --wait`));
   assert.deepEqual(readFakeState(ctx.env).questionReplies[0].answers, [['Postgres'], ['A', 'C'], ['my service']]);
   const id = jobIdFrom(r.stderr);
   assert.equal((await opc(ctx, ['status', id, '--wait', '--timeout-ms', '30000', '--poll-interval-ms', '200'])).code, 0);
@@ -119,6 +122,7 @@ test('reply always is refused (exit 2) without contacting the server', async (t)
   const r = await opc(ctx, ['permissions', 'reply', 'per_anything', 'always']);
   assert.equal(r.code, 2);
   assert.match(r.stdout + r.stderr, /nunca é enviado/);
+  assert.equal(readFakeState(ctx.env).requests.length, 0);
 });
 
 test('approver claude: destructive needs --confirmed-by-user (exit 4); benign does not', async (t) => {

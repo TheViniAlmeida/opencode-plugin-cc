@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, createJob, findResumeCandidate, groupStatus, jobLogPath,
+  ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, clearJobRequests, createJob, findResumeCandidate, groupStatus, jobLogPath,
   listJobs, newJobId, readJob, readJobProgress, resolveJobRef, updateJob, waitForJob, workerMatcher, acquireSessionLock,
   assertNotInsideServer, workerLogPath,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
@@ -63,6 +63,21 @@ test('createJob writes a queued record with all spec fields; updateJob merges', 
   assert.equal(updated.status, 'running');
   assert.equal(readJob(dir, job.id).phase, 'starting');
   assert.throws(() => readJob(dir, '../etc/passwd'), (e) => e.code === 'INVALID_JOB_ID');
+});
+
+test('clearJobRequests removes requests once and resumes a waiting job; repeated clears are harmless', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ status: 'waiting_permission', phase: 'waiting_permission', pendingRequest: [{ id: 'per_one' }, { id: 'que_two' }] }));
+  await updateJob(dir, job.id, { status: 'waiting_permission', phase: 'waiting_permission' });
+  const first = await clearJobRequests(dir, job.id, ['per_one']);
+  assert.deepEqual(first.pendingRequest, [{ id: 'que_two' }]);
+  assert.equal(first.status, 'waiting_permission');
+  const second = await clearJobRequests(dir, job.id, ['que_two']);
+  assert.equal(second.pendingRequest, null);
+  assert.equal(second.status, 'running');
+  const repeated = await clearJobRequests(dir, job.id, ['que_two']);
+  assert.equal(repeated.status, 'running');
+  assert.equal(repeated.pendingRequest, null);
 });
 
 test('createJob always generates its id and path APIs reject unsafe ids', async (t) => {
