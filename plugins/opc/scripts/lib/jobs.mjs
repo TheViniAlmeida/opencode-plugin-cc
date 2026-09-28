@@ -424,7 +424,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
       const message = short(redactText(err?.message ?? String(err)));
       appendJobLog(ctx.stateDir, id, `falha ao solicitar cancelamento: ${message}`);
       const latest = readJob(ctx.stateDir, id);
-      return { ok: false, code: 'CANCEL_FAILED', job: latest, report };
+      return { ok: false, code: 'CANCEL_FAILED', reason: message, job: latest, report };
     }
   }
   if (job.pid) {

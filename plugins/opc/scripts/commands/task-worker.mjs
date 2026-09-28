@@ -177,6 +177,7 @@ export async function run(ctx, argv) {
       log,
     });
     let lastPhase = null;
+    let lastProgressLine = null;
     const childIDs = new Set(stored.childSessionIDs ?? []);
     const result = await runTurn({
       api,
@@ -184,7 +185,10 @@ export async function run(ctx, argv) {
       request,
       signal: controller.signal,
       onProgress: (event) => {
-        if (event.message) log(event.message);
+        if (event.message && event.message !== lastProgressLine) {
+          lastProgressLine = event.message;
+          log(event.message);
+        }
         const patch = {};
         if (event.sessionID) patch.sessionID = event.sessionID;
         if (event.childSessionID && !childIDs.has(event.childSessionID)) {

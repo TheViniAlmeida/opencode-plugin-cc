@@ -1,4 +1,4 @@
-// /opc:result (spec §4).
+// /opc:result (spec §4). Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
 import { isActive, isTerminal, listJobs, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
@@ -12,12 +12,16 @@ const stillRunning = (job) => {
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
+  if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
   const ref = positionals[0] ?? null;
   let job;
   if (ref) {
     job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref));
   } else {
-    const jobs = listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null });
+    const jobs = [];
+    for (const candidate of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null })) {
+      jobs.push(await reconcileJob(ctx.stateDir, candidate));
+    }
     job = jobs.find(isTerminal) ?? null;
     if (!job) {
       const active = jobs.find(isActive);
@@ -30,3 +34,5 @@ export async function run(ctx, argv) {
   else ctx.out(renderTurnResult(job));
   return exitCodeForJob(job);
 }
+
+function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }

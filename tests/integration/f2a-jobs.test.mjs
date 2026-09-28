@@ -147,7 +147,7 @@ test('retry-status → phase retrying in the log, then completed', async (t) => 
   const ctx = setupF2a(t, { scenario: 'retry-status' });
   const r = await opc(ctx, ['task', 'flaky provider']);
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stderr, /\[opc\] retrying \(attempt 1\): APIError 429/);
+  assert.equal((r.stderr.match(/\[opc\] Nova tentativa \(1\): APIError 429/g) ?? []).length, 1);
   assert.match(r.stdout, /recovered after retry/);
 });
 

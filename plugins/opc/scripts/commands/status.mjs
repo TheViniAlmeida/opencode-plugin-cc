@@ -1,4 +1,4 @@
-// /opc:status (spec §4, §9.1).
+// /opc:status (spec §4, §9.1). Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { isActive, listJobs, readJobProgress, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
@@ -16,6 +16,10 @@ const FLAGS = {
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, { flags: FLAGS, allowPositionals: true });
+  if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
+  for (const name of ['timeout-ms', 'poll-interval-ms']) {
+    if (flags[name] < 0) throw new UsageError('USAGE', `--${name} não pode ser negativo.`);
+  }
   const ref = positionals[0] ?? null;
   if (flags.wait && !ref) throw new UsageError('USAGE', '`status --wait` exige um identificador de tarefa');
   if (ref) {
@@ -43,3 +47,5 @@ export async function run(ctx, argv) {
   else ctx.out(renderStatusList(jobs, { maxJobs: flags.all ? Infinity : 8, progressById }));
   return ExitCode.OK;
 }
+
+function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }
