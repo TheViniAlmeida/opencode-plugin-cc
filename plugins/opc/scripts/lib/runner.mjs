@@ -63,6 +63,15 @@ function displayValue(value) {
   return redactText(String(value ?? ''));
 }
 
+const TOOL_ERROR_MAX = 200;
+
+// Tool errors are free text from OpenCode; a permission denial echoes the whole rule list (user config included).
+export function toolErrorSummary(error) {
+  const firstLine = redactText(String(error ?? '')).split('\n')[0];
+  const text = firstLine.replace(/\s*Here are some of the relevant rules\b.*$/s, '').trim();
+  return text.length > TOOL_ERROR_MAX ? `${text.slice(0, TOOL_ERROR_MAX)}…` : text;
+}
+
 export function filesFromToolPart(part) {
   const input = part.state?.input ?? {};
   const files = [];
@@ -355,7 +364,7 @@ export async function runTurn({
               if (phase) lastPhase = phase;
               progress({ phase, message: `${part.tool}${arg ? `: ${arg}` : ''}` });
             } else if (status === 'error') {
-              progress({ message: `Falha na ferramenta ${displayValue(part.tool)}: ${displayValue(part.state?.error ?? '')}` });
+              progress({ message: `Falha na ferramenta ${displayValue(part.tool)}: ${toolErrorSummary(part.state?.error)}` });
             }
             return;
           }

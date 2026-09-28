@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newMessageId, phaseFromPart, runTurn, turnMessages, extractTurn } from '../../plugins/opc/scripts/lib/runner.mjs';
+import { newMessageId, phaseFromPart, runTurn, turnMessages, extractTurn, toolErrorSummary } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { ConnectionError, RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 
 function stubHub() {
@@ -427,4 +427,14 @@ test('gate 5: progress prints full server IDs and redacts them', async () => {
   await runTurn({ api, hub, request: baseRequest({ sessionID: sid }), onProgress: (event) => lines.push(event.message ?? '') });
   for (const id of [sid, child.replace(secret, '***'), permission, question]) assert.ok(lines.some((line) => line.includes(id)), id);
   assert.equal(lines.join('\n').includes(secret), false);
+});
+
+test('toolErrorSummary drops the echoed rule list and caps free text', () => {
+  const denial = 'The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{"permission":"*","pattern":"~/private/**","action":"allow"}]';
+  assert.equal(toolErrorSummary(denial), 'The user has specified a rule which prevents you from using this specific tool call.');
+  assert.equal(toolErrorSummary('first line\nsecond line'), 'first line');
+  const long = toolErrorSummary('x'.repeat(500));
+  assert.equal(long.length, 201);
+  assert.ok(long.endsWith('…'));
+  assert.equal(toolErrorSummary(undefined), '');
 });
