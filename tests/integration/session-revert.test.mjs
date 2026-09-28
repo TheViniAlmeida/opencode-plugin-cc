@@ -71,6 +71,7 @@ test('revert preview falls back to the target message after a formatted turn bre
   writeGlobalConfig(env, { ...F3_TEST_CONFIG, review: { structuredOutput: 'tool' } });
   writeFileSync(join(cwd, 'README.md'), '# formatted review target\n\nA change for the fake review.\n');
   env.FAKE_FORMAT_LIST_BUG = '1';
+  env.FAKE_TARGET_DIFF = '1'; // the target message's own diff, served by GET /session/:id/diff?messageID=
   const session = await runCli(['review', '--wait', '--json'], {
     env,
     cwd,
@@ -86,7 +87,7 @@ test('revert preview falls back to the target message after a formatted turn bre
   const result = JSON.parse(preview.stdout);
   assert.equal(result.confirmed, false);
   assert.equal(result.messageID, messageID);
-  assert.ok(Array.isArray(result.affected), 'preview includes the diff for the target message');
+  assert.ok(result.affected.some((entry) => (entry.file ?? entry.path) === 'target.txt'), `preview includes the target message diff: ${JSON.stringify(result.affected)}`);
   assert.match(result.notice, /não foi possível enumerar os turnos posteriores/i);
 
   const unknown = await runCli(['session', 'revert', sessionID, '--message', 'msg_unknown', '--json'], { env, cwd });
