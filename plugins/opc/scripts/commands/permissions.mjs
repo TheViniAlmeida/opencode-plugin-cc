@@ -8,7 +8,6 @@ import { renderPermissionList } from '../lib/render.mjs';
 
 const FLAGS = { json: { type: 'boolean' }, cwd: { type: 'string' }, 'confirmed-by-user': { type: 'boolean' } };
 const USAGE = 'uso: permissions list | reply <id> once|reject [mensagem] [--confirmed-by-user] | answer <question-id> <resposta...>';
-const short = (value) => String(value ?? '').slice(0, 12) + (String(value ?? '').length > 12 ? '…' : '');
 
 export function parseAnswers(questions, values) {
   const describe = () => questions.map((q, i) => `${i + 1}. [${q.header ?? ''}] ${q.question ?? ''} — opções: ${(q.options ?? []).map((o) => o.label).join(' | ') || '(texto livre)'}`).join('\n');
@@ -28,8 +27,8 @@ export function parseAnswers(questions, values) {
   });
 }
 
-function requireServerApi(ctx) {
-  const api = existingServerApi(ctx);
+function requireServerApi(ctx, getApi = existingServerApi) {
+  const api = getApi(ctx);
   if (!api) throw new NotFoundError('NO_SERVER', 'não há servidor opc em execução para este workspace; não há solicitações pendentes');
   return api;
 }
@@ -39,7 +38,7 @@ const jobForRequest = (ctx, id) => listJobs(ctx.stateDir, { all: true }).find((j
 export async function list(ctx, flags, getApi = existingServerApi) {
   const api = getApi(ctx);
   let requests = [];
-  let serverDown = false;
+  let serverDown = !api;
   if (api) {
     try {
       const [permissions, questions] = await Promise.all([api.listPermissions(), api.listQuestions()]);
@@ -56,7 +55,7 @@ export async function list(ctx, flags, getApi = existingServerApi) {
   return ExitCode.OK;
 }
 
-async function reply(ctx, flags, id, rest) {
+async function reply(ctx, flags, id, rest, { getApi = existingServerApi, clearRequests = clearJobRequests } = {}) {
   const [decision, ...messageParts] = rest;
   if (!id || !decision) throw new UsageError('USAGE', USAGE);
   const policy = ctx.config?.policy ?? {};
@@ -67,51 +66,51 @@ async function reply(ctx, flags, id, rest) {
   if (id.startsWith('que')) {
     if (decision !== 'reject') throw new UsageError('INVALID_REPLY', 'perguntas só podem ser recusadas aqui; responda com: permissions answer <id> <resposta...>');
     const knownJob = jobForRequest(ctx, id);
-    const api = requireServerApi(ctx);
+    const api = requireServerApi(ctx, getApi);
     const pending = (await api.listQuestions() ?? []).find((q) => q.id === id);
-    if (!pending) throw new NotFoundError('NOT_FOUND', `a pergunta ${short(id)} não está pendente`);
+    if (!pending) throw new NotFoundError('NOT_FOUND', `a pergunta ${id} não está pendente`);
     await api.rejectQuestion(id);
-    if (knownJob) await clearJobRequests(ctx.stateDir, knownJob.id, [id]);
-    ctx.out(`Pergunta ${short(id)} recusada.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
+    if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id]);
+    ctx.out(`Pergunta ${id} recusada.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
     return ExitCode.OK;
   }
   const knownJob = jobForRequest(ctx, id);
-  const api = requireServerApi(ctx);
+  const api = requireServerApi(ctx, getApi);
   const pending = (await api.listPermissions()) ?? [];
   const request = pending.find((p) => p.id === id);
-  if (!request) throw new NotFoundError('NOT_FOUND', `a solicitação de permissão ${short(id)} não está pendente`);
+  if (!request) throw new NotFoundError('NOT_FOUND', `a solicitação de permissão ${id} não está pendente`);
   const verdict = checkReply({ approver, request, reply: decision, confirmedByUser: Boolean(flags['confirmed-by-user']), policy });
   if (!verdict.ok) throw verdict.code === 'INVALID_REPLY' ? new UsageError(verdict.code, verdict.reason) : new PolicyError(verdict.code, verdict.reason);
   await api.replyPermission(id, decision === 'reject' ? { reply: 'reject', ...(message ? { message } : {}) } : { reply: 'once' });
   const siblings = decision === 'reject' ? pending.filter((p) => p.sessionID === request.sessionID && p.id !== id).map((p) => p.id) : [];
-  if (knownJob) await clearJobRequests(ctx.stateDir, knownJob.id, [id, ...siblings]);
-  const lines = [`Resposta ${decision} enviada para ${short(id)} (${request.permission}).`];
-  if (siblings.length) lines.push(`O OpenCode também recusou as outras solicitações pendentes desta sessão: ${siblings.map(short).join(', ')}.`);
+  if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id, ...siblings]);
+  const lines = [`Resposta ${decision} enviada para ${id} (${request.permission}).`];
+  if (siblings.length) lines.push(`O OpenCode também recusou as outras solicitações pendentes desta sessão: ${siblings.join(', ')}.`);
   if (knownJob) lines.push(`Acompanhe a tarefa: /opc:status ${knownJob.id} --wait`);
   ctx.out(`${lines.join('\n')}\n`);
   return ExitCode.OK;
 }
 
-async function answer(ctx, id, values) {
+async function answer(ctx, id, values, { getApi = existingServerApi, clearRequests = clearJobRequests } = {}) {
   if (!id || !id.startsWith('que') || values.length === 0) throw new UsageError('USAGE', USAGE);
   const knownJob = jobForRequest(ctx, id);
-  const api = requireServerApi(ctx);
+  const api = requireServerApi(ctx, getApi);
   const request = ((await api.listQuestions()) ?? []).find((q) => q.id === id);
-  if (!request) throw new NotFoundError('NOT_FOUND', `a pergunta ${short(id)} não está pendente`);
+  if (!request) throw new NotFoundError('NOT_FOUND', `a pergunta ${id} não está pendente`);
   const answers = parseAnswers(request.questions ?? [], values);
   await api.replyQuestion(id, answers);
-  if (knownJob) await clearJobRequests(ctx.stateDir, knownJob.id, [id]);
-  ctx.out(`Resposta enviada para ${short(id)}.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
+  if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id]);
+  ctx.out(`Resposta enviada para ${id}.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
   return ExitCode.OK;
 }
 
-export async function run(ctx, argv) {
+export async function run(ctx, argv, dependencies = {}) {
   const { flags, positionals } = parseArgs(argv, { flags: FLAGS, allowPositionals: true });
   const [action = 'list', id, ...rest] = positionals;
   switch (action) {
     case 'list': return list(ctx, flags);
-    case 'reply': return reply(ctx, flags, id, rest);
-    case 'answer': return answer(ctx, id, rest);
+    case 'reply': return reply(ctx, flags, id, rest, dependencies);
+    case 'answer': return answer(ctx, id, rest, dependencies);
     default: throw new UsageError('USAGE', USAGE);
   }
 }

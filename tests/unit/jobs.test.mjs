@@ -103,8 +103,8 @@ test('terminal status is frozen (cancel wins over late worker writes)', async (t
 
 test('jobs.maxActive refuses new jobs with the active list; SESSION_BUSY per session', async (t) => {
   const dir = stateDir(t);
-  await createJob(dir, base({ sessionID: 'ses_a' }), { maxActive: 2 });
-  await assert.rejects(createJob(dir, base({ sessionID: 'ses_a' }), { maxActive: 2 }), (e) => e.code === 'SESSION_BUSY' && e.exitCode === 2);
+  const busy = await createJob(dir, base({ sessionID: 'ses_full_session_123456789' }), { maxActive: 2 });
+  await assert.rejects(createJob(dir, base({ sessionID: 'ses_full_session_123456789' }), { maxActive: 2 }), (e) => e.code === 'SESSION_BUSY' && e.exitCode === 2 && e.message.includes('ses_full_session_123456789') && e.message.includes(`/opc:cancel ${busy.id}`));
   await createJob(dir, base(), { maxActive: 2 });
   await assert.rejects(createJob(dir, base(), { maxActive: 2 }), (e) => e.code === 'TOO_MANY_JOBS' && e.exitCode === 2 && e.details.active.length === 2);
 });
@@ -256,7 +256,7 @@ test('waitForJob returns terminal or waiting_permission, streams log, times out 
   assert.equal((await waitForJob(ctx, w.id, { pollMs: 20 })).status, 'waiting_permission');
   const slow = await createJob(dir, base());
   await updateJob(dir, slow.id, { status: 'running' });
-  await assert.rejects(waitForJob(ctx, slow.id, { waitTimeoutMs: 80, pollMs: 20 }), (e) => e.code === 'WAIT_TIMEOUT' && e.exitCode === 6 && e.details.jobId === slow.id);
+  await assert.rejects(waitForJob(ctx, slow.id, { waitTimeoutMs: 80, pollMs: 20 }), (e) => e.code === 'WAIT_TIMEOUT' && e.exitCode === 6 && e.details.jobId === slow.id && e.message.includes(`/opc:status ${slow.id} --wait`) && !e.message.includes('<valor>'));
 });
 
 test('cancelJob aborts session and child sessions, never signals an identity mismatch', async (t) => {

@@ -143,6 +143,14 @@ test('read-only profile: any permission request is rejected immediately by the b
   const ctx = setupF2a(t, { scenario: 'permission-ask' });
   const r = await opc(ctx, ['task', 'read only']);
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /rejected: opc: read-only profile; request rejected/);
+  assert.match(r.stdout, /rejected: opc: perfil somente leitura; solicitação recusada/);
   assert.deepEqual(readFakeState(ctx.env).permissionReplies.map((x) => x.reply), ['reject']);
+});
+
+test('permissions request with fake auth-401 fails with exit 5', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'auth-401' });
+  const r = await opc(ctx, ['task', 'probe authentication']);
+  assert.equal(r.code, 5, r.stderr);
+  assert.match(r.stdout + r.stderr, /AUTH_FAILED/);
+  assert.equal(readFakeState(ctx.env).bootAttempts, 1);
 });

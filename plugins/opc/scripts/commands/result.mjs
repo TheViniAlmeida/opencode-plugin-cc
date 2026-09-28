@@ -8,7 +8,7 @@ import { exitCodeForJob } from './task.mjs';
 
 const stillRunning = (job) => {
   const status = job.status === 'queued' ? 'na fila' : job.status === 'waiting_permission' ? 'aguardando permissão' : 'em execução';
-  return new UsageError('JOB_ACTIVE', `a tarefa ainda está ${status}${job.status === 'waiting_permission' ? ' (aguarda uma decisão: /opc:permissions list)' : ''}; consulte /opc:status <valor> --wait`);
+  return new UsageError('JOB_ACTIVE', `a tarefa ${job.id} ainda está ${status}${job.status === 'waiting_permission' ? ' (aguarda uma decisão: /opc:permissions list)' : ''}; consulte /opc:status ${job.id} --wait`);
 };
 
 export async function run(ctx, argv) {

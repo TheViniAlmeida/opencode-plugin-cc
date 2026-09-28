@@ -45,6 +45,9 @@ export function queueProgressUpdate(jobUpdates, patch, log) {
 }
 
 export function createRequestBridge({ update, jobId, stateDir, api, profileKind, policy = {}, timeoutMs = 600000, log = () => {} }) {
+  if (!jobId) throw new TypeError('createRequestBridge requires jobId');
+  if (!stateDir) throw new TypeError('createRequestBridge requires stateDir');
+  if (typeof update !== 'function') throw new TypeError('createRequestBridge requires update');
   const timers = new Map();
   const autoReject = profileKind === 'read-only';
   const clearTimer = (id) => {

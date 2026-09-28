@@ -156,7 +156,7 @@ export async function createJob(stateDir, fields, { maxActive = 8 } = {}) {
     if (fields.sessionID) {
       const busy = active.find((j) => j.sessionID === fields.sessionID);
       if (busy) {
-        throw new UsageError('SESSION_BUSY', `a sessão ${short(fields.sessionID)} já tem uma tarefa ativa (${busy.id}); aguarde ou execute /opc:cancel <valor>`, { details: { jobId: busy.id } });
+        throw new UsageError('SESSION_BUSY', `a sessão ${fields.sessionID} já tem uma tarefa ativa (${busy.id}); aguarde ou execute /opc:cancel ${busy.id}`, { details: { jobId: busy.id } });
       }
     }
     const id = newJobId(fields.kind);
@@ -174,7 +174,7 @@ export async function updateJob(stateDir, id, patch) {
   let updated = null;
   await updateState(stateDir, (state) => {
     const job = readJob(stateDir, id);
-    if (!job) throw new NotFoundError('NOT_FOUND', `tarefa ${short(id)} não encontrada`);
+    if (!job) throw new NotFoundError('NOT_FOUND', `tarefa ${id} não encontrada`);
     if (isTerminal(job)) {
       updated = job;
       return state;
@@ -307,7 +307,7 @@ function readFileTail(file, bytes) {
 
 export function acquireSessionLock(stateDir, sessionID) {
   if (!SESSION_ID_RE.test(String(sessionID))) throw new UsageError('INVALID_SESSION_ID', `identificador de sessão inválido "${short(sessionID)}"`);
-  return tryAcquireLock(join(stateDir, `session-${sessionID}.lock`), { purpose: `tarefa na sessão ${short(sessionID)}` });
+  return tryAcquireLock(join(stateDir, `session-${sessionID}.lock`), { purpose: `tarefa na sessão ${sessionID}` });
 }
 
 export function serverContext(ctx) {
@@ -380,7 +380,7 @@ export async function waitForJob(ctx, id, { waitTimeoutMs = null, pollMs = 500, 
   for (;;) {
     if (onLog) offset = streamLog(logFile, offset, onLog);
     let job = readJob(ctx.stateDir, id);
-    if (!job) throw new NotFoundError('NOT_FOUND', `tarefa ${short(id)} não encontrada`);
+    if (!job) throw new NotFoundError('NOT_FOUND', `tarefa ${id} não encontrada`);
     job = await reconcileJob(ctx.stateDir, job);
     if (!isActive(job) || (job.status === 'waiting_permission' && job.pendingRequest?.length)) {
       if (onLog) streamLog(logFile, offset, onLog);
@@ -388,7 +388,7 @@ export async function waitForJob(ctx, id, { waitTimeoutMs = null, pollMs = 500, 
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      throw new OpcError('WAIT_TIMEOUT', `a tarefa ${short(id)} continua ${job.status} (fase ${job.phase}); ela segue em execução. Acompanhe com: /opc:status <valor> --wait`, {
+      throw new OpcError('WAIT_TIMEOUT', `a tarefa ${id} continua ${job.status} (fase ${job.phase}); ela segue em execução. Acompanhe com: /opc:status ${id} --wait`, {
         exitCode: ExitCode.WAIT_TIMEOUT,
         details: { jobId: id, status: job.status, phase: job.phase },
       });
@@ -420,8 +420,8 @@ async function waitWorkerExit(expected, matcher, maxMs) {
 export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, exitWaitMs = 2000, graceMs = 3000 } = {}) {
   assertJobId(id);
   const current = readJob(ctx.stateDir, id);
-  if (!current) throw new NotFoundError('NOT_FOUND', `a tarefa ${short(id)} não foi encontrada`);
-  if (!isActive(current)) throw new UsageError('NOT_ACTIVE', `a tarefa ${short(id)} já está ${current.status}`);
+  if (!current) throw new NotFoundError('NOT_FOUND', `a tarefa ${id} não foi encontrada`);
+  if (!isActive(current)) throw new UsageError('NOT_ACTIVE', `a tarefa ${id} já está ${current.status}`);
   const job = await updateJob(ctx.stateDir, id, { cancelRequestedAt: nowIso() });
   const report = { jobId: id, aborted: false, idle: false, worker: 'not-running' };
   if (!isActive(job)) {
@@ -432,7 +432,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   if (client && job.sessionID) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
-        if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${short(sessionID)}`);
+        if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
       }
       report.aborted = true;
       report.idle = await waitSessionIdle(client, job.sessionID, idleWaitMs);

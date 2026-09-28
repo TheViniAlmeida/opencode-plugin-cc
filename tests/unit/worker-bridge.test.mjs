@@ -1,20 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequestBridge, createSerialUpdater, queueProgressUpdate, stateWriteFailure, workerFailureState } from '../../plugins/opc/scripts/commands/task-worker.mjs';
+import { createJob, readJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
-function harness({ profileKind = 'write', timeoutMs = 60000, policy = {} } = {}) {
-  let job = { status: 'running', phase: 'editing', pendingRequest: null };
+async function harness(t, { profileKind = 'write', timeoutMs = 60000, policy = {} } = {}) {
+  const stateDir = trackTempDir(t, makeTempDir('opc-worker-bridge-'));
+  const stored = await createJob(stateDir, { kind: 'task', title: 'bridge test', workspaceRoot: '/ws', status: 'running', phase: 'editing', sessionID: 'ses_bridge123456' });
+  const jobId = stored.id;
+  await updateJob(stateDir, jobId, { status: 'running', phase: 'editing' });
   const calls = [];
   const logs = [];
   const bridge = createRequestBridge({
-    update: async (patch) => { job = { ...job, ...(typeof patch === 'function' ? patch(job) : patch) }; return job; },
+    jobId,
+    stateDir,
+    update: async (patch) => updateJob(stateDir, jobId, (job) => (typeof patch === 'function' ? patch(job) : patch)),
     api: {
       async replyPermission(id, body) { calls.push(['reply', id, body]); return true; },
       async rejectQuestion(id) { calls.push(['rejectQuestion', id]); return true; },
     },
     profileKind, policy, timeoutMs, log: (l) => logs.push(l),
   });
-  return { bridge, calls, logs, get job() { return job; } };
+  return { bridge, calls, logs, stateDir, jobId, get job() { return readJob(stateDir, jobId); } };
 }
 const perm = (id, patterns = ['rm -rf build'], sessionID = 'ses_1') => ({ id, sessionID, permission: 'bash', patterns, metadata: { command: patterns[0] }, always: [] });
 
@@ -59,8 +66,8 @@ test('cancel + failed final state write ends failed with STATE_WRITE_FAILED and 
   assert.match(cancellationLog, /cancelamento solicitado/i);
 });
 
-test('read-only profile rejects permissions and questions immediately', async () => {
-  const h = harness({ profileKind: 'read-only' });
+test('read-only profile rejects permissions and questions immediately', async (t) => {
+  const h = await harness(t, { profileKind: 'read-only' });
   await h.bridge.onPermission(perm('per_1'));
   await h.bridge.onQuestion({ id: 'que_1', sessionID: 'ses_1', questions: [] });
   assert.deepEqual(h.calls, [['reply', 'per_1', { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' }], ['rejectQuestion', 'que_1']]);
@@ -68,8 +75,8 @@ test('read-only profile rejects permissions and questions immediately', async ()
   h.bridge.dispose();
 });
 
-test('write profile: pending → waiting_permission with requiresUser; resolution returns to running', async () => {
-  const h = harness();
+test('write profile: pending → waiting_permission with requiresUser; resolution returns to running', async (t) => {
+  const h = await harness(t);
   await h.bridge.onPermission(perm('per_1'));
   await h.bridge.onPermission(perm('per_2', ['ls']));
   assert.equal(h.job.status, 'waiting_permission');
@@ -83,8 +90,8 @@ test('write profile: pending → waiting_permission with requiresUser; resolutio
   h.bridge.dispose();
 });
 
-test('timeout rejects with "opc: nenhum aprovador disponível"; questions get question reject', async () => {
-  const h = harness({ timeoutMs: 30 });
+test('timeout rejects with "opc: nenhum aprovador disponível"; questions get question reject', async (t) => {
+  const h = await harness(t, { timeoutMs: 30 });
   await h.bridge.onPermission(perm('per_1'));
   await h.bridge.onQuestion({ id: 'que_1', sessionID: 'ses_1', questions: [{ question: 'Q', header: 'Q', options: [] }] });
   await new Promise((r) => setTimeout(r, 80));
@@ -92,11 +99,16 @@ test('timeout rejects with "opc: nenhum aprovador disponível"; questions get qu
   h.bridge.dispose();
 });
 
-test('resolution before the timeout cancels the automatic reject', async () => {
-  const h = harness({ timeoutMs: 40 });
+test('resolution before the timeout cancels the automatic reject', async (t) => {
+  const h = await harness(t, { timeoutMs: 40 });
   await h.bridge.onPermission(perm('per_1'));
   await h.bridge.onResolved({ requestID: 'per_1', outcome: 'once' });
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(h.calls.length, 0);
   h.bridge.dispose();
+});
+
+test('request bridge fails fast when required job identity is missing', () => {
+  assert.throws(() => createRequestBridge({ update() {}, stateDir: '/tmp/state', api: {}, profileKind: 'write' }), TypeError);
+  assert.throws(() => createRequestBridge({ update() {}, jobId: 'task-a-123456', api: {}, profileKind: 'write' }), TypeError);
 });
