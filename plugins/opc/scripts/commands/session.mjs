@@ -95,10 +95,111 @@ async function actionTodo(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
+const MAX_DIFF_MESSAGES = 50;
+const DEFAULT_SUMMARIZE_TIMEOUT_SEC = 600;
+
+export async function withSessionGuard(ctx, api, sessionID, fn) {
+  const release = tryAcquireLock(join(ctx.stateDir, `session-${sessionID}.lock`), { purpose: 'session-op' });
+  if (!release) throw new UsageError('SESSION_IN_USE', `a sessão ${sessionID} está em uso por um job ativo; aguarde (/opc:status) ou cancele (/opc:cancel)`);
+  try {
+    const status = (await api.sessionStatus())?.[sessionID];
+    if (status && status.type !== 'idle') throw new UsageError('SESSION_BUSY', `a sessão ${sessionID} está ocupada (${status.type}); tente de novo quando ficar ociosa`);
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+export async function collectAffectedDiff(api, sessionID, messageID) {
+  const messages = (await readSessionMessages(api, sessionID)) ?? [];
+  const index = messages.findIndex((m) => m.info?.id === messageID);
+  if (index < 0) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
+  const target = messages[index].info;
+  const ids = [];
+  if (target.role === 'assistant' && target.parentID) ids.push(target.parentID);
+  for (const message of messages.slice(index)) {
+    if (message.info?.role === 'user' && !ids.includes(message.info.id)) ids.push(message.info.id);
+  }
+  const byFile = new Map();
+  for (const id of ids.slice(0, MAX_DIFF_MESSAGES)) {
+    for (const diff of (await api.diff(sessionID, { messageID: id })) ?? []) {
+      const key = diff.file ?? '(desconhecido)';
+      const previous = byFile.get(key);
+      if (!previous) {
+        byFile.set(key, { ...diff });
+        continue;
+      }
+      byFile.set(key, {
+        ...previous,
+        additions: (previous.additions ?? 0) + (diff.additions ?? 0),
+        deletions: (previous.deletions ?? 0) + (diff.deletions ?? 0),
+        patch: [previous.patch, diff.patch].filter(Boolean).join('\n'),
+        status: previous.status === 'added' ? 'added' : (diff.status ?? previous.status),
+      });
+    }
+  }
+  return [...byFile.values()];
+}
+
+async function actionRevert(ctx, api, { flags, sessionID, rest }) {
+  if (!rest[1]) throw new UsageError('MISSING_MESSAGE_ID', 'session revert exige <sessionID> <messageID>');
+  const messageID = assertId('msg', rest[1], 'mensagem');
+  const partID = flags.part ? assertId('prt', flags.part, 'parte') : undefined;
+  return withSessionGuard(ctx, api, sessionID, async () => {
+    const affected = await collectAffectedDiff(api, sessionID, messageID);
+    if (!flags['confirmed-by-user']) {
+      const command = `opc session revert ${sessionID} ${messageID}${partID ? ` --part ${partID}` : ''} --confirmed-by-user`;
+      if (flags.json) ctx.json({ confirmed: false, action: 'revert', sessionID, messageID, affected, command });
+      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command }));
+      return ExitCode.USAGE;
+    }
+    const session = await api.revert(sessionID, { messageID, partID });
+    if (flags.json) ctx.json({ confirmed: true, action: 'revert', session });
+    else ctx.out(renderSession(session, { note: `Revert aplicado a partir de ${messageID}. Para desfazer: opc session unrevert ${sessionID} --confirmed-by-user` }));
+    return ExitCode.OK;
+  });
+}
+
+async function actionUnrevert(ctx, api, { flags, sessionID }) {
+  return withSessionGuard(ctx, api, sessionID, async () => {
+    const current = await api.getSession(sessionID);
+    if (!current.revert) throw new UsageError('NOT_REVERTED', `a sessão ${sessionID} não tem revert ativo; nada a desfazer`);
+    if (!flags['confirmed-by-user']) {
+      const command = `opc session unrevert ${sessionID} --confirmed-by-user`;
+      const rawDiff = current.revert.diff ?? null;
+      if (flags.json) ctx.json({ confirmed: false, action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command });
+      else ctx.out(renderRevertPreview({ action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
+      return ExitCode.USAGE;
+    }
+    const session = await api.unrevert(sessionID);
+    if (flags.json) ctx.json({ confirmed: true, action: 'unrevert', session });
+    else ctx.out(renderSession(session, { note: 'Unrevert aplicado: mensagens e arquivos restaurados.' }));
+    return ExitCode.OK;
+  });
+}
+
+async function actionSummarize(ctx, api, { flags, sessionID }) {
+  const discovery = await loadDiscovery(api);
+  const model = resolveModel(ctx, discovery, 'summarize', flags.model);
+  return withSessionGuard(ctx, api, sessionID, async () => {
+    await api.summarize(sessionID, {
+      providerID: model.providerID,
+      modelID: model.modelID,
+      timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000,
+    });
+    if (flags.json) ctx.json({ sessionID, model: model.full, summarized: true });
+    else ctx.out(`# Sessão ${sessionID} resumida\n\nModelo: ${model.full}\nVeja o resultado: opc session show ${sessionID}\n`);
+    return ExitCode.OK;
+  });
+}
+
 const ACTIONS = {
   new: actionNew,
   show: actionShow,
   fork: actionFork,
+  revert: actionRevert,
+  unrevert: actionUnrevert,
+  summarize: actionSummarize,
   children: actionChildren,
   diff: actionDiff,
   todo: actionTodo,
