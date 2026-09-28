@@ -100,7 +100,7 @@ function spawnFailed(message, err = undefined) {
   });
 }
 
-export async function spawnDetached(command, args, { cwd = process.cwd(), env = process.env, logFile }) {
+export async function spawnDetached(command, args, { cwd = process.cwd(), env = process.env, logFile, readIdentity = getProcessIdentity, identityTimeoutMs = 1000 }) {
   try {
     assertCommandExists(command, env, cwd);
   } catch (err) {
@@ -118,16 +118,25 @@ export async function spawnDetached(command, args, { cwd = process.cwd(), env = 
     if (!child.pid) {
       throw spawnFailed(`Não foi possível iniciar o processo: ${command}`);
     }
+    let identity;
+    try {
+      identity = readIdentity(child.pid);
+      const deadline = performance.now() + identityTimeoutMs;
+      while (!identity && performance.now() < deadline) {
+        await sleep(25);
+        identity = readIdentity(child.pid);
+      }
+      if (!identity) throw new Error('Identidade do processo indisponível');
+    } catch (err) {
+      // Retain ownership until verification; never signal an unverified PID/group.
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+      }
+      throw spawnFailed(`Não foi possível ler a identidade do processo iniciado: ${command}`, err);
+    }
     child.unref();
-    let identity = getProcessIdentity(child.pid);
-    const deadline = performance.now() + 1000;
-    while (!identity && performance.now() < deadline) {
-      await sleep(25);
-      identity = getProcessIdentity(child.pid);
-    }
-    if (!identity) {
-      throw spawnFailed(`Não foi possível ler a identidade do processo iniciado: ${command}`);
-    }
     return { pid: child.pid, startTime: identity.startTime };
   } finally {
     fs.closeSync(fd);

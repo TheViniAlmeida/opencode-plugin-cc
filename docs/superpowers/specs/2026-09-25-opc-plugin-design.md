@@ -260,14 +260,14 @@ clonado) e **só restringe**:
 
 ```json
 {
-  "defaultProvider": "omniroute-mvalmeida",
-  "defaultModel": "omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash",
+  "defaultProvider": "omniroute-personal",
+  "defaultModel": "omniroute-personal/opencode-go/deepseek-v4.1-flash",
   "defaultVariant": null,
   "defaultAgent": null,
   "aliases": {
-    "fast":   "omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash",
-    "strong": "omniroute-mvalmeida/opencode-go/qwen3.8-max",
-    "k3":     "omniroute-mvalmeida/opencode-go/kimi-k3"
+    "fast":   "omniroute-personal/opencode-go/deepseek-v4.1-flash",
+    "strong": "omniroute-personal/opencode-go/qwen3.8-max",
+    "k3":     "omniroute-personal/opencode-go/kimi-k3"
   },
   "reviewModel": "strong",
   "stopGate": { "enabled": false, "model": null },
@@ -278,7 +278,7 @@ clonado) e **só restringe**:
   },
   "policy": {
     "providers": { "allow": [], "deny": ["omniroute-work"] },
-    "models":    { "allow": ["omniroute-mvalmeida/opencode-go/*", "anthropic/*"], "deny": [] },
+    "models":    { "allow": ["omniroute-personal/opencode-go/*", "anthropic/*"], "deny": [] },
     "agents":    { "allow": [], "deny": ["work-*"] },
     "tools":     { "deny": [] },
     "sensitivePaths": ["*.env", "*.env.*", "**/.ssh/**", "*.pem", "*.key", "**/id_rsa*", "**/id_ed25519*", "**/secrets.env"],
@@ -1102,7 +1102,7 @@ Uma fase só fecha com os cinco itens:
 
 ### 13.3 Fases, entregas e critérios de aceite
 
-Prefixo dos modelos: `omniroute-mvalmeida/opencode-go/`, com rodízio entre as fases.
+Prefixo dos modelos: `omniroute-personal/opencode-go/`, com rodízio entre as fases.
 
 **F0 — Fundação e conexão** (ao vivo: `deepseek-v4.1-flash`)
 

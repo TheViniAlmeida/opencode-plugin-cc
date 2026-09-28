@@ -91,9 +91,14 @@ export function ensurePrivateDir(dir) {
 export function writeFileAtomic(filePath, data, { mode = 0o600 } = {}) {
   const content = typeof data === 'string' || Buffer.isBuffer(data) ? data : `${JSON.stringify(data, null, 2)}\n`;
   const tmp = `${filePath}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  fs.writeFileSync(tmp, content, { mode });
-  if (process.platform !== 'win32') fs.chmodSync(tmp, mode);
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.writeFileSync(tmp, content, { mode });
+    if (process.platform !== 'win32') fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* preserve the atomic write failure */ }
+    throw err;
+  }
 }
 
 export function readJson(filePath, fallback) {

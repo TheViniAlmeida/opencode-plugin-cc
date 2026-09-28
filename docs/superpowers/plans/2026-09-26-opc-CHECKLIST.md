@@ -62,7 +62,7 @@ Checklist mestre para retomar o trabalho em qualquer sessão. Marque os itens co
 
 ## F0 — Fundação e conexão · `2026-09-26-opc-F0-foundation.md` · branch `feat/opc-f0`
 
-Ao vivo: `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash`
+Ao vivo: `omniroute-personal/opencode-go/deepseek-v4.1-flash`
 
 - [ ] Task 1: Esqueleto do repositório, runner de testes e helpers
 - [ ] Task 2: Scanner de segredos e CI

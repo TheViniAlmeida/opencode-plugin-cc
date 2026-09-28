@@ -29,7 +29,7 @@
 - Perfil `read-only` para review, adversarial-review e stop gate: sem bash; a coleta do diff é **sempre** do companion (§8.1, §9.4).
 - SessionEnd: orçamento total de 1,5 s → o hook sai em **< 1 s** (§9.3).
 - Stop hook: `timeout: 900` no `hooks.json`; bloqueio só com `{"decision":"block","reason":...}` e exit 0; falha de infraestrutura **permite** com `systemMessage` (§9.3, §14.3).
-- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável, modelo da fase `omniroute-mvalmeida/opencode-go/qwen3.8-max` (`OPC_LIVE_MODEL` sobrescreve).
+- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável, modelo da fase `omniroute-personal/opencode-go/qwen3.8-max` (`OPC_LIVE_MODEL` sobrescreve).
 - Licença Apache-2.0; arquivos portados com o cabeçalho de modificação; nada copiado do `swarm-code-plugin`.
 - Git: branch `feat/opc-f2b`; Conventional Commits; **sem trailers** (`Co-Authored-By`, `Signed-off-by`, "Generated with"); commit/push/PR só com autorização explícita do operador na sessão de execução (mestre, "Regras de git").
 
@@ -4738,14 +4738,16 @@ Execution mode rules:
 ```bash
 opc review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Otherwise, estimate the review size first:
 
 ```bash
 opc review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4760,7 +4762,8 @@ Foreground flow (user chose to wait):
 ```bash
 opc review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the review job continues: tell the user to run `/opc:status <job-id> --wait` with the id the command printed.
@@ -4771,7 +4774,8 @@ Background flow (user chose background):
 ```bash
 opc review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim (it has the job id and the `/opc:status` and `/opc:result` lines).
 
@@ -4814,14 +4818,16 @@ Execution mode rules:
 ```bash
 opc adversarial-review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Otherwise, estimate the review size first:
 
 ```bash
 opc adversarial-review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4836,7 +4842,8 @@ Foreground flow (user chose to wait):
 ```bash
 opc adversarial-review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the job continues: tell the user to run `/opc:status <job-id> --wait`.
@@ -4847,7 +4854,8 @@ Background flow (user chose background):
 ```bash
 opc adversarial-review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim.
 
@@ -4935,7 +4943,8 @@ Forwarding rules:
 opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Keep `--write` by default. Drop it only when the user explicitly asks for read-only behavior or only wants review, diagnosis or research without edits.
 - `--resume` in the request → add `--resume-last`. `--fresh` → add `--fresh`. With neither: if the user is clearly continuing prior OpenCode work ("continue", "keep going", "resume", "apply the top fix", "dig deeper"), add `--resume-last`; otherwise start fresh.
@@ -5061,7 +5070,8 @@ Command shape (the flags you chose on the command line, before `--raw-args-stdin
 opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Run it with the Bash tool `timeout: 600000`; `--wait-timeout 540` makes the companion return (exit 6, job still running) before that limit.
 
@@ -5270,7 +5280,7 @@ import { spawnSync } from 'node:child_process';
 import { runCli } from '../helpers.mjs';
 
 export const SKIP = process.env.OPC_LIVE === '1' ? false : 'OPC_LIVE != 1';
-export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/qwen3.8-max';
+export const LIVE_MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/qwen3.8-max';
 export const LIVE_TIMEOUT_MS = 20 * 60 * 1000;
 
 export const MATH_BASE = [
@@ -5608,7 +5618,7 @@ Expected: 100% verde. Anexe o resumo (`# tests`, `# pass`, `# fail 0`) ao relat�
 - [ ] **Step 7: Rodar o checklist ao vivo com `qwen3.8-max`**
 
 ```bash
-OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-mvalmeida/opencode-go/qwen3.8-max \
+OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-personal/opencode-go/qwen3.8-max \
   node --test tests/live/f2b-review.mjs tests/live/f2b-adversarial.mjs tests/live/f2b-stop-gate.mjs \
   tests/live/f2b-rescue.mjs tests/live/f2b-session-end.mjs 2>&1 | tee "$TMPDIR/opc-f2b-live.txt"
 ```
@@ -5667,7 +5677,7 @@ $ opc review --wait
 # OPC Review
 
 Target: working tree diff
-Model: omniroute-mvalmeida/opencode-go/qwen3.8-max
+Model: omniroute-personal/opencode-go/qwen3.8-max
 Job: review-<id>
 Verdict: needs-attention
 
@@ -5806,7 +5816,7 @@ Crie com este conteúdo e preencha **cada** linha com `PASSOU`, `N/A` (justifica
 - **Data:** DD/MM/AAAA
 - **Branch/commit:** `feat/opc-f2b` @ `<sha>`
 - **Ambiente:** Node `<versão>`, OpenCode `<versão>`, Linux `<kernel>`
-- **Modelo ao vivo:** `omniroute-mvalmeida/opencode-go/qwen3.8-max`
+- **Modelo ao vivo:** `omniroute-personal/opencode-go/qwen3.8-max`
 
 ## Premissas do F2a (Task 1)
 

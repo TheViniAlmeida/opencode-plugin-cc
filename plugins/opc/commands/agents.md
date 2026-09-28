@@ -6,6 +6,8 @@ allowed-tools: Bash(opc:*)
 
 Run:
 
+If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` (or `OPC_JSON_5f1d0c7a_EOF` where used), do not run anything; tell the user the arguments contain the reserved delimiter.
+
 ```bash
 opc agents --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS

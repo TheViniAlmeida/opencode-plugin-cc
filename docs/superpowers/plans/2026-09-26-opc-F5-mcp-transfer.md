@@ -25,7 +25,7 @@
 - `always` nunca é enviado em `permission reply`.
 - Exit codes conforme a spec, §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Namespace de comandos `/opc:`; executável `opc`; título das sessões com o prefixo `OPC: `.
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
 - Licença Apache-2.0; `NOTICE` credita o `openai/codex-plugin-cc`; nada copiado do `swarm-code-plugin`.
 - **F5 (spec §13.3):** nada que exija o usuário (review com `disable-model-invocation`, revert/unrevert, `--stop-server`, config) é exposto via MCP sem as mesmas confirmações; **decisão desta fase: esses itens simplesmente não são expostos** (ver "Decisões").
 - **F5:** toda ferramenta MCP chama a mesma função da CLI (`main` do companion da F0 → `loadCommand` → `commands/<sub>.mjs#run`); o MCP não reimplementa regra.
@@ -3902,7 +3902,8 @@ Transfira a conversa para o OpenCode executando exatamente:
 ```bash
 opc transfer --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Regras:
 
@@ -4127,7 +4128,7 @@ Exemplo (execução ao vivo da F5, caminhos redigidos):
 
 Sessão OpenCode criada: `ses_0000000000000000000000000000`
 Título: OPC: transfer: live transfer OPC-F5-0000000000000
-Modelo registrado: omniroute-mvalmeida/opencode-go/qwen3.8-max
+Modelo registrado: omniroute-personal/opencode-go/qwen3.8-max
 Mensagens importadas: 4 (2 do usuário, 2 do assistente)
 Origem: ~/.claude/projects/<projeto>/<sessão>.jsonl
 Ignorados: 0 meta, 0 sidechain, 0 comandos locais, 0 blocos de raciocínio, 1 outros, 0 linhas inválidas
@@ -4212,8 +4213,8 @@ import { redact } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { cliJson, findJobId, runCli, startMcpClient } from '../helpers.mjs';
 
 const LIVE = process.env.OPC_LIVE === '1';
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
-const SECOND = process.env.OPC_LIVE_MODEL_2 ?? 'omniroute-mvalmeida/opencode-go/kimi-k3';
+const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
+const SECOND = process.env.OPC_LIVE_MODEL_2 ?? 'omniroute-personal/opencode-go/kimi-k3';
 const KEEP = process.env.OPC_LIVE_KEEP === '1';
 
 function liveWorkspace(t) {
@@ -4299,7 +4300,7 @@ import { validateExportShape } from '../../plugins/opc/scripts/lib/transfer.mjs'
 import { cliJson } from '../helpers.mjs';
 
 const LIVE = process.env.OPC_LIVE === '1';
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/qwen3.8-max';
+const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/qwen3.8-max';
 const KEEP = process.env.OPC_LIVE_KEEP === '1';
 
 function record(type, uuid, timestamp, message, extra = {}) {
@@ -4393,7 +4394,7 @@ Expected: `f5-mcp` passa em ≥ 2 de 3 (depende do modelo); `f5-transfer` passa 
 
 1. Com o workspace mantido pelo `OPC_LIVE_KEEP=1`, rodar a linha `cd … && opencode -s ses_…` impressa no Step 3.
 2. Na TUI, perguntar "Qual é a palavra-código?" → a resposta contém o marcador `OPC-F5-…` (histórico transferido chegou ao modelo).
-3. Numa sessão real do Claude num repositório descartável, trocar duas mensagens, rodar `/opc:transfer --model omniroute-mvalmeida/opencode-go/qwen3.8-max`, retomar com o `opencode -s` impresso e conferir o histórico na TUI.
+3. Numa sessão real do Claude num repositório descartável, trocar duas mensagens, rodar `/opc:transfer --model omniroute-personal/opencode-go/qwen3.8-max`, retomar com o `opencode -s` impresso e conferir o histórico na TUI.
 4. Remover os workspaces descartáveis depois da conferência (pedido explícito do operador; as sessões importadas continuam no storage do OpenCode, pois o plugin não apaga sessões — D15).
 
 - [ ] **Step 5: Exemplo real na documentação**

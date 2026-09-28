@@ -27,7 +27,7 @@
 - Mínimo de 2 membros; `2 ≤ quorum ≤ membros`; `1 ≤ rounds ≤ 3`; `debate` ⇒ `rounds ≥ 2` (padrão 2).
 - O mapeamento rótulo → modelo só existe nos registros de job e na seção final "Composição" (último campo do pacote JSON).
 - Toda saída passa por `ctx.out`/`ctx.json`/`ctx.err` (redação do F0).
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; pool `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` + 1 extra escolhido do catálogo em runtime e filtrado pela política.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, em diretório descartável; pool `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` + 1 extra escolhido do catálogo em runtime e filtrado pela política.
 - Git: branch `feat/opc-f4c`; Conventional Commits; **sem** `Co-Authored-By`, `Signed-off-by` ou "Generated with"; commit, push e PR só com autorização explícita do operador na sessão de execução (pedir antes do primeiro commit se ela não existir); nada de `--no-verify`, `push --force`, `reset --hard`.
 
 ## Review Focus
@@ -59,7 +59,7 @@ operador** (regra do mestre).
 | P4 | **Confirmada (F3 Task 10, `resultForGroupOrCommand`):** `result` de job-grupo imprime `job.rendered` (ou `renderGroupResult`) e, com `--json`, `{ group, members }` — o pacote fica em `group.result`; nenhum ramo próprio no `result.mjs` | `scripts/commands/result.mjs` | — |
 | P5 | `runTurn` chama `onPermission(req)`/`onQuestion(q)` com o objeto do evento (`req.id`/`q.id`); timeout → `{status:'failed', errorType:'Timeout'}` após `POST /session/:id/abort`; `StructuredOutputError` → `status:'failed'`, `errorType:'StructuredOutputError'`, `finalText` com o texto bruto | `lib/runner.mjs`, `lib/errors.mjs` | Ajustar só as strings esperadas nos testes de integração (`'Timeout'`) e na doc; a lib não depende desses nomes |
 | P6 | Fake: cenário `{ onPromptAsync(fake, sessionID, body) }`; `fake.emitTurn(sessionID, { text, structured, error, delayMs })`; rota `POST /session/:id/abort`; `state.requests[]` com `{method, path (sem query), query, body}` | `tests/fixtures/fake-opencode.mjs` | Adaptar só `tests/fixtures/scenarios/_conclave-common.mjs` (ponto único) |
-| P7 | A fixture de `/provider` tem `omniroute-mvalmeida` **conectado** com `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` e `opencode-go/kimi-k3` | `tests/fixtures/data/` | Parar e escalar (mudar fixture compartilhada afeta F1–F4a) |
+| P7 | A fixture de `/provider` tem `omniroute-personal` **conectado** com `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` e `opencode-go/kimi-k3` | `tests/fixtures/data/` | Parar e escalar (mudar fixture compartilhada afeta F1–F4a) |
 | P8 | **Ajustada (F2b Task 5):** `prompts/review.md` usa `{TARGET_LABEL, PROJECT_CONTEXT, REVIEW_COLLECTION_GUIDANCE, REVIEW_INPUT}` — **sem** `USER_FOCUS` (só o `adversarial-review.md` tem) — e começa com um comentário de atribuição que `loadPrompt` (F2b) remove. A Tarefa 8 preenche também `PROJECT_CONTEXT` (o `fillTemplate` estrito falharia sem ele) e, quando o template não tem `{{USER_FOCUS}}`, anexa a pergunta como bloco `<user_focus>` (A19); `loadConclaveAssets` lê o review por `loadPrompt`. `schemas/review-output.schema.json` no formato do codex (`verdict`, `summary`, `findings[{severity, title, body, file, line_start, line_end, confidence, recommendation}]`, `next_steps`) | `plugins/opc/prompts/review.md`, `plugins/opc/schemas/` | Se a F2b mudar os placeholders, o teste `the review prompt shipped by F2b…` acusa; acrescentar o nome em `reviewTemplateVars` |
 | P9 | `DEFAULT_CONFIG.conclave` existe com os valores da spec §3.2 e config parcial em `config.json` é mesclada sobre o padrão | `lib/config.mjs` | Parar e escalar (é entrega da F1) |
 | P10 | `redact()` casa **nomes exatos** de chave (`key_points` não vira `***`) | `lib/redact.mjs` | Parar e escalar (bug do F0 que corromperia o pacote) |
@@ -285,7 +285,7 @@ grep -n "emitTurn\|onPromptAsync\|abort" tests/fixtures/fake-session-api.mjs
 
 # P7 — modelos na fixture de /provider
 ls tests/fixtures/data/
-node --input-type=module -e "import fs from 'node:fs'; const f=fs.readdirSync('tests/fixtures/data').find(n=>/provider/.test(n)); const p=JSON.parse(fs.readFileSync('tests/fixtures/data/'+f,'utf8')); const pr=(p.all??[]).find(x=>x.id==='omniroute-mvalmeida'); console.log(f, (p.connected??[]).includes('omniroute-mvalmeida'), Object.keys(pr?.models??{}).filter(k=>/deepseek-v4.1-flash|qwen3.8-max|kimi-k3/.test(k)))"
+node --input-type=module -e "import fs from 'node:fs'; const f=fs.readdirSync('tests/fixtures/data').find(n=>/provider/.test(n)); const p=JSON.parse(fs.readFileSync('tests/fixtures/data/'+f,'utf8')); const pr=(p.all??[]).find(x=>x.id==='omniroute-personal'); console.log(f, (p.connected??[]).includes('omniroute-personal'), Object.keys(pr?.models??{}).filter(k=>/deepseek-v4.1-flash|qwen3.8-max|kimi-k3/.test(k)))"
 # esperado: <arquivo> true [ 'opencode-go/deepseek-v4.1-flash', 'opencode-go/qwen3.8-max', 'opencode-go/kimi-k3' ]
 
 # P8 — placeholders do review.md e forma do review-output
@@ -325,7 +325,7 @@ resultado, evidência e ajuste. As demais seções são preenchidas no portão (
 - **Data:** DD/MM/AAAA
 - **Branch:** `feat/opc-f4c`
 - **OpenCode:** versão do `opencode --version` no portão
-- **Modelos ao vivo:** `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` + extra escolhido em runtime
+- **Modelos ao vivo:** `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` + extra escolhido em runtime
 - **Legenda:** `PASSOU` · `N/A` (com justificativa) · `NÃO VALIDADO` (com motivo)
 
 ## 1. Premissas sobre F0–F4a (Tarefa 0)
@@ -338,7 +338,7 @@ resultado, evidência e ajuste. As demais seções são preenchidas no portão (
 | P4 | `result` de grupo imprime `job.rendered`; com `--json`, `{ group, members }` (pacote em `group.result`) | | | |
 | P5 | `runTurn`: `onPermission(req)` com `req.id`; timeout → `errorType: 'Timeout'`; `StructuredOutputError` com `finalText` | | | |
 | P6 | Fake: `onPromptAsync(fake, sessionID, body)`, `fake.emitTurn`, rota de abort, `requests[].body` | | | |
-| P7 | Fixture `/provider` com os três modelos do `omniroute-mvalmeida` conectados | | | |
+| P7 | Fixture `/provider` com os três modelos do `omniroute-personal` conectados | | | |
 | P8 | `prompts/review.md` usa `TARGET_LABEL`, `PROJECT_CONTEXT`, `REVIEW_COLLECTION_GUIDANCE`, `REVIEW_INPUT` (sem `USER_FOCUS`); `review-output` no formato do codex | | | |
 | P9 | `DEFAULT_CONFIG.conclave` com os valores do §3.2 e config parcial mesclada | | | |
 | P10 | `redact()` casa nomes de chave exatos (`key_points` preservado) | | | |
@@ -451,7 +451,7 @@ git commit -m "docs: start F4c report with premise check"
 
 ```js
 // Shared fixtures for conclave unit tests (not a test file).
-export const PROVIDER = 'omniroute-mvalmeida';
+export const PROVIDER = 'omniroute-personal';
 export const DS = `${PROVIDER}/opencode-go/deepseek-v4.1-flash`;
 export const QW = `${PROVIDER}/opencode-go/qwen3.8-max`;
 export const KM = `${PROVIDER}/opencode-go/kimi-k3`;
@@ -1435,12 +1435,12 @@ const catalog = makeCatalog([
   { full: KM, name: 'Kimi K3' },
   { full: 'openai/gpt-5.2-mini', name: 'GPT-5.2 Mini' },
   { full: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
-], ['omniroute-mvalmeida', 'openai', 'anthropic']);
+], ['omniroute-personal', 'openai', 'anthropic']);
 const known = buildKnownNames(catalog);
-const FORBIDDEN = /deepseek|qwen|kimi|omniroute|mvalmeida|opencode-go|alibaba|moonshot|openai|chatgpt|gpt|anthropic|claude/i;
+const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot|openai|chatgpt|gpt|anthropic|claude/i;
 
 test('buildKnownNames collects provider ids, model ids, names, families and vendors', () => {
-  for (const name of ['omniroute-mvalmeida', 'omniroute', 'mvalmeida', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'opencode-go', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) {
+  for (const name of ['omniroute-personal', 'omniroute', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'opencode-go', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) {
     assert.ok(known.exact.includes(name), `exact should include ${name}`);
   }
   assert.deepEqual([...known.families].sort(), ['claude', 'deepseek', 'gpt', 'kimi', 'qwen', 'sonnet'].sort());
@@ -1453,7 +1453,7 @@ test('generic words from model ids never become family words', () => {
 });
 
 test('self-identification is scrubbed, with case and version variants', () => {
-  const text = 'I am DeepSeek V4.1 Flash via omniroute-mvalmeida. As QWEN3.8-max (by Alibaba) and kimi-k3 from Moonshot, we agree; ChatGPT and gpt-5 disagree, Claude too.';
+  const text = 'I am DeepSeek V4.1 Flash via omniroute-personal. As QWEN3.8-max (by Alibaba) and kimi-k3 from Moonshot, we agree; ChatGPT and gpt-5 disagree, Claude too.';
   const out = anonymize(text, known);
   assert.doesNotMatch(out, FORBIDDEN);
   assert.ok(out.includes(REDACTED_NAME));
@@ -2104,7 +2104,7 @@ import { makeCatalog, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed }
 
 const assets = loadConclaveAssets();
 const knownNames = buildKnownNames(makeCatalog());
-const FORBIDDEN = /deepseek|qwen|kimi|omniroute|mvalmeida|opencode-go|alibaba|moonshot/i;
+const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot/i;
 
 function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4 } = {}) {
   const calls = [];
@@ -2281,7 +2281,7 @@ test('huge peer answers are truncated in the debate prompt', async () => {
 });
 
 test('judge model sees only labels and its synthesis is validated', async () => {
-  const judge = { type: 'model', providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/kimi-k3', full: KM };
+  const judge = { type: 'model', providerID: 'omniroute-personal', modelID: 'opencode-go/kimi-k3', full: KM };
   const h = harness((spec) => {
     if (spec.role === 'judge') return ok(synthesis(['A', 'B']), 'ses_judge');
     return ok(answer({ position: `I am ${spec.member.full}` }), `ses_${spec.label}`);
@@ -2299,7 +2299,7 @@ test('judge model sees only labels and its synthesis is validated', async () => 
 });
 
 test('judge failure keeps the conclave completed with a warning', async () => {
-  const judge = { type: 'model', providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/kimi-k3', full: KM };
+  const judge = { type: 'model', providerID: 'omniroute-personal', modelID: 'opencode-go/kimi-k3', full: KM };
   const h = harness((spec) => (spec.role === 'judge' ? failed('StructuredOutputError', { finalText: 'raw' }) : ok(answer(), `ses_${spec.label}`)), { members: MEMBERS.slice(0, 2), judge });
   const pkg = await h.run();
   assert.equal(pkg.status, 'completed');
@@ -2310,7 +2310,7 @@ test('judge failure keeps the conclave completed with a warning', async () => {
 });
 
 test('debate note tells the judge how many extra rounds happened', async () => {
-  const judge = { type: 'model', providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/kimi-k3', full: KM };
+  const judge = { type: 'model', providerID: 'omniroute-personal', modelID: 'opencode-go/kimi-k3', full: KM };
   const h = harness((spec) => {
     if (spec.role === 'judge') return ok(synthesis(['A', 'B']), 'ses_judge');
     return spec.round === 1 ? ok(answer(), `ses_${spec.label}`) : ok(debateAnswer(peerOf(spec)), spec.sessionID);
@@ -2745,7 +2745,7 @@ test('truncated diffs tell reviewers to read the changed files', async () => {
 });
 
 test('judge model in review mode receives anonymized clusters', async () => {
-  const judge = { type: 'model', providerID: 'omniroute-mvalmeida', modelID: 'opencode-go/kimi-k3', full: KM };
+  const judge = { type: 'model', providerID: 'omniroute-personal', modelID: 'opencode-go/kimi-k3', full: KM };
   const reviews = { ...REVIEWS, A: { ...REVIEWS.A, findings: [finding('src/calc.js', 10, 12, 'Division by zero when count is 0 (qwen3.8-max agrees)', 'high', 0.9)] } };
   const h = harness((spec) => (spec.role === 'judge' ? ok(synthesis(['A', 'B', 'C']), 'ses_j') : ok(reviews[spec.label], `ses_${spec.label}`)), { judge });
   const pkg = await h.run();
@@ -2931,7 +2931,7 @@ test('member answers are rendered by label only and composition comes last', () 
   const body = out.slice(0, out.indexOf('## Composição'));
   assert.doesNotMatch(body, /deepseek|qwen|omniroute/i);
   assert.ok(out.indexOf('## Composição') > out.indexOf('## Síntese'));
-  assert.match(out, /\| A \| omniroute-mvalmeida\/opencode-go\/deepseek-v4\.1-flash \|/);
+  assert.match(out, /\| A \| omniroute-personal\/opencode-go\/deepseek-v4\.1-flash \|/);
 });
 
 test('answers are rendered from the anonymized synthesis input when available', () => {
@@ -2950,7 +2950,7 @@ test('claude judge asks for the opc-conclave skill', () => {
 test('model judge synthesis is rendered with all fields', () => {
   const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'completed', synthesis: synthesis(['A', 'B']) } };
   const out = renderConclave(pkg);
-  assert.match(out, /Juiz: `omniroute-mvalmeida\/opencode-go\/kimi-k3` · confiança 0\.70/);
+  assert.match(out, /Juiz: `omniroute-personal\/opencode-go\/kimi-k3` · confiança 0\.70/);
   assert.match(out, /\*\*Consenso:\*\*\n- Durability is the main concern\./);
   assert.match(out, /- Mechanism\n  - A: write-ahead log\n  - B: backups/);
   assert.match(out, /\*\*Posição ponderada:\*\* Use a write-ahead log\./);
@@ -2960,7 +2960,7 @@ test('model judge synthesis is rendered with all fields', () => {
 test('failed judge and failures table are shown', () => {
   const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error: { errorType: 'StructuredOutputError', message: 'bad' } }, failures: [{ label: 'C', round: 1, role: 'member', errorType: 'Timeout', message: 'timed out | late' }], warnings: ['judge failed'] };
   const out = renderConclave(pkg);
-  assert.match(out, /O juiz `omniroute-mvalmeida\/opencode-go\/kimi-k3` falhou \(StructuredOutputError: bad\)/);
+  assert.match(out, /O juiz `omniroute-personal\/opencode-go\/kimi-k3` falhou \(StructuredOutputError: bad\)/);
   assert.match(out, /\| C \| 1 \| Timeout \| timed out \\\| late \|/);
   assert.match(out, /\*\*Avisos:\*\*\n- judge failed/);
 });
@@ -3214,7 +3214,7 @@ const SCENARIOS = ['conclave-opinion', 'conclave-debate', 'conclave-member-timeo
 const MODELS = ['opencode-go/deepseek-v4.1-flash', 'opencode-go/qwen3.8-max', 'opencode-go/kimi-k3'];
 
 function body(modelID, schema, text) {
-  return { model: { providerID: 'omniroute-mvalmeida', modelID }, format: { type: 'json_schema', schema }, parts: [{ type: 'text', text }] };
+  return { model: { providerID: 'omniroute-personal', modelID }, format: { type: 'json_schema', schema }, parts: [{ type: 'text', text }] };
 }
 
 async function emitted(name, requestBody) {
@@ -3264,7 +3264,7 @@ test('self-identify scenario really names model, provider and vendor', async () 
   const turn = await emitted('conclave-self-identify', body(MODELS[1], member, 'q'));
   const text = JSON.stringify(turn.structured);
   assert.match(text, /qwen3\.8-max/);
-  assert.match(text, /omniroute-mvalmeida/);
+  assert.match(text, /omniroute-personal/);
   assert.match(text, /Alibaba/);
 });
 ```
@@ -3587,12 +3587,12 @@ import { makeWorkspace, testEnv, runCli, fakeRequests, writeGlobalConfig } from 
 
 export { fakeRequests };
 
-export const PREFIX = 'omniroute-mvalmeida/opencode-go/';
+export const PREFIX = 'omniroute-personal/opencode-go/';
 export const DS = `${PREFIX}deepseek-v4.1-flash`;
 export const QW = `${PREFIX}qwen3.8-max`;
 export const KM = `${PREFIX}kimi-k3`;
 export const TRIO = `${DS},${QW},${KM}`;
-export const FORBIDDEN_NAMES = ['deepseek', 'qwen', 'kimi', 'omniroute', 'mvalmeida', 'opencode-go', 'alibaba', 'moonshot'];
+export const FORBIDDEN_NAMES = ['deepseek', 'qwen', 'kimi', 'omniroute', 'opencode-go', 'alibaba', 'moonshot'];
 
 // Servers are stopped by the F0 per-test cleanup (testEnv/makeWorkspace) before the temp dirs are removed.
 export function setupConclave(t, { scenario, config = null, git = true } = {}) {
@@ -3704,7 +3704,7 @@ test('opinion without --json renders markdown with the composition after the syn
   assert.match(res.stdout, /Juiz: Claude\. Sintetize com a skill `opc-conclave`/);
   assert.ok(res.stdout.indexOf('## Composição') > res.stdout.indexOf('## Síntese'));
   const beforeComposition = res.stdout.slice(0, res.stdout.indexOf('## Composição'));
-  assert.doesNotMatch(beforeComposition, /omniroute-mvalmeida\/opencode-go/);
+  assert.doesNotMatch(beforeComposition, /omniroute-personal\/opencode-go/);
   assert.match(res.stderr, /\[opc\] conclave conc-/);
 });
 
@@ -4148,7 +4148,7 @@ test('composition: pool from config; denied member skipped with a warning', asyn
   const res = await conclave(['--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(res.json.composition.map((c) => c.model).sort(), [DS, QW].sort());
-  assert.match(res.stderr, /skipping "omniroute-mvalmeida\/opencode-go\/kimi-k3": model denied by policy/);
+  assert.match(res.stderr, /skipping "omniroute-personal\/opencode-go\/kimi-k3": model denied by policy/);
   assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !r.body.model.modelID.includes('kimi')));
 });
 
@@ -4473,7 +4473,8 @@ Argumentos do usuário: `$ARGUMENTS`
 ```bash
 opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
    O texto do heredoc chega verbatim (aspas, crases e apóstrofos não são interpretados); as
    flags conhecidas são reconhecidas como palavras inteiras em qualquer posição. Se o usuário
@@ -4694,7 +4695,7 @@ o Claude, aplica a skill `opc-conclave` para sintetizar.
    posição).
 3. **Anonimização:** antes de repassar respostas a outro membro ou ao juiz, o opc remove do
    texto os nomes conhecidos e põe `[redacted]` no lugar. A lista vem do catálogo `/provider`:
-   - IDs de provider (`omniroute-mvalmeida`) e as palavras que os compõem;
+   - IDs de provider (`omniroute-personal`) e as palavras que os compõem;
    - IDs de modelo completos e parciais (`opencode-go/kimi-k3`, `kimi-k3`, `opencode-go`);
    - nomes de exibição dos modelos (`Kimi K3`);
    - a família de cada modelo (`kimi`, `qwen`, `deepseek`), inclusive com sufixos de versão
@@ -4846,7 +4847,7 @@ Saídas reais do portão da F4c (redigidas: caminhos pessoais trocados por `~`).
 ### Opinião com três modelos
 
 ```bash
-opc conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniroute-mvalmeida/opencode-go/qwen3.8-max,omniroute-mvalmeida/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
+opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max,omniroute-personal/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
 ```
 
 <!-- F4C-LIVE-OUTPUT: opinion -->
@@ -4854,7 +4855,7 @@ opc conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniro
 ### Debate de duas rodadas com juiz modelo
 
 ```bash
-opc conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniroute-mvalmeida/opencode-go/qwen3.8-max --mode debate --rounds 2 --judge omniroute-mvalmeida/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
+opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max --mode debate --rounds 2 --judge omniroute-personal/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
 ```
 
 <!-- F4C-LIVE-OUTPUT: debate -->
@@ -4862,7 +4863,7 @@ opc conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniro
 ### Review cruzado
 
 ```bash
-opc conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniroute-mvalmeida/opencode-go/qwen3.8-max,omniroute-mvalmeida/opencode-go/kimi-k3 --mode review "Foque em correção e segurança"
+opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max,omniroute-personal/opencode-go/kimi-k3 --mode review "Foque em correção e segurança"
 ```
 
 <!-- F4C-LIVE-OUTPUT: review -->
@@ -4941,7 +4942,7 @@ Relacionadas: `jobs.maxParallel` (turnos simultâneos do conclave) e `jobs.maxAc
 conclave ocupa 1 vaga — só o job-grupo conta).
 
 ```bash
-opc config set conclave.judge omniroute-mvalmeida/opencode-go/qwen3.8-max
+opc config set conclave.judge omniroute-personal/opencode-go/qwen3.8-max
 opc config set conclave.memberTimeoutSec 600 --workspace
 ```
 ````
@@ -5031,7 +5032,7 @@ import { loadConclaveAssets, buildMemberSchema, buildDebateSchema, buildSynthesi
 
 export const LIVE = process.env.OPC_LIVE === '1';
 export const SKIP = LIVE ? false : 'set OPC_LIVE=1 to run live tests';
-export const PROVIDER = 'omniroute-mvalmeida';
+export const PROVIDER = 'omniroute-personal';
 export const PREFIX = `${PROVIDER}/opencode-go/`;
 export const BASE_POOL = (process.env.OPC_LIVE_POOL ?? `${PREFIX}deepseek-v4.1-flash,${PREFIX}qwen3.8-max,${PREFIX}kimi-k3`)
   .split(',').map((s) => s.trim()).filter(Boolean);
@@ -5112,7 +5113,7 @@ export function schemas() {
 }
 
 export function familyWords(models) {
-  const words = new Set([PROVIDER, 'omniroute', 'mvalmeida', 'opencode-go']);
+  const words = new Set([PROVIDER, 'omniroute', 'opencode-go']);
   for (const full of models) {
     const last = full.split('/').at(-1).toLowerCase();
     const lead = last.match(/^[a-z]+/)?.[0];
@@ -5301,8 +5302,8 @@ skill `opc-conclave`:
 R=$(pwd); C="node $R/plugins/opc/scripts/opc-companion.mjs"
 W=$(mktemp -d /tmp/opc-f4c-ws-XXXX) && D=$(mktemp -d /tmp/opc-f4c-data-XXXX) && chmod 700 "$D"
 git -C "$W" init -q && git -C "$W" -c user.email=live@example.invalid -c user.name="opc live" commit --allow-empty -qm init
-printf '{"defaultProvider":"omniroute-mvalmeida","policy":{"providers":{"allow":[],"deny":["omniroute-work"]},"models":{"allow":["omniroute-mvalmeida/opencode-go/*"],"deny":[]},"agents":{"allow":[],"deny":["work-*"]},"tools":{"deny":[]}}}\n' > "$D/config.json" && chmod 600 "$D/config.json"
-( cd "$W" && OPC_DATA_DIR="$D" $C conclave --models omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash,omniroute-mvalmeida/opencode-go/qwen3.8-max,omniroute-mvalmeida/opencode-go/kimi-k3 --judge claude "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?" ) 2>&1 | sed "s#$HOME#~#g" | tee "$S/judge-claude.md"
+printf '{"defaultProvider":"omniroute-personal","policy":{"providers":{"allow":[],"deny":["omniroute-work"]},"models":{"allow":["omniroute-personal/opencode-go/*"],"deny":[]},"agents":{"allow":[],"deny":["work-*"]},"tools":{"deny":[]}}}\n' > "$D/config.json" && chmod 600 "$D/config.json"
+( cd "$W" && OPC_DATA_DIR="$D" $C conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max,omniroute-personal/opencode-go/kimi-k3 --judge claude "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?" ) 2>&1 | sed "s#$HOME#~#g" | tee "$S/judge-claude.md"
 ```
 
 Leia `$S/judge-claude.md`, aplique a skill `opc-conclave` (composição só no fim) e cole na
@@ -5331,7 +5332,7 @@ exemplos de `docs/conclave.md` e substitua cada marcador pela saída real (entre
 código, com `sed "s#$HOME#~#g"`):
 
 ```bash
-P=omniroute-mvalmeida/opencode-go
+P=omniroute-personal/opencode-go
 Q="Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
 ( cd "$W" && OPC_DATA_DIR="$D" $C conclave --models $P/deepseek-v4.1-flash,$P/qwen3.8-max,$P/kimi-k3 "$Q" ) 2>&1 | sed "s#$HOME#~#g" > "$S/ex-opinion.md"
 ( cd "$W" && OPC_DATA_DIR="$D" $C conclave --models $P/deepseek-v4.1-flash,$P/qwen3.8-max --mode debate --rounds 2 --judge $P/kimi-k3 "$Q" ) 2>&1 | sed "s#$HOME#~#g" > "$S/ex-debate.md"

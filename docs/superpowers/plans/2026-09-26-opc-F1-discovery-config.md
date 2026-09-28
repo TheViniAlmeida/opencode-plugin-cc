@@ -42,14 +42,14 @@ A F0 foi implementada e revisada (merge `de234b4`). As rodadas de revisão mudar
 - Exit codes conforme a spec, §4.1: `0, 2, 3, 4, 5, 6, 7, 130` (na F1: 0, 2, 4, 5).
 - Namespace de comandos `/opc:`; executável `opc`; argumentos do usuário sempre por heredoc com delimitador entre aspas, conforme a convenção única entre fases: comandos só de flags/ids (todos os da F1: `setup`, `config`, `providers`, `models`, `agents`, `catalog`) → `--args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'` (divisão tipo shell sem expansão); JSON do `setup apply` → `--stdin <<'OPC_JSON_5f1d0c7a_EOF'` (D5); texto livre (a partir da F2a: `task`, `ask`, `plan`, …) → `--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`, fora do escopo da F1.
 - Todo JSON e todo log passam por redação (`redact`): por isso **nenhuma view JSON usa uma propriedade chamada `key`** (o `redact()` do F0 mascara qualquer campo `key`); o nome de uma chave de config vai em `setting`.
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelo da F1: `omniroute-mvalmeida/opencode-go/kimi-k3`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelo da F1: `omniroute-personal/opencode-go/kimi-k3`.
 - Git: branch `feat/opc-f1`; Conventional Commits; **sem** `Co-Authored-By`/`Signed-off-by`/"Generated with"; commit, push e PR só com autorização explícita do operador na sessão de execução. Sem ela, os passos "Commit" ficam pendentes e o trabalho segue acumulado na branch.
 
 ## Review Focus
 
 Entradas e condições que a spec implica e que mais provavelmente quebram o uso real da F1. Cada linha tem teste na tarefa dona.
 
-1. **IDs de modelo com várias barras e prefixos ambíguos** (`opencode/big-pickle` é provider `opencode` *e* nome curto em `omniroute-mvalmeida/opencode/big-pickle`): nunca escolher em silêncio; erro `AMBIGUOUS_MODEL` (exit 2) com os dois candidatos, `=` força a leitura completa, e IDs já gravados são relidos sem prefixo. [Task 3 · `models.test.mjs`; Task 11 · `config-cli.test.mjs` "model ids"]
+1. **IDs de modelo com várias barras e prefixos ambíguos** (`opencode/big-pickle` é provider `opencode` *e* nome curto em `omniroute-personal/opencode/big-pickle`): nunca escolher em silêncio; erro `AMBIGUOUS_MODEL` (exit 2) com os dois candidatos, `=` força a leitura completa, e IDs já gravados são relidos sem prefixo. [Task 3 · `models.test.mjs`; Task 11 · `config-cli.test.mjs` "model ids"]
 2. **Primeiro uso sem config nenhuma** (Review Focus 3 do mestre): descoberta, `config show/get/validate/path` e `setup --json` funcionam com os padrões; erros de edição são claros (exit 2/4), sem stack trace e sem gravar nada. [Task 13 · `no-config-first-run.test.mjs`]
 3. **Texto do usuário com aspas, `$()`, crases e apóstrofos** em `config set` (via `--args-stdin`; apóstrofos sem aspas, como `can't-won't`, ficam literais graças à regra do `splitArgString` da F0 — `'` entre letras/dígitos nunca abre aspas) e no payload do onboarding (via `setup apply --stdin`): gravado literalmente, nada executado. [Task 11 · `config-cli.test.mjs` "arguments via --args-stdin"; Task 13 · `onboarding.test.mjs` "guided flow"]
 4. **Rascunho velho ou corrida do bootstrap** (uma config global surge entre o `apply` de uma chave travada e o `commit`): o commit recusa com `LOCKED_KEY` (exit 4) e imprime o comando de terminal; rascunho corrompido é tratado como ausente. [Task 8 · `onboarding.test.mjs`; Task 13 · `onboarding.test.mjs` "bootstrap race"]
@@ -280,7 +280,7 @@ git commit -m "feat(api): add read-only OpenCode API operations and connectApi"
 - Consumes: `startFake({ port, password, scenario, stateFile, dataDir })` e `FIXTURE_DATA_DIR` (F0); `pickFreePort()` (F0); `createClient` (F0); `createApi` (Task 1).
 - Produces: fixtures `provider.json` (5 providers, 4 conectados, **com** `key`/`options.apiKey`/`headers` falsos), `agent.json` (10 agentes), `command.json` (5), `skill.json` (2); `loadFixtureData(name, { dataDir, scenario })`, `F1_DATA_ROUTES` e a extensão F1 (`registerFakeExtension`) no fake; campo opcional `data: { '<arquivo>.json': valor | (base) => valor }` nos módulos de cenário (mecanismo único para trocar catálogos por cenário); cenário `pinned-denied-model`; helpers `scriptedTTY(lines)`, `pipedStdin(text)`, `captureStream({ isTTY })`, `fixtureData(name)`, `writeGlobalConfig(env, cfg) → caminho`, `readGlobalConfig(env)`, `writeWorkspaceConfig(ws, cfg) → caminho`, `runInProcess(sub, argv, { env, cwd, stdin })` → `{ code, stdout, stderr }`.
 
-As fixtures seguem os schemas `Provider`, `Model`, `Agent` e `Command` da OpenAPI 1.18.32 (todos os campos obrigatórios presentes). Os IDs reais de `models.txt` foram usados; `omniroute-mvalmeida/opencode/big-pickle` é sintético, para reproduzir a ambiguidade do §3.2.
+As fixtures seguem os schemas `Provider`, `Model`, `Agent` e `Command` da OpenAPI 1.18.32 (todos os campos obrigatórios presentes). Os IDs reais de `models.txt` foram usados; `omniroute-personal/opencode/big-pickle` é sintético, para reproduzir a ambiguidade do §3.2.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -309,7 +309,7 @@ test('fake serves /provider, /command, /skill and /agent from fixtures (raw, wit
   const { api } = await boot(t);
   const providers = await api.providers();
   assert.deepEqual(providers.connected, fixtureData('provider.json').connected);
-  assert.equal(providers.all.find((p) => p.id === 'omniroute-mvalmeida').key, 'sk-omr-FIXTURE-mvalmeida-0001', 'raw fixture keeps the key so redaction can be proven'); // scan-secrets:allow
+  assert.equal(providers.all.find((p) => p.id === 'omniroute-personal').key, 'sk-omr-FIXTURE-personal-0001', 'raw fixture keeps the key so redaction can be proven'); // scan-secrets:allow
   assert.deepEqual((await api.commands()).map((c) => c.name), fixtureData('command.json').map((c) => c.name));
   assert.deepEqual((await api.skills()).map((s) => s.name), ['brainstorm', 'release-notes']);
   assert.ok((await api.agents()).some((a) => a.name === 'work-deploy'));
@@ -343,15 +343,15 @@ Antes de substituir `agent.json`, confirmar que nenhum teste do F0 depende do co
 ```json
 {
   "all": [
-    {"id":"omniroute-mvalmeida","name":"OmniRoute (mvalmeida)","source":"config","env":[],"key":"sk-omr-FIXTURE-mvalmeida-0001","options":{"baseURL":"http://127.0.0.1:9/v1","apiKey":"sk-FIXTURE-apikey-0002","headers":{"Authorization":"Bearer FIXTURE-hdr-0003"}}, // scan-secrets:allow
+    {"id":"omniroute-personal","name":"OmniRoute (personal)","source":"config","env":[],"key":"sk-omr-FIXTURE-personal-0001","options":{"baseURL":"http://127.0.0.1:9/v1","apiKey":"sk-FIXTURE-apikey-0002","headers":{"Authorization":"Bearer FIXTURE-hdr-0003"}}, // scan-secrets:allow
       "models": {
-        "opencode-go/deepseek-v4.1-flash": {"id":"opencode-go/deepseek-v4.1-flash","providerID":"omniroute-mvalmeida","api":{"id":"opencode-go/deepseek-v4.1-flash","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"DeepSeek V4.1 Flash","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{"X-Fixture-Secret":"FIXTURE-model-header-0004"},"release_date":"2026-08-20","variants":{"low":{"reasoningEffort":"low"},"high":{"reasoningEffort":"high"}}},
-        "opencode-go/qwen3.8-max": {"id":"opencode-go/qwen3.8-max","providerID":"omniroute-mvalmeida","api":{"id":"opencode-go/qwen3.8-max","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Qwen3.8 Max","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":1.6,"output":6.4,"cache":{"read":0,"write":0}},"limit":{"context":262144,"output":32768},"status":"active","options":{},"headers":{},"release_date":"2026-09-02","variants":{"high":{"reasoningEffort":"high"},"max":{"reasoningEffort":"max"}}},
-        "opencode-go/kimi-k3": {"id":"opencode-go/kimi-k3","providerID":"omniroute-mvalmeida","api":{"id":"opencode-go/kimi-k3","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Kimi K3","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.6,"output":2.5,"cache":{"read":0,"write":0}},"limit":{"context":262144,"output":32768},"status":"active","options":{},"headers":{},"release_date":"2026-08-28","variants":{"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}},
-        "opencode-go/qwen3.8-flash": {"id":"opencode-go/qwen3.8-flash","providerID":"omniroute-mvalmeida","api":{"id":"opencode-go/qwen3.8-flash","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Qwen3.8 Flash","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{},"release_date":"2026-09-02","variants":{}},
-        "opencode-go/kimi-k2.6": {"id":"opencode-go/kimi-k2.6","providerID":"omniroute-mvalmeida","api":{"id":"opencode-go/kimi-k2.6","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Kimi K2.6","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"deprecated","options":{},"headers":{},"release_date":"2026-01-15","variants":{}},
-        "cx/gpt-5.6-sol": {"id":"cx/gpt-5.6-sol","providerID":"omniroute-mvalmeida","api":{"id":"cx/gpt-5.6-sol","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"GPT-5.6 Sol","family":"cx","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":1.25,"output":10,"cache":{"read":0,"write":0}},"limit":{"context":400000,"output":128000},"status":"active","options":{},"headers":{},"release_date":"2026-07-10","variants":{"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}},
-        "opencode/big-pickle": {"id":"opencode/big-pickle","providerID":"omniroute-mvalmeida","api":{"id":"opencode/big-pickle","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Big Pickle (via omniroute)","family":"opencode","capabilities":{"temperature":true,"reasoning":false,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{},"release_date":"2026-03-01","variants":{}}
+        "opencode-go/deepseek-v4.1-flash": {"id":"opencode-go/deepseek-v4.1-flash","providerID":"omniroute-personal","api":{"id":"opencode-go/deepseek-v4.1-flash","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"DeepSeek V4.1 Flash","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{"X-Fixture-Secret":"FIXTURE-model-header-0004"},"release_date":"2026-08-20","variants":{"low":{"reasoningEffort":"low"},"high":{"reasoningEffort":"high"}}},
+        "opencode-go/qwen3.8-max": {"id":"opencode-go/qwen3.8-max","providerID":"omniroute-personal","api":{"id":"opencode-go/qwen3.8-max","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Qwen3.8 Max","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":1.6,"output":6.4,"cache":{"read":0,"write":0}},"limit":{"context":262144,"output":32768},"status":"active","options":{},"headers":{},"release_date":"2026-09-02","variants":{"high":{"reasoningEffort":"high"},"max":{"reasoningEffort":"max"}}},
+        "opencode-go/kimi-k3": {"id":"opencode-go/kimi-k3","providerID":"omniroute-personal","api":{"id":"opencode-go/kimi-k3","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Kimi K3","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.6,"output":2.5,"cache":{"read":0,"write":0}},"limit":{"context":262144,"output":32768},"status":"active","options":{},"headers":{},"release_date":"2026-08-28","variants":{"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}},
+        "opencode-go/qwen3.8-flash": {"id":"opencode-go/qwen3.8-flash","providerID":"omniroute-personal","api":{"id":"opencode-go/qwen3.8-flash","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Qwen3.8 Flash","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{},"release_date":"2026-09-02","variants":{}},
+        "opencode-go/kimi-k2.6": {"id":"opencode-go/kimi-k2.6","providerID":"omniroute-personal","api":{"id":"opencode-go/kimi-k2.6","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Kimi K2.6","family":"opencode-go","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"deprecated","options":{},"headers":{},"release_date":"2026-01-15","variants":{}},
+        "cx/gpt-5.6-sol": {"id":"cx/gpt-5.6-sol","providerID":"omniroute-personal","api":{"id":"cx/gpt-5.6-sol","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"GPT-5.6 Sol","family":"cx","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":1.25,"output":10,"cache":{"read":0,"write":0}},"limit":{"context":400000,"output":128000},"status":"active","options":{},"headers":{},"release_date":"2026-07-10","variants":{"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}},
+        "opencode/big-pickle": {"id":"opencode/big-pickle","providerID":"omniroute-personal","api":{"id":"opencode/big-pickle","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"Big Pickle (via omniroute)","family":"opencode","capabilities":{"temperature":true,"reasoning":false,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":0.3,"output":1.2,"cache":{"read":0,"write":0}},"limit":{"context":128000,"output":16384},"status":"active","options":{},"headers":{},"release_date":"2026-03-01","variants":{}}
       }},
     {"id":"omniroute-work","name":"OmniRoute (work)","source":"config","env":[],"key":"sk-omr-FIXTURE-work-0006","options":{"baseURL":"http://127.0.0.1:9/v1","apiKey":"sk-FIXTURE-apikey-0007"}, // scan-secrets:allow
       "models": {
@@ -374,8 +374,8 @@ Antes de substituir `agent.json`, confirmar que nenhum teste do F0 depende do co
         "gpt-5.6": {"id":"gpt-5.6","providerID":"openai","api":{"id":"gpt-5.6","url":"http://127.0.0.1:9/v1","npm":"@ai-sdk/openai-compatible"},"name":"GPT-5.6","family":"gpt","capabilities":{"temperature":true,"reasoning":true,"attachment":false,"toolcall":true,"input":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"output":{"text":true,"audio":false,"image":false,"video":false,"pdf":false},"interleaved":false},"cost":{"input":1.25,"output":10,"cache":{"read":0,"write":0}},"limit":{"context":400000,"output":128000},"status":"active","options":{},"headers":{},"release_date":"2026-07-10","variants":{"low":{"reasoningEffort":"low"},"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}}
       }}
   ],
-  "default": {"omniroute-mvalmeida":"opencode-go/deepseek-v4.1-flash","omniroute-work":"opencode-go/kimi-k3","opencode":"big-pickle","anthropic":"claude-opus-5-5","openai":"gpt-5.6"},
-  "connected": ["omniroute-mvalmeida","omniroute-work","opencode","anthropic"]
+  "default": {"omniroute-personal":"opencode-go/deepseek-v4.1-flash","omniroute-work":"opencode-go/kimi-k3","opencode":"big-pickle","anthropic":"claude-opus-5-5","openai":"gpt-5.6"},
+  "connected": ["omniroute-personal","omniroute-work","opencode","anthropic"]
 }
 ```
 
@@ -390,7 +390,7 @@ Antes de substituir `agent.json`, confirmar que nenhum teste do F0 depende do co
   {"name":"title","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
   {"name":"summary","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
   {"name":"compaction","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"docs-writer","description":"Writes and updates documentation in PT-BR.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"model":{"providerID":"omniroute-mvalmeida","modelID":"opencode-go/qwen3.8-max"},"variant":"high","prompt":"You write docs.","options":{}},
+  {"name":"docs-writer","description":"Writes and updates documentation in PT-BR.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"model":{"providerID":"omniroute-personal","modelID":"opencode-go/qwen3.8-max"},"variant":"high","prompt":"You write docs.","options":{}},
   {"name":"work-deploy","description":"Work deploy helper.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
   {"name":"work-reviewer","description":"Work code reviewer.","mode":"all","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}}
 ]
@@ -402,7 +402,7 @@ Antes de substituir `agent.json`, confirmar que nenhum teste do F0 depende do co
 [
   {"name":"init","description":"create/update AGENTS.md","source":"command","template":"Please analyze this codebase and create an AGENTS.md file.","hints":[]},
   {"name":"review","description":"review changes [commit|branch|pr], defaults to uncommitted","source":"command","agent":"plan","subtask":true,"template":"Review the following changes: $ARGUMENTS","hints":["$ARGUMENTS"]},
-  {"name":"docs","description":"Update the docs for a module","source":"command","agent":"docs-writer","model":"omniroute-mvalmeida/opencode-go/qwen3.8-max","template":"Update docs for $1","hints":["$1"]},
+  {"name":"docs","description":"Update the docs for a module","source":"command","agent":"docs-writer","model":"omniroute-personal/opencode-go/qwen3.8-max","template":"Update docs for $1","hints":["$1"]},
   {"name":"gitlab:list-mrs","description":"List open merge requests (MCP prompt)","source":"mcp","template":"List MRs","hints":[]},
   {"name":"brainstorm","description":"Brainstorm before building","source":"skill","template":"Use the brainstorm skill.","hints":[]}
 ]
@@ -624,12 +624,12 @@ import {
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const providers = JSON.parse(fs.readFileSync(path.join(DATA, 'provider.json'), 'utf8'));
 const catalog = buildCatalog(providers);
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 
 test('globToRegExp: * matches any sequence including slashes', () => {
-  assert.ok(globToRegExp('omniroute-mvalmeida/*').test('omniroute-mvalmeida/opencode-go/kimi-k3'));
+  assert.ok(globToRegExp('omniroute-personal/*').test('omniroute-personal/opencode-go/kimi-k3'));
   assert.ok(globToRegExp('*/kimi-*').test('omniroute-work/opencode-go/kimi-k3'));
-  assert.ok(!globToRegExp('anthropic/*').test('omniroute-mvalmeida/anthropic/x'));
+  assert.ok(!globToRegExp('anthropic/*').test('omniroute-personal/anthropic/x'));
   assert.ok(globToRegExp('a.b').test('a.b'));
   assert.ok(!globToRegExp('a.b').test('axb'), 'dots are literal');
   assert.ok(globToRegExp('work-*').test('work-deploy'));
@@ -934,7 +934,7 @@ import {
   evaluate, assertAllowed, evaluateAgent, evaluateCommand, assertAgentUsable, assertCommandUsable, pinnedModelOf,
 } from '../../plugins/opc/scripts/lib/policy.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = {
   providers: { allow: [], deny: [EQ] },
@@ -1183,7 +1183,7 @@ import {
   schemaFor, keyNeedsServer,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 test('DEFAULT_CONFIG is valid against CONFIG_SCHEMA and neutral', () => {
@@ -1634,7 +1634,7 @@ const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const fresh = () => JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
@@ -2003,7 +2003,7 @@ import { createPrompter, parseSelection } from '../../plugins/opc/scripts/lib/tt
 import { scriptedTTY, captureStream } from '../helpers.mjs';
 
 const CHOICES = [
-  { label: 'omniroute-mvalmeida (182 modelos)', value: 'omniroute-mvalmeida' },
+  { label: 'omniroute-personal (182 modelos)', value: 'omniroute-personal' },
   { label: 'omniroute-work (51 modelos)', value: 'omniroute-work' },
   { label: 'anthropic (18 modelos)', value: 'anthropic' },
   { label: 'opencode (7 modelos)', value: 'opencode' },
@@ -2030,7 +2030,7 @@ test('select by number, with invalid answer retried', async () => {
   const p = createPrompter({ input: scriptedTTY(['9', '3']), output });
   assert.equal(await p.select('Provider padrão?', CHOICES), 'anthropic');
   assert.match(output.text(), /Opção inválida: 9/);
-  assert.match(output.text(), / 1\) omniroute-mvalmeida \(182 modelos\)/);
+  assert.match(output.text(), / 1\) omniroute-personal \(182 modelos\)/);
   p.close();
 });
 
@@ -2051,7 +2051,7 @@ test('select default on empty answer and "Outro"', async () => {
 test('multiSelect by ranges, min enforced', async () => {
   const output = captureStream();
   const p = createPrompter({ input: scriptedTTY(['', '1,3-4']), output });
-  assert.deepEqual(await p.multiSelect('Tipos?', CHOICES, { min: 1 }), ['omniroute-mvalmeida', 'anthropic', 'opencode']);
+  assert.deepEqual(await p.multiSelect('Tipos?', CHOICES, { min: 1 }), ['omniroute-personal', 'anthropic', 'opencode']);
   assert.match(output.text(), /pelo menos 1/);
   p.close();
 });
@@ -2260,7 +2260,7 @@ const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const NOW = new Date('2026-09-26T12:00:00Z');
 const tmp = (t) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-onb-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
@@ -2321,7 +2321,7 @@ test('applyDraftStep: locked keys need allowLocked; error carries the terminal c
   assert.throws(() => applyDraftStep(draft, { policy: { models: { allow: [`${MV}/*`] } } }, deps({ allowLocked: false })), (e) => {
     assert.equal(e.code, 'LOCKED_KEY');
     assert.equal(e.exitCode, 4);
-    assert.equal(e.details.command, `opc config set policy.models.allow '["omniroute-mvalmeida/*"]' --tty-confirm`);
+    assert.equal(e.details.command, `opc config set policy.models.allow '["omniroute-personal/*"]' --tty-confirm`);
     return true;
   });
 });
@@ -2775,7 +2775,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderProviders, renderModels, renderAgents, renderCatalog, renderConfig, renderOnboarding } from '../../plugins/opc/scripts/lib/render.mjs';
 
-const model = { full: 'omniroute-mvalmeida/opencode-go/kimi-k3', name: 'Kimi K3', variants: ['low', 'high'], limit: { context: 262144, output: 32768 }, cost: { input: 0.6, output: 2.5 }, status: 'active', allowed: true };
+const model = { full: 'omniroute-personal/opencode-go/kimi-k3', name: 'Kimi K3', variants: ['low', 'high'], limit: { context: 262144, output: 32768 }, cost: { input: 0.6, output: 2.5 }, status: 'active', allowed: true };
 
 test('renderProviders: table with policy column and empty state', () => {
   const text = renderProviders({ providers: [{ id: 'omniroute-work', name: 'EQ', connected: true, modelCount: 3, defaultModel: null, allowed: false, rule: 'policy.providers.deny: omniroute-work' }], all: false });
@@ -2786,8 +2786,8 @@ test('renderProviders: table with policy column and empty state', () => {
 
 test('renderModels: compact and verbose', () => {
   const compact = renderModels({ models: [model], provider: null, verbose: false });
-  assert.match(compact, /\| omniroute-mvalmeida\/opencode-go\/kimi-k3 \| Kimi K3 \| low, high \| permitido \|/);
-  const verbose = renderModels({ models: [model], provider: 'omniroute-mvalmeida', verbose: true, allowedOnly: true });
+  assert.match(compact, /\| omniroute-personal\/opencode-go\/kimi-k3 \| Kimi K3 \| low, high \| permitido \|/);
+  const verbose = renderModels({ models: [model], provider: 'omniroute-personal', verbose: true, allowedOnly: true });
   assert.match(verbose, /só permitidos/);
   assert.match(verbose, /262144/);
   assert.match(verbose, /0\.6 \/ 2\.5/);
@@ -2982,7 +2982,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [EQ] }, agents: { allow: [], deny: ['work-*'] } } };
 const SECRET_MARKERS = /FIXTURE-|sk-omr|sk-ant|sk-FIXTURE|Bearer /;
@@ -3294,7 +3294,7 @@ import {
   makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [EQ] }, agents: { allow: [], deny: ['work-*'] } } };
 
@@ -3718,7 +3718,7 @@ const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog(load('provider.json'));
 const agents = load('agent.json');
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const tmp = (t) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-wiz-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 
@@ -3794,7 +3794,7 @@ import {
   makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 function setup(t, { config = null, git = true } = {}) {
@@ -3824,7 +3824,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   fs.mkdirSync(path.join(ws, 'src'));
   fs.mkdirSync(path.join(ws, 'tests'));
   const answers = [
-    '1',                        // provider: omniroute-mvalmeida (most models)
+    '1',                        // provider: omniroute-personal (most models)
     'kimi-k3', '1',             // model: filter by text, pick the first match
     '1',                        // review model: none (use default)
     '1',                        // stop gate model: none
@@ -3851,7 +3851,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   assert.deepEqual(cfg.project, { goal: 'Plugin Claude Code para OpenCode', scope: ['src/', 'tests/'], taskTypes: ['ask', 'review'] });
   assert.equal(cfg.aliases.fast, `${MV}/opencode-go/qwen3.8-flash`);
   assert.equal(cfg.aliases.strong, `${MV}/opencode-go/qwen3.8-max`);
-  assert.match(r.stderr, / 1\) omniroute-mvalmeida/);
+  assert.match(r.stderr, / 1\) omniroute-personal/);
 });
 
 test('config init without a TTY is refused (exit 2) and writes nothing', async (t) => {
@@ -4078,7 +4078,7 @@ import {
   makeWorkspace, makeTempDir, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig,
 } from '../helpers.mjs';
 
-const MV = 'omniroute-mvalmeida';
+const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
 function setup(t, { config = null, env: extra = {} } = {}) {
@@ -4582,7 +4582,8 @@ Run:
 ```bash
 opc setup --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Read the JSON. The diagnostic fields come from the server check; the `onboarding` object drives everything below. Follow the first branch that applies.
 
@@ -4624,7 +4625,8 @@ Present the diagnostic output (including the terminal alias line), then run `opc
 ```bash
 opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'
 {"defaultProvider":"<id>"}
-OPC_JSON_5f1d0c7a_EOF```
+OPC_JSON_5f1d0c7a_EOF
+```
 
    The result carries the next `nextStep`. Continue until `nextStep` is `null`. Text typed by the user goes **only** inside the heredoc, never on the command line.
 3. Steps (`AskUserQuestion` always offers "Other" for free text; use it as the "Outro" option):
@@ -4648,14 +4650,16 @@ OPC_JSON_5f1d0c7a_EOF```
 ```bash
 opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --top 3
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
    When the user types a name or glob in "Other", search it and confirm the match with one more `AskUserQuestion` (up to 4 matches as options):
 
 ```bash
 opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --query <typed text>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 5. Errors while applying: exit code 2 (invalid, unknown or ambiguous model, invalid variant) → show the message and ask the same step again. Exit code 4 with `POLICY_DENIED` → explain the rule and ask again. Exit code 4 with `LOCKED_KEY` (reconfigure) → show the terminal command from the message and move on to the next step.
 6. When `nextStep` is `null`, commit:
@@ -4691,7 +4695,8 @@ Run:
 ```bash
 opc config --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4716,7 +4721,8 @@ Run:
 ```bash
 opc providers --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim (it is already Markdown).
@@ -4739,11 +4745,12 @@ Run:
 ```bash
 opc models --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
-- Model IDs are `provider/model` and the model part may contain more slashes (for example `omniroute-mvalmeida/opencode-go/kimi-k3`); never shorten or rewrite them.
+- Model IDs are `provider/model` and the model part may contain more slashes (for example `omniroute-personal/opencode-go/kimi-k3`); never shorten or rewrite them.
 - A model marked `negado` is blocked by the opc policy: using it fails with exit code 4. Do not suggest it as an alternative.
 - Exit code 2 with `UNKNOWN_PROVIDER`: show the message (it lists the known providers).
 ````
@@ -4762,7 +4769,8 @@ Run:
 ```bash
 opc agents --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4784,7 +4792,8 @@ Run:
 ```bash
 opc catalog --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4832,7 +4841,7 @@ import { spawnSync } from 'node:child_process';
 import { runCli, stopAllServers, REPO_ROOT } from '../helpers.mjs';
 
 const LIVE = process.env.OPC_LIVE === '1';
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/kimi-k3';
+const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/kimi-k3';
 const WORLD_PROVIDER = 'omniroute-work';
 const WORLD = { policy: { providers: { allow: [], deny: [WORLD_PROVIDER] }, agents: { allow: [], deny: ['work-*'] } } };
 
@@ -5097,7 +5106,7 @@ Expected: 100% verde (F0 + F1). Anexar a saída ao relatório.
 Pré-condições: `opencode --version` ≥ 1.18.0; providers conectados (`opencode auth list`); nada do operador precisa parar (o `opencode serve` do plugin sobe numa porta própria, em diretório temporário).
 
 ```bash
-OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-mvalmeida/opencode-go/kimi-k3 node --test tests/live/f1-discovery.mjs 2>&1 | tee /tmp/opc-f1-live.txt
+OPC_LIVE=1 OPC_LIVE_MODEL=omniroute-personal/opencode-go/kimi-k3 node --test tests/live/f1-discovery.mjs 2>&1 | tee /tmp/opc-f1-live.txt
 OPC_LIVE=1 node --test tests/live/f1-fixture-coverage.mjs 2>&1 | tee /tmp/opc-f1-contract.txt
 OPC_LIVE=1 node tests/live/contract.mjs 2>&1 | tee /tmp/opc-f0-contract.txt
 ```
@@ -5108,7 +5117,7 @@ Expected: `f1-discovery` verde (itens `N/A` aparecem como `# diagnostic N/A: …
 
 Registrar cada item no relatório como `PASSOU` / `NÃO VALIDADO` com a evidência:
 
-1. **Onboarding guiado nesta sessão do Claude** (bootstrap sem tocar na config real): abrir o Claude com `OPC_DATA_DIR=$(mktemp -d) claude` na pasta do repo, rodar `/opc:setup`, responder todas as etapas (provider `omniroute-mvalmeida`, modelo `opencode-go/kimi-k3`, allow `omniroute-mvalmeida/*`, agentes com `!work-*` no "Other", aprovador "Eu aprovo") e conferir no fim o `opc config show --effective` exibido. Interromper uma segunda rodada no meio e rodar `/opc:setup` de novo: deve oferecer "Retomar".
+1. **Onboarding guiado nesta sessão do Claude** (bootstrap sem tocar na config real): abrir o Claude com `OPC_DATA_DIR=$(mktemp -d) claude` na pasta do repo, rodar `/opc:setup`, responder todas as etapas (provider `omniroute-personal`, modelo `opencode-go/kimi-k3`, allow `omniroute-personal/*`, agentes com `!work-*` no "Other", aprovador "Eu aprovo") e conferir no fim o `opc config show --effective` exibido. Interromper uma segunda rodada no meio e rodar `/opc:setup` de novo: deve oferecer "Retomar".
 2. **`opc config init`** (validação manual do usuário, spec §13.3): no terminal, `OPC_DATA_DIR=$(mktemp -d) node plugins/opc/scripts/opc-companion.mjs config init`; percorrer as listas numeradas, usar o filtro por texto e uma seleção por intervalo (`1-2`).
 3. **Config de mundo real do operador** (se a config global real já tiver o perfil de mundo): `opc models --allowed --json` sem nenhum `omniroute-work/*`; `opc agents --allowed --json` sem `work-*`; `opc config set defaultModel omniroute-work/opencode-go/kimi-k3` → exit 4. Sem perfil de mundo na config real → `N/A` (coberto pelo teste ao vivo com a config simulada).
 
@@ -5120,11 +5129,11 @@ Todas as saídas de exemplo vêm de execuções reais (com `OPC_DATA_DIR` tempor
 
 1. **Onde fica cada coisa** — `opc config path` (exemplo executado); config global em `<dataDir>/config.json` (600), `.opc.json` no workspace (versionável, sem segredos), rascunho `config.draft.json`; alias de terminal impresso pelo `/opc:setup`.
 2. **Todas as chaves** — a tabela abaixo (gerada do `CONFIG_SCHEMA`/`DEFAULT_CONFIG`), seguida do exemplo completo do §3.2 da spec.
-3. **IDs de modelo** — ID completo `provider/modelo` (o modelo pode ter barras); nome curto completado com `defaultProvider`; ambiguidade (`opencode/big-pickle` × `omniroute-mvalmeida/opencode/big-pickle`) e o prefixo `=`; aliases (1 nível; mapa de alias → ID completo; referências por nome em `reviewModel`, `routing.*`, `conclave.*`, `orchestrate.*`); globs (`*` casa `/`). Exemplos executados: `opc config set defaultModel opencode-go/kimi-k3`, o erro `AMBIGUOUS_MODEL` e `opc config set defaultModel =opencode/big-pickle`.
+3. **IDs de modelo** — ID completo `provider/modelo` (o modelo pode ter barras); nome curto completado com `defaultProvider`; ambiguidade (`opencode/big-pickle` × `omniroute-personal/opencode/big-pickle`) e o prefixo `=`; aliases (1 nível; mapa de alias → ID completo; referências por nome em `reviewModel`, `routing.*`, `conclave.*`, `orchestrate.*`); globs (`*` casa `/`). Exemplos executados: `opc config set defaultModel opencode-go/kimi-k3`, o erro `AMBIGUOUS_MODEL` e `opc config set defaultModel =opencode/big-pickle`.
 4. **Merge restritivo do `.opc.json`** — o que vale (preferências de D4; `deny` une; `allow` intersecta via `allowWorkspace`; `sensitivePaths`/`destructiveBash` unem) e o que é ignorado com aviso; exemplo executado de `opc config show --effective` com um `.opc.json` que tenta ampliar o allow.
 5. **Chaves travadas** — `policy.*`, `permissionProfiles`, `server.configOverride`; bootstrap (só o onboarding antes de existir config global); depois só `opc config init` ou `opc config set … --tty-confirm` num TTY; qualquer `opc config set` de chave comum cria a config global e **encerra o bootstrap**; limitação: edição manual do arquivo não é impedida.
 6. **Onboarding — as três portas** — `/opc:setup` (etapas, rascunho, retomar/recomeçar, `--reconfigure`), `opc config init` (listas numeradas, filtro, `1,3,5-7`, `todos`), `opc config …` não interativo.
-7. **Perfil de mundo (exemplo do operador)** — `providers.deny: ["omniroute-work"]`, `models.allow: ["omniroute-mvalmeida/opencode-go/*", "anthropic/*"]`, `agents.deny: ["work-*"]`; efeito em `/opc:models --allowed` e `/opc:agents --allowed` (exemplos executados).
+7. **Perfil de mundo (exemplo do operador)** — `providers.deny: ["omniroute-work"]`, `models.allow: ["omniroute-personal/opencode-go/*", "anthropic/*"]`, `agents.deny: ["work-*"]`; efeito em `/opc:models --allowed` e `/opc:agents --allowed` (exemplos executados).
 8. **`opc config validate`** — o que checa (forma, modelos, variants, aliases quebrados, agente padrão, pool, política, chaves com cara de segredo) e os exit codes (D11). Exemplo executado com um alias quebrado.
 
 Tabela de chaves (colar como está na seção 2):
@@ -5193,12 +5202,12 @@ Exemplos a executar e colar (num workspace descartável com `OPC_DATA_DIR` tempo
 ```bash
 opc setup --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify(JSON.parse(s).onboarding,null,2)))"
 opc providers
-opc models omniroute-mvalmeida --verbose
+opc models omniroute-personal --verbose
 opc models --allowed
 opc agents --verbose
 opc catalog commands
 opc catalog skills
-opc config set defaultProvider omniroute-mvalmeida
+opc config set defaultProvider omniroute-personal
 opc config set defaultModel opencode-go/kimi-k3
 opc config set defaultVariant high
 opc config set policy.approver claude            # exit 4 LOCKED_KEY (sem TTY)
@@ -5225,7 +5234,7 @@ Depois de escrever: `node scripts/scan-secrets.mjs docs/ README.md` → sem acha
 
 - **Data:** DD/MM/AAAA
 - **Branch / PR:** `feat/opc-f1` / #N
-- **Ambiente:** Node vX.Y.Z · OpenCode 1.18.x (`opencode --version`) · Linux (kernel) · modelo ao vivo `omniroute-mvalmeida/opencode-go/kimi-k3`
+- **Ambiente:** Node vX.Y.Z · OpenCode 1.18.x (`opencode --version`) · Linux (kernel) · modelo ao vivo `omniroute-personal/opencode-go/kimi-k3`
 
 ## Portão
 

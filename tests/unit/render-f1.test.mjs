@@ -48,6 +48,10 @@ test('renderConfig: redacts secret-looking values and renders all kinds', () => 
   assert.equal(renderConfig({ kind: 'get', setting: 'server.configOverride.keybinds', value: ['vim'] }), 'server.configOverride.keybinds = ["vim"]\n');
   const secret = 'registered-secret-warning-value';
   registerSecret(secret);
+  const pathLeak = renderConfig({ kind: 'path', dataDir: `/data/${secret}`, global: '/d/config.json', workspace: '/w/.opc.json', draft: '/d/config.draft.json' });
+  assert.ok(!pathLeak.includes(secret), 'config path output must redact registered secrets');
+  const valueLeak = renderConfig({ kind: 'show', global: { defaultModel: secret }, workspace: null, paths: { global: '/d/config.json', workspace: '/w/.opc.json' }, warnings: [] });
+  assert.ok(!valueLeak.includes(secret), 'config value output must redact registered secrets');
   assert.ok(!renderConfig({ kind: 'edit', setting: 'defaultModel', value: 'm', op: 'set', scope: 'global', path: '/d', warnings: [`warning ${secret}`] }).includes(secret));
   assert.ok(!renderConfig({ kind: 'validate', errors: [{ source: 'global', path: 'x', code: 'ERR', message: `error ${secret}` }], warnings: [], serverChecked: true }).includes(secret));
   assert.match(renderConfig({ kind: 'validate', errors: [{ source: 'global', path: 'defaultModel', code: 'UNKNOWN_MODEL', message: 'x' }], warnings: [], serverChecked: true }), /Config inválida/);

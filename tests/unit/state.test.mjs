@@ -76,6 +76,33 @@ test('writeFileAtomic writes JSON or text with mode 600 and leaves no temp files
   assert.deepEqual(fs.readdirSync(base), ['x.json']);
 });
 
+test('writeFileAtomic removes its exact temp file when writing or renaming fails', (t) => {
+  const base = temp(t);
+  const file = path.join(base, 'failure.json');
+  const originalWrite = fs.writeFileSync;
+  const originalRename = fs.renameSync;
+  const leftovers = [];
+  for (const phase of ['write', 'rename']) {
+    if (phase === 'write') {
+      fs.writeFileSync = (...args) => {
+        originalWrite(...args);
+        throw new Error('injected write failure');
+      };
+    } else {
+      fs.writeFileSync = originalWrite;
+      fs.renameSync = () => { throw new Error('injected rename failure'); };
+    }
+    try {
+      assert.throws(() => writeFileAtomic(file, 'private'), new RegExp(`injected ${phase} failure`));
+    } finally {
+      fs.writeFileSync = originalWrite;
+      fs.renameSync = originalRename;
+    }
+    leftovers.push(...fs.readdirSync(base));
+  }
+  assert.deepEqual(leftovers, [], 'write and rename failures must leave no atomic temp files');
+});
+
 test('readJson returns fallback only for missing files and reports invalid JSON or I/O failures', (t) => {
   const base = temp(t);
   assert.equal(readJson(path.join(base, 'none.json'), 'fb'), 'fb');

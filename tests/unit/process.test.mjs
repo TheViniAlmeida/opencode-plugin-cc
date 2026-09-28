@@ -10,7 +10,7 @@ import { deadPid, makeTempDir, removeTempDir, waitFor } from '../helpers.mjs';
 
 const linuxOnly = { skip: process.platform !== 'linux' && 'process groups and /proc are validated on Linux only' };
 const IDLE = 'setInterval(() => {}, 1000)';
-const IGNORE_TERM = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+const IGNORE_TERM = "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
 
 function killHard(pid) {
   try {
@@ -114,7 +114,7 @@ test('terminateProcessGroup: terminated with SIGTERM, killed when SIGTERM is ign
 
   const stubborn = await spawnDetached(process.execPath, ['-e', IGNORE_TERM], { cwd: dir, env: process.env, logFile: path.join(dir, 'b') });
   t.after(() => killHard(stubborn.pid));
-  await new Promise((r) => setTimeout(r, 300));
+  await waitFor(() => fs.readFileSync(path.join(dir, 'b'), 'utf8').includes('ready'), { message: 'SIGTERM handler installed' });
   assert.equal(await terminateProcessGroup(stubborn, () => true, { graceMs: 300 }), 'killed');
   assert.equal(isPidAlive(stubborn.pid), false);
 });
@@ -146,3 +146,21 @@ test('terminateProcessGroup never signals a process whose identity does not matc
   assert.equal(isPidAlive(other.pid), true);
   assert.equal(await terminateProcessGroup({ pid: await deadPid(), startTime: '1' }, () => true), 'not-running');
 });
+
+for (const mode of ['null', 'throw']) {
+  test(`gate 4: identity ${mode} kills the exact child through its handle`, async (t) => {
+    const dir = makeTempDir('opc-identity-');
+    t.after(() => removeTempDir(dir));
+    let pid;
+    await assert.rejects(spawnDetached(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], {
+      cwd: dir, logFile: path.join(dir, 'worker.log'), identityTimeoutMs: 10,
+      readIdentity(value) {
+        pid = value;
+        if (mode === 'throw') throw new Error('identidade indisponível');
+        return null;
+      },
+    }), (err) => err.code === 'SPAWN_FAILED');
+    assert.ok(pid > 0);
+    assert.equal(isPidAlive(pid), false);
+  });
+}

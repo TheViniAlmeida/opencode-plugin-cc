@@ -22,7 +22,7 @@
 - Exit codes da spec §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Títulos de sessão com prefixo `OPC: ` (`OPC: orch-plan: …`, `OPC: orch-<kind>: …`, `OPC: orch-synth: …`).
 - Prompts `orchestrate-decompose.md` e `orchestrate-synthesize.md` com **texto original**: nada copiado do `swarm-code-plugin` (sem licença; spec §1.2, §16).
-- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável; planner `omniroute-mvalmeida/opencode-go/qwen3.8-max`.
+- Testes ao vivo só com `OPC_LIVE=1`, em diretório descartável; planner `omniroute-personal/opencode-go/qwen3.8-max`.
 - Git: branch `feat/opc-f4b`; Conventional Commits; **sem** `Co-Authored-By`, `Signed-off-by` ou "Generated with"; commit/push/PR só com autorização explícita do operador na sessão de execução.
 
 ## Review Focus
@@ -994,7 +994,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSubtaskCandidates, spreadCandidates } from '../../plugins/opc/scripts/lib/orchestrator.mjs';
 
-const P = 'omniroute-mvalmeida/opencode-go/';
+const P = 'omniroute-personal/opencode-go/';
 const FAST = `${P}deepseek-v4.1-flash`;
 const STRONG = `${P}qwen3.8-max`;
 const K3 = `${P}kimi-k3`;
@@ -1009,7 +1009,7 @@ function catalogOf(fulls) {
 }
 const catalog = catalogOf([FAST, STRONG, K3]);
 const baseConfig = (routing, policy = {}) => ({
-  defaultProvider: 'omniroute-mvalmeida',
+  defaultProvider: 'omniroute-personal',
   aliases: { fast: FAST, strong: STRONG, k3: K3 },
   policy,
   routing,
@@ -1052,7 +1052,7 @@ test('denied and unknown entries are skipped with warnings', () => {
 });
 
 test('every entry denied yields no candidates and the reasons (subtask fails, group goes on)', () => {
-  const config = baseConfig({ tasks: { ask: ['k3'] } }, { providers: { deny: ['omniroute-mvalmeida'] } });
+  const config = baseConfig({ tasks: { ask: ['k3'] } }, { providers: { deny: ['omniroute-personal'] } });
   const r = resolveSubtaskCandidates(sub(), { config, catalog });
   assert.deepEqual(r.candidates, []);
   assert.match(r.reasons[0], /denied by policy \(providers\.deny\)/);
@@ -2203,7 +2203,7 @@ Seis cenários (`decompose-ok`, `decompose-cycle`, `decompose-write-without-flag
 - [ ] **Step 1: Conferir os modelos da fixture `/provider`**
 
 Run: `grep -l 'kimi-k3' tests/fixtures/data/*.json && grep -l 'qwen3.8-max' tests/fixtures/data/*.json && grep -l 'deepseek-v4.1-flash' tests/fixtures/data/*.json`
-Expected: o arquivo da resposta de `/provider` (F1) aparece nas três buscas, com o provider `omniroute-mvalmeida` em `connected`. Se algum modelo faltar, acrescente-o em `all[omniroute-mvalmeida].models` copiando a entrada de um modelo existente e trocando `id`/`name` para `opencode-go/<modelo>` — os testes de integração usam `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
+Expected: o arquivo da resposta de `/provider` (F1) aparece nas três buscas, com o provider `omniroute-personal` em `connected`. Se algum modelo faltar, acrescente-o em `all[omniroute-personal].models` copiando a entrada de um modelo existente e trocando `id`/`name` para `opencode-go/<modelo>` — os testes de integração usam `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
 
 - [ ] **Step 2: Escrever o teste que falha**
 
@@ -2537,7 +2537,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, readFakeState, writeGlobalConfig } from '../helpers.mjs';
 
-const P = 'omniroute-mvalmeida/opencode-go/';
+const P = 'omniroute-personal/opencode-go/';
 const M1 = `${P}deepseek-v4.1-flash`;
 const M2 = `${P}qwen3.8-max`;
 const M3 = `${P}kimi-k3`;
@@ -2545,7 +2545,7 @@ const M3 = `${P}kimi-k3`;
 function orchestrateConfig(extra = {}) {
   const list = [M1, M2, M3];
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M1,
     orchestrate: { planner: M2, maxSubtasks: 5, synthesizer: 'claude' },
     routing: {
@@ -3052,7 +3052,7 @@ import { makeWorkspace, testEnv, runCli, readFakeState, writeGlobalConfig, readT
 import { workspaceStateDir, resolveWorkspaceRoot } from '../../plugins/opc/scripts/lib/state.mjs';
 import { listJobs } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
-const P = 'omniroute-mvalmeida/opencode-go/';
+const P = 'omniroute-personal/opencode-go/';
 const M1 = `${P}deepseek-v4.1-flash`;
 const M2 = `${P}qwen3.8-max`;
 const M3 = `${P}kimi-k3`;
@@ -3062,7 +3062,7 @@ const DENY_ALL = { permission: '*', pattern: '*', action: 'deny' };
 function orchestrateConfig(extra = {}) {
   const list = [M1, M2, M3];
   return {
-    defaultProvider: 'omniroute-mvalmeida',
+    defaultProvider: 'omniroute-personal',
     defaultModel: M1,
     orchestrate: { planner: M2, maxSubtasks: 5, synthesizer: 'claude' },
     routing: {
@@ -3191,7 +3191,7 @@ test('F4b: model synthesis runs a read-only session with every result', async (t
   const synthSession = sessionPosts(env).find((r) => r.body.title.startsWith('OPC: orch-synth: '));
   assert.deepEqual(synthSession.body.permission[0], DENY_ALL, 'synthesizer runs read-only');
   const rendered = await runCli(['result', out.jobId], { env, cwd: ws });
-  assert.match(rendered.stdout, /Sintetizador: `omniroute-mvalmeida\/opencode-go\/kimi-k3`\n\nSYNTHESIS-OK/);
+  assert.match(rendered.stdout, /Sintetizador: `omniroute-personal\/opencode-go\/kimi-k3`\n\nSYNTHESIS-OK/);
   assert.match(rendered.stdout, /RESULT\[a\] by /, 'raw results are delivered with the synthesis');
 });
 
@@ -3324,7 +3324,8 @@ Execute exatamente um comando:
 ```bash
 opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Regras:
 
@@ -3366,7 +3367,8 @@ texto chega verbatim; a linha `--` impede que palavras da tarefa virem flags):
 opc orchestrate [--max N] [--synthesizer claude|<modelo>] [--background] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <tarefa autocontida: objetivo, caminhos relevantes, o que cada parte deve entregar>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 **Ao receber o resultado:**
 
@@ -3460,7 +3462,7 @@ import { makeTempDir, makeWorkspace, runCli, trackEnv, trackTempDir, writeGlobal
 import { SUBTASK_KINDS } from '../../plugins/opc/scripts/lib/orchestrator.mjs';
 
 const LIVE = process.env.OPC_LIVE === '1';
-const P = 'omniroute-mvalmeida/opencode-go/';
+const P = 'omniroute-personal/opencode-go/';
 const FAST = `${P}deepseek-v4.1-flash`;
 const STRONG = `${P}qwen3.8-max`;
 const K3 = `${P}kimi-k3`;
@@ -3474,7 +3476,7 @@ const TASK = [
 ].join(' ');
 
 const LIVE_CONFIG = {
-  defaultProvider: 'omniroute-mvalmeida',
+  defaultProvider: 'omniroute-personal',
   defaultModel: FAST,
   aliases: { fast: FAST, strong: STRONG, k3: K3 },
   orchestrate: { planner: 'strong', maxSubtasks: 5, synthesizer: 'claude' },
@@ -3703,7 +3705,7 @@ planner, subtarefa e sintetizador aparece como membro do grupo em `/opc:status`.
 opc orchestrate "Mapeie o tratamento de erros de scripts/lib, revise-o e proponha testes"
 
 # Síntese por modelo, no máximo 3 subtarefas, em background
-opc orchestrate --synthesizer omniroute-mvalmeida/opencode-go/kimi-k3 --max 3 --background \
+opc orchestrate --synthesizer omniroute-personal/opencode-go/kimi-k3 --max 3 --background \
   "Compare as estratégias de cache de src/cache e src/http"
 
 # Com escrita (subtarefas task em série)
@@ -3761,7 +3763,7 @@ de todas as subtarefas · 130 cancelada.
 ```bash
 opc orchestrate "Mapeie as rotas HTTP de src/, revise a validação de entrada e proponha testes"
 opc orchestrate --json --max 3 "Explique o ciclo de vida do servidor e aponte riscos"
-opc orchestrate --synthesizer omniroute-mvalmeida/opencode-go/kimi-k3 --background "Revise src/cache"
+opc orchestrate --synthesizer omniroute-personal/opencode-go/kimi-k3 --background "Revise src/cache"
 opc status orch-<id> --wait
 opc result orch-<id>
 ```
@@ -3773,7 +3775,7 @@ opc result orch-<id>
 
 Tarefa: <tarefa>
 Status: concluída · job orch-… · 3 subtarefas · 84.2 s
-Planner: omniroute-mvalmeida/opencode-go/qwen3.8-max
+Planner: omniroute-personal/opencode-go/qwen3.8-max
 
 ## Plano
 <rationale>
@@ -3833,7 +3835,7 @@ Crie `docs/phases/F4b-report.md` a partir do modelo abaixo e preencha cada linha
 - **Data:** DD/MM/AAAA
 - **Branch / PR:** `feat/opc-f4b` / #<n>
 - **OpenCode:** 1.18.32 · **Node:** <versão>
-- **Modelos ao vivo:** planner `omniroute-mvalmeida/opencode-go/qwen3.8-max`; subtarefas via
+- **Modelos ao vivo:** planner `omniroute-personal/opencode-go/qwen3.8-max`; subtarefas via
   `routing` (`deepseek-v4.1-flash`, `kimi-k3`, `qwen3.8-max`); síntese por modelo `kimi-k3`
 
 ## 1. `npm test`
