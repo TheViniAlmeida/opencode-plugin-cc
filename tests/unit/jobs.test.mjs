@@ -8,9 +8,9 @@ import {
   assertNotInsideServer, workerLogPath,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
+import { identityMatches, spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ACTIVE_JOB_STATUSES } from '../../plugins/opc/scripts/lib/state.mjs';
-import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { makeTempDir, trackTempDir, waitFor } from '../helpers.mjs';
 
 function stateDir(t) {
   return trackTempDir(t, makeTempDir('opc-jobs-'));
@@ -343,14 +343,15 @@ test('cancelJob reports a worker that exits spontaneously', async (t) => {
   const dir = stateDir(t);
   const job = await createJob(dir, base());
   const script = join(dir, 'opc-companion.mjs');
-  writeFileSync(script, 'setTimeout(() => process.exit(0), 100);\n');
+  writeFileSync(script, 'setTimeout(() => process.exit(0), 400);\n');
   const worker = await spawnDetached(process.execPath, [script, 'task-worker', '--job-id', job.id], {
     cwd: dir, env: process.env, logFile: workerLogPath(dir, job.id),
   });
   t.after(() => killHard(worker.pid));
   await updateJob(dir, job.id, { status: 'running', pid: worker.pid, pidStartTime: worker.startTime });
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, { api: null });
+  // Cancel while the worker is still alive and identifiable; it then exits on its own within exitWaitMs.
+  await waitFor(() => identityMatches({ pid: worker.pid, startTime: worker.startTime }, workerMatcher(job.id)), { message: 'worker identity' });
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, { api: null, exitWaitMs: 5000 });
   assert.equal(result.report.worker, 'exited');
   assert.equal(result.job.status, 'cancelled');
 });

@@ -8,7 +8,7 @@ import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './op
 import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } from './redact.mjs';
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
-import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
+import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
 import { readServerRecord } from './server.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
@@ -634,7 +634,8 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     const expected = { pid: job.pid, startTime: job.pidStartTime };
     const matcher = workerMatcher(id);
     if (!identityMatches(expected, matcher)) {
-      report.worker = isPidAlive(job.pid) ? 'identity-mismatch' : 'not-running';
+      if (await exitingWithoutCmdline(expected)) report.worker = 'exited';
+      else report.worker = isPidAlive(job.pid) ? 'identity-mismatch' : 'not-running';
     } else if (await waitWorkerExit(expected, matcher, exitWaitMs)) {
       report.worker = 'exited';
     } else {
