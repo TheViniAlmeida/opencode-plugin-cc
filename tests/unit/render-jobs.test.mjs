@@ -20,7 +20,7 @@ test('formatDuration', () => {
 
 test('renderJobStatus: job ativo mostra tempo, progresso e cancelamento', () => {
   const out = renderJobStatus(job(), { progress: ['leitura: a.js', 'edição: b.js'], now: Date.parse('2026-09-26T10:01:00Z') });
-  assert.match(out, /Status: running \(phase: editing\)/);
+  assert.match(out, /Estado: running \(fase: editing\)/);
   assert.match(out, /Decorrido: 1m 0s/);
   assert.match(out, /Progresso:\n  leitura: a\.js\n  edição: b\.js/);
   assert.match(out, /\/opc:cancel task-abc-123456/);

@@ -111,6 +111,26 @@ function workerErrorCode(err) {
   return 'worker_error';
 }
 
+export function workerFailureState(job, failure) {
+  return {
+    patch: {
+      status: 'failed',
+      phase: 'failed',
+      completedAt: nowIso(),
+      pendingRequest: null,
+      errorCode: failure instanceof OpcError && failure.code === 'STATE_WRITE_FAILED' ? 'STATE_WRITE_FAILED' : workerErrorCode(failure),
+      errorClass: 'fatal',
+      errorType: failure instanceof OpcError ? failure.code : failure?.name ?? 'Error',
+      errorMessage: redact(failure instanceof Error ? failure.message : String(failure)),
+    },
+    cancellationLog: job.cancelRequestedAt ? 'Cancelamento solicitado antes da falha ao salvar o estado.' : null,
+  };
+}
+
+export function stateWriteFailure(err) {
+  return new OpcError('STATE_WRITE_FAILED', `falha ao salvar o estado da tarefa: ${redact(err).message}`);
+}
+
 export async function run(ctx, argv) {
   const { flags } = parseArgs(argv, { flags: { 'job-id': { type: 'string' }, cwd: { type: 'string' }, json: { type: 'boolean' } } });
   const jobId = flags['job-id'];
@@ -196,7 +216,7 @@ export async function run(ctx, argv) {
       errorCode: status === 'completed' ? null : cancelRequested ? 'cancelled' : result.errorCode ?? null,
       errorClass: status === 'completed' ? null : result.errorClass ?? null,
       errorType: status === 'completed' ? null : cancelRequested ? 'Cancelled' : result.errorType ?? null,
-      errorMessage: status === 'completed' ? null : cancelRequested ? 'Cancelled by user.' : result.errorMessage ?? null,
+      errorMessage: status === 'completed' ? null : cancelRequested ? 'Cancelado pelo usuário.' : result.errorMessage ?? null,
       attempts: [...(stored.attempts ?? []), { model: stored.model, sessionID: result.sessionID, status, errorClass: result.errorClass ?? null, startedAt, endedAt: completedAt }],
       result: {
         finalText: result.finalText,
@@ -214,7 +234,7 @@ export async function run(ctx, argv) {
       const text = result.finalText.length > FINAL_LOG_LIMIT
         ? `${result.finalText.slice(0, FINAL_LOG_LIMIT)}\n[saída final truncada no log; consulte /opc:result ${jobId}]`
         : result.finalText;
-      log(`Final output\n${text}`);
+      log(`Saída final\n${text}`);
     }
   } catch (err) {
     exitCode = 7;
@@ -222,20 +242,12 @@ export async function run(ctx, argv) {
     try {
       await jobUpdates.flush();
     } catch (writeErr) {
-      failure = new OpcError('STATE_WRITE_FAILED', `falha ao salvar o estado da tarefa: ${redact(writeErr).message}`);
+      failure = stateWriteFailure(writeErr);
     }
-    const message = redact(failure instanceof Error ? failure.message : String(failure));
-    log(`Falha no worker: ${message}`);
-    await updateJob(ctx.stateDir, jobId, (job) => ({
-      status: job.cancelRequestedAt ? 'cancelled' : 'failed',
-      phase: job.cancelRequestedAt ? 'cancelled' : 'failed',
-      completedAt: nowIso(),
-      pendingRequest: null,
-      errorCode: failure instanceof OpcError && failure.code === 'STATE_WRITE_FAILED' ? 'STATE_WRITE_FAILED' : workerErrorCode(failure),
-      errorClass: 'fatal',
-      errorType: failure instanceof OpcError ? failure.code : failure?.name ?? 'Error',
-      errorMessage: message,
-    }));
+    const { patch, cancellationLog } = workerFailureState(readJob(ctx.stateDir, jobId), failure);
+    if (cancellationLog) log(cancellationLog);
+    log(`Falha no worker: ${patch.errorMessage}`);
+    await updateJob(ctx.stateDir, jobId, patch);
   } finally {
     bridge?.dispose();
     hub?.stop();

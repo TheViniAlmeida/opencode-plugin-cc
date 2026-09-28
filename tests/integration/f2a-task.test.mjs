@@ -117,5 +117,5 @@ test('large output (>1 MB): printed whole, job log stays under 5 MB', async (t) 
   const id = jobIdFrom(r.stderr);
   const job = jobIn(ctx.env, ctx.cwd, id);
   assert.ok(statSync(job.logFile).size <= 5 * 1024 * 1024);
-  assert.match(readFileSync(job.logFile, 'utf8'), /final output truncated in the log/);
+  assert.match(readFileSync(job.logFile, 'utf8'), /saída final truncada no log/);
 });

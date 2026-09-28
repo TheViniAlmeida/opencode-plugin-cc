@@ -30,7 +30,7 @@ const SAFE_JOB_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const JOB_REF_RE = /^[0-9a-z-]+$/;
 const SESSION_ID_RE = /^ses[_0-9A-Za-z]+$/;
 const QUEUED_WITHOUT_WORKER_MS = 60_000;
-const BLOCK_TITLES = new Set(['Final output']);
+const BLOCK_TITLES = new Set(['Saída final']);
 
 const nowIso = () => new Date().toISOString();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

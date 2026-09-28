@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequestBridge, createSerialUpdater, queueProgressUpdate } from '../../plugins/opc/scripts/commands/task-worker.mjs';
+import { createRequestBridge, createSerialUpdater, queueProgressUpdate, stateWriteFailure, workerFailureState } from '../../plugins/opc/scripts/commands/task-worker.mjs';
 
 function harness({ profileKind = 'write', timeoutMs = 60000, policy = {} } = {}) {
   let job = { status: 'running', phase: 'editing', pendingRequest: null };
@@ -43,6 +43,20 @@ test('progress update handles a rejected write and logs a redacted failure line'
   await queueProgressUpdate(updater, { phase: 'editing' }, (line) => logs.push(line));
   assert.deepEqual(logs, ['falha ao salvar o progresso da tarefa: persistence failed']);
   await assert.rejects(updater.flush(), /persistence failed/);
+});
+
+test('cancel + failed final state write ends failed with STATE_WRITE_FAILED and records cancellation', async () => {
+  const updater = createSerialUpdater('/unused-by-injected-writer', 'task-test-id', {
+    writeJob: async () => { throw new Error('final write failed'); },
+  });
+  const cancelJob = { status: 'running', cancelRequestedAt: '2026-09-27T12:00:00Z' };
+  await assert.rejects(updater.update({ status: 'cancelled' }), /final write failed/);
+  let failure;
+  try { await updater.flush(); } catch (err) { failure = stateWriteFailure(err); }
+  const { patch, cancellationLog } = workerFailureState(cancelJob, failure);
+  assert.equal(patch.status, 'failed');
+  assert.equal(patch.errorCode, 'STATE_WRITE_FAILED');
+  assert.match(cancellationLog, /cancelamento solicitado/i);
 });
 
 test('read-only profile rejects permissions and questions immediately', async () => {

@@ -262,7 +262,7 @@ function resumeHint(job) {
 export function renderQueuedJob(job) {
   return redactText([
     `Tarefa opc ${job.id} na fila em segundo plano (${job.kind}${job.model ? `, ${job.model}` : ''}).`,
-    `- Status: /opc:status ${job.id}`,
+    `- Acompanhar: /opc:status ${job.id}`,
     `- Aguardar: /opc:status ${job.id} --wait`,
     `- Resultado: /opc:result ${job.id}`,
     `- Cancelar: /opc:cancel ${job.id}`,
@@ -309,14 +309,14 @@ export function renderPermissionRequest(job, { timeoutSec = null } = {}) {
 export function renderJobStatus(job, { progress = [], now = Date.now() } = {}) {
   const active = ACTIVE.has(job.status);
   const lines = [`# opc tarefa ${job.id}`, ''];
-  lines.push(`- Status: ${job.status}${job.phase ? ` (phase: ${job.phase})` : ''}`);
+  lines.push(`- Estado: ${job.status}${job.phase ? ` (fase: ${job.phase})` : ''}`);
   lines.push(`- Tipo: ${job.kind} · Perfil: ${job.permissionProfile ?? '-'}`);
   lines.push(`- Modelo: ${job.model ?? '-'}${job.agent ? ` · Agente: ${job.agent}` : ''}${job.variant ? ` · Variante: ${job.variant}` : ''}`);
   if (job.sessionID) lines.push(`- Sessão: ${job.sessionID}${job.childSessionIDs?.length ? ` (filhas: ${job.childSessionIDs.join(', ')})` : ''}`);
   if (job.summary) lines.push(`- Resumo: ${job.summary}`);
   const time = active ? formatDuration(job.startedAt ?? job.createdAt, null, now) : formatDuration(job.startedAt ?? job.createdAt, job.completedAt ?? job.updatedAt, now);
   if (time) lines.push(`- ${active ? 'Decorrido' : 'Duração'}: ${time}`);
-  if (job.status === 'failed') lines.push(`- Erro: ${job.errorType ?? 'error'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
+  if (job.status === 'failed') lines.push(`- Erro: ${job.errorType ?? 'erro'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
   if (job.logFile) lines.push(`- Log: ${job.logFile}`);
   if (job.status === 'waiting_permission' && job.pendingRequest?.length) lines.push('', ...pendingLines(job));
   if (progress.length) lines.push('', 'Progresso:', ...progress.map((line) => `  ${line}`));
@@ -333,7 +333,7 @@ export function renderStatusList(jobs, { maxJobs = 8, progressById = {}, now = D
   if (active.length) {
     lines.push('Jobs ativos:', '');
     lines.push(renderTable(
-      ['Tarefa', 'Tipo', 'Status', 'Fase', 'Decorrido', 'Sessão', 'Resumo', 'Ações'],
+      ['Tarefa', 'Tipo', 'Estado', 'Fase', 'Decorrido', 'Sessão', 'Resumo', 'Ações'],
       active.map((j) => [j.id, j.kind, j.status, j.phase ?? '', formatDuration(j.startedAt ?? j.createdAt, null, now), j.sessionID ?? '', j.summary ?? '', jobActions(j).slice(1).map((a) => `\`${a}\``).join(' ')]),
     ));
     const withProgress = active.filter((j) => (progressById[j.id] ?? []).length);
@@ -346,7 +346,7 @@ export function renderStatusList(jobs, { maxJobs = 8, progressById = {}, now = D
   if (recent.length) {
     lines.push('Jobs recentes:', '');
     lines.push(renderTable(
-      ['Tarefa', 'Tipo', 'Status', 'Duração', 'Resumo', 'Ações'],
+      ['Tarefa', 'Tipo', 'Estado', 'Duração', 'Resumo', 'Ações'],
       recent.map((j) => [j.id, j.kind, j.status, formatDuration(j.startedAt ?? j.createdAt, j.completedAt ?? j.updatedAt, now), j.summary ?? '', `\`/opc:result ${j.id}\``]),
     ));
   }
@@ -367,7 +367,7 @@ export function renderTurnResult(job) {
     lines.push(`# opc tarefa ${job.id} cancelada`);
     if (r.finalText) lines.push('', 'Saída parcial:', '', r.finalText);
   } else {
-    lines.push(`# opc tarefa ${job.id} falhou`, '', `- Erro: ${job.errorType ?? 'error'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
+    lines.push(`# opc tarefa ${job.id} falhou`, '', `- Erro: ${job.errorType ?? 'erro'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
     if (job.errorCode === 'server_lost' && job.sessionID) {
       lines.push(`- O servidor OpenCode foi perdido durante o turno; a sessão ${job.sessionID} foi preservada. Continue com: /opc:${RESUMABLE_KINDS.has(job.kind) ? job.kind : 'task'} --resume ${job.id}`);
     }
