@@ -72,13 +72,26 @@ function compileRoute(key) {
       return seg.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
     })
     .join('/');
-  return { method, regex: new RegExp(`^${source}$`), names };
+  const segments = pattern.split('/').filter(Boolean);
+  return {
+    method,
+    regex: new RegExp(`^${source}$`),
+    names,
+    staticSegments: segments.filter((seg) => !seg.startsWith(':')).length,
+  };
 }
 
-function matchRoute(table, method, pathname) {
-  for (const [key, handler] of Object.entries(table)) {
-    const route = compileRoute(key);
-    if (route.method !== method) continue;
+export function matchRoute(table, method, pathname) {
+  const candidates = Object.entries(table)
+    .map(([key, handler], index) => ({ key, handler, route: compileRoute(key), index }))
+    .filter(({ route }) => route.method === method)
+    .sort((a, b) => {
+      const aStatic = a.route.names.length === 0;
+      const bStatic = b.route.names.length === 0;
+      if (aStatic !== bStatic) return aStatic ? -1 : 1;
+      return b.route.staticSegments - a.route.staticSegments || a.index - b.index;
+    });
+  for (const { handler, route } of candidates) {
     const m = route.regex.exec(pathname);
     if (!m) continue;
     const params = {};

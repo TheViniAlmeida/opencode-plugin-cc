@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, stateDirFor } from '../helpers.mjs';
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { createJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { serverLockPath } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { acquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 
 async function setup(t, { scenario = 'f3-sessions', config = F3_TEST_CONFIG, extra = {} } = {}) {
@@ -50,4 +52,24 @@ test('sessions --refresh is refused while a job is active', async (t) => {
   assert.equal(res.code, 2);
   assert.match(res.stdout + res.stderr, new RegExp(job.id));
   assert.equal(fakeRequests(env).filter((r) => r.path === '/instance/dispose').length, 0);
+});
+
+test('sessions --refresh sees a job registered while it waits for server.lock', async (t) => {
+  const { cwd, env } = await setup(t);
+  const boot = await runCli(['sessions', '--json'], { env, cwd });
+  assert.equal(boot.code, 0, boot.stderr);
+  const stateDir = await stateDirFor(env, cwd);
+  const release = await acquireLock(serverLockPath(stateDir), { timeoutMs: 1000, purpose: 'test-refresh-race' });
+  try {
+    const pending = runCli(['sessions', '--refresh'], { env, cwd });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const job = await createJob(stateDir, { kind: 'task', title: 'registered while refresh waits', status: 'running', workspaceRoot: cwd });
+    release();
+    const res = await pending;
+    assert.equal(res.code, 2);
+    assert.match(res.stdout + res.stderr, new RegExp(job.id));
+    assert.equal(fakeRequests(env).filter((r) => r.path === '/instance/dispose').length, 0);
+  } finally {
+    release();
+  }
 });

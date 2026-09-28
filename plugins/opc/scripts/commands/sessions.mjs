@@ -1,7 +1,7 @@
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
-import { listJobs, ACTIVE_STATUSES, topLevelJobs } from '../lib/jobs.mjs';
+import { listJobs, ACTIVE_STATUSES, topLevelJobs, withServerLock } from '../lib/jobs.mjs';
 import { renderSessions } from '../lib/render.mjs';
 
 const SPEC = {
@@ -30,11 +30,13 @@ export async function run(ctx, argv) {
       if (server.attached) {
         throw new UsageError('REFRESH_ATTACHED', '--refresh descarta a instância do servidor e não é permitido num servidor externo (OPC_SERVER_URL)');
       }
-      const active = topLevelJobs(listJobs(ctx.stateDir, { all: true })).filter((j) => ACTIVE_STATUSES.includes(j.status));
-      if (active.length) {
-        throw new UsageError('ACTIVE_JOBS', `--refresh recusado: há jobs ativos (${active.map((j) => j.id).join(', ')}); aguarde ou cancele`);
-      }
-      await api.dispose();
+      await withServerLock(ctx, async () => {
+        const active = topLevelJobs(listJobs(ctx.stateDir, { all: true })).filter((j) => ACTIVE_STATUSES.includes(j.status));
+        if (active.length) {
+          throw new UsageError('ACTIVE_JOBS', `--refresh recusado: há jobs ativos (${active.map((j) => j.id).join(', ')}); aguarde ou cancele`);
+        }
+        await api.dispose();
+      }, { purpose: 'sessions-refresh' });
     }
     const [all, statusMap] = await Promise.all([api.listSessions(), api.sessionStatus()]);
     const list = (all ?? [])
