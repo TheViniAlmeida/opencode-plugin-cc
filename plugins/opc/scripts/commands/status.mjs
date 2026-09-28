@@ -1,4 +1,5 @@
-// /opc:status (spec §4, §9.1). Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
+// /opc:status (spec §4, §9.1).
+// Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { isActive, listJobs, readJobProgress, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';

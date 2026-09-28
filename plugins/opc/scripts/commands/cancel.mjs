@@ -1,4 +1,5 @@
-// /opc:cancel (spec §4, §9.1). Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
+// /opc:cancel (spec §4, §9.1).
+// Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { cancelJob, resolveJobRef } from '../lib/jobs.mjs';

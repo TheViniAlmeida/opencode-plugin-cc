@@ -1,4 +1,5 @@
-// /opc:result (spec §4). Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
+// /opc:result (spec §4).
+// Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
 import { isActive, isTerminal, listJobs, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
