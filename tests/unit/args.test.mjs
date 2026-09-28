@@ -94,7 +94,7 @@ test('parseArgs rejects unknown flags, missing values, bad numbers and unexpecte
   assert.deepEqual(parseArgs(['-5'], SPEC).positionals, ['-5']);
   assert.throws(() => parseArgs(['--toString'], SPEC), UsageError);
   assert.throws(() => parseArgs(['--model='], SPEC), UsageError);
-  const offending = '--sk-AAAAAAAAAAAAAAAAAAAAAAAA';
+  const offending = `--sk-${'A'.repeat(24)}`;
   assert.throws(() => parseArgs([offending], SPEC), (error) =>
     error instanceof UsageError && !error.message.includes(offending));
 });
