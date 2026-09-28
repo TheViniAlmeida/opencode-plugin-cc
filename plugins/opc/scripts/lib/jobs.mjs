@@ -403,7 +403,7 @@ async function waitWorkerExit(expected, matcher, maxMs) {
 export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, exitWaitMs = 2000, graceMs = 3000 } = {}) {
   assertJobId(id);
   const current = readJob(ctx.stateDir, id);
-  if (!current) throw new NotFoundError('NOT_FOUND', `job ${id} not found`);
+  if (!current) throw new NotFoundError('NOT_FOUND', `a tarefa ${short(id)} não foi encontrada`);
   if (!isActive(current)) throw new UsageError('NOT_ACTIVE', `a tarefa ${short(id)} já está ${current.status}`);
   const job = await updateJob(ctx.stateDir, id, { cancelRequestedAt: nowIso() });
   const report = { jobId: id, aborted: false, idle: false, worker: 'not-running' };
