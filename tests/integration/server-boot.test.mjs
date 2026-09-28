@@ -45,8 +45,12 @@ test('eaddrinuse on every attempt → BOOT_FAILED after exactly 3 attempts', asy
 
 test('boot-slow: timeout on each attempt → BOOT_FAILED without orphans; a longer bootTimeoutSec succeeds', async (t) => {
   const { env, ctx } = makeServerCtx(t, { scenario: 'boot-slow', extraEnv: { FAKE_BOOT_DELAY_MS: '2500' }, config: { server: { bootTimeoutSec: 0.5 } } });
-  await assert.rejects(ensureServer(ctx), (e) => e.code === 'BOOT_FAILED' && /timeout/.test(e.message));
-  assert.equal(readFakeState(env).bootAttempts, 3);
+  let bootError;
+  await assert.rejects(ensureServer(ctx), (e) => { bootError = e; return e.code === 'BOOT_FAILED' && /timeout/.test(e.message); });
+  // Under load the fake can be killed before it records its own start, so count the plugin's attempts.
+  assert.match(bootError.message, /tentativa 3 /);
+  assert.doesNotMatch(bootError.message, /tentativa 4 /);
+  assert.ok(readFakeState(env).bootAttempts <= 3);
   assertNoLiveBoots(env);
   const patient = { ...ctx, config: mergeConfig({ server: { bootTimeoutSec: 10 } }, null).config };
   const server = await ensureServer(patient);

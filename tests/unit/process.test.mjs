@@ -10,7 +10,7 @@ import { deadPid, makeTempDir, removeTempDir, waitFor } from '../helpers.mjs';
 
 const linuxOnly = { skip: process.platform !== 'linux' && 'process groups and /proc are validated on Linux only' };
 const IDLE = 'setInterval(() => {}, 1000)';
-const IGNORE_TERM = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+const IGNORE_TERM = "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
 
 function killHard(pid) {
   try {
@@ -114,7 +114,7 @@ test('terminateProcessGroup: terminated with SIGTERM, killed when SIGTERM is ign
 
   const stubborn = await spawnDetached(process.execPath, ['-e', IGNORE_TERM], { cwd: dir, env: process.env, logFile: path.join(dir, 'b') });
   t.after(() => killHard(stubborn.pid));
-  await new Promise((r) => setTimeout(r, 300));
+  await waitFor(() => fs.readFileSync(path.join(dir, 'b'), 'utf8').includes('ready'), { message: 'SIGTERM handler installed' });
   assert.equal(await terminateProcessGroup(stubborn, () => true, { graceMs: 300 }), 'killed');
   assert.equal(isPidAlive(stubborn.pid), false);
 });
