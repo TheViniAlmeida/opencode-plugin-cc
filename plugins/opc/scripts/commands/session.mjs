@@ -26,6 +26,7 @@ const SPEC = {
 };
 
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
+export const PREVIEW_TRUNCATION_NOTICE = 'Prévia limitada às 50 primeiras mensagens do usuário a partir do alvo; o revert pode afetar mais arquivos.';
 
 async function actionNew(ctx, api, { flags }) {
   const policy = ctx.config.policy ?? {};
@@ -157,15 +158,16 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
-  if (!rest[1]) throw new UsageError('MISSING_MESSAGE_ID', 'session revert exige <sessionID> <messageID>');
-  const messageID = assertId('msg', rest[1], 'mensagem');
+  const requestedMessageID = flags.message ?? rest[1];
+  if (!requestedMessageID) throw new UsageError('MISSING_MESSAGE_ID', 'session revert exige <sessionID> <messageID>');
+  const messageID = assertId('msg', requestedMessageID, 'mensagem');
   const partID = flags.part ? assertId('prt', flags.part, 'parte') : undefined;
   return withSessionGuard(ctx, api, sessionID, async () => {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
     if (!flags['confirmed-by-user']) {
       const command = `opc session revert ${sessionID} ${messageID}${partID ? ` --part ${partID}` : ''} --confirmed-by-user`;
-      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, command, ...(affected.previewTruncated ? { previewTruncated: true, notice: 'Prévia limitada às 50 mensagens do usuário mais recentes; o revert pode afetar mais arquivos.' } : {}), ...(affected.listBugNotice ? { notice: affected.listBugNotice } : {}) }));
-      else ctx.out(`${renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command })}${affected.previewTruncated ? '\nPrévia limitada às 50 mensagens do usuário mais recentes; o revert pode afetar mais arquivos.\n' : ''}${affected.listBugNotice ? `\n${affected.listBugNotice}\n` : ''}`);
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, command, ...(affected.previewTruncated ? { previewTruncated: true, notice: PREVIEW_TRUNCATION_NOTICE } : {}), ...(affected.listBugNotice ? { notice: affected.listBugNotice } : {}) }));
+      else ctx.out(`${renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command })}${affected.previewTruncated ? `\n${PREVIEW_TRUNCATION_NOTICE}\n` : ''}${affected.listBugNotice ? `\n${affected.listBugNotice}\n` : ''}`);
       return ExitCode.USAGE;
     }
     const session = await api.revert(sessionID, { messageID, partID });

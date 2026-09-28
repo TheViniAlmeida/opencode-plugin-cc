@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withSessionGuard, collectAffectedDiff } from '../../plugins/opc/scripts/commands/session.mjs';
+import { withSessionGuard, collectAffectedDiff, PREVIEW_TRUNCATION_NOTICE } from '../../plugins/opc/scripts/commands/session.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 
 function tmpState(t) {
@@ -71,8 +71,14 @@ test('collectAffectedDiff validates a message directly when message listing hits
 });
 
 test('collectAffectedDiff marks previews capped at 50 user messages', async () => {
-  const messages = Array.from({ length: 51 }, (_, i) => ({ info: { id: `msg_${i}`, role: 'user' } }));
-  const api = { messages: async () => messages, diff: async () => [] };
+  const messages = [
+    { info: { id: 'msg_before_target', role: 'user' } },
+    ...Array.from({ length: 51 }, (_, i) => ({ info: { id: `msg_${i}`, role: 'user' } })),
+  ];
+  const calls = [];
+  const api = { messages: async () => messages, diff: async (_sessionID, { messageID }) => { calls.push(messageID); return []; } };
   const preview = await collectAffectedDiff(api, 'ses_a', 'msg_0');
   assert.equal(preview.previewTruncated, true);
+  assert.deepEqual(calls, Array.from({ length: 50 }, (_, i) => `msg_${i}`));
+  assert.equal(PREVIEW_TRUNCATION_NOTICE, 'Prévia limitada às 50 primeiras mensagens do usuário a partir do alvo; o revert pode afetar mais arquivos.');
 });

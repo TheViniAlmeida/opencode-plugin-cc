@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, stateDirFor } from '../helpers.mjs';
+import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, readFakeState, stateDirFor } from '../helpers.mjs';
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
@@ -63,6 +64,34 @@ test('unknown message is refused before any revert', async (t) => {
   assert.equal(res.code, 2);
   assert.match(res.stdout + res.stderr, /não pertence à sessão/);
   assert.equal(posts(env, `/session/${SEED.session}/revert`).length, 0);
+});
+
+test('revert preview falls back to the target message after a formatted turn breaks message listing', async (t) => {
+  const { cwd, env } = await setup(t);
+  writeGlobalConfig(env, { ...F3_TEST_CONFIG, review: { structuredOutput: 'tool' } });
+  writeFileSync(join(cwd, 'README.md'), '# formatted review target\n\nA change for the fake review.\n');
+  env.FAKE_FORMAT_LIST_BUG = '1';
+  const session = await runCli(['review', '--wait', '--json'], {
+    env,
+    cwd,
+  });
+  assert.equal(session.code, 0, session.stderr);
+  const state = readFakeState(env);
+  const promptPath = fakeRequests(env).find((request) => request.method === 'POST' && /\/prompt_async$/.test(request.path)).path;
+  const sessionID = promptPath.split('/')[2];
+  const messageID = state.messages[sessionID].find((message) => message.info.role === 'user').info.id;
+
+  const preview = await runCli(['session', 'revert', sessionID, '--message', messageID, '--json'], { env, cwd });
+  assert.equal(preview.code, 2);
+  const result = JSON.parse(preview.stdout);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.messageID, messageID);
+  assert.ok(Array.isArray(result.affected), 'preview includes the diff for the target message');
+  assert.match(result.notice, /não foi possível enumerar os turnos posteriores/i);
+
+  const unknown = await runCli(['session', 'revert', sessionID, '--message', 'msg_unknown', '--json'], { env, cwd });
+  assert.equal(unknown.code, 2);
+  assert.match(unknown.stdout + unknown.stderr, /não pertence à sessão/);
 });
 
 test('revert rejects a message id with path characters', async (t) => {
