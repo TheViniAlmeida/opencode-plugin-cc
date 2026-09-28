@@ -215,4 +215,195 @@ export function renderOnboarding(view) {
       throw new TypeError(`renderOnboarding: unknown view kind ${view.kind}`);
   }
 }
+
+// ---- F2a: renderização de jobs, turnos e solicitações de permissão ----
+
+const ACTIVE = new Set(['queued', 'running', 'waiting_permission']);
+const RESUMABLE_KINDS = new Set(['task', 'ask', 'plan']);
+
+export function formatDuration(startIso, endIso = null, now = Date.now()) {
+  const start = Date.parse(startIso ?? '');
+  if (!Number.isFinite(start)) return '';
+  const end = endIso ? Date.parse(endIso) : now;
+  if (!Number.isFinite(end) || end < start) return '';
+  const total = Math.round((end - start) / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function fence(text) {
+  const runs = String(text).match(/`+/g) ?? [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+function codeBlock(text, lang = 'text') {
+  const f = fence(text);
+  return [`${f}${lang}`, String(text), f];
+}
+
+function jobActions(job) {
+  const actions = [`/opc:status ${job.id}`];
+  if (ACTIVE.has(job.status)) actions.push(`/opc:status ${job.id} --wait`, `/opc:cancel ${job.id}`);
+  else actions.push(`/opc:result ${job.id}`);
+  return actions;
+}
+
+function resumeHint(job) {
+  if (!job.sessionID || !RESUMABLE_KINDS.has(job.kind) || ACTIVE.has(job.status)) return null;
+  return `/opc:${job.kind} --resume ${job.id}`;
+}
+
+export function renderQueuedJob(job) {
+  return [
+    `Tarefa opc ${job.id} na fila em segundo plano (${job.kind}${job.model ? `, ${job.model}` : ''}).`,
+    `- Status: /opc:status ${job.id}`,
+    `- Aguardar: /opc:status ${job.id} --wait`,
+    `- Resultado: /opc:result ${job.id}`,
+    `- Cancelar: /opc:cancel ${job.id}`,
+    '',
+  ].join('\n');
+}
+
+function pendingLines(job, { timeoutSec = null } = {}) {
+  const lines = [];
+  for (const req of job.pendingRequest ?? []) {
+    if (req.type === 'question') {
+      lines.push(`## Pergunta ${req.id}`, '');
+      if (req.sessionID && req.sessionID !== job.sessionID) lines.push(`- Sessão: ${req.sessionID} (sessão filha)`);
+      (req.questions ?? []).forEach((q, i) => {
+        const options = (q.options ?? []).map((o) => o.label).join(' | ') || '(texto livre)';
+        lines.push(`${i + 1}. [${q.header ?? ''}] ${q.question ?? ''}`, `   Opções: ${options}${q.multiple ? ' · várias permitidas (separadas por |)' : ''}${q.custom ? ' · texto livre permitido' : ''}`);
+      });
+      const placeholders = (req.questions ?? []).map((_, i) => `"<answer ${i + 1}>"`).join(' ');
+      lines.push('', `- Responder: \`/opc:permissions answer ${req.id} ${placeholders}\``, `- Recusar: \`/opc:permissions reply ${req.id} reject\``, '');
+      continue;
+    }
+    lines.push(`## Solicitação ${req.id}`, '');
+    if (req.sessionID && req.sessionID !== job.sessionID) lines.push(`- Sessão: ${req.sessionID} (sessão filha)`);
+    lines.push(`- Ferramenta: ${req.permission}`, '- Padrões:', ...codeBlock((req.patterns ?? []).join('\n') || '*'));
+    if (req.requiresUser) lines.push('- Exige o usuário: sim (comando destrutivo, diretório externo ou caminho sensível)');
+    lines.push('- Responder:', `  - \`/opc:permissions reply ${req.id} once\``, `  - \`/opc:permissions reply ${req.id} reject "<reason>"\``, '');
+  }
+  lines.push(`Depois: \`/opc:status ${job.id} --wait\``);
+  if (timeoutSec) lines.push(`Solicitações sem resposta serão recusadas automaticamente após ${timeoutSec} s.`);
+  return lines;
+}
+
+export function renderPermissionRequest(job, { timeoutSec = null } = {}) {
+  const lines = [
+    '# opc: aguardando uma decisão',
+    '',
+    `Tarefa: ${job.id} (${job.kind}) · Sessão: ${job.sessionID ?? '-'}`,
+    '',
+    ...pendingLines(job, { timeoutSec }),
+  ];
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
+export function renderJobStatus(job, { progress = [], now = Date.now() } = {}) {
+  const active = ACTIVE.has(job.status);
+  const lines = [`# opc tarefa ${job.id}`, ''];
+  lines.push(`- Status: ${job.status}${job.phase ? ` (phase: ${job.phase})` : ''}`);
+  lines.push(`- Tipo: ${job.kind} · Perfil: ${job.permissionProfile ?? '-'}`);
+  lines.push(`- Modelo: ${job.model ?? '-'}${job.agent ? ` · Agente: ${job.agent}` : ''}${job.variant ? ` · Variante: ${job.variant}` : ''}`);
+  if (job.sessionID) lines.push(`- Sessão: ${job.sessionID}${job.childSessionIDs?.length ? ` (filhas: ${job.childSessionIDs.join(', ')})` : ''}`);
+  if (job.summary) lines.push(`- Resumo: ${job.summary}`);
+  const time = active ? formatDuration(job.startedAt ?? job.createdAt, null, now) : formatDuration(job.startedAt ?? job.createdAt, job.completedAt ?? job.updatedAt, now);
+  if (time) lines.push(`- ${active ? 'Decorrido' : 'Duração'}: ${time}`);
+  if (job.status === 'failed') lines.push(`- Erro: ${job.errorType ?? 'error'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
+  if (job.logFile) lines.push(`- Log: ${job.logFile}`);
+  if (job.status === 'waiting_permission' && job.pendingRequest?.length) lines.push('', ...pendingLines(job));
+  if (progress.length) lines.push('', 'Progresso:', ...progress.map((line) => `  ${line}`));
+  const hint = resumeHint(job);
+  lines.push('', 'Ações:', ...jobActions(job).map((a) => `- ${a}`), ...(hint ? [`- ${hint}`] : []));
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
+}
+
+export function renderStatusList(jobs, { maxJobs = 8, progressById = {}, now = Date.now() } = {}) {
+  const active = jobs.filter((j) => ACTIVE.has(j.status));
+  const recent = jobs.filter((j) => !ACTIVE.has(j.status)).slice(0, Math.max(0, maxJobs));
+  const lines = ['# opc status', ''];
+  if (active.length === 0 && recent.length === 0) return '# opc status\n\nNenhum job registrado ainda.\n';
+  if (active.length) {
+    lines.push('Jobs ativos:', '');
+    lines.push(renderTable(
+      ['Tarefa', 'Tipo', 'Status', 'Fase', 'Decorrido', 'Sessão', 'Resumo', 'Ações'],
+      active.map((j) => [j.id, j.kind, j.status, j.phase ?? '', formatDuration(j.startedAt ?? j.createdAt, null, now), j.sessionID ?? '', j.summary ?? '', jobActions(j).slice(1).map((a) => `\`${a}\``).join(' ')]),
+    ));
+    const withProgress = active.filter((j) => (progressById[j.id] ?? []).length);
+    if (withProgress.length) {
+      lines.push('', 'Detalhes recentes:');
+      for (const j of withProgress) lines.push(`- ${j.id}`, ...(progressById[j.id] ?? []).slice(-4).map((l) => `    ${l}`));
+    }
+    lines.push('');
+  }
+  if (recent.length) {
+    lines.push('Jobs recentes:', '');
+    lines.push(renderTable(
+      ['Tarefa', 'Tipo', 'Status', 'Duração', 'Resumo', 'Ações'],
+      recent.map((j) => [j.id, j.kind, j.status, formatDuration(j.startedAt ?? j.createdAt, j.completedAt ?? j.updatedAt, now), j.summary ?? '', `\`/opc:result ${j.id}\``]),
+    ));
+  }
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
+}
+
+export function renderTurnResult(job) {
+  const r = job.result ?? {};
+  const lines = [];
+  if (job.status === 'completed') {
+    if (r.finalText) lines.push(r.finalText);
+    if (r.structured !== null && r.structured !== undefined) {
+      if (r.finalText) lines.push('', 'Saída estruturada:');
+      lines.push(...codeBlock(JSON.stringify(redact(r.structured), null, 2), 'json'));
+    }
+    if (!r.finalText && (r.structured === null || r.structured === undefined)) lines.push('(o modelo não retornou texto final)');
+  } else if (job.status === 'cancelled') {
+    lines.push(`# opc tarefa ${job.id} cancelada`);
+    if (r.finalText) lines.push('', 'Saída parcial:', '', r.finalText);
+  } else {
+    lines.push(`# opc tarefa ${job.id} falhou`, '', `- Erro: ${job.errorType ?? 'error'} (${job.errorClass ?? 'fatal'}): ${job.errorMessage ?? ''}`);
+    if (job.errorCode === 'server_lost' && job.sessionID) {
+      lines.push(`- O servidor OpenCode foi perdido durante o turno; a sessão ${job.sessionID} foi preservada. Continue com: /opc:${RESUMABLE_KINDS.has(job.kind) ? job.kind : 'task'} --resume ${job.id}`);
+    }
+    if (r.finalText) {
+      lines.push('', job.errorType === 'StructuredOutputError' ? 'Saída bruta (falha na saída estruturada):' : 'Saída parcial:', '', r.finalText);
+    }
+  }
+  lines.push('', '---', `Tarefa: ${job.id} · Sessão: ${job.sessionID ?? '-'} · Modelo: ${job.model ?? '-'}`);
+  if (r.touchedFiles?.length) lines.push(`Arquivos alterados: ${r.touchedFiles.join(', ')}`);
+  const hint = resumeHint(job);
+  if (hint) lines.push(`Continuar: ${hint}`);
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
+}
+
+export function renderCancel(job, report) {
+  const sessionResult = report.aborted ? (report.idle ? 'cancelada; sessão ociosa' : 'cancelada; o estado ocioso não foi confirmado em 10 s') : 'não enviada (sem sessão ou servidor)';
+  return [
+    '# opc cancelamento',
+    '',
+    `Cancelada ${job.id} (${job.kind}).`,
+    `- Interrupção da sessão: ${sessionResult}`,
+    `- Processo: ${report.worker}`,
+    '- Consulte a lista atualizada em `/opc:status`.',
+    '',
+  ].join('\n');
+}
+
+export function renderPermissionList(requests, jobs = []) {
+  if (requests.length === 0) return '# opc permissions\n\nNenhuma solicitação pendente.\n';
+  const jobFor = (sessionID) => jobs.find((j) => j.sessionID === sessionID || (j.childSessionIDs ?? []).includes(sessionID));
+  const rows = requests.map((req) => {
+    const job = jobFor(req.sessionID);
+    const what = req.type === 'question'
+      ? (req.questions ?? []).map((q) => q.header ?? q.question).join(' | ')
+      : `${req.permission}: ${(req.patterns ?? []).join(' ')}`;
+    return [req.id, req.type, what, req.sessionID, job?.id ?? '-'];
+  });
+  return redactText(`# opc permissions\n\n${renderTable(['Id', 'Tipo', 'Solicitação', 'Sessão', 'Tarefa'], rows)}\n`);
+}
 // ---- end F1 ----
