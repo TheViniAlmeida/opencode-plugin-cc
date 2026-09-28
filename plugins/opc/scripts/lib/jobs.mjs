@@ -650,3 +650,11 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   report.status = final.status;
   return { job: final, report };
 }
+
+export function isGroupMember(job) {
+  return Boolean(job && job.groupId);
+}
+
+export function topLevelJobs(jobs) {
+  return jobs.filter((job) => !isGroupMember(job));
+}
