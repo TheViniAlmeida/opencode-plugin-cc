@@ -44,6 +44,14 @@ test('session new refuses a denied agent (exit 4) and an unknown one (exit 2) be
   assert.equal(posts(env, '/session').length, 0);
 });
 
+test('session new validates the configured default model before POST', async (t) => {
+  const { cwd, env } = await setup(t);
+  writeGlobalConfig(env, { ...F3_TEST_CONFIG, defaultModel: 'omniroute-work/cx/gpt-5.5' });
+  const res = await runCli(['session', 'new', '--json'], { env, cwd });
+  assert.equal(res.code, 4, res.stderr);
+  assert.equal(posts(env, '/session').length, 0);
+});
+
 test('session show: session, status and messages with ids', async (t) => {
   const { cwd, env } = await setup(t);
   const res = await runCli(['session', 'show', SEED.session, '--json'], { env, cwd });
@@ -56,6 +64,39 @@ test('session show: session, status and messages with ids', async (t) => {
   assert.match(text.stdout, /# Sessão ses_seed/);
   assert.match(text.stdout, /msg_seed_003/);
   assert.equal((await runCli(['session', 'show', 'ses_missing'], { env, cwd })).code, 2);
+});
+
+test('session show reports unavailable messages after the OpenCode list bug', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORMAT_LIST_BUG: '1' } });
+  const json = await runCli(['session', 'show', SEED.session, '--json'], { env, cwd });
+  assert.equal(json.code, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout).messages, []);
+  assert.equal(JSON.parse(json.stdout).messagesUnavailable, true);
+  assert.equal(JSON.parse(json.stdout).reason, 'OPENCODE_LIST_BUG');
+  const text = await runCli(['session', 'show', SEED.session], { env, cwd });
+  assert.match(text.stdout, /As mensagens desta sessão não podem ser listadas por um defeito do OpenCode 1\.18\.32 com saída estruturada; o diff e os filhos continuam disponíveis\./);
+});
+
+test('session show and diff mask runtime pattern tokens in text and JSON', async (t) => {
+  const token = `ghp_${'Ab12'.repeat(10)}`;
+  const { cwd, env } = await setup(t, { extra: { FAKE_SESSION_CONTENT: token } });
+  for (const args of [
+    ['session', 'show', SEED.session, '--json'], ['session', 'show', SEED.session],
+    ['session', 'diff', SEED.session, '--json'], ['session', 'diff', SEED.session],
+  ]) {
+    const res = await runCli(args, { env, cwd });
+    assert.equal(res.code, 0, res.stderr);
+    assert.ok(!res.stdout.includes(token), args.join(' '));
+    assert.match(res.stdout, /\*\*\*/);
+  }
+});
+
+test('session diff rejects an explicitly empty message id before connecting', async (t) => {
+  const { cwd, env } = await setup(t);
+  const res = await runCli(['session', 'diff', SEED.session, '--message', ''], { env, cwd });
+  assert.equal(res.code, 2);
+  assert.match(res.stdout + res.stderr, /id inválido/);
+  assert.equal(fakeRequests(env).length, 0);
 });
 
 test('session fork: body with and without messageID; forked history stops before the message', async (t) => {
