@@ -64,14 +64,18 @@ export function sessionWriteMethods(client) {
 const ID_BODY = /^[A-Za-z0-9_-]{1,160}$/;
 
 export function assertId(prefix, value, label = prefix) {
-  if (typeof value !== 'string' || !value.startsWith(prefix) || !ID_BODY.test(value)) {
+  // OpenCode ids are `<prefix>_<body>` (ses_…, msg_…, prt_…): the separator and a non-empty body are required.
+  if (typeof value !== 'string' || !value.startsWith(`${prefix}_`) || value.length <= prefix.length + 1 || !ID_BODY.test(value)) {
     const shown = String(value ?? '').slice(0, 12);
-    throw new UsageError('INVALID_ID', `id inválido para ${label}: ${shown}${String(value ?? '').length > 12 ? '…' : ''} (esperado prefixo "${prefix}")`);
+    throw new UsageError('INVALID_ID', `id inválido para ${label}: ${shown}${String(value ?? '').length > 12 ? '…' : ''} (esperado prefixo "${prefix}_")`);
   }
   return value;
 }
 
 const seg = (prefix, id) => encodeURIComponent(assertId(prefix, id));
+
+// A supplied optional id (even '') is validated, never silently dropped: dropping it widens the request.
+const given = (value) => value !== undefined && value !== null;
 
 function compact(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null));
@@ -80,13 +84,13 @@ function compact(obj) {
 function f3Methods(client) {
   return {
     diff: (id, { messageID } = {}) =>
-      client.get(`/session/${seg('ses', id)}/diff`, messageID ? { ...GET, query: { messageID: assertId('msg', messageID) } } : GET),
+      client.get(`/session/${seg('ses', id)}/diff`, given(messageID) ? { ...GET, query: { messageID: assertId('msg', messageID) } } : GET),
     fork: (id, { messageID } = {}) =>
-      client.post(`/session/${seg('ses', id)}/fork`, messageID ? { messageID: assertId('msg', messageID) } : {}),
+      client.post(`/session/${seg('ses', id)}/fork`, given(messageID) ? { messageID: assertId('msg', messageID) } : {}),
     revert: (id, { messageID, partID } = {}) => {
-      if (!messageID) throw new UsageError('MISSING_MESSAGE_ID', 'revert exige messageID');
+      if (!given(messageID)) throw new UsageError('MISSING_MESSAGE_ID', 'revert exige messageID');
       const body = { messageID: assertId('msg', messageID) };
-      if (partID) body.partID = assertId('prt', partID);
+      if (given(partID)) body.partID = assertId('prt', partID);
       return client.post(`/session/${seg('ses', id)}/revert`, body);
     },
     unrevert: (id) => client.post(`/session/${seg('ses', id)}/unrevert`, undefined),
@@ -100,7 +104,7 @@ function f3Methods(client) {
         throw new UsageError('MODEL_NOT_STRING', 'runCommand: model deve ser a string "provider/model"');
       }
       if (typeof args !== 'string') throw new UsageError('ARGUMENTS_NOT_STRING', 'runCommand: arguments deve ser string');
-      const body = { ...compact({ command, agent, model, variant, messageID }), arguments: args };
+      const body = { ...compact({ command, agent, model, variant, messageID: given(messageID) ? assertId('msg', messageID) : undefined }), arguments: args };
       const ordered = { command: body.command, arguments: body.arguments, ...body };
       return client.post(`/session/${seg('ses', id)}/command`, ordered, timeoutMs ? { timeoutMs } : {});
     },

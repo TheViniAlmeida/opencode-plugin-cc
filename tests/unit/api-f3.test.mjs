@@ -88,3 +88,17 @@ test('diff forwards messageID as query', async () => {
     ['/session/ses_a/diff', { messageID: 'msg_b' }],
   ]);
 });
+
+test('F3 ids require the prefix separator and a body; supplied empty optional ids are rejected, never dropped', async () => {
+  const { assertId, createApi } = await import('../../plugins/opc/scripts/lib/api.mjs');
+  for (const bad of ['ses', 'sesx', 'ses_', 'msg_x']) assert.throws(() => assertId('ses', bad), (err) => err.code === 'INVALID_ID', bad);
+  assert.equal(assertId('ses', 'ses_abc123'), 'ses_abc123');
+  const calls = [];
+  const client = { get: async (...a) => { calls.push(['get', ...a]); return []; }, post: async (...a) => { calls.push(['post', ...a]); return {}; } };
+  const api = createApi(client);
+  await assert.rejects(async () => api.fork('ses_abc', { messageID: '' }), (err) => err.code === 'INVALID_ID');
+  await assert.rejects(async () => api.revert('ses_abc', { messageID: 'msg_1', partID: '' }), (err) => err.code === 'INVALID_ID');
+  await assert.rejects(async () => api.diff('ses_abc', { messageID: '' }), (err) => err.code === 'INVALID_ID');
+  await assert.rejects(async () => api.runCommand('ses_abc', { command: 'x', messageID: '' }), (err) => err.code === 'INVALID_ID');
+  assert.equal(calls.length, 0, 'nothing is sent with an invalid supplied id');
+});
