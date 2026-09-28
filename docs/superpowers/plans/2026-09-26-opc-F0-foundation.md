@@ -30,7 +30,7 @@ Copiadas do mestre (valem para todas as tarefas):
 - `always` nunca é enviado em `permission reply` (na F0 só o probe ao vivo o usa, para documentar o escopo).
 - Exit codes conforme a spec, §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Namespace de comandos `/opc:`; executável `opc`; título das sessões com o prefixo `OPC: `.
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos `omniroute-mvalmeida/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` (F0: `deepseek-v4.1-flash`).
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}` (F0: `deepseek-v4.1-flash`).
 - Licença Apache-2.0; `NOTICE` credita o `openai/codex-plugin-cc`; nada copiado do `swarm-code-plugin`.
 
 Específicas da F0:
@@ -2345,7 +2345,7 @@ test('getPath/setPath use dotted paths and setPath is immutable', () => {
 });
 
 test('matchesGlob: * matches any sequence including /', () => {
-  assert.equal(matchesGlob('omniroute-mvalmeida/opencode-go/kimi-k3', 'omniroute-mvalmeida/*'), true);
+  assert.equal(matchesGlob('omniroute-personal/opencode-go/kimi-k3', 'omniroute-personal/*'), true);
   assert.equal(matchesGlob('anthropic/claude', 'anthropic/*'), true);
   assert.equal(matchesGlob('work-review', 'work-*'), true);
   assert.equal(matchesGlob('prov.a/x', 'prov.a/x'), true);
@@ -6609,7 +6609,7 @@ if (process.env.OPC_LIVE !== '1') {
 }
 
 const WANT_JSON = process.argv.includes('--json');
-const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash';
+const MODEL = process.env.OPC_LIVE_MODEL ?? 'omniroute-personal/opencode-go/deepseek-v4.1-flash';
 const [providerID, ...modelRest] = MODEL.split('/');
 const modelID = modelRest.join('/');
 const TURN_TIMEOUT_MS = 240000;
@@ -7427,7 +7427,7 @@ Crie a partir deste modelo, preenchendo cada campo e a coluna Status com `PASSOU
 - **Branch / PR:** `feat/opc-f0` / #N
 - **OpenCode:** versão reportada pelo `/global/health` no teste ao vivo
 - **Node:** versões usadas (local e CI)
-- **Modelo ao vivo:** `omniroute-mvalmeida/opencode-go/deepseek-v4.1-flash` (ou o valor de `OPC_LIVE_MODEL`)
+- **Modelo ao vivo:** `omniroute-personal/opencode-go/deepseek-v4.1-flash` (ou o valor de `OPC_LIVE_MODEL`)
 
 Legenda: `PASSOU` (executado e verde), `N/A` (não se aplica, com motivo), `NÃO VALIDADO`
 (não foi possível verificar, com motivo), `FALHOU` (com a saída).

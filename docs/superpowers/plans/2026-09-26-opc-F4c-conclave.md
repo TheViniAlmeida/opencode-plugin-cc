@@ -1437,10 +1437,10 @@ const catalog = makeCatalog([
   { full: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
 ], ['omniroute-personal', 'openai', 'anthropic']);
 const known = buildKnownNames(catalog);
-const FORBIDDEN = /deepseek|qwen|kimi|omniroute|mvalmeida|opencode-go|alibaba|moonshot|openai|chatgpt|gpt|anthropic|claude/i;
+const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot|openai|chatgpt|gpt|anthropic|claude/i;
 
 test('buildKnownNames collects provider ids, model ids, names, families and vendors', () => {
-  for (const name of ['omniroute-personal', 'omniroute', 'mvalmeida', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'opencode-go', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) {
+  for (const name of ['omniroute-personal', 'omniroute', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'opencode-go', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) {
     assert.ok(known.exact.includes(name), `exact should include ${name}`);
   }
   assert.deepEqual([...known.families].sort(), ['claude', 'deepseek', 'gpt', 'kimi', 'qwen', 'sonnet'].sort());
@@ -2104,7 +2104,7 @@ import { makeCatalog, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed }
 
 const assets = loadConclaveAssets();
 const knownNames = buildKnownNames(makeCatalog());
-const FORBIDDEN = /deepseek|qwen|kimi|omniroute|mvalmeida|opencode-go|alibaba|moonshot/i;
+const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot/i;
 
 function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4 } = {}) {
   const calls = [];
@@ -3592,7 +3592,7 @@ export const DS = `${PREFIX}deepseek-v4.1-flash`;
 export const QW = `${PREFIX}qwen3.8-max`;
 export const KM = `${PREFIX}kimi-k3`;
 export const TRIO = `${DS},${QW},${KM}`;
-export const FORBIDDEN_NAMES = ['deepseek', 'qwen', 'kimi', 'omniroute', 'mvalmeida', 'opencode-go', 'alibaba', 'moonshot'];
+export const FORBIDDEN_NAMES = ['deepseek', 'qwen', 'kimi', 'omniroute', 'opencode-go', 'alibaba', 'moonshot'];
 
 // Servers are stopped by the F0 per-test cleanup (testEnv/makeWorkspace) before the temp dirs are removed.
 export function setupConclave(t, { scenario, config = null, git = true } = {}) {
@@ -5113,7 +5113,7 @@ export function schemas() {
 }
 
 export function familyWords(models) {
-  const words = new Set([PROVIDER, 'omniroute', 'mvalmeida', 'opencode-go']);
+  const words = new Set([PROVIDER, 'omniroute', 'opencode-go']);
   for (const full of models) {
     const last = full.split('/').at(-1).toLowerCase();
     const lead = last.match(/^[a-z]+/)?.[0];
