@@ -72,6 +72,7 @@ test('createJob always generates its id and path APIs reject unsafe ids', async 
   assert.notEqual(job.id, '../outside');
   assert.throws(() => readJob(dir, '../x'), (e) => e.code === 'INVALID_JOB_ID');
   assert.throws(() => jobLogPath(dir, '../x'), (e) => e.code === 'INVALID_JOB_ID');
+  assert.throws(() => readJobProgress(dir, '../x'), (e) => e.code === 'INVALID_JOB_ID');
   await assert.rejects(cancelJob({ stateDir: dir, env: {} }, '../x'), (e) => e.code === 'INVALID_JOB_ID');
 });
 
@@ -246,7 +247,11 @@ test('cancelJob redacts the complete abort error before truncating it and leaves
   assert.equal(result.code, 'CANCEL_FAILED');
   assert.equal(readJob(dir, job.id).status, 'running');
   const log = readFileSync(jobLogPath(dir, job.id), 'utf8');
-  assert.ok(!log.includes(secret.slice(0, 12)), 'no prefix of the registered secret is logged');
+  for (let length = 6; length <= secret.length; length += 1) {
+    for (let start = 0; start <= secret.length - length; start += 1) {
+      assert.ok(!log.includes(secret.slice(start, start + length)), `no ${length}-character substring of the registered secret is logged`);
+    }
+  }
 });
 
 test('cancelJob returns failure and preserves status when abort returns false', async (t) => {

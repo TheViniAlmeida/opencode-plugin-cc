@@ -259,11 +259,13 @@ export function appendJobLog(stateDir, id, line) {
 }
 
 export function readJobProgress(stateDir, id, maxLines = 4) {
+  assertJobId(id);
   let text;
   try {
     text = readFileTail(jobLogPath(stateDir, id), 64 * 1024);
-  } catch {
-    return [];
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
   }
   return text
     .split(/\r?\n/)
