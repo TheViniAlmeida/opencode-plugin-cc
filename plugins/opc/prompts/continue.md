@@ -1,0 +1,1 @@
+Continue the task of this session. Re-read the last request and your last answer, check the current state of the files involved, and carry on from where you stopped. If the task is already complete, say so in one sentence and list what was done with `path:line` references. If you are blocked, say exactly what you need to proceed.
