@@ -1,0 +1,81 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { PLUGIN_ROOT, jobIdFrom, jobIn, opc, requestsTo, setupF2a, waitFor } from '../helpers.mjs';
+import { READ_ONLY_RULES, WRITE_RULES } from '../fixtures/expected-rules-f2a.mjs';
+
+test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const first = await opc(ctx, ['task', 'first turn']);
+  assert.equal(first.code, 0, first.stderr);
+  const a = jobIn(ctx.env, ctx.cwd, jobIdFrom(first.stderr));
+  const second = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: `--resume ${a.id} second turn` });
+  assert.equal(second.code, 0, second.stderr);
+  const b = jobIn(ctx.env, ctx.cwd, jobIdFrom(second.stderr));
+  assert.equal(b.sessionID, a.sessionID);
+  assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 1);
+  assert.equal(requestsTo(ctx.env, 'POST', `/session/${a.sessionID}/prompt_async`).length, 2);
+  const third = await opc(ctx, ['task', '--resume', a.id]);
+  assert.equal(third.code, 0, third.stderr);
+  const prompts = requestsTo(ctx.env, 'POST', `/session/${a.sessionID}/prompt_async`);
+  assert.equal(prompts.at(-1).body.parts[0].text, readFileSync(join(PLUGIN_ROOT, 'prompts', 'continue.md'), 'utf8'));
+  assert.equal(jobIn(ctx.env, ctx.cwd, jobIdFrom(third.stderr)).summary, 'continue');
+});
+
+test('--resume sem id retoma o último job concluído do mesmo tipo nesta sessão Claude', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const asked = await opc(ctx, ['ask', 'question one']);
+  const askJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(asked.stderr));
+  const tasked = await opc(ctx, ['task', 'task one']);
+  const taskJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(tasked.stderr));
+  const resumedAsk = await opc(ctx, ['ask', '--raw-args-stdin'], { stdin: '--resume and a follow-up' });
+  assert.equal(resumedAsk.code, 0, resumedAsk.stderr);
+  assert.equal(jobIn(ctx.env, ctx.cwd, jobIdFrom(resumedAsk.stderr)).sessionID, askJob.sessionID);
+  assert.notEqual(askJob.sessionID, taskJob.sessionID);
+  const noSession = await opc(ctx, ['task', '--resume', 'x'], { env: { OPC_COMPANION_SESSION_ID: '' } });
+  assert.equal(noSession.code, 2);
+  assert.match(noSession.stdout + noSession.stderr, /RESUME_NEEDS_ID/);
+});
+
+test('task-resume-candidate --json informa o último task concluído desta sessão Claude', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const empty = await opc(ctx, ['task-resume-candidate', '--json']);
+  assert.deepEqual(JSON.parse(empty.stdout), { available: false, sessionId: 'claude-f2a', candidate: null });
+  const r = await opc(ctx, ['task', 'something']);
+  const id = jobIdFrom(r.stderr);
+  const payload = JSON.parse((await opc(ctx, ['task-resume-candidate', '--json'])).stdout);
+  assert.equal(payload.available, true);
+  assert.equal(payload.candidate.id, id);
+  assert.match(payload.candidate.sessionID, /^ses/);
+});
+
+test('um segundo job na mesma sessão OpenCode falha imediatamente (exit 2)', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'slow' });
+  const bg = await opc(ctx, ['task', '--background', '--json', 'long']);
+  const id = JSON.parse(bg.stdout).jobId;
+  const running = await waitFor(() => jobIn(ctx.env, ctx.cwd, id)?.sessionID, { timeoutMs: 20000, intervalMs: 100, message: 'session id' });
+  const again = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: `--resume ${running} more` });
+  assert.equal(again.code, 2);
+  assert.match(again.stdout + again.stderr, /SESSION_BUSY/);
+});
+
+test('troca de perfil ao retomar: read-only → escrita recusada; write → read-only aplicado', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const ro = await opc(ctx, ['task', 'read only first']);
+  const roJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(ro.stderr));
+  const refused = await opc(ctx, ['task', '--write', '--resume', roJob.id, 'now write']);
+  assert.equal(refused.code, 2);
+  assert.match(refused.stdout + refused.stderr, /PROFILE_SWITCH_UNSUPPORTED/);
+  assert.equal(requestsTo(ctx.env, 'PATCH', /^\/session\//).length, 0);
+  const wr = await opc(ctx, ['task', '--write', 'write first']);
+  const wrJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(wr.stderr));
+  const back = await opc(ctx, ['task', '--resume', wrJob.id, 'now read only']);
+  assert.equal(back.code, 0, back.stderr);
+  const [patch] = requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`);
+  assert.deepEqual(patch.body, { permission: READ_ONLY_RULES });
+  const same = await opc(ctx, ['task', '--resume', wrJob.id, 'still read only']);
+  assert.equal(same.code, 0, same.stderr);
+  assert.equal(requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`).length, 1);
+  assert.equal(WRITE_RULES.at(-1).action, 'ask');
+});
