@@ -78,7 +78,7 @@ export function consumeJobInput(stateDir, id) {
       if (typeof constants.O_NOFOLLOW !== 'number') {
         throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.');
       }
-      fd = openSync(consuming, constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(consuming, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const info = fstatSync(fd);
       if (!info.isFile() || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
         throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.');
@@ -194,7 +194,7 @@ function pruneTerminal(stateDir, state, jobs) {
   state.jobs = (state.jobs ?? []).filter((entry) => !ids.has(entry.id));
 }
 
-export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn = updateState } = {}) {
+export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn = updateState, writeInputFn = writeFileAtomic } = {}) {
   ensurePrivateDir(jobsDir(stateDir));
   let created = null;
   let inputWritten = false;
@@ -224,7 +224,16 @@ export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn
       created = { ...jobDefaults(), ...fields, id, status: 'queued', phase: 'queued', createdAt: now, updatedAt: now, logFile: jobLogPath(stateDir, id) };
       writeJob(stateDir, created);
       if (created.request) {
-        writeFileAtomic(jobInputPath(stateDir, id), `${JSON.stringify(created.request)}\n`);
+        try {
+          writeInputFn(jobInputPath(stateDir, id), `${JSON.stringify(created.request)}\n`);
+        } catch (cause) {
+          const message = 'Não foi possível gravar a entrada privada da tarefa.';
+          created = { ...created, status: 'failed', phase: 'failed', completedAt: nowIso(), errorCode: 'JOB_INPUT_WRITE_FAILED', errorClass: 'fatal', errorType: 'JobInputWriteFailed', errorMessage: message };
+          writeJob(stateDir, created);
+          upsertIndex(state, created);
+          try { unlinkSync(jobInputPath(stateDir, id)); } catch { /* best effort for this exact input path */ }
+          throw new OpcError('JOB_INPUT_WRITE_FAILED', message, { exitCode: ExitCode.JOB_FAILED, cause });
+        }
         inputWritten = true;
       }
       upsertIndex(state, created);

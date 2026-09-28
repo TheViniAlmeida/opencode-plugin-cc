@@ -41,7 +41,7 @@ test('findStaleStates: missing data root returns an empty result with skipped st
   assert.deepEqual(stale.skipped, []);
 });
 
-test('findStaleStates: gc removes leftover consuming inputs for terminal jobs', (t) => {
+test('findStaleStates: discovery leaves leftover inputs of terminal jobs untouched', (t) => {
   const root = rootFor(t);
   const dir = makeState(root, 'recent-0123456789abcdef', 0);
   const jobId = 'task-abc-123456';
@@ -49,7 +49,46 @@ test('findStaleStates: gc removes leftover consuming inputs for terminal jobs', 
   const consuming = join(dir, 'jobs', `${jobId}.input.1234-deadbeef.consuming`);
   writeFileSync(consuming, '{"prompt":"private"}');
   findStaleStates(root, { olderThanMs: 30 * 86400000 });
-  assert.equal(existsSync(consuming), false);
+  assert.equal(existsSync(consuming), true);
+});
+
+test('gc without confirmation leaves terminal job inputs in place', async (t) => {
+  const root = rootFor(t);
+  const dir = makeState(root, 'old-0123456789abcdef', 40);
+  const jobId = 'task-abc-123456';
+  writeFileSync(join(dir, 'jobs', `${jobId}.json`), JSON.stringify({ id: jobId, status: 'completed' }));
+  const input = join(dir, 'jobs', `${jobId}.input.json`);
+  writeFileSync(input, '{"prompt":"private"}');
+  const old = new Date(Date.now() - 40 * 86400000);
+  utimesSync(input, old, old);
+  utimesSync(join(dir, 'jobs', `${jobId}.json`), old, old);
+  utimesSync(join(dir, 'jobs'), old, old);
+  utimesSync(dir, old, old);
+  let output = '';
+  const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: false }, stderr: {}, out: (value) => { output += value; }, err() {} };
+  await run(ctx, []);
+  assert.equal(existsSync(input), true);
+  assert.match(output, /Nada foi removido/);
+});
+
+test('gc reports terminal job inputs removed after confirmation', async (t) => {
+  const root = rootFor(t);
+  const dir = makeState(root, 'old-0123456789abcdef', 40);
+  const jobId = 'task-abc-123456';
+  writeFileSync(join(dir, 'jobs', `${jobId}.json`), JSON.stringify({ id: jobId, status: 'completed' }));
+  const input = join(dir, 'jobs', `${jobId}.input.json`);
+  writeFileSync(input, '{"prompt":"private"}');
+  const old = new Date(Date.now() - 40 * 86400000);
+  utimesSync(input, old, old);
+  utimesSync(join(dir, 'jobs', `${jobId}.json`), old, old);
+  utimesSync(join(dir, 'jobs'), old, old);
+  utimesSync(dir, old, old);
+  let output = '';
+  const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: true }, stderr: {}, out: (value) => { output += value; }, err() {} };
+  await run(ctx, ['--confirmed-by-user']);
+  assert.equal(existsSync(input), false);
+  assert.match(output, /Entradas privadas removidas/);
+  assert.match(output, new RegExp(jobId));
 });
 
 test('gc removes old candidates after taking locks, but preserves a non-lock file touched after listing', async (t) => {

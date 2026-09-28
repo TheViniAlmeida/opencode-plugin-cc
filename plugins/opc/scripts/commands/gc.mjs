@@ -31,7 +31,24 @@ function newestMtime(dir) {
 
 function staleResults(candidates = []) {
   Object.defineProperty(candidates, 'skipped', { value: [], enumerable: false });
+  Object.defineProperty(candidates, 'inputCleanup', { value: [], enumerable: false });
   return candidates;
+}
+
+function terminalInputFiles(dir, jobs) {
+  let names;
+  try { names = readdirSync(join(dir, 'jobs')); } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const files = [];
+  for (const job of jobs) {
+    if (!isTerminal(job)) continue;
+    const prefix = `${job.id}.input.`;
+    const matches = names.filter((name) => name === `${job.id}.input.json` || (name.startsWith(prefix) && name.endsWith('.consuming')));
+    if (matches.length) files.push({ id: job.id, files: matches });
+  }
+  return files;
 }
 
 function serverStatus(dir, deps) {
@@ -87,7 +104,9 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
       const identity = lstatSync(dir);
       if (!identity.isDirectory() || identity.isSymbolicLink() || (uid !== null && identity.uid !== uid)) continue;
       const jobs = listJobs(dir, { all: true });
-      for (const job of jobs) if (isTerminal(job)) cleanupJobInputFiles(dir, job.id);
+      for (const inputs of terminalInputFiles(dir, jobs)) {
+        stale.inputCleanup.push({ dir, id: inputs.id, files: inputs.files, dev: identity.dev, ino: identity.ino, uid: identity.uid });
+      }
       const lastUsed = newestMtime(dir);
       if (now - lastUsed <= olderThanMs) continue;
       if (jobs.some(isActive)) continue;
@@ -113,26 +132,29 @@ export async function run(ctx, argv, overrides = {}) {
   if (!Number.isInteger(flags.days) || flags.days < 1) throw new UsageError('USAGE', '--days deve ser um inteiro maior ou igual a 1.');
   const days = flags.days;
   const stale = findStaleStates(ctx.dataDir, { olderThanMs: days * DAY_MS, exclude: ctx.stateDir }, deps);
-  if (stale.length === 0) {
+  if (stale.length === 0 && stale.inputCleanup.length === 0) {
     if (flags.json) ctx.json({ removed: [], candidates: [], skipped: stale.skipped });
     else if (stale.skipped.length) ctx.out(`# opc gc\n\nNenhum candidato removido. Estados preservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n`);
     else ctx.out(`opc gc: nada a remover; nenhum estado de workspace sem uso há mais de ${days} dias.\n`);
     return ExitCode.OK;
   }
-  const table = renderTable(['Estado', 'Último uso'], stale.map((s) => [s.name, s.lastUsed]));
+  const table = stale.length ? renderTable(['Estado', 'Último uso'], stale.map((s) => [s.name, s.lastUsed])) : '';
+  const inputTable = stale.inputCleanup.length
+    ? renderTable(['Tarefa', 'Estado'], stale.inputCleanup.map((entry) => [entry.id, entry.dir.split(/[\\/]/).at(-1)])) : '';
   let confirmed = Boolean(flags['confirmed-by-user']);
   if (!confirmed) {
     if (!ctx.stdin?.isTTY) {
-      if (flags.json) ctx.json({ removed: [], candidates: stale.map(publicCandidate), skipped: stale.skipped, needsConfirmation: true });
-      else ctx.out(`# opc gc\n\nEstes estados seriam removidos:\n\n${table}\n${stale.skipped.length ? `\nPreservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n` : ''}\nNada foi removido. Execute em um terminal ou use --confirmed-by-user após obter confirmação do usuário.\n`);
+      if (flags.json) ctx.json({ removed: [], removedInputs: [], candidates: stale.map(publicCandidate), inputCleanup: stale.inputCleanup.map(({ id, files }) => ({ id, files })), skipped: stale.skipped, needsConfirmation: true });
+      else ctx.out(`# opc gc\n\n${stale.length ? `Estes estados seriam removidos:\n\n${table}\n` : ''}${inputTable ? `Estas entradas privadas de tarefas terminais seriam removidas:\n\n${inputTable}\n` : ''}${stale.skipped.length ? `\nPreservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n` : ''}\nNada foi removido. Execute em um terminal ou use --confirmed-by-user após obter confirmação do usuário.\n`);
       return ExitCode.USAGE;
     }
-    ctx.err(`# opc gc\n\n${table}\n\n`);
-    if (deps.confirm) confirmed = await deps.confirm(`Remover estes ${stale.length} diretórios de estado?`);
+    ctx.err(`# opc gc\n\n${stale.length ? `${table}\n\n` : ''}${inputTable ? `${inputTable}\n\n` : ''}`);
+    const confirmation = `Remover ${stale.length} diretórios de estado e ${stale.inputCleanup.length} entradas privadas de tarefas terminais?`;
+    if (deps.confirm) confirmed = await deps.confirm(confirmation);
     else {
       const prompter = createPrompter({ input: ctx.stdin, output: ctx.stderr });
       try {
-        confirmed = await prompter.confirm(`Remover estes ${stale.length} diretórios de estado?`);
+        confirmed = await prompter.confirm(confirmation);
       } finally {
         prompter.close();
       }
@@ -144,8 +166,38 @@ export async function run(ctx, argv, overrides = {}) {
   }
   const removed = [];
   const removedStates = [];
+  const removedInputs = [];
   const skipped = [...stale.skipped];
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const input of stale.inputCleanup) {
+    const held = [];
+    try {
+      for (const lockName of ['state.lock', 'server.lock']) {
+        const release = deps.tryAcquireLock(join(input.dir, lockName), { purpose: 'gc' });
+        if (!release) break;
+        held.push(release);
+      }
+      if (held.length !== 2) {
+        skipped.push({ dir: input.dir, name: input.dir.split(/[\\/]/).at(-1), reason: 'Estado em uso; entradas preservadas porque o lock está ocupado.' });
+        continue;
+      }
+      const identity = lstatSync(input.dir);
+      if (!identity.isDirectory() || identity.isSymbolicLink() || identity.dev !== input.dev || identity.ino !== input.ino || (uid !== null && identity.uid !== uid)) {
+        skipped.push({ dir: input.dir, name: input.dir.split(/[\\/]/).at(-1), reason: 'Identidade do diretório mudou; entradas preservadas.' });
+        continue;
+      }
+      const job = listJobs(input.dir, { all: true }).find((entry) => entry.id === input.id);
+      if (!job || !isTerminal(job)) continue;
+      const existing = terminalInputFiles(input.dir, [job]).find((entry) => entry.id === input.id)?.files ?? [];
+      if (!existing.length) continue;
+      cleanupJobInputFiles(input.dir, input.id);
+      removedInputs.push(input.id);
+    } catch (err) {
+      skipped.push({ dir: input.dir, name: input.dir.split(/[\\/]/).at(-1), reason: `Não foi possível remover a entrada privada; preservada (${err.code ?? 'erro'}).` });
+    } finally {
+      for (const release of held.reverse()) release();
+    }
+  }
   for (const s of stale) {
     const held = [];
     let lockFailed = false;
@@ -207,12 +259,12 @@ export async function run(ctx, argv, overrides = {}) {
       for (const release of held.reverse()) release();
     }
   }
-  if (flags.json) ctx.json({ removed, candidates: stale.map(publicCandidate), skipped });
+  if (flags.json) ctx.json({ removed, removedInputs: [...new Set(removedInputs)], candidates: stale.map(publicCandidate), skipped });
   else {
     const removedTable = renderTable(['Estado', 'Último uso'], removedStates.map((s) => [s.name, s.lastUsed]));
-    const summary = removed.length
+    const summary = `${removed.length
       ? `Removidos ${removed.length} diretórios de estado:\n\n${removedTable}`
-      : 'Nenhum diretório de estado foi removido.';
+      : 'Nenhum diretório de estado foi removido.'}${removedInputs.length ? `\n\nEntradas privadas removidas (${new Set(removedInputs).size} tarefas): ${[...new Set(removedInputs)].join(', ')}.` : ''}`;
     ctx.out(`# opc gc\n\n${summary}${skipped.length ? `\n\nPreservados:\n${skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n` : '\n'}`);
   }
   return ExitCode.OK;

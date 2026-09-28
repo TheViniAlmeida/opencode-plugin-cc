@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { consumeJobInput, createJob, readJob, updateJob, spawnWorker } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { run as runWorker } from '../../plugins/opc/scripts/commands/task-worker.mjs';
@@ -109,6 +110,43 @@ test('gate 1 round 2: concurrent consumers have exactly one input winner', async
   assert.equal(outcomes.filter((item) => item.status === 'fulfilled').length, 1);
   assert.equal(outcomes.filter((item) => item.status === 'rejected' && item.reason.code === 'JOB_INPUT_MISSING').length, 1);
   assert.deepEqual(outcomes.find((item) => item.status === 'fulfilled').value, request);
+});
+
+test('gate 1 round 3: FIFO input is rejected without blocking and reports JOB_INPUT_INVALID', async (t) => {
+  const dir = trackTempDir(t, makeTempDir());
+  const job = await createJob(dir, { kind: 'task', request: { prompt: 'expected' } });
+  const input = join(dir, 'jobs', `${job.id}.input.json`);
+  try {
+    unlinkSync(input);
+    execFileSync('mkfifo', [input]);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'EPERM' || error.status !== 0) return t.skip('mkfifo is unavailable in this environment');
+    throw error;
+  }
+  // A child process with a short timeout proves the open does not block on a FIFO.
+  const source = "import { consumeJobInput } from './plugins/opc/scripts/lib/jobs.mjs'; try { consumeJobInput(process.argv[1], process.argv[2]); process.stdout.write('consumed'); } catch (error) { process.stdout.write(String(error.code)); }";
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', source, dir, job.id], { cwd: process.cwd(), encoding: 'utf8', timeout: 2500 });
+  assert.equal(output, 'JOB_INPUT_INVALID');
+  assert.equal(existsSync(input), false);
+});
+
+test('gate 1 round 3: failed input write persists a terminal job before rethrowing', async (t) => {
+  const dir = trackTempDir(t, makeTempDir());
+  await assert.rejects(createJob(dir, { kind: 'task', request: { prompt: 'raw' } }, {
+    writeInputFn: () => { throw new Error('injected input write failure'); },
+    updateStateFn: async (stateDir, mutate) => {
+      const state = { version: 1, jobs: [], claudeSessions: [] };
+      await mutate(state);
+      return state;
+    },
+  }), (error) => error.code === 'JOB_INPUT_WRITE_FAILED' && /entrada privada/.test(error.message));
+  const [name] = readdirSync(join(dir, 'jobs')).filter((entry) => entry.endsWith('.json'));
+  assert.ok(name);
+  const record = JSON.parse(readFileSync(join(dir, 'jobs', name), 'utf8'));
+  assert.equal(record.status, 'failed');
+  assert.equal(record.errorCode, 'JOB_INPUT_WRITE_FAILED');
+  assert.equal(record.errorMessage, 'Não foi possível gravar a entrada privada da tarefa.');
+  assert.equal(existsSync(join(dir, 'jobs', `${record.id}.input.json`)), false);
 });
 
 for (const failure of ['patch', 'bridge']) {
