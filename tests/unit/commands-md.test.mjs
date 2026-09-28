@@ -42,6 +42,22 @@ for (const [name, expected] of Object.entries(F1)) {
   });
 }
 
+test('all command heredocs have an explicit reserved-delimiter guard and closed bash fence', () => {
+  const files = fs.readdirSync(COMMANDS).filter((name) => name.endsWith('.md'));
+  for (const name of files) {
+    const text = fs.readFileSync(path.join(COMMANDS, name), 'utf8');
+    const opensHeredoc = /<<'OPC_(?:ARGS|JSON)_5f1d0c7a_EOF'/.test(text);
+    if (!opensHeredoc) continue;
+    assert.match(text, /If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` \(or `OPC_JSON_5f1d0c7a_EOF` where used\), do not run anything; tell the user the arguments contain the reserved delimiter\./, `${name} delimiter guard`);
+    const blocks = [...text.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
+    assert.equal(blocks.length, (text.match(/```bash\n/g) ?? []).length, `${name} every bash block must have its own closing fence`);
+    for (const block of blocks) {
+      if (!/<<'OPC_(?:ARGS|JSON)_5f1d0c7a_EOF'/.test(block)) continue;
+      assert.match(block, /(?:^|\n)OPC_(?:ARGS|JSON)_5f1d0c7a_EOF$/, `${name} heredoc terminator must be its own line before the fence`);
+    }
+  }
+});
+
 test('setup.md: install offer, heredoc payloads, commit', () => {
   const { body, bashBlocks } = parse('setup');
   assert.ok(bashBlocks.some((b) => b.trim() === 'npm install -g opencode-ai'));

@@ -10,7 +10,7 @@ test('task foreground: ok turn prints the final text, exit 0, read-only rules on
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'say hello\n' });
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^fake-opencode: ok\n/);
-  assert.match(r.stderr, /\[opc\] job task-[0-9a-z]+-[0-9a-z]{6} started/);
+  assert.match(r.stderr, /\[opc\] tarefa task-[0-9a-z]+-[0-9a-z]{6} iniciada/);
   const [post] = requestsTo(ctx.env, 'POST', '/session');
   assert.deepEqual(post.body.permission, READ_ONLY_RULES);
   assert.match(post.body.title, /^OPC: task: say hello$/);
@@ -37,7 +37,7 @@ test('task: StructuredOutputError → exit 7 with the raw text', async (t) => {
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'give me json' });
   assert.equal(r.code, 7, r.stderr);
   assert.match(r.stdout, /StructuredOutputError \(recoverable\)/);
-  assert.match(r.stdout, /Raw output \(structured output failed\):\n\nraw text answer/);
+  assert.match(r.stdout, /Saída bruta \(falha na saída estruturada\):\n\nraw text answer/);
 });
 
 test('--model with slashes reaches prompt_async intact; --effort is sent as variant', async (t) => {
@@ -58,11 +58,19 @@ test('invalid --effort is refused before any session (exit 2)', async (t) => {
   assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 0);
 });
 
+test('--variant and --effort conflict even when their values match', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const r = await opc(ctx, ['task', '--variant', 'high', '--effort', 'high', 'check']);
+  assert.equal(r.code, 2);
+  assert.match(r.stdout + r.stderr, /CONFLICT/);
+  assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 0);
+});
+
 test('--resume with --fresh is a usage error (exit 2) without contacting the server', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await opc(ctx, ['task', '--resume', '--fresh', 'go']);
   assert.equal(r.code, 2);
-  assert.match(r.stdout + r.stderr, /mutually exclusive/);
+  assert.match(r.stdout + r.stderr, /mutuamente exclusivos/);
   assert.equal(existsSync(ctx.env.FAKE_OPENCODE_STATE), false);
 });
 

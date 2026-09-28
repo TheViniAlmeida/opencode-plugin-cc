@@ -21,18 +21,27 @@ function trimMetadata(metadata) {
   return JSON.stringify(safe).length > METADATA_LIMIT ? { truncated: true } : safe;
 }
 
-export function createSerialUpdater(stateDir, jobId) {
+export function createSerialUpdater(stateDir, jobId, { writeJob: write = updateJob } = {}) {
   let chain = Promise.resolve();
+  let firstFailure = null;
   return {
     update(patch) {
-      const next = chain.then(() => updateJob(stateDir, jobId, patch));
-      chain = next.catch(() => {});
+      const next = chain.then(() => write(stateDir, jobId, patch));
+      chain = next.catch((err) => { firstFailure ??= err; });
       return next;
     },
-    flush() {
-      return chain;
+    async flush() {
+      await chain;
+      if (firstFailure) throw firstFailure;
     },
   };
+}
+
+export function queueProgressUpdate(jobUpdates, patch, log) {
+  return jobUpdates.update(patch).catch((err) => {
+    const detail = redact(err);
+    log(`falha ao salvar o progresso da tarefa: ${detail?.message ?? String(detail)}`);
+  });
 }
 
 export function createRequestBridge({ update, api, profileKind, policy = {}, timeoutMs = 600000, log = () => {} }) {
@@ -55,14 +64,14 @@ export function createRequestBridge({ update, api, profileKind, policy = {}, tim
   const arm = (id, onTimeout) => {
     timers.set(id, setTimeout(() => {
       timers.delete(id);
-      log(`no answer for ${id} in ${Math.round(timeoutMs / 1000)} s: rejecting`);
-      onTimeout().catch((err) => log(`automatic reject of ${id} failed: ${err.message}`));
+      log(`sem resposta para ${id} em ${Math.round(timeoutMs / 1000)} s; recusando`);
+      onTimeout().catch((err) => log(`falha ao recusar automaticamente ${id}: ${redact(err).message}`));
     }, timeoutMs));
   };
   return {
     async onPermission(req) {
       if (autoReject) {
-        log(`permission ${req.id} (${req.permission}) rejected automatically: read-only profile`);
+        log(`permissão ${req.id} (${req.permission}) recusada automaticamente: perfil somente leitura`);
         await api.replyPermission(req.id, { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' });
         return;
       }
@@ -71,22 +80,22 @@ export function createRequestBridge({ update, api, profileKind, policy = {}, tim
         patterns: req.patterns ?? [], metadata: trimMetadata(req.metadata), always: req.always ?? [],
         requiresUser: requiresUser(req, policy), askedAt: nowIso(),
       });
-      log(`waiting for a decision on ${req.id} (${req.permission})`);
+      log(`aguardando decisão sobre ${req.id} (${req.permission})`);
       arm(req.id, () => api.replyPermission(req.id, { reply: 'reject', message: 'opc: nenhum aprovador disponível' }));
     },
     async onQuestion(req) {
       if (autoReject) {
-        log(`question ${req.id} rejected automatically: read-only profile`);
+        log(`pergunta ${req.id} recusada automaticamente: perfil somente leitura`);
         await api.rejectQuestion(req.id);
         return;
       }
       await addPending({ type: 'question', id: req.id, sessionID: req.sessionID, questions: req.questions ?? [], askedAt: nowIso() });
-      log(`waiting for an answer to ${req.id}`);
+      log(`aguardando resposta para ${req.id}`);
       arm(req.id, () => api.rejectQuestion(req.id));
     },
     async onResolved({ requestID, outcome }) {
       clearTimer(requestID);
-      log(`request ${requestID} resolved: ${outcome}`);
+      log(`solicitação ${requestID} resolvida: ${outcome}`);
       await removePending(requestID);
     },
     dispose() {
@@ -107,7 +116,7 @@ export async function run(ctx, argv) {
   const jobId = flags['job-id'];
   if (!jobId) throw new UsageError('USAGE', 'task-worker exige --job-id');
   const stored = readJob(ctx.stateDir, jobId);
-  if (!stored?.request) throw new NotFoundError('NOT_FOUND', `job ${jobId} não tem uma solicitação salva`);
+  if (!stored?.request) throw new NotFoundError('NOT_FOUND', `a tarefa ${jobId} não tem uma solicitação salva`);
   const request = stored.request;
   const log = (line) => appendJobLog(ctx.stateDir, jobId, line);
   const jobUpdates = createSerialUpdater(ctx.stateDir, jobId);
@@ -126,7 +135,7 @@ export async function run(ctx, argv) {
     if (readJob(ctx.stateDir, jobId)?.cancelRequestedAt) controller.abort();
     if (request.sessionID) {
       releaseSession = acquireSessionLock(ctx.stateDir, request.sessionID);
-      if (!releaseSession) throw new OpcError('SESSION_BUSY', `session ${request.sessionID} está bloqueada por outra tarefa`, { exitCode: 2 });
+      if (!releaseSession) throw new OpcError('SESSION_BUSY', `a sessão ${request.sessionID} está bloqueada por outra tarefa`, { exitCode: 2 });
     }
     const sctx = serverContext(ctx);
     const server = await ensureServer(sctx);
@@ -167,7 +176,7 @@ export async function run(ctx, argv) {
           patch.phase = event.phase;
         }
         if (Object.keys(patch).length === 0) return;
-        jobUpdates.update((job) => (job.status === 'waiting_permission' ? { ...patch, phase: job.phase } : patch));
+        void queueProgressUpdate(jobUpdates, (job) => (job.status === 'waiting_permission' ? { ...patch, phase: job.phase } : patch), log);
       },
       onPermission: (req) => bridge.onPermission(req),
       onQuestion: (req) => bridge.onQuestion(req),
@@ -199,26 +208,32 @@ export async function run(ctx, argv) {
         error: result.error ?? null,
       },
     });
-    log(`Turn ${status}${result.errorType ? ` (${result.errorType})` : ''}.`);
+    const statusLabel = { completed: 'concluído', failed: 'falhou', cancelled: 'cancelado', waiting_permission: 'aguardando permissão' }[status] ?? status;
+    log(`Turno ${statusLabel}${result.errorType ? ` (${result.errorType})` : ''}.`);
     if (result.finalText) {
       const text = result.finalText.length > FINAL_LOG_LIMIT
-        ? `${result.finalText.slice(0, FINAL_LOG_LIMIT)}\n[final output truncated in the log; see /opc:result ${jobId}]`
+        ? `${result.finalText.slice(0, FINAL_LOG_LIMIT)}\n[saída final truncada no log; consulte /opc:result ${jobId}]`
         : result.finalText;
       log(`Final output\n${text}`);
     }
   } catch (err) {
     exitCode = 7;
-    await jobUpdates.flush();
-    const message = err instanceof Error ? err.message : String(err);
-    log(`Worker failed: ${message}`);
+    let failure = err;
+    try {
+      await jobUpdates.flush();
+    } catch (writeErr) {
+      failure = new OpcError('STATE_WRITE_FAILED', `falha ao salvar o estado da tarefa: ${redact(writeErr).message}`);
+    }
+    const message = redact(failure instanceof Error ? failure.message : String(failure));
+    log(`Falha no worker: ${message}`);
     await updateJob(ctx.stateDir, jobId, (job) => ({
       status: job.cancelRequestedAt ? 'cancelled' : 'failed',
       phase: job.cancelRequestedAt ? 'cancelled' : 'failed',
       completedAt: nowIso(),
       pendingRequest: null,
-      errorCode: workerErrorCode(err),
+      errorCode: failure instanceof OpcError && failure.code === 'STATE_WRITE_FAILED' ? 'STATE_WRITE_FAILED' : workerErrorCode(failure),
       errorClass: 'fatal',
-      errorType: err instanceof OpcError ? err.code : err?.name ?? 'Error',
+      errorType: failure instanceof OpcError ? failure.code : failure?.name ?? 'Error',
       errorMessage: message,
     }));
   } finally {

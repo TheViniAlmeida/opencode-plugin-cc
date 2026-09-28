@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequestBridge } from '../../plugins/opc/scripts/commands/task-worker.mjs';
+import { createRequestBridge, createSerialUpdater, queueProgressUpdate } from '../../plugins/opc/scripts/commands/task-worker.mjs';
 
 function harness({ profileKind = 'write', timeoutMs = 60000, policy = {} } = {}) {
   let job = { status: 'running', phase: 'editing', pendingRequest: null };
@@ -17,6 +17,33 @@ function harness({ profileKind = 'write', timeoutMs = 60000, policy = {} } = {})
   return { bridge, calls, logs, get job() { return job; } };
 }
 const perm = (id, patterns = ['rm -rf build'], sessionID = 'ses_1') => ({ id, sessionID, permission: 'bash', patterns, metadata: { command: patterns[0] }, always: [] });
+
+test('serial updater keeps later writes alive and flush rejects with the first write failure', async () => {
+  const failure = new Error('write failed once');
+  const calls = [];
+  const updater = createSerialUpdater('/unused-by-injected-writer', 'task-test-id', {
+    writeJob: async (...args) => {
+      calls.push(args[2]);
+      if (calls.length === 1) throw failure;
+    },
+  });
+  const first = updater.update({ phase: 'one' });
+  const second = updater.update({ phase: 'two' });
+  await assert.rejects(first, failure);
+  await second;
+  await assert.rejects(updater.flush(), failure);
+  assert.deepEqual(calls.map((patch) => patch.phase), ['one', 'two']);
+});
+
+test('progress update handles a rejected write and logs a redacted failure line', async () => {
+  const logs = [];
+  const updater = createSerialUpdater('/unused-by-injected-writer', 'task-test-id', {
+    writeJob: async () => { throw new Error('persistence failed'); },
+  });
+  await queueProgressUpdate(updater, { phase: 'editing' }, (line) => logs.push(line));
+  assert.deepEqual(logs, ['falha ao salvar o progresso da tarefa: persistence failed']);
+  await assert.rejects(updater.flush(), /persistence failed/);
+});
 
 test('read-only profile rejects permissions and questions immediately', async () => {
   const h = harness({ profileKind: 'read-only' });

@@ -30,6 +30,7 @@ test('resolveProfile', () => {
   assert.equal(resolveProfile({ profile: 'npm-test-only' }, { readOnly: false }), 'custom:npm-test-only');
   assert.equal(resolveProfile({ profile: 'custom:x' }, { readOnly: false }), 'custom:x');
   assert.throws(() => resolveProfile({ write: true, profile: 'x' }, { readOnly: false }), (e) => e.code === 'CONFLICT');
+  assert.throws(() => resolveProfile({ write: true, profile: 'write' }, { readOnly: false }), (e) => e.code === 'CONFLICT');
   assert.throws(() => resolveProfile({ write: true }, { readOnly: true }), (e) => e.code === 'READ_ONLY_KIND');
   assert.equal(resolveProfile({}, { readOnly: true }), 'read-only');
 });

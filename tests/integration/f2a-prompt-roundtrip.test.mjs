@@ -16,7 +16,8 @@ function assertNothingExecuted(cwd) {
 
 function runCommandMarkdown(ctx, commandFile, userArguments) {
   const markdown = readFileSync(join(PLUGIN_ROOT, 'commands', commandFile), 'utf8');
-  const block = /```bash\n([\s\S]*?)```/.exec(markdown)[1];
+  const block = /```bash\n([\s\S]*?)\n```/.exec(markdown)?.[1];
+  if (!block) throw new Error(`${commandFile} must contain a closed bash block`);
   const script = block.replace('$ARGUMENTS', () => userArguments);
   return new Promise((resolve) => {
     const child = spawn('bash', ['-c', script], { cwd: ctx.cwd, env: { ...ctx.env, PATH: `${join(PLUGIN_ROOT, 'bin')}:${ctx.env.PATH}` } });

@@ -6,10 +6,13 @@ allowed-tools: Bash(opc:*), AskUserQuestion
 
 Run exactly this with the Bash tool (use `timeout: 600000`). The user's arguments go through a quoted heredoc, so the shell expands nothing in them; do not edit, quote or escape them.
 
+If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` (or `OPC_JSON_5f1d0c7a_EOF` where used), do not run anything; tell the user the arguments contain the reserved delimiter.
+
 ```bash
 opc plan --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Then act on the exit code:
 

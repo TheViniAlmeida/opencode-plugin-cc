@@ -109,7 +109,7 @@ export function resolveProfile(flags, { readOnly }) {
     if (flags.profile && flags.profile !== 'read-only') throw new UsageError('READ_ONLY_KIND', 'este comando é somente leitura: --profile não é aceito');
     return 'read-only';
   }
-  if (flags.write && flags.profile && flags.profile !== 'write') throw new UsageError('CONFLICT', '--write e --profile são mutuamente exclusivos');
+  if (flags.write && flags.profile) throw new UsageError('CONFLICT', '--write e --profile são mutuamente exclusivos');
   if (flags.write) return 'write';
   if (!flags.profile) return 'read-only';
   if (flags.profile === 'read-only' || flags.profile === 'write') return flags.profile;
@@ -150,7 +150,7 @@ export async function followJob(ctx, id, { waitTimeoutMs, pollMs = 500, json = f
     if (!(err instanceof OpcError) || err.code !== 'WAIT_TIMEOUT') throw err;
     const current = readJob(ctx.stateDir, id);
     if (json) ctx.json({ job: current, waitTimedOut: true });
-    else ctx.out(`${renderJobStatus(current)}\nStill ${current.status} after the wait timeout; the job keeps running. Follow it with: /opc:status ${id} --wait\n`);
+    else ctx.out(`${renderJobStatus(current)}\nA tarefa continua ${current.status} após o tempo limite de espera. Acompanhe com: /opc:status ${id} --wait\n`);
     return ExitCode.WAIT_TIMEOUT;
   }
   if (json) ctx.json({ job });
@@ -189,15 +189,15 @@ function resolveResumeSession(ctx, flags, kind) {
     const ref = flags['resume-id'];
     if (SESSION_REF_RE.test(ref)) return ref;
     const job = resolveJobRef(ctx.stateDir, ref);
-    if (!job.sessionID) throw new UsageError('NO_SESSION', `job ${job.id} has no OpenCode session to resume`);
+    if (!job.sessionID) throw new UsageError('NO_SESSION', `a tarefa ${job.id} não tem uma sessão OpenCode para retomar`);
     return job.sessionID;
   }
   if (flags['resume-last']) {
     if (!ctx.claudeSessionId) {
-      throw new UsageError('RESUME_NEEDS_ID', '--resume without an id needs a Claude session (OPC_COMPANION_SESSION_ID); pass --resume <job-id|session-id>');
+      throw new UsageError('RESUME_NEEDS_ID', '--resume sem id exige uma sessão Claude (OPC_COMPANION_SESSION_ID); informe --resume <job-id|session-id>');
     }
     const candidate = findResumeCandidate(ctx.stateDir, { kind, claudeSessionId: ctx.claudeSessionId });
-    if (!candidate) throw new UsageError('NOTHING_TO_RESUME', `no finished ${kind} job with a session in this Claude session`);
+    if (!candidate) throw new UsageError('NOTHING_TO_RESUME', `não há tarefa ${kind} concluída com sessão nesta sessão Claude`);
     return candidate.sessionID;
   }
   return null;
@@ -221,7 +221,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const { flags, inlinePrompt } = await parseTurnArgs(ctx, argv);
   const resuming = Boolean(flags['resume-id'] || flags['resume-last']);
   if (flags.fresh && resuming) throw new UsageError('CONFLICT', '--resume e --fresh são mutuamente exclusivos');
-  if (flags.variant && flags.effort && flags.variant !== flags.effort) throw new UsageError('CONFLICT', '--effort é um alias de --variant; informe apenas uma das opções');
+  if (flags.variant && flags.effort) throw new UsageError('CONFLICT', '--variant e --effort são mutuamente exclusivos; informe apenas uma opção');
   const profile = resolveProfile(flags, spec);
   assertNotInsideServer(ctx.env);
   const { text: userPrompt, isDefault } = await readUserPrompt(ctx, flags, inlinePrompt, { resuming });
@@ -234,7 +234,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const catalog = buildCatalog(await api.providers());
   const opencodeConfig = await api.getConfig();
   const { candidates, warnings } = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
-  for (const warning of warnings) ctx.err(`[opc] warning: ${warning}\n`);
+  for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
   const agentName = flags.agent ?? config.defaultAgent ?? null;
   const agents = agentName ? await api.agents() : [];
@@ -242,7 +242,7 @@ export async function runKindCommand(ctx, argv, kind) {
   if (!variant && config.defaultVariant) {
     const available = catalog.byFull.get(candidate.full)?.variants ?? [];
     if (available.includes(config.defaultVariant)) variant = config.defaultVariant;
-    else ctx.err(`[opc] warning: defaultVariant "${config.defaultVariant}" is not available for ${candidate.full}; ignored\n`);
+    else ctx.err(`[opc] aviso: defaultVariant "${config.defaultVariant}" não está disponível para ${candidate.full}; ignorada\n`);
   }
   const selection = validateSelection({ candidate, variant, agentName, agents, catalog, policy });
   const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
