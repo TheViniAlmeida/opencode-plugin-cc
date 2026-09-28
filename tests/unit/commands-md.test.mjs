@@ -48,7 +48,11 @@ test('all command heredocs have an explicit reserved-delimiter guard and closed 
     const text = fs.readFileSync(path.join(COMMANDS, name), 'utf8');
     const opensHeredoc = /<<'OPC_(?:ARGS|JSON)_5f1d0c7a_EOF'/.test(text);
     if (!opensHeredoc) continue;
-    assert.match(text, /If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` \(or `OPC_JSON_5f1d0c7a_EOF` where used\), do not run anything; tell the user the arguments contain the reserved delimiter\./, `${name} delimiter guard`);
+    assert.ok(
+      /Se os argumentos contiverem uma linha exatamente igual a `OPC_ARGS_5f1d0c7a_EOF` \(ou `OPC_JSON_5f1d0c7a_EOF` quando usado\), não execute nada; informe ao usuário que os argumentos contêm o delimitador reservado\./.test(text)
+        || /If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` \(or `OPC_JSON_5f1d0c7a_EOF` where used\), do not run anything; tell the user the arguments contain the reserved delimiter\./.test(text),
+      `${name} delimiter guard`,
+    );
     const blocks = [...text.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
     assert.equal(blocks.length, (text.match(/```bash\n/g) ?? []).length, `${name} every bash block must have its own closing fence`);
     for (const block of blocks) {
