@@ -4582,7 +4582,8 @@ Run:
 ```bash
 opc setup --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Read the JSON. The diagnostic fields come from the server check; the `onboarding` object drives everything below. Follow the first branch that applies.
 
@@ -4624,7 +4625,8 @@ Present the diagnostic output (including the terminal alias line), then run `opc
 ```bash
 opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'
 {"defaultProvider":"<id>"}
-OPC_JSON_5f1d0c7a_EOF```
+OPC_JSON_5f1d0c7a_EOF
+```
 
    The result carries the next `nextStep`. Continue until `nextStep` is `null`. Text typed by the user goes **only** inside the heredoc, never on the command line.
 3. Steps (`AskUserQuestion` always offers "Other" for free text; use it as the "Outro" option):
@@ -4648,14 +4650,16 @@ OPC_JSON_5f1d0c7a_EOF```
 ```bash
 opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --top 3
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
    When the user types a name or glob in "Other", search it and confirm the match with one more `AskUserQuestion` (up to 4 matches as options):
 
 ```bash
 opc setup models --json --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --provider <defaultProvider> --query <typed text>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 5. Errors while applying: exit code 2 (invalid, unknown or ambiguous model, invalid variant) → show the message and ask the same step again. Exit code 4 with `POLICY_DENIED` → explain the rule and ask again. Exit code 4 with `LOCKED_KEY` (reconfigure) → show the terminal command from the message and move on to the next step.
 6. When `nextStep` is `null`, commit:
@@ -4691,7 +4695,8 @@ Run:
 ```bash
 opc config --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4716,7 +4721,8 @@ Run:
 ```bash
 opc providers --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim (it is already Markdown).
@@ -4739,7 +4745,8 @@ Run:
 ```bash
 opc models --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4762,7 +4769,8 @@ Run:
 ```bash
 opc agents --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.
@@ -4784,7 +4792,8 @@ Run:
 ```bash
 opc catalog --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Output rules:
 - Present the command output to the user verbatim.

@@ -3902,7 +3902,8 @@ Transfira a conversa para o OpenCode executando exatamente:
 ```bash
 opc transfer --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Regras:
 

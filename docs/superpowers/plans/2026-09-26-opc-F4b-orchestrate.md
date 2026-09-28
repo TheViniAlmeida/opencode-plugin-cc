@@ -3324,7 +3324,8 @@ Execute exatamente um comando:
 ```bash
 opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Regras:
 
@@ -3366,7 +3367,8 @@ texto chega verbatim; a linha `--` impede que palavras da tarefa virem flags):
 opc orchestrate [--max N] [--synthesizer claude|<modelo>] [--background] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <tarefa autocontida: objetivo, caminhos relevantes, o que cada parte deve entregar>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 **Ao receber o resultado:**
 

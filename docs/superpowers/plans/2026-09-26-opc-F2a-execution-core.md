@@ -4722,7 +4722,8 @@ Run exactly this with the Bash tool (use `timeout: 600000`). The user's argument
 ```bash
 opc task --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Then act on the exit code:
 
@@ -4748,7 +4749,8 @@ Run exactly this with the Bash tool (use `timeout: 600000`). The user's argument
 ```bash
 opc ask --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Then act on the exit code:
 
@@ -4772,7 +4774,8 @@ Run exactly this with the Bash tool (use `timeout: 600000`). The user's argument
 ```bash
 opc plan --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Then act on the exit code:
 
@@ -5105,7 +5108,8 @@ Run exactly this with the Bash tool (use `timeout: 600000` when `--wait` is pres
 ```bash
 opc status --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 If the user did not pass a job id, render the output as one compact Markdown table of the current and recent jobs; keep job id, kind, status, phase, time, summary and the follow-up commands, without extra prose.
 
@@ -5127,7 +5131,8 @@ Run exactly this with the Bash tool. The arguments go through a quoted heredoc; 
 ```bash
 opc result --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Present the full output verbatim: the final text, structured output, errors, touched files, file paths and line numbers exactly as printed, and follow-up commands such as `/opc:task --resume <id>`. Exit code `2` with "still running" means the job is active: suggest `/opc:status <id> --wait`.
 ````
@@ -5147,7 +5152,8 @@ Run exactly this with the Bash tool. The arguments go through a quoted heredoc; 
 ```bash
 opc cancel --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Present the output verbatim. If several jobs are active the command lists them and exits `2`: show the list and ask which one to cancel.
 ````
@@ -5661,7 +5667,8 @@ Run with the Bash tool, passing the arguments (plus `--confirmed-by-user` when t
 ```bash
 opc permissions --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Show the output verbatim, including the `/opc:status <job> --wait` line.
 ````

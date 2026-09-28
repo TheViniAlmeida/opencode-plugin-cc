@@ -4831,7 +4831,8 @@ Execute exatamente:
 ```bash
 opc sessions --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Apresente a saída como veio (tabela Markdown), sem resumir.
 - `--refresh` descarta a instância do servidor do opc para reler o storage; só use se o usuário pedir.
@@ -4851,7 +4852,8 @@ Execute exatamente:
 ```bash
 opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Regras:
 - Apresente a saída ao usuário sem resumir. Em `show`, preserve os IDs de mensagem (são eles que `fork` e `revert` usam).
@@ -4873,7 +4875,8 @@ Execute exatamente (o heredoc com delimitador entre aspas não expande nada; nã
 ```bash
 opc subagent --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Apresente o resultado de **cada** membro separadamente (agente, modelo, sessão, texto ou erro); não funda as respostas numa só sem avisar.
 - Exit 3: um membro pediu permissão ou fez pergunta. Siga a skill `opc-result-handling` (pergunte ao usuário antes de qualquer `/opc:permissions reply`).
@@ -4894,7 +4897,8 @@ Execute exatamente (o heredoc com delimitador entre aspas não expande nada; nã
 ```bash
 opc command --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Apresente a saída sem resumir.
 - Exit 4: o command fixa um modelo ou agente negado pela política; explique e não tente contornar.
@@ -4916,7 +4920,8 @@ Execute exatamente:
 ```bash
 opc attach --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Apresente a saída como veio. A linha impressa lê a senha de um arquivo de modo 600 para a variável de ambiente; nunca peça, mostre ou copie a senha.
 - `--pane` precisa do tmux; se falhar, mostre a linha impressa para o usuário rodar num terminal.

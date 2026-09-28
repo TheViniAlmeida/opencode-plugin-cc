@@ -4738,14 +4738,16 @@ Execution mode rules:
 ```bash
 opc review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Otherwise, estimate the review size first:
 
 ```bash
 opc review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4760,7 +4762,8 @@ Foreground flow (user chose to wait):
 ```bash
 opc review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the review job continues: tell the user to run `/opc:status <job-id> --wait` with the id the command printed.
@@ -4771,7 +4774,8 @@ Background flow (user chose background):
 ```bash
 opc review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim (it has the job id and the `/opc:status` and `/opc:result` lines).
 
@@ -4814,14 +4818,16 @@ Execution mode rules:
 ```bash
 opc adversarial-review --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Otherwise, estimate the review size first:
 
 ```bash
 opc adversarial-review --estimate --json --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
   - The JSON has `files`, `insertions`, `deletions` and `recommendation` (`nothing`, `wait` or `background`).
   - If `recommendation` is `nothing`, tell the user there is nothing to review for that target and stop.
@@ -4836,7 +4842,8 @@ Foreground flow (user chose to wait):
 ```bash
 opc adversarial-review --wait --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim. Do not paraphrase, summarize, or add commentary before or after it.
 - Exit code 6 means the wait timed out but the job continues: tell the user to run `/opc:status <job-id> --wait`.
@@ -4847,7 +4854,8 @@ Background flow (user chose background):
 ```bash
 opc adversarial-review --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Return the command stdout verbatim.
 
@@ -4935,7 +4943,8 @@ Forwarding rules:
 opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Keep `--write` by default. Drop it only when the user explicitly asks for read-only behavior or only wants review, diagnosis or research without edits.
 - `--resume` in the request → add `--resume-last`. `--fresh` → add `--fresh`. With neither: if the user is clearly continuing prior OpenCode work ("continue", "keep going", "resume", "apply the top fix", "dig deeper"), add `--resume-last`; otherwise start fresh.
@@ -5061,7 +5070,8 @@ Command shape (the flags you chose on the command line, before `--raw-args-stdin
 opc task --write --wait-timeout 540 --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 Run it with the Bash tool `timeout: 600000`; `--wait-timeout 540` makes the companion return (exit 6, job still running) before that limit.
 

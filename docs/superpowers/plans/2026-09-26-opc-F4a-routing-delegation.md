@@ -3666,7 +3666,8 @@ Put the flags on the command line before `--raw-args-stdin` and pass the prompt 
 opc ask [--model <m> | --tier light|heavy] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <self-contained question: goal, relevant paths, what a good answer contains>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 - Write a self-contained prompt: goal, relevant paths, constraints and the expected shape of the answer.
 - Prefer the configured routing (no `--model`) so fallback can work; use `--tier heavy` for hard problems and `--tier light` for quick lookups. An explicit `--model` disables fallback.
@@ -3949,7 +3950,8 @@ For `ask`, `plan` and `task`, put the flags on the command line before `--raw-ar
 opc <ask|plan|task> --wait-timeout 540 [flags from the lead] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 --
 <task text exactly as received>
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
 For `review`, there is no task text; pass only the flags:
 

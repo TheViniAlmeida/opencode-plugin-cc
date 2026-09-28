@@ -4473,7 +4473,8 @@ Argumentos do usuário: `$ARGUMENTS`
 ```bash
 opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
 $ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF```
+OPC_ARGS_5f1d0c7a_EOF
+```
 
    O texto do heredoc chega verbatim (aspas, crases e apóstrofos não são interpretados); as
    flags conhecidas são reconhecidas como palavras inteiras em qualquer posição. Se o usuário
