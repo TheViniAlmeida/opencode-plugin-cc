@@ -1,7 +1,7 @@
 // Job records, worker lifecycle, limits and cancel (spec §9.1–§9.2).
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { appendFileSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
@@ -49,21 +49,60 @@ const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.js
 export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.log`);
 export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.worker.log`);
 const jobInputPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.input.json`);
+const consumingInputPrefix = (id) => `${assertJobId(id)}.input.`;
+
+export function cleanupJobInputFiles(stateDir, id) {
+  const dir = jobsDir(stateDir);
+  const base = jobInputPath(stateDir, id);
+  try { unlinkSync(base); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  const prefix = consumingInputPrefix(id);
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith('.consuming')) continue;
+    try { unlinkSync(join(dir, name)); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  }
+}
 
 // The sole unredacted handoff lives in our private job directory, never in the record.
 export function consumeJobInput(stateDir, id) {
-  const file = jobInputPath(stateDir, id);
+  const source = jobInputPath(stateDir, id);
+  const consuming = join(jobsDir(stateDir), `${assertJobId(id)}.input.${process.pid}-${randomBytes(8).toString('hex')}.consuming`);
   try {
-    const request = readJson(file, null);
-    if (!request) throw new OpcError('JOB_INPUT_MISSING', 'A entrada privada da tarefa não está disponível.');
-    return request;
+    renameSync(source, consuming);
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new OpcError('JOB_INPUT_MISSING', 'A entrada privada da tarefa não está disponível.');
+    throw err;
+  }
+  let fd;
+  try {
+    try {
+      if (typeof constants.O_NOFOLLOW !== 'number') {
+        throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.');
+      }
+      fd = openSync(consuming, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const info = fstatSync(fd);
+      if (!info.isFile() || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
+        throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.');
+      }
+      const raw = readFileSync(fd, 'utf8');
+      try { return JSON.parse(raw); } catch (cause) {
+        throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.', { cause });
+      }
+    } catch (err) {
+      if (err.code === 'ELOOP' || err.code === 'EINVAL') {
+        throw new OpcError('JOB_INPUT_INVALID', 'A entrada privada da tarefa é inválida.', { cause: err });
+      }
+      throw err;
+    }
   } finally {
-    discardJobInput(stateDir, id);
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the input validation/read error */ }
+    }
+    try { unlinkSync(consuming); } catch { /* best effort for the reserved path */ }
   }
 }
 
 function discardJobInput(stateDir, id) {
-  try { unlinkSync(jobInputPath(stateDir, id)); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  cleanupJobInputFiles(stateDir, id);
 }
 
 export function newJobId(kind) {
@@ -149,43 +188,55 @@ function pruneTerminal(stateDir, state, jobs) {
     for (const member of jobs) if (member.groupId === job.id) ids.add(member.id);
   }
   for (const id of ids) {
+    cleanupJobInputFiles(stateDir, id);
     for (const file of [jobPath(stateDir, id), jobLogPath(stateDir, id), workerLogPath(stateDir, id)]) rmSync(file, { force: true });
   }
   state.jobs = (state.jobs ?? []).filter((entry) => !ids.has(entry.id));
 }
 
-export async function createJob(stateDir, fields, { maxActive = 8 } = {}) {
+export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn = updateState } = {}) {
   ensurePrivateDir(jobsDir(stateDir));
   let created = null;
-  await updateState(stateDir, (state) => {
-    const jobs = listJobs(stateDir, { all: true });
-    for (const job of jobs) {
-      if (!workerLost(job)) continue;
-      Object.assign(job, lostPatch(), { updatedAt: nowIso() });
-      writeJob(stateDir, job);
-      upsertIndex(state, job);
-    }
-    const active = jobs.filter(isActive);
-    if (active.length >= maxActive) {
-      throw new UsageError('TOO_MANY_JOBS', `jobs.maxActive (${maxActive}) atingido; tarefas ativas:\n${active.map((j) => `- ${j.id} (${j.kind}, ${j.status})`).join('\n')}`, {
-        details: { active: active.map((j) => ({ id: j.id, kind: j.kind, status: j.status })) },
-      });
-    }
-    if (fields.sessionID) {
-      const busy = active.find((j) => j.sessionID === fields.sessionID);
-      if (busy) {
-        throw new UsageError('SESSION_BUSY', `a sessão ${fields.sessionID} já tem uma tarefa ativa (${busy.id}); aguarde ou execute /opc:cancel ${busy.id}`, { details: { jobId: busy.id } });
+  let inputWritten = false;
+  try {
+    await updateStateFn(stateDir, (state) => {
+      const jobs = listJobs(stateDir, { all: true });
+      for (const job of jobs) {
+        if (!workerLost(job)) continue;
+        Object.assign(job, lostPatch(), { updatedAt: nowIso() });
+        writeJob(stateDir, job);
+        upsertIndex(state, job);
       }
+      const active = jobs.filter(isActive);
+      if (active.length >= maxActive) {
+        throw new UsageError('TOO_MANY_JOBS', `jobs.maxActive (${maxActive}) atingido; tarefas ativas:\n${active.map((j) => `- ${j.id} (${j.kind}, ${j.status})`).join('\n')}`, {
+          details: { active: active.map((j) => ({ id: j.id, kind: j.kind, status: j.status })) },
+        });
+      }
+      if (fields.sessionID) {
+        const busy = active.find((j) => j.sessionID === fields.sessionID);
+        if (busy) {
+          throw new UsageError('SESSION_BUSY', `a sessão ${fields.sessionID} já tem uma tarefa ativa (${busy.id}); aguarde ou execute /opc:cancel ${busy.id}`, { details: { jobId: busy.id } });
+        }
+      }
+      const id = newJobId(fields.kind);
+      const now = nowIso();
+      created = { ...jobDefaults(), ...fields, id, status: 'queued', phase: 'queued', createdAt: now, updatedAt: now, logFile: jobLogPath(stateDir, id) };
+      writeJob(stateDir, created);
+      if (created.request) {
+        writeFileAtomic(jobInputPath(stateDir, id), `${JSON.stringify(created.request)}\n`);
+        inputWritten = true;
+      }
+      upsertIndex(state, created);
+      pruneTerminal(stateDir, state, jobs);
+      return state;
+    });
+  } catch (err) {
+    if (inputWritten && created?.request) {
+      try { unlinkSync(jobInputPath(stateDir, created.id)); } catch { /* best effort for this exact input path */ }
     }
-    const id = newJobId(fields.kind);
-    const now = nowIso();
-    created = { ...jobDefaults(), ...fields, id, status: 'queued', phase: 'queued', createdAt: now, updatedAt: now, logFile: jobLogPath(stateDir, id) };
-    if (created.request) writeFileAtomic(jobInputPath(stateDir, id), `${JSON.stringify(created.request)}\n`);
-    writeJob(stateDir, created);
-    upsertIndex(state, created);
-    pruneTerminal(stateDir, state, jobs);
-    return state;
-  });
+    throw err;
+  }
   return created;
 }
 

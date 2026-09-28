@@ -6,7 +6,7 @@ import { ConnectionError, ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { identityMatches } from '../lib/process.mjs';
 import { readServerRecord, serverMatcher } from '../lib/server.mjs';
 import { createPrompter } from '../lib/tty.mjs';
-import { isActive, listJobs } from '../lib/jobs.mjs';
+import { cleanupJobInputFiles, isActive, isTerminal, listJobs } from '../lib/jobs.mjs';
 import { renderTable } from '../lib/render.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 
@@ -86,9 +86,11 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
     try {
       const identity = lstatSync(dir);
       if (!identity.isDirectory() || identity.isSymbolicLink() || (uid !== null && identity.uid !== uid)) continue;
+      const jobs = listJobs(dir, { all: true });
+      for (const job of jobs) if (isTerminal(job)) cleanupJobInputFiles(dir, job.id);
       const lastUsed = newestMtime(dir);
       if (now - lastUsed <= olderThanMs) continue;
-      if (listJobs(dir, { all: true }).some(isActive)) continue;
+      if (jobs.some(isActive)) continue;
       const server = serverStatus(dir, deps);
       if (server.reason) {
         skip(stale, dir, entry.name, server.reason);

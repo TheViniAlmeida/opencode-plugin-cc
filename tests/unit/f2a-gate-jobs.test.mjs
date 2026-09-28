@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createJob, readJob, updateJob, spawnWorker } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { consumeJobInput, createJob, readJob, updateJob, spawnWorker } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { run as runWorker } from '../../plugins/opc/scripts/commands/task-worker.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
@@ -72,6 +72,43 @@ test('gate 1: terminal jobs discard an input that no worker consumed', async (t)
   const job = await createJob(dir, { kind: 'task', request: { parts: [] } });
   await updateJob(dir, job.id, { status: 'cancelled' });
   assert.equal(existsSync(join(dir, 'jobs', `${job.id}.input.json`)), false);
+});
+
+test('gate 1 round 2: createJob removes raw input when state persistence fails after the callback', async (t) => {
+  const dir = trackTempDir(t, makeTempDir());
+  let inputPath;
+  await assert.rejects(createJob(dir, { kind: 'task', request: { prompt: 'raw private prompt' } }, {
+    updateStateFn: async (stateDir, mutate) => {
+      await mutate({ version: 1, jobs: [], claudeSessions: [] });
+      inputPath = readdirSync(join(stateDir, 'jobs')).find((name) => name.endsWith('.input.json'));
+      assert.ok(inputPath && existsSync(join(stateDir, 'jobs', inputPath)), 'the raw input must exist before the injected state persistence failure');
+      throw new Error('injected state persistence failure');
+    },
+  }), /injected state persistence failure/);
+  assert.ok(inputPath);
+  assert.equal(existsSync(join(dir, 'jobs', inputPath)), false);
+});
+
+test('gate 1 round 2: input consumption rejects a symlink to a JSON file outside jobs', async (t) => {
+  const dir = trackTempDir(t, makeTempDir());
+  const job = await createJob(dir, { kind: 'task', request: { prompt: 'expected' } });
+  const input = join(dir, 'jobs', `${job.id}.input.json`);
+  const outside = join(dir, 'outside.json');
+  writeFileSync(outside, JSON.stringify({ prompt: 'must not be sent' }));
+  unlinkSync(input);
+  symlinkSync(outside, input);
+  assert.throws(() => consumeJobInput(dir, job.id), (error) => error.code === 'JOB_INPUT_INVALID' && /inválida/.test(error.message));
+  assert.equal(existsSync(input), false);
+});
+
+test('gate 1 round 2: concurrent consumers have exactly one input winner', async (t) => {
+  const dir = trackTempDir(t, makeTempDir());
+  const request = { prompt: 'single-use' };
+  const job = await createJob(dir, { kind: 'task', request });
+  const outcomes = await Promise.allSettled([Promise.resolve().then(() => consumeJobInput(dir, job.id)), Promise.resolve().then(() => consumeJobInput(dir, job.id))]);
+  assert.equal(outcomes.filter((item) => item.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.filter((item) => item.status === 'rejected' && item.reason.code === 'JOB_INPUT_MISSING').length, 1);
+  assert.deepEqual(outcomes.find((item) => item.status === 'fulfilled').value, request);
 });
 
 for (const failure of ['patch', 'bridge']) {
