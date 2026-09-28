@@ -6,6 +6,19 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado (F2a — núcleo de execução)
+
+- `/opc:task`, `/opc:ask` e `/opc:plan`: workers destacados, resolução de modelo, `--effort`, `--resume`/`--resume-last`/`--fresh`, `--background`, timeouts, prompt por argumento/arquivo/stdin e `<project_context>`.
+- Perfis `read-only`, `write` e `custom:<nome>`, ponte de permissões/perguntas, `/opc:permissions`, jobs (`status`, `result`, `cancel`), `opc gc` e `opc task-resume-candidate --json`.
+- Prompts `ask.md`, `plan.md` e `continue.md`, classificação de erros, retries limitados e tratamento de perda do servidor durante o turno.
+- Documentação de execução e permissões.
+
+### Segurança
+
+- Invariantes para diretório externo, caminhos sensíveis, agentes/ferramentas negados, comandos destrutivos e `doom_loop`, aplicadas também às sessões filhas.
+- `always` nunca é enviado; comandos destrutivos encapsulados ou não analisáveis exigem confirmação do usuário.
+- Registros persistidos são redigidos; a entrada bruta do job é privada, consumida atomicamente e descartada ao terminar.
+
 ### Adicionado (F1 — descoberta, configuração e onboarding)
 
 - `/opc:providers`, `/opc:models`, `/opc:agents` e `/opc:catalog`, com a política do opc aplicada (`--allowed`, `--all`, `--verbose`, `--mode`).

@@ -63,3 +63,96 @@ Lista commands ou skills expostos pelo servidor. Para commands, inclui a decisã
 ## Saídas e segurança
 
 Use `--json` em integrações. O portão F1 verificou as respostas JSON de providers, modelos e onboarding e não encontrou credenciais. Evite passar segredo como argumento ou gravá-lo na configuração.
+
+## Execução (F2a)
+
+Todo turno roda num **worker destacado** (`opc task-worker`), registrado como job em `<estado>/jobs/<id>.json`. Em primeiro plano acompanha o job; com `--background`, devolve o id. IDs seguem `<tipo>-<base36(ms)>-<rand6>` e aceitam prefixo único.
+
+### Códigos de saída
+
+| Código | Quando |
+| --- | --- |
+| 0 | Sucesso |
+| 2 | Uso inválido, id ausente/ambíguo, limite de jobs, sessão ocupada ou troca de perfil não suportada no resume |
+| 3 | Job em `waiting_permission`, com pedido de permissão ou pergunta pendente |
+| 4 | Negado por política, aprovador ou recursão (`OPC_INSIDE_SERVER=1`) |
+| 5 | Falha de conexão/servidor |
+| 6 | `--wait-timeout` ou `status --timeout-ms` expirou; o job continua e o id é impresso |
+| 7 | Job terminou em `failed` |
+| 130 | Job terminou em `cancelled` |
+
+### `/opc:task`
+
+```text
+/opc:task [--write | --profile <nome>] [--model <m>] [--agent <a>] [--variant <v> | --effort <v>]
+          [--tier <t>] [--resume [id] | --resume-last | --fresh] [--background]
+          [--prompt-file <arquivo>] [--timeout <s>] [--wait-timeout <s>] <prompt>
+```
+
+Sem `--write`, usa `read-only`; `--write` usa `write`; `--profile <nome>` usa `custom:<nome>`. `--model` aceita alias, id completo (`provider/modelo`) ou nome curto no provider padrão. `--effort` é alias de `--variant`; `--tier` usa `routing.tiers.<tier>`. Agentes são validados contra a política; agentes apenas-subagente são recusados.
+
+`--resume [id]` continua job ou sessão (`ses_…`); sem id equivale a `--resume-last`. `--fresh` conflita com `--resume`. `--timeout` limita o turno (padrão 1800 s); `--wait-timeout` limita só a espera (padrão 540 s). Prompt pode vir por argumento, stdin ou `--prompt-file` (bytes intactos); resume sem prompt usa `prompts/continue.md`.
+
+Texto livre (`task`, `ask`, `plan`) usa `--raw-args-stdin`; comandos só de flags/ids usam `--args-stdin`. No heredoc, use uma linha `--` antes do texto. O corpo é preservado, flags são reconhecidas somente nas sequências inicial e final e delimitador que apareça isolado nos argumentos é recusado. Se houver `project`, inclui `<project_context>`; `OPC_INSIDE_SERVER=1` recusa job (exit 4).
+
+```text
+$ opc ask --raw-args-stdin
+`src/math.js:1`
+
+---
+Tarefa: ask-mukvemmb-nvmj2z · Sessão: ses_f1948c840ffeVGPURNfoPmSNav · Modelo: omniroute-personal/opencode-go/deepseek-v4.1-flash
+Continuar: /opc:ask --resume ask-mukvemmb-nvmj2z
+
+$ opc task --background --raw-args-stdin
+Tarefa opc task-mukvg8io-6ih238 na fila em segundo plano (task, omniroute-personal/opencode-go/deepseek-v4.1-flash).
+- Acompanhar: /opc:status task-mukvg8io-6ih238
+- Aguardar: /opc:status task-mukvg8io-6ih238 --wait
+- Resultado: /opc:result task-mukvg8io-6ih238
+- Cancelar: /opc:cancel task-mukvg8io-6ih238
+```
+
+### `/opc:ask` e `/opc:plan`
+
+| Comando | Prompt | Rota | Saída esperada |
+| --- | --- | --- | --- |
+| `/opc:ask <pergunta>` | `prompts/ask.md` | `routing.tasks.ask` | Resposta direta com `arquivo:linha` |
+| `/opc:plan <tarefa>` | `prompts/plan.md` | `routing.tasks.plan` | Goal, Files, Steps, Trade-offs, Risks, Tests, Open questions |
+
+Aceitam flags de modelo, `--background`, `--resume`/`--fresh`, `--timeout` e `--wait-timeout`; `--write` e `--profile` retornam exit 2.
+
+### `/opc:status`, `/opc:result` e `/opc:cancel`
+
+```text
+/opc:status [job-id] [--wait] [--timeout-ms 240000] [--poll-interval-ms 2000] [--all]
+/opc:result [job-id]
+/opc:cancel [job-id]
+```
+
+`status` sem id lista jobs desta sessão; `--all` inclui todas. Com id, mostra fase, modelo, sessão, filhas, erro, pedidos e log. `--wait` retorna 0 (`completed`), 3 (`waiting_permission`), 7 (`failed`), 130 (`cancelled`) ou 6 sem parar o job. `result` mostra texto final, saída estruturada, arquivos tocados e continuação; job ativo retorna 2. `cancel` aborta sessão principal e filhas, espera idle por até 10 s e encerra worker somente após conferir identidade.
+
+### `/opc:permissions`
+
+```text
+/opc:permissions list
+/opc:permissions reply <id> once|reject [mensagem] [--confirmed-by-user]
+/opc:permissions answer <id-da-pergunta> <resposta...>
+```
+
+`list` mostra pedidos pendentes com job dono. `user` exige `--confirmed-by-user` em `once`; `claude` também o exige para destrutivo, `external_directory` ou caminho sensível. `reject` é sempre permitido e rejeita irmãos. `always` retorna 2; veja [Permissões](permissions.md#por-que-nunca-always).
+
+### `opc gc`
+
+```text
+opc gc [--days 30] [--confirmed-by-user]
+```
+
+Lista estados sem uso, sem jobs ativos ou servidor vivo; o atual nunca entra. A remoção pede confirmação. Sem TTY, só remove com `--confirmed-by-user`; sem a flag, retorna 2.
+
+```text
+$ opc gc
+opc gc: nada a remover; nenhum estado de workspace sem uso há mais de 30 dias.
+```
+
+### `opc task-resume-candidate --json` (interno)
+
+Usado por `/opc:rescue` (F2b): `{available, sessionId, candidate: {id, kind, status, title, summary, sessionID, completedAt, updatedAt}}`; `--kind task|ask|plan` (padrão `task`).
