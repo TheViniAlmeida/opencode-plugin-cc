@@ -66,7 +66,7 @@ test('result of an active job → exit 2 "still running"', async (t) => {
   const id = await startBackground(ctx, 'slow one');
   const r = await opc(ctx, ['result', id]);
   assert.equal(r.code, 2);
-  assert.match(r.stdout + r.stderr, /JOB_ACTIVE: a tarefa ainda está (na fila|em execução)/);
+  assert.match(r.stdout + r.stderr, new RegExp(`JOB_ACTIVE: a tarefa ${id} ainda está (na fila|em execução); consulte /opc:status ${id} --wait`));
   const noId = await opc(ctx, ['result']);
   assert.equal(noId.code, 2);
 });
