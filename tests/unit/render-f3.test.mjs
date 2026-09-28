@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
 import {
   renderSessions, renderSession, renderSessionDiff, renderTodos, renderRevertPreview,
@@ -108,6 +109,31 @@ test('renderGroupStatus: member table, warnings and cancel hints', () => {
   assert.match(out, /Avisos: 1 failed/);
   assert.match(out, /\/opc:cancel sub-g/);
   assert.match(out, /\/opc:status sub-g --wait/);
+});
+
+test('renderGroupStatus displays requires-user for a pending permission', () => {
+  const out = renderGroupStatus(group, [{ ...members[0], status: 'waiting_permission', pendingRequest: [
+    { type: 'permission', id: 'per_sensitive', permission: 'bash', patterns: ['rm -rf build'], requiresUser: true },
+  ] }]);
+  assert.match(out, /- Exige o usuário: sim \(comando destrutivo, diretório externo ou caminho sensível\)/);
+});
+
+test('F3 renderers redact registered secrets and pattern tokens from patches and model results', () => {
+  const registered = 'fake-render-secret-value';
+  const patterned = `sk-${'a'.repeat(24)}`;
+  registerSecret(registered);
+  const patch = `+patch ${registered} ${patterned}`;
+  const diff = renderSessionDiff([{ file: 'secret.txt', status: 'modified', patch }]);
+  assert.ok(!diff.includes(registered));
+  assert.ok(!diff.includes(patterned));
+
+  const groupResult = renderGroupResult({ ...group, status: 'completed' }, [{ ...members[0], result: { finalText: `group ${registered} ${patterned}` } }]);
+  assert.ok(!groupResult.includes(registered));
+  assert.ok(!groupResult.includes(patterned));
+
+  const commandResult = renderCommandResult({ command: 'echo', arguments: '', sessionID: 'ses_a', model: 'p/m', agent: null, finalText: `command ${registered} ${patterned}` });
+  assert.ok(!commandResult.includes(registered));
+  assert.ok(!commandResult.includes(patterned));
 });
 
 test('renderGroupResult: one section per member with text or error', () => {

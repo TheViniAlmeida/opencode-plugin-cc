@@ -1,7 +1,7 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
 import { shellQuote } from './args.mjs';
-import { redact, redactText, redactOutput, redactTurnOutput } from './redact.mjs';
+import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
 
 function cell(value) {
@@ -288,12 +288,16 @@ function pendingLines(job, { timeoutSec = null } = {}) {
     lines.push(`## Solicitação ${req.id}`, '');
     if (req.sessionID && req.sessionID !== job.sessionID) lines.push(`- Sessão: ${req.sessionID} (sessão filha)`);
     lines.push(`- Ferramenta: ${req.permission}`, '- Padrões:', ...codeBlock((req.patterns ?? []).join('\n') || '*'));
-    if (req.requiresUser) lines.push('- Exige o usuário: sim (comando destrutivo, diretório externo ou caminho sensível)');
+    if (req.requiresUser) lines.push(requiresUserLine());
     lines.push('- Responder:', `  - \`/opc:permissions reply ${req.id} once\``, `  - \`/opc:permissions reply ${req.id} reject "<reason>"\``, '');
   }
   lines.push(`Depois: \`/opc:status ${job.id} --wait\``);
   if (timeoutSec) lines.push(`Solicitações sem resposta serão recusadas automaticamente após ${timeoutSec} s.`);
   return lines;
+}
+
+function requiresUserLine() {
+  return '- Exige o usuário: sim (comando destrutivo, diretório externo ou caminho sensível)';
 }
 
 export function renderPermissionRequest(job, { timeoutSec = null } = {}) {
@@ -638,6 +642,14 @@ export function renderReviewGate({ enabled, changed }) {
 const F3_ACTIVE = ['queued', 'running', 'waiting_permission'];
 const F3_MAX_INLINE_DIFF = 400 * 1024;
 
+function f3Finish(lines) {
+  return redactText(`${lines.join('\n')}\n`);
+}
+
+function f3DerivedText(value) {
+  return redactText(maskSecretPatterns(String(value ?? '')));
+}
+
 function fmtTime(ms) {
   if (!Number.isFinite(ms)) return '-';
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
@@ -686,7 +698,8 @@ function diffBody(diffs, maxInlineBytes) {
       continue;
     }
     used += size;
-    chunks.push(d.patch.endsWith('\n') ? d.patch : `${d.patch}\n`);
+    const patch = f3DerivedText(d.patch);
+    chunks.push(patch.endsWith('\n') ? patch : `${patch}\n`);
   }
   if (chunks.length) {
     const body = chunks.join('').trimEnd();
@@ -698,11 +711,11 @@ function diffBody(diffs, maxInlineBytes) {
 }
 
 export function renderSessions(sessions, { statusMap = {}, title = 'Sessões OPC', hiddenCount = 0 } = {}) {
-  if (!sessions.length) return `# ${title}\n\nNenhuma sessão encontrada.\n`;
+  if (!sessions.length) return f3Finish([`# ${title}`, '', 'Nenhuma sessão encontrada.']);
   const rows = sessions.map((s) => [s.id, s.title ?? '', statusMap[s.id]?.type ?? 'idle', fmtTime(s.time?.updated), s.parentID ?? '-']);
   const lines = [`# ${title}`, '', f3Table(['ID', 'Título', 'Status', 'Atualizada (UTC)', 'Pai'], rows)];
   if (hiddenCount > 0) lines.push('', `(${hiddenCount} sessão(ões) omitida(s); use --limit para ver mais)`);
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
 
 export function renderSession(session, { status = null, messages = [], note = null } = {}) {
@@ -728,18 +741,18 @@ export function renderSession(session, { status = null, messages = [], note = nu
       oneLine(messageText(m), 100),
     ])));
   }
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
 
 export function renderSessionDiff(diffs, { maxInlineBytes = F3_MAX_INLINE_DIFF, title = 'Diff da sessão' } = {}) {
-  if (!diffs.length) return `# ${title}\n\nNenhuma alteração registrada.\n`;
-  return `${[`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)].join('\n')}\n`;
+  if (!diffs.length) return f3Finish([`# ${title}`, '', 'Nenhuma alteração registrada.']);
+  return f3Finish([`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)]);
 }
 
 export function renderTodos(todos, { sessionID = null } = {}) {
   const heading = `# Todos${sessionID ? ` da sessão ${sessionID}` : ''}`;
-  if (!todos.length) return `${heading}\n\nNenhum todo.\n`;
-  return `${heading}\n\n${f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))}\n`;
+  if (!todos.length) return f3Finish([heading, '', 'Nenhum todo.']);
+  return f3Finish([heading, '', f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))]);
 }
 
 export function renderRevertPreview({ action, sessionID, messageID = null, affected = [], rawDiff = null, command }) {
@@ -753,7 +766,7 @@ export function renderRevertPreview({ action, sessionID, messageID = null, affec
     lines.push(`Sessão ${sessionID} · revert ativo a partir de ${messageID ?? '-'}.`);
     lines.push('O unrevert devolve as mensagens e reaplica nos arquivos o diff abaixo:', '');
     if (rawDiff) {
-      const { text, truncated } = truncateBytes(rawDiff, F3_MAX_INLINE_DIFF);
+      const { text, truncated } = truncateBytes(f3DerivedText(rawDiff), F3_MAX_INLINE_DIFF);
       const fence = fenceFor(text);
       lines.push(`${fence}diff`, text.trimEnd(), fence);
       if (truncated) lines.push('(diff truncado em 400 KB)');
@@ -762,7 +775,7 @@ export function renderRevertPreview({ action, sessionID, messageID = null, affec
     }
   }
   lines.push('', 'Nada foi alterado. Confirme com o usuário e só então rode:', '', `    ${command}`);
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
 
 // job.pendingRequest is a list (F2a); in a group each item carries memberId.
@@ -776,10 +789,11 @@ export function renderPendingLines(job) {
     const patterns = (req.patterns ?? []).join(', ');
     return [
       `- ${owner}: permissão ${req.permission ?? '?'} [${patterns}] (pedido ${req.id}, sessão ${req.sessionID ?? '-'})`,
+      ...(req.requiresUser ? [requiresUserLine()] : []),
       `  /opc:permissions reply ${req.id} once`,
       `  /opc:permissions reply ${req.id} reject`,
     ];
-  });
+  }).map((line) => redactText(line));
 }
 
 export function renderGroupStatus(group, members) {
@@ -793,7 +807,7 @@ export function renderGroupStatus(group, members) {
   if (warnings.length) lines.push('', `Avisos: ${warnings.join('; ')}`);
   lines.push('', `Cancelar um membro: /opc:cancel <job> · o grupo inteiro: /opc:cancel ${group.id}`);
   if (F3_ACTIVE.includes(group.status)) lines.push(`Acompanhar: /opc:status ${group.id} --wait`);
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
 
 export function renderGroupResult(group, members) {
@@ -806,20 +820,20 @@ export function renderGroupResult(group, members) {
     const r = m.result ?? {};
     lines.push('', `## #${i + 1} ${m.agent ?? '-'} · ${modelLabel(m.model)} — ${m.status}`);
     lines.push(`Sessão: ${r.sessionID ?? m.sessionID ?? '-'} (mecanismo ${r.mechanism ?? '-'}${r.fellBack ? ', fallback de child-session' : ''})`);
-    if (m.status === 'completed') lines.push('', String(r.finalText ?? '').trim() || '(sem texto final)');
+    if (m.status === 'completed') lines.push('', f3DerivedText(r.finalText).trim() || '(sem texto final)');
     else if (m.status === 'cancelled') lines.push('', 'Cancelado.');
-    else lines.push('', `Erro: ${m.errorType ?? r.errorType ?? m.errorCode ?? 'erro'}: ${m.errorMessage ?? r.errorMessage ?? '(sem mensagem)'}`);
+    else lines.push('', `Erro: ${m.errorType ?? r.errorType ?? m.errorCode ?? 'erro'}: ${f3DerivedText(m.errorMessage ?? r.errorMessage ?? '(sem mensagem)')}`);
   });
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
 
 export function renderCommandResult(result) {
   const lines = [`# opc command /${result.command}`, ''];
   lines.push(`Argumentos: ${result.arguments ? `\`${result.arguments}\`` : '(nenhum)'}`);
   lines.push(`Sessão: ${result.sessionID ?? '-'} · modelo ${result.model ?? '-'} · agente ${result.agent ?? '(padrão)'}`, '');
-  if (result.error) lines.push(`Erro: ${result.error.name ?? 'Error'}: ${result.error.data?.message ?? result.error.message ?? ''}`);
-  else lines.push(String(result.finalText ?? '').trim() || '(sem texto final)');
-  return `${lines.join('\n')}\n`;
+  if (result.error) lines.push(`Erro: ${result.error.name ?? 'Error'}: ${f3DerivedText(result.error.data?.message ?? result.error.message ?? '')}`);
+  else lines.push(f3DerivedText(result.finalText).trim() || '(sem texto final)');
+  return f3Finish(lines);
 }
 
 export function renderAttach(info) {
@@ -833,10 +847,10 @@ export function renderAttach(info) {
   lines.push(`Diretório: ${info.directory}`, '');
   if (info.pane) {
     lines.push(`Pane aberto: ${info.pane.id}. A senha foi lida do arquivo 0600 dentro do pane (não passa por argv).`);
-    return `${lines.join('\n')}\n`;
+    return f3Finish(lines);
   }
   lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.credential?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
   lines.push(`    ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
-  return `${lines.join('\n')}\n`;
+  return f3Finish(lines);
 }
