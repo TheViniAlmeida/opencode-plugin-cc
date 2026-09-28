@@ -11,7 +11,7 @@ import {
   deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, spawnSleeper, waitFor,
 } from '../helpers.mjs';
 
-test('ensureServer spawns a detached server, records it (600) and reuses it; stopServer disposes then signals', async (t) => {
+test('ensureServer spawns a detached server, records it (600) and reuses it; stopServer identity-stops without dispose', async (t) => {
   const { env, ctx, stateDir } = makeServerCtx(t);
   const first = await ensureServer(ctx);
   assert.equal(first.reused, false);
@@ -34,13 +34,21 @@ test('ensureServer spawns a detached server, records it (600) and reuses it; sto
   assert.equal(second.pid, first.pid);
   assert.equal(readFakeState(env).bootAttempts, 1);
 
+  writeFileAtomic(path.join(stateDir, 'server.json'), { ...record, startTime: `${record.startTime}-mismatch` });
+  try {
+    assert.deepEqual(await stopServer(ctx), { stopped: false, reason: 'identity-mismatch' });
+    assert.ok(processAlive(first.pid), 'a mismatched identity must not be terminated');
+    assert.equal(readFakeState(env).signals.length, 0, 'no signal for a mismatched identity');
+  } finally {
+    writeFileAtomic(path.join(stateDir, 'server.json'), record);
+  }
+
   assert.deepEqual(await stopServer(ctx), { stopped: true, reason: 'terminated' });
   await waitFor(() => !processAlive(first.pid), { message: 'server gone' });
   assert.equal(fs.existsSync(path.join(stateDir, 'server.json')), false);
   const fake = readFakeState(env);
-  const disposeAt = fake.requests.find((r) => r.method === 'POST' && r.path === '/global/dispose')?.at;
-  const sigtermAt = fake.signals.find((s) => s.signal === 'SIGTERM')?.at;
-  assert.ok(disposeAt && sigtermAt && disposeAt <= sigtermAt, 'dispose happens before SIGTERM');
+  assert.equal(fake.requests.some((r) => r.path === '/global/dispose'), false, 'stop never sends dispose');
+  assert.ok(fake.signals.some((s) => s.signal === 'SIGTERM' && s.pid === record.pid), 'the identity-matched process receives SIGTERM');
   assert.deepEqual(await stopServer(ctx), { stopped: false, reason: 'not-running' });
 });
 

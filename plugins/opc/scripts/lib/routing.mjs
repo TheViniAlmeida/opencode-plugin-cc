@@ -113,3 +113,23 @@ export function validateSelection({ candidate, variant = null, agentName = null,
   }
   return { variant: checkedVariant, agent: agentName || null };
 }
+
+// ---- F2b: the single model a turn uses (no fallback until F4a) ----
+import { buildCatalog } from './models.mjs';
+
+export async function resolveTurnModel({ api, kind, flags = {}, config }) {
+  const [providerResponse, opencodeConfig] = await Promise.all([api.providers(), api.getConfig()]);
+  const catalog = buildCatalog(providerResponse);
+  const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
+  const chosen = resolution.candidates[0];
+  const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, catalog, policy: config?.policy ?? {} });
+  return {
+    model: { providerID: chosen.providerID, modelID: chosen.modelID },
+    full: chosen.full,
+    variant: selection.variant,
+    warnings: resolution.warnings ?? [],
+    resolution,
+    catalog,
+    opencodeConfig,
+  };
+}

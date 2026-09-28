@@ -15,6 +15,7 @@ export function createApi(client) {
     listSessions: () => client.get('/session', GET),
     getSession: (id) => client.get(`/session/${seg(id)}`, GET),
     sessionStatus: () => client.get('/session/status', GET),
+    message: (id, messageID) => client.get(`/session/${seg(id)}/message/${seg(messageID)}`, GET),
     messages: (id, { limit } = {}) => client.get(`/session/${seg(id)}/message`, limit ? { ...GET, query: { limit } } : GET),
     children: (id) => client.get(`/session/${seg(id)}/children`, GET),
     diff: (id) => client.get(`/session/${seg(id)}/diff`, GET),

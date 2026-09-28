@@ -9,7 +9,7 @@ import { EventHub } from '../lib/sse.mjs';
 import { runTurn } from '../lib/runner.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
-import { redact } from '../lib/redact.mjs';
+import { redact, redactTurnOutput } from '../lib/redact.mjs';
 import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
 
 const FINAL_LOG_LIMIT = 64 * 1024;
@@ -184,7 +184,8 @@ export async function run(ctx, argv, {
     let lastPhase = null;
     let lastProgressLine = null;
     const childIDs = new Set(stored.childSessionIDs ?? []);
-    const result = await runTurn({
+    const assistantIDs = new Set(stored.assistantMessageIDs ?? []);
+    const result = redactTurnOutput(await runTurn({
       api,
       hub,
       request,
@@ -195,6 +196,10 @@ export async function run(ctx, argv, {
           log(event.message);
         }
         const patch = {};
+        if (event.assistantMessageID) {
+          assistantIDs.add(event.assistantMessageID);
+          patch.assistantMessageIDs = [...assistantIDs];
+        }
         if (event.sessionID) patch.sessionID = event.sessionID;
         if (event.childSessionID && !childIDs.has(event.childSessionID)) {
           childIDs.add(event.childSessionID);
@@ -210,7 +215,7 @@ export async function run(ctx, argv, {
       onPermission: (req) => bridge.onPermission(req),
       onQuestion: (req) => bridge.onQuestion(req),
       onRequestResolved: (event) => bridge.onResolved(event),
-    });
+    }));
     await jobUpdates.flush();
     const cancelRequested = Boolean(readJob(ctx.stateDir, jobId)?.cancelRequestedAt);
     const status = cancelRequested ? 'cancelled' : result.status;
@@ -222,6 +227,7 @@ export async function run(ctx, argv, {
       pendingRequest: null,
       sessionID: result.sessionID,
       childSessionIDs: result.childSessionIDs,
+      assistantMessageIDs: result.assistantMessageIDs ?? [...assistantIDs],
       errorCode: status === 'completed' ? null : cancelRequested ? 'cancelled' : result.errorCode ?? null,
       errorClass: status === 'completed' ? null : result.errorClass ?? null,
       errorType: status === 'completed' ? null : cancelRequested ? 'Cancelled' : result.errorType ?? null,
@@ -230,6 +236,7 @@ export async function run(ctx, argv, {
       result: {
         finalText: result.finalText,
         structured: result.structured,
+        structuredSource: result.structuredSource ?? null,
         touchedFiles: result.touchedFiles,
         toolsRan: result.toolsRan,
         childSessionIDs: result.childSessionIDs,

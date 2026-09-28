@@ -335,6 +335,18 @@ export function parsePromptArgs(raw, flagSpec) {
   return { argv, prompt };
 }
 
+// ---- F2b: Claude Code hook input (JSON on stdin) ----
+export function parseHookInput(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
 export const RAW_ARGS_FLAG = '--raw-args-stdin';
 
 // Commands that take free text: with --raw-args-stdin in argv, reads stdin once, extracts the known

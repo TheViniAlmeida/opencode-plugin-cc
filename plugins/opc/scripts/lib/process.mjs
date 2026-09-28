@@ -194,8 +194,22 @@ function killUnconfirmed(pgid) {
   });
 }
 
+// While a process exits the kernel drops its memory (empty /proc/<pid>/cmdline) before it becomes a
+// zombie: an empty cmdline with the expected start time is our process on its way out, not a stranger.
+async function exitingWithoutCmdline(expected, waitMs = 1000) {
+  const current = getProcessIdentity(expected.pid);
+  if (!current || current.cmdline.length > 0 || String(current.startTime) !== String(expected.startTime)) return false;
+  const deadline = performance.now() + waitMs;
+  while (performance.now() < deadline) {
+    if (!isPidAlive(expected.pid)) return true;
+    await sleep(50);
+  }
+  return !isPidAlive(expected.pid);
+}
+
 export async function terminateProcessGroup(expected, matcher, { graceMs = 3000 } = {}) {
-  const first = check(expected, matcher);
+  let first = check(expected, matcher);
+  if (first === 'mismatch' && await exitingWithoutCmdline(expected)) first = 'gone';
   if (first === 'gone') return 'not-running';
   if (first === 'mismatch') return 'identity-mismatch';
   signalGroup(expected.pid, 'SIGTERM');

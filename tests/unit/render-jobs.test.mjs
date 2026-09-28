@@ -110,3 +110,14 @@ test('todos os oito renderizadores F2a redigem o texto final', () => {
   ];
   for (const output of outputs) assert.ok(!output.includes(secret), 'renderer output must not contain the registered secret');
 });
+
+test('turn rendering masks model fields without pattern-masking opc errors', () => {
+  const pattern = 'sk-' + 'proj-' + 'R'.repeat(24);
+  const completed = renderTurnResult(job({ status: 'completed', result: { finalText: pattern, structured: { note: pattern } } }));
+  assert.ok(!completed.includes(pattern));
+  assert.match(completed, /\*\*\*/);
+  const failed = renderTurnResult(job({ status: 'failed', errorMessage: pattern, result: { finalText: pattern } }));
+  assert.equal(failed.split(pattern).length - 1, 1, 'only the opc error remains unchanged');
+  registerSecret(pattern);
+  assert.ok(!renderTurnResult(job({ status: 'failed', errorMessage: pattern })).includes(pattern));
+});

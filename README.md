@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F1 — descoberta, configuração e onboarding**. Além do diagnóstico do servidor, os
-> comandos de descoberta, configuração e onboarding já estão disponíveis.
+> Estado: **F2b — review, gate, rescue e hooks**. Descoberta, onboarding, turnos, reviews e
+> ciclo de sessão já estão disponíveis.
 
 ## Requisitos
 
@@ -30,7 +30,7 @@ Veja os detalhes em [docs/installation.md](docs/installation.md). A instalação
 1. Execute `/opc:setup` e responda ao onboarding: provider, modelo padrão, política, projeto e aliases.
 2. Consulte `/opc:models --allowed` e `/opc:agents` para ver o que o `opc` pode usar.
 3. Para ajustes não interativos, use `/opc:config set …`. Alterações de política são feitas no terminal com `opc config init`.
-4. O primeiro review chega na F2b, com `/opc:review`.
+4. Faça uma mudança e rode `/opc:review`.
 
 Para preservar argumentos literalmente quando a invocação for feita pelo comando interno, o plugin usa este heredoc canônico:
 
@@ -48,13 +48,28 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 |---|---|---|
 | `/opc:setup` | F0 | diagnóstico, sobe/reaproveita o servidor, `--stop-server [--force]` |
 | `/opc:config`, `/opc:providers`, `/opc:models`, `/opc:agents`, `/opc:catalog` | F1 | disponível |
-| `/opc:task`, `/opc:ask`, `/opc:plan`, `/opc:status`, `/opc:result`, `/opc:cancel`, `/opc:permissions` | F2a | planejado |
-| `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | planejado |
+| `/opc:task`, `/opc:ask`, `/opc:plan`, `/opc:status`, `/opc:result`, `/opc:cancel`, `/opc:permissions` | F2a | disponível |
+| `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | disponível |
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | planejado |
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | planejado |
 | `/opc:orchestrate` | F4b | planejado |
 | `/opc:conclave` | F4c | planejado |
 | servidor MCP, `/opc:transfer` | F5 | planejado |
+
+## Mapa do mínimo (paridade com o codex-plugin-cc)
+
+| Comando | Para que serve |
+| --- | --- |
+| `/opc:setup` | Diagnóstico, instalação guiada, onboarding, `--stop-server`, `--enable-review-gate`/`--disable-review-gate` |
+| `/opc:review` | Review das mudanças locais, do working tree ou branch, com pergunta aguardar/background |
+| `/opc:adversarial-review` | Review que desafia a abordagem, com texto de foco |
+| `/opc:rescue` | Delega investigação ou correção ao OpenCode, continuando ou iniciando sessão |
+| `/opc:task`, `/opc:ask`, `/opc:plan` | Turnos avulsos de escrita, pergunta e plano |
+| `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
+| `/opc:permissions` | Responde pedidos de permissão e perguntas do OpenCode |
+| Hooks | `SessionStart`/`SessionEnd` no ciclo do servidor e `Stop` no gate opcional |
+
+Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 
 ## Documentação
 

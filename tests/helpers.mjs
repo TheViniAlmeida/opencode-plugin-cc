@@ -390,12 +390,12 @@ export async function runInProcess(sub, argv, { env, cwd, stdin = pipedStdin('')
   const { createContext } = await import(lib('context.mjs'));
   const { toExitCode } = await import(lib('opc-error.mjs'));
   const { renderError } = await import(lib('render.mjs'));
+  const mod = await import(pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'commands', `${sub}.mjs`)).href);
   const stdout = captureStream();
   const stderr = captureStream();
   let code;
   try {
-    const ctx = await createContext({ argv, env, cwd, stdin, stdout, stderr });
-    const mod = await import(pathToFileURLF1(pathF1.join(PLUGIN_ROOT, 'scripts', 'commands', `${sub}.mjs`)).href);
+    const ctx = await createContext({ argv, env, cwd, stdin, stdout, stderr, ...(mod.contextOptions?.(argv) ?? {}) });
     code = await mod.run(ctx, argv);
   } catch (err) {
     stderr.write(renderError(err));
@@ -463,3 +463,10 @@ export function setupF2a(t, { scenario = 'ok', config = {}, extraEnv = {}, git =
 
 export const opc = (ctx, args, { stdin = '', timeoutMs = 60000, env = {} } = {}) =>
   runCli(args, { env: { ...ctx.env, ...env }, cwd: ctx.cwd, stdin, timeoutMs });
+
+// ---- F2b helpers (appended) ----
+// Requests recorded by the fake spawned for `env` (readFakeState, F0); [] when no server was started.
+export function fakeRequests(env) {
+  return readFakeState(env).requests ?? [];
+}
+// ---- end F2b ----

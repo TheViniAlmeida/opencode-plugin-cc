@@ -156,3 +156,126 @@ opc gc: nada a remover; nenhum estado de workspace sem uso há mais de 30 dias.
 ### `opc task-resume-candidate --json` (interno)
 
 Usado por `/opc:rescue` (F2b): `{available, sessionId, candidate: {id, kind, status, title, summary, sessionID, completedAt, updatedAt}}`; `--kind task|ask|plan` (padrão `task`).
+
+## Review, gate e rescue (F2b)
+
+### `/opc:review`
+
+Revisa as mudanças locais com modelo do OpenCode, perfil `read-only` e saída validada no schema `review-output`. Só o usuário invoca (`disable-model-invocation`).
+
+Uso: `/opc:review [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <m>] [--variant <v>]`
+
+- **Alvo:** `auto` revisa o working tree quando há mudanças; sem elas, revisa a branch contra `origin/HEAD`, `main`, `master` ou `trunk`. `--base` força a ref; `--scope` escolhe o modo.
+- **Espera:** sem `--wait`/`--background`, mede com `opc review --estimate --json` e pergunta entre aguardar ou rodar em segundo plano. Só recomenda aguardar para até 2 arquivos e 300 linhas alteradas.
+- **Diff grande:** até 400 KB vai inteiro; acima disso, envia `--stat` completo e diffs menores primeiro. O modelo pode ler os omitidos com `read`; o perfil não libera Bash.
+- **Segredos:** `policy.sensitivePaths` nunca tem conteúdo enviado e aparece apenas em "Excluded Files"; symlink não rastreado não é seguido.
+- **Modelo:** `--model` → `reviewModel` → `routing.tasks.review` → `defaultModel` → padrão do OpenCode.
+- **Correções:** o comando somente revisa. Depois dos achados, o Claude pergunta quais corrigir antes de editar.
+- **Exit codes:** 0 (qualquer veredito), 2 (uso ou fora de Git), 4 (modelo negado), 5 (servidor), 6 (espera expirou; job continua), 7 (falha, inclusive saída inválida; texto bruto impresso), 130 (cancelado).
+
+Exemplo ao vivo redigido:
+
+```text
+$ opc review --wait
+# OPC Revisão
+
+Alvo: diff da árvore de trabalho
+Modelo: omniroute-personal/cmd/deepseek/deepseek-v4-flash
+Job: review-<id>
+
+Veredito: needs-attention
+
+O novo src/math.js contém defeitos críticos: sum lê além do array e divide ignora o divisor.
+
+Achados:
+- [critical] sum itera além do último índice e retorna NaN (src/math.js:3)
+  O loop usa `i <= values.length`; a última leitura é `undefined`.
+  Recomendação: Trocar a condição por `i < values.length` e cobrir com testes.
+- [critical] divide retorna a / 0 e ignora o divisor b (src/math.js:12)
+  A função retorna `a / 0`, descartando `b`.
+  Recomendação: Retornar `a / b` e definir o caso `b === 0`.
+- [high] average não trata array vazio e propaga NaN (src/math.js:7-9)
+  Recomendação: Validar `values.length === 0`.
+
+Próximos passos:
+- Corrigir o limite de sum, divide e a entrada vazia de average; adicionar testes.
+```
+
+```text
+$ opc review --background
+# OPC Revisão
+
+Revisão iniciada em segundo plano: review-<id>
+- Progresso: /opc:status review-<id>
+- Aguardar: /opc:status review-<id> --wait
+- Resultado: /opc:result review-<id>
+```
+
+### `/opc:adversarial-review`
+
+Usa o mesmo fluxo e flags de `/opc:review`, porém procura razões para não publicar a mudança: limites de confiança, perda de dados, corridas, rollback e falhas parciais. Texto após as flags vira foco literal.
+
+```text
+$ opc adversarial-review --wait foco em entradas vazias e divisão por zero
+# OPC Revisão Adversarial
+
+Alvo: diff da árvore de trabalho
+Modelo: omniroute-personal/cmd/deepseek/deepseek-v4-flash
+Job: review-<id>
+
+Veredito: needs-attention
+
+Bloquear entrega: sum retorna NaN, average não trata entrada vazia e divide ignora o divisor.
+
+Achados:
+- [critical] Off-by-one em sum faz a função retornar NaN (src/math.js:3)
+- [critical] divide ignora o divisor e sempre divide por zero (src/math.js:12)
+- [high] average não trata array vazio (divisão por zero) (src/math.js:8)
+```
+
+### `/opc:rescue`
+
+Delega investigação, correção pedida ou continuação ao OpenCode pelo subagente `opc-rescue`, que chama `opc task` uma vez e devolve a saída sem comentários.
+
+Uso: `/opc:rescue [--background|--wait] [--resume|--fresh] [--model <m>] [--variant <v>|--effort <v>] [--agent <a>] <pedido>`
+
+- Sem `--resume`/`--fresh`, consulta `opc task-resume-candidate --json`; se houver candidata da sessão Claude, pergunta entre continuar a sessão atual (primeira opção) e começar outra.
+- Por padrão roda com `--write`; peça "somente leitura" para diagnóstico sem edição.
+- `--background` é repassado a `opc task`; acompanhe com `/opc:status` e leia com `/opc:result`.
+- O subagente não responde permissões; o Claude principal segue o aprovador configurado.
+
+### `/opc:setup` — stop review gate
+
+`/opc:setup --enable-review-gate` e `/opc:setup --disable-review-gate` gravam `stopGate.enabled` somente na configuração global. Exigem onboarding já concluído; sem config global, saem com exit 2 e orientam executar `/opc:setup`.
+
+```text
+$ opc setup --enable-review-gate
+# opc setup
+
+Status: pronto
+
+## Verificações
+
+- node: ok (22.22.1)
+- opencode: ok (1.18.32)
+- diretório de dados: <tmp>
+- workspace: <tmp>
+
+## Servidor
+
+- estado: rodando
+- versão: 1.18.32
+- reaproveitado: não (subiu agora)
+
+Gate de parada: ativado (atualizado)
+```
+
+`/opc:setup --stop-server` recusa com exit 2 enquanto houver jobs ativos e os lista. `--force` exige confirmação do usuário (`--confirmed-by-user`).
+
+### Hooks
+
+| Hook | O que faz |
+| --- | --- |
+| `SessionStart` | Exporta `OPC_COMPANION_SESSION_ID`, `OPC_COMPANION_TRANSCRIPT_PATH`, `CLAUDE_PLUGIN_DATA` e `OPC_DATA_DIR`; registra a sessão e, com `delegation.auto`, injeta lembrete de delegação. |
+| `SessionEnd` | Registra o fim e dispara `opc reap` destacado, saindo em menos de 1 s. |
+| `Stop` | Avisa em stderr sobre jobs ativos; com o gate ligado, executa o stop review gate. |
