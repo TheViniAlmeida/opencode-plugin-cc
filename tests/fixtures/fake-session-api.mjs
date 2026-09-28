@@ -2,6 +2,7 @@
 // Shapes follow the OpenAPI of OpenCode 1.18.32; PATCH /session/:id appends permission rules,
 // like the 1.18.32 binary (`merge(old, new)` = concatenation).
 import { randomBytes } from 'node:crypto';
+import { redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 const SESSION_KEYS = new Set(['parentID', 'title', 'agent', 'model', 'metadata', 'permission', 'workspaceID']);
 const PATCH_KEYS = new Set(['title', 'metadata', 'permission', 'time']);
@@ -23,6 +24,14 @@ export function installSessionApi(fake) {
   for (const key of ['permissionReplies', 'questionReplies', 'questionRejects', 'aborts']) state[key] ??= [];
   const waiters = new Map();
   const turns = new Map();
+  const getTurn = (sessionID) => {
+    let turn = turns.get(sessionID);
+    if (!turn) {
+      turn = { aborted: false, timers: new Map() };
+      turns.set(sessionID, turn);
+    }
+    return turn;
+  };
   const persist = () => fake.persist();
   const event = (type, properties) => fake.emit({ id: nextId('evt'), type, properties });
 
@@ -35,10 +44,22 @@ export function installSessionApi(fake) {
   fake.event = event;
 
   fake.setStatus = (sessionID, status) => {
+    if (status.type === 'busy' && turns.get(sessionID)?.aborted) turns.delete(sessionID);
+    if (status.type === 'busy' || status.type === 'retry') getTurn(sessionID);
     if (status.type === 'idle') delete state.statuses[sessionID];
     else state.statuses[sessionID] = status;
     persist();
     event('session.status', { sessionID, status });
+  };
+
+  fake.isAborted = (sessionID) => Boolean(turns.get(sessionID)?.aborted);
+  fake.waitFor = (sessionID, ms) => {
+    const turn = getTurn(sessionID);
+    if (turn.aborted) return Promise.resolve({ aborted: true });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { turn.timers.delete(timer); resolve({ aborted: false }); }, ms);
+      turn.timers.set(timer, resolve);
+    });
   };
 
   fake.createSession = (body = {}, directory = '') => {
@@ -81,12 +102,8 @@ export function installSessionApi(fake) {
     tokens = { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost = 0,
   } = {}) => {
     const session = state.sessions[sessionID];
-    const turn = { aborted: false, timers: new Set() };
-    turns.set(sessionID, turn);
-    const wait = (ms) => new Promise((resolve) => {
-      const timer = setTimeout(() => { turn.timers.delete(timer); resolve(); }, ms);
-      turn.timers.add(timer);
-    });
+    const turn = getTurn(sessionID);
+    const wait = (ms) => fake.waitFor(sessionID, ms);
     const info = {
       id: nextId('msg'), sessionID, role: 'assistant', parentID: parentID ?? session.lastUserMessageID,
       time: { created: Date.now() }, modelID: session.lastModel?.modelID ?? 'fake-model',
@@ -100,27 +117,23 @@ export function installSessionApi(fake) {
     persist();
     event('message.updated', { sessionID, info });
     for (const tool of tools) {
-      await wait(delayMs);
-      if (turn.aborted) return;
+      if ((await wait(delayMs)).aborted || turn.aborted) return;
       const start = Date.now();
       const part = { id: nextId('prt'), sessionID, messageID: info.id, type: 'tool', callID: nextId('call'), tool: tool.tool, state: { status: 'running', input: tool.input ?? {}, time: { start } } };
       message.parts.push(part);
       event('message.part.updated', { sessionID, part, time: Date.now() });
-      await wait(delayMs);
-      if (turn.aborted) return;
+      if ((await wait(delayMs)).aborted || turn.aborted) return;
       part.state = { status: 'completed', input: tool.input ?? {}, output: tool.output ?? '', title: tool.tool, metadata: tool.metadata ?? {}, time: { start, end: Date.now() } };
       persist();
       event('message.part.updated', { sessionID, part, time: Date.now() });
     }
-    await wait(delayMs);
-    if (turn.aborted) return;
+    if ((await wait(delayMs)).aborted || turn.aborted) return;
     if (text) {
       const part = { id: nextId('prt'), sessionID, messageID: info.id, type: 'text', text, time: { start: Date.now(), end: Date.now() } };
       message.parts.push(part);
       event('message.part.updated', { sessionID, part, time: Date.now() });
     }
-    await wait(delayMs);
-    if (turn.aborted) return;
+    if ((await wait(delayMs)).aborted || turn.aborted) return;
     info.time.completed = Date.now();
     info.finish = structured === undefined ? 'stop' : 'tool-calls';
     info.tokens = tokens;
@@ -140,8 +153,11 @@ export function installSessionApi(fake) {
     const turn = turns.get(sessionID);
     if (turn) {
       turn.aborted = true;
-      for (const timer of turn.timers) clearTimeout(timer);
-      turns.delete(sessionID);
+      for (const [timer, resolve] of turn.timers) {
+        clearTimeout(timer);
+        turn.timers.delete(timer);
+        resolve({ aborted: true });
+      }
     }
     for (const [id, request] of [...Object.entries(state.permissions), ...Object.entries(state.questions)]) {
       if (request.sessionID !== sessionID) continue;
@@ -210,7 +226,7 @@ export function installSessionApi(fake) {
       setImmediate(() => {
         const hook = fake.scenario?.onPromptAsync;
         Promise.resolve(hook ? hook(fake, session.id, body) : fake.emitTurn(session.id)).catch((err) => {
-          process.stderr.write(`fake-opencode scenario error: ${err.stack}\n`);
+          process.stderr.write(`${redactText(`fake-opencode scenario error: ${err?.message ?? String(err)}`).replace(/[\r\n]+/g, ' ')}\n`);
         });
       });
       return { status: 204, body: null };

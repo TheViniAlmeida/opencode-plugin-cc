@@ -13,10 +13,11 @@ const DESTRUCTIVE = [
 ].map((p) => r('bash', p, 'ask'));
 const READ_ONLY_BASE = [
   r('*', '*', 'deny'),
-  r('read', '*', 'allow'), r('glob', '*', 'allow'), r('grep', '*', 'allow'), r('list', '*', 'allow'),
+  r('read', '*', 'allow'), r('glob', '*', 'allow'), r('list', '*', 'allow'),
   r('lsp', '*', 'allow'), r('skill', '*', 'allow'), r('todowrite', '*', 'allow'),
 ];
+const READ_ONLY_INVARIANTS_HEAD = [INVARIANTS_HEAD[0], r('grep', '*', 'deny'), ...INVARIANTS_HEAD.slice(1)];
 
-export const READ_ONLY_RULES = [...READ_ONLY_BASE, ...INVARIANTS_HEAD, r('doom_loop', '*', 'deny')];
+export const READ_ONLY_RULES = [...READ_ONLY_BASE, ...READ_ONLY_INVARIANTS_HEAD, r('doom_loop', '*', 'deny')];
 export const WRITE_RULES = [...INVARIANTS_HEAD, ...DESTRUCTIVE, r('doom_loop', '*', 'ask')];
-export const NPM_TEST_ONLY_RULES = [...READ_ONLY_BASE, r('bash', 'npm test', 'allow'), ...INVARIANTS_HEAD, ...DESTRUCTIVE, r('doom_loop', '*', 'deny')];
+export const NPM_TEST_ONLY_RULES = [...READ_ONLY_BASE, r('bash', 'npm test', 'allow'), ...READ_ONLY_INVARIANTS_HEAD, ...DESTRUCTIVE, r('doom_loop', '*', 'deny')];

@@ -158,7 +158,7 @@ export function invariantRules(profile, { policy = {}, deniedAgentGlobs = [], br
   const { kind } = parseProfile(profile);
   const withDestructive = bridged ?? kind === 'write';
   const rules = [rule('external_directory', '*', 'deny')];
-  if (kind === 'read-only') rules.push(rule('grep', '*', 'deny'));
+  if (kind !== 'write') rules.push(rule('grep', '*', 'deny'));
   for (const pattern of sensitivePathsOf(policy)) {
     for (const permission of SENSITIVE_PATH_PERMISSIONS) rules.push(rule(permission, pattern, 'deny'));
   }

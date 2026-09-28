@@ -4,6 +4,7 @@ import {
   BUILTIN_DESTRUCTIVE_BASH, buildPermissionRules, checkReply, invariantRules, planPermissionSwitch, requiresUser, bridgeModeOf,
 } from '../../plugins/opc/scripts/lib/policy.mjs';
 import { UsageError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { READ_ONLY_RULES, NPM_TEST_ONLY_RULES } from '../fixtures/expected-rules-f2a.mjs';
 
 const policy = {
   sensitivePaths: ['*.env', '**/.ssh/**'],
@@ -31,6 +32,14 @@ test('read-only: deny-all, allows, invariants, doom_loop deny — exact order', 
     r('doom_loop', '*', 'deny'),
   ]);
   assert.ok(!rules.some((x) => x.permission === 'bash' && x.action !== 'deny'));
+});
+
+test('F2a expected read-only fixtures exactly match the profile builder', () => {
+  const opts = { policy: { sensitivePaths: ['*.env', '**/.ssh/**'], tools: { deny: ['gitlab_*'] }, destructiveBash: ['make nuke*'] }, deniedAgentGlobs: ['work-*'] };
+  assert.deepEqual(READ_ONLY_RULES, buildPermissionRules('read-only', opts));
+  assert.deepEqual(NPM_TEST_ONLY_RULES, buildPermissionRules('custom:npm-test-only', {
+    ...opts, permissionProfiles: { 'npm-test-only': [{ permission: 'bash', pattern: 'npm test', action: 'allow' }] },
+  }));
 });
 
 test('write: only invariants + destructive asks (builtin then policy) + doom_loop ask', () => {

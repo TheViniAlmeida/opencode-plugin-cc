@@ -102,3 +102,18 @@ test('fake session API: question reply validates string[][]; abort ends a busy t
   const messages = (await call('GET', `/session/${session.id}/message`)).body;
   assert.equal(messages.at(-1).info.error.name, 'MessageAbortedError');
 });
+
+test('fake session API: abort during retry settles the scenario and prevents recovery messages', async (t) => {
+  const { call, waitEvent } = await openFake(t, 'retry-status');
+  const session = (await call('POST', '/session', { title: 'retry abort' })).body;
+  await call('POST', `/session/${session.id}/prompt_async`, { parts: [{ type: 'text', text: 'retry' }] });
+  await waitEvent((e) => e.type === 'session.status' && e.properties.sessionID === session.id && e.properties.status.type === 'retry');
+  await call('POST', `/session/${session.id}/abort`);
+  await waitEvent((e) => e.type === 'session.idle' && e.properties.sessionID === session.id);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const messages = (await call('GET', `/session/${session.id}/message`)).body;
+  const aborted = messages.filter((m) => m.info.error?.name === 'MessageAbortedError');
+  assert.equal(aborted.length, 1);
+  assert.equal(messages.filter((m) => m.info.role === 'assistant').length, 1);
+  assert.deepEqual((await call('GET', '/session/status')).body, {});
+});
