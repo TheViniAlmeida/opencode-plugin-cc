@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PLUGIN_ROOT, jobIdFrom, jobIn, opc, requestsTo, setupF2a, waitFor } from '../helpers.mjs';
-import { READ_ONLY_RULES, WRITE_RULES } from '../fixtures/expected-rules-f2a.mjs';
+import { READ_ONLY_RULES } from '../fixtures/expected-rules-f2a.mjs';
 
 test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
@@ -38,16 +38,27 @@ test('--resume sem id retoma o último job concluído do mesmo tipo nesta sessã
   assert.match(noSession.stdout + noSession.stderr, /RESUME_NEEDS_ID/);
 });
 
-test('task-resume-candidate --json informa o último task concluído desta sessão Claude', async (t) => {
+test('task-resume-candidate --json retorna todos os campos para task, ask e plan', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const empty = await opc(ctx, ['task-resume-candidate', '--json']);
   assert.deepEqual(JSON.parse(empty.stdout), { available: false, sessionId: 'claude-f2a', candidate: null });
-  const r = await opc(ctx, ['task', 'something']);
-  const id = jobIdFrom(r.stderr);
-  const payload = JSON.parse((await opc(ctx, ['task-resume-candidate', '--json'])).stdout);
-  assert.equal(payload.available, true);
-  assert.equal(payload.candidate.id, id);
-  assert.match(payload.candidate.sessionID, /^ses/);
+  for (const kind of ['task', 'ask', 'plan']) {
+    const r = await opc(ctx, [kind, `something for ${kind}`]);
+    const job = jobIn(ctx.env, ctx.cwd, jobIdFrom(r.stderr));
+    const payload = JSON.parse((await opc(ctx, ['task-resume-candidate', '--json', '--kind', kind])).stdout);
+    assert.equal(payload.available, true, kind);
+    assert.equal(payload.sessionId, 'claude-f2a', kind);
+    assert.deepEqual(payload.candidate, {
+      id: job.id,
+      kind: job.kind,
+      status: job.status,
+      title: job.title,
+      summary: job.summary,
+      sessionID: job.sessionID,
+      completedAt: job.completedAt,
+      updatedAt: job.updatedAt,
+    }, kind);
+  }
 });
 
 test('um segundo job na mesma sessão OpenCode falha imediatamente (exit 2)', async (t) => {
@@ -74,8 +85,10 @@ test('troca de perfil ao retomar: read-only → escrita recusada; write → read
   assert.equal(back.code, 0, back.stderr);
   const [patch] = requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`);
   assert.deepEqual(patch.body, { permission: READ_ONLY_RULES });
+  const posts = requestsTo(ctx.env, 'POST', '/session');
+  assert.ok(posts.length > 0);
+  assert.equal(posts.at(-1).body.permission.at(-1).action, 'ask');
   const same = await opc(ctx, ['task', '--resume', wrJob.id, 'still read only']);
   assert.equal(same.code, 0, same.stderr);
   assert.equal(requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`).length, 1);
-  assert.equal(WRITE_RULES.at(-1).action, 'ask');
 });

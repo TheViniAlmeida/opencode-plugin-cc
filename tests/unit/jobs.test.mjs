@@ -167,6 +167,29 @@ test('findResumeCandidate: last terminal job of the same kind in this Claude ses
   assert.equal(findResumeCandidate(dir, { kind: 'task', claudeSessionId: 'other' }), null);
 });
 
+test('findResumeCandidate uses completion time, then creation time for ties', async (t) => {
+  const dir = stateDir(t);
+  const a = await createJob(dir, base({ title: 'A', sessionID: 'ses_a' }));
+  const b = await createJob(dir, base({ title: 'B', sessionID: 'ses_b' }));
+  for (const [job, createdAt] of [[a, '2026-01-01T00:00:00.000Z'], [b, '2026-01-02T00:00:00.000Z']]) {
+    const record = readJob(dir, job.id);
+    record.createdAt = createdAt;
+    writeFileSync(join(dir, 'jobs', `${job.id}.json`), JSON.stringify(record));
+  }
+  await updateJob(dir, b.id, { status: 'completed', completedAt: '2026-01-02T00:00:00.000Z' });
+  await updateJob(dir, a.id, { status: 'completed', completedAt: '2026-01-03T00:00:00.000Z' });
+  assert.equal(findResumeCandidate(dir, { kind: 'task', claudeSessionId: 'c1' }).id, a.id);
+
+  const tie = '2026-01-04T00:00:00.000Z';
+  for (const [job, createdAt] of [[a, '2026-01-01T00:00:00.000Z'], [b, '2026-01-02T00:00:00.000Z']]) {
+    const record = readJob(dir, job.id);
+    record.completedAt = tie;
+    record.createdAt = createdAt;
+    writeFileSync(join(dir, 'jobs', `${job.id}.json`), JSON.stringify(record));
+  }
+  assert.equal(findResumeCandidate(dir, { kind: 'task', claudeSessionId: 'c1' }).id, b.id);
+});
+
 test('appendJobLog caps the log at 5 MB keeping the tail', async (t) => {
   const dir = stateDir(t);
   const job = await createJob(dir, base());

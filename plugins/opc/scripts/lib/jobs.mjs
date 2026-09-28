@@ -216,7 +216,10 @@ export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnl
 
 export function findResumeCandidate(stateDir, { kind, claudeSessionId }) {
   if (!claudeSessionId) return null;
-  return listJobs(stateDir, { claudeSessionId }).find((j) => j.kind === kind && j.sessionID && isTerminal(j)) ?? null;
+  return listJobs(stateDir, { claudeSessionId })
+    .filter((j) => j.kind === kind && j.sessionID && isTerminal(j))
+    .sort((a, b) => String(b.completedAt ?? '').localeCompare(String(a.completedAt ?? ''))
+      || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))[0] ?? null;
 }
 
 export function groupStatus(members) {
