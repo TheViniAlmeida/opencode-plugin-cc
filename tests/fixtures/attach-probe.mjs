@@ -9,7 +9,7 @@ const passwordMatches = createHash('sha256').update(password).digest('hex') === 
 const passwordInArgv = password !== '' && process.argv.some((arg) => arg.includes(password));
 const args = process.argv.slice(2);
 const redactedArgs = args.map((arg, index) => {
-  if ((password && arg === password) || (/^(--password|-p)$/.test(args[index - 1] ?? '') && arg) || /:\/\/[^/@\s]+:[^/@\s]+@/.test(arg)) return '***';
+  if ((password && arg === password) || (/^(--password|-p)$/.test(args[index - 1] ?? '') && arg) || /:\/\/[^/@\s]*:[^/@\s]*@/.test(arg)) return '***';
   return arg;
 });
 const fd = openSync(process.env.PROBE_LOG, 'a', 0o600);

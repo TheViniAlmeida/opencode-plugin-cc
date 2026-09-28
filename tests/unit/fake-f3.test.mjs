@@ -72,6 +72,12 @@ test('f3 fake: attach probe redacts password from argv log and creates private l
   const contents = readFileSync(log, 'utf8');
   assert.equal(contents.includes(password), false);
   assert.equal(statSync(log).mode & 0o777, 0o600);
+  // A URL with an empty user still carries a password that is not the server one.
+  const other = randomBytes(12).toString('hex');
+  execFileSync(process.execPath, ['tests/fixtures/attach-probe.mjs', `https://:${other}@localhost/path`], {
+    env: { ...process.env, PROBE_LOG: log, OPENCODE_SERVER_PASSWORD: password, EXPECTED_SHA256: 'unused' },
+  });
+  assert.equal(readFileSync(log, 'utf8').includes(other), false);
 });
 
 test('group-slow permission reply rejects missing, non-pending, and always replies', async () => {
