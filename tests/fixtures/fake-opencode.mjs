@@ -98,9 +98,14 @@ export function matchRoute(table, method, pathname) {
     route.names.forEach((n, i) => {
       params[n] = decodeURIComponent(m[i + 1]);
     });
-    return { handler, params };
+    return { handler, params, route };
   }
   return null;
+}
+
+// Higher is more specific: a static pattern beats any parametrized one, then more static segments win.
+export function routeSpecificity(route) {
+  return (route.names.length === 0 ? 1000 : 0) + route.staticSegments;
 }
 
 function parseConfigContent(text) {
@@ -246,8 +251,11 @@ export async function startFake({
     const query = Object.fromEntries(url.searchParams.entries());
     state.requests.push({ method: req.method, path: url.pathname, query, body, at: Date.now() });
     writeStateFile(stateFile, state);
-    const scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
+    let scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
     const baseHit = matchRoute(baseRoutes, req.method, url.pathname);
+    // A scenario route only shadows a base route that is not more specific (e.g. scenario
+    // 'GET /session/:id' must not capture the base 'GET /session/status').
+    if (scenarioHit && baseHit && routeSpecificity(baseHit.route) > routeSpecificity(scenarioHit.route)) scenarioHit = null;
     if (!scenarioHit && !baseHit) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ name: 'NotFoundError', data: { message: `no route ${req.method} ${url.pathname}` } }));
