@@ -217,6 +217,7 @@ export function renderOnboarding(view) {
 }
 
 // ---- F2a: renderização de jobs, turnos e solicitações de permissão ----
+// Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_permission']);
 const RESUMABLE_KINDS = new Set(['task', 'ask', 'plan']);
@@ -259,14 +260,14 @@ function resumeHint(job) {
 }
 
 export function renderQueuedJob(job) {
-  return [
+  return redactText([
     `Tarefa opc ${job.id} na fila em segundo plano (${job.kind}${job.model ? `, ${job.model}` : ''}).`,
     `- Status: /opc:status ${job.id}`,
     `- Aguardar: /opc:status ${job.id} --wait`,
     `- Resultado: /opc:result ${job.id}`,
     `- Cancelar: /opc:cancel ${job.id}`,
     '',
-  ].join('\n');
+  ].join('\n'));
 }
 
 function pendingLines(job, { timeoutSec = null } = {}) {
@@ -302,7 +303,7 @@ export function renderPermissionRequest(job, { timeoutSec = null } = {}) {
     '',
     ...pendingLines(job, { timeoutSec }),
   ];
-  return `${lines.join('\n').trimEnd()}\n`;
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
 }
 
 export function renderJobStatus(job, { progress = [], now = Date.now() } = {}) {
@@ -383,7 +384,7 @@ export function renderTurnResult(job) {
 
 export function renderCancel(job, report) {
   const sessionResult = report.aborted ? (report.idle ? 'cancelada; sessão ociosa' : 'cancelada; o estado ocioso não foi confirmado em 10 s') : 'não enviada (sem sessão ou servidor)';
-  return [
+  return redactText([
     '# opc cancelamento',
     '',
     `Cancelada ${job.id} (${job.kind}).`,
@@ -391,7 +392,7 @@ export function renderCancel(job, report) {
     `- Processo: ${report.worker}`,
     '- Consulte a lista atualizada em `/opc:status`.',
     '',
-  ].join('\n');
+  ].join('\n'));
 }
 
 export function renderPermissionList(requests, jobs = []) {

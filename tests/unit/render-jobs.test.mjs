@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatDuration, renderCancel, renderJobStatus, renderPermissionList, renderPermissionRequest, renderQueuedJob, renderStatusList, renderTurnResult,
+  formatDuration, renderCancel, renderJobStatus, renderPermissionList, renderPermissionRequest, renderQueuedJob, renderStatusList, renderTable, renderTurnResult,
 } from '../../plugins/opc/scripts/lib/render.mjs';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 const job = (over = {}) => ({
   id: 'task-abc-123456', kind: 'task', status: 'running', phase: 'editing', model: 'p/m', permissionProfile: 'write',
@@ -89,4 +90,20 @@ test('renderQueuedJob, renderCancel e renderPermissionList', () => {
   const list = renderPermissionList([{ type: 'permission', id: 'per_9', sessionID: 'ses_1', permission: 'bash', patterns: ['ls'] }], [job()]);
   assert.match(list, /\| per_9 \| permission \| bash: ls \| ses_1 \| task-abc-123456 \|/);
   assert.match(renderPermissionList([]), /Nenhuma solicitação pendente/);
+});
+
+test('todos os oito renderizadores F2a redigem o texto final', () => {
+  const secret = 'renderer-secret-123456789';
+  registerSecret(secret);
+  const outputs = [
+    renderTable(['header'], [[secret]]),
+    renderJobStatus(job({ summary: secret, errorMessage: secret }), { progress: [secret] }),
+    renderStatusList([job({ summary: secret })]),
+    renderTurnResult(job({ status: 'completed', result: { finalText: secret } })),
+    renderPermissionRequest(job({ pendingRequest: [{ type: 'permission', id: 'p', permission: 'bash', patterns: [secret] }] })),
+    renderQueuedJob(job({ id: secret })),
+    renderCancel(job({ id: secret }), { aborted: true, idle: true, worker: secret }),
+    renderPermissionList([{ type: 'permission', id: 'p', permission: 'bash', patterns: [secret], sessionID: 'ses_1' }]),
+  ];
+  for (const output of outputs) assert.ok(!output.includes(secret), 'renderer output must not contain the registered secret');
 });
