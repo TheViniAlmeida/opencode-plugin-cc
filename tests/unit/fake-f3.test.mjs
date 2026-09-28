@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { startFake } from '../fixtures/fake-opencode.mjs';
+import { randomBytes } from 'node:crypto';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { loadScenario, startFake } from '../fixtures/fake-opencode.mjs';
 import { pickFreePort } from '../../plugins/opc/scripts/lib/server.mjs';
-import { F3_MODELS, SEED } from '../fixtures/f3-fake.mjs';
-
-const PASSWORD = 'f3-fake-password-0123456789';
+import { F3_MODELS, SEED, userMessage, assistantMessage } from '../fixtures/f3-fake.mjs';
 
 async function boot(t, scenario = 'f3-sessions') {
-  const dir = mkdtempSync(join(tmpdir(), 'opc-f3fake-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const fake = await startFake({ port: await pickFreePort(), password: PASSWORD, scenario, stateFile: join(dir, 'state.json') });
+  const dir = trackTempDir(t, makeTempDir('opc-f3fake-'));
+  const password = randomBytes(24).toString('hex');
+  const fake = await startFake({ port: await pickFreePort(), password, scenario, stateFile: join(dir, 'state.json') });
   t.after(() => fake.close());
-  const auth = `Basic ${Buffer.from(`opencode:${PASSWORD}`).toString('base64')}`;
+  const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
   async function call(method, path, body) {
     const res = await fetch(`${fake.url}${path}`, {
       method,
@@ -34,6 +34,7 @@ test('f3 fake: seeded sessions are listed newest first', async (t) => {
   const ids = res.body.map((s) => s.id);
   assert.ok(ids.includes(SEED.session));
   assert.ok(ids.includes(SEED.userSession));
+  assert.deepEqual(ids.slice(0, 2), [SEED.session, SEED.userSession]);
 });
 
 test('f3 fake: POST /session stores parentID, agent and model; children lists it', async (t) => {
@@ -43,8 +44,45 @@ test('f3 fake: POST /session stores parentID, agent and model; children lists it
   assert.match(created.body.id, /^ses/);
   assert.equal(created.body.parentID, SEED.session);
   assert.equal(created.body.agent, 'general');
+  assert.deepEqual(created.body.model, { id: 'opencode-go/kimi-k3', providerID: 'omniroute-personal' });
   const children = await call('GET', `/session/${SEED.session}/children`);
   assert.deepEqual(children.body.map((s) => s.id), [created.body.id]);
+});
+
+test('f3 fake: fork uses insertion order even when message ids sort differently', async (t) => {
+  const { fake, call } = await boot(t);
+  const messages = [
+    userMessage(SEED.session, 'msg_z_last', 'one'),
+    assistantMessage(SEED.session, 'msg_a_target', 'msg_z_last', 'two'),
+    userMessage(SEED.session, 'msg_m_after', 'three'),
+  ];
+  fake.state.messages[SEED.session] = messages;
+  const forked = await call('POST', `/session/${SEED.session}/fork`, { messageID: 'msg_a_target' });
+  const result = await call('GET', `/session/${forked.body.id}/message`);
+  assert.deepEqual(result.body.map((message) => message.info.id), ['msg_z_last']);
+});
+
+test('f3 fake: attach probe redacts password from argv log and creates private log', (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-probe-'));
+  const log = join(dir, 'probe.jsonl');
+  const password = randomBytes(24).toString('hex');
+  execFileSync(process.execPath, ['tests/fixtures/attach-probe.mjs', '--password', password, `https://user:${password}@localhost/path`], {
+    env: { ...process.env, PROBE_LOG: log, OPENCODE_SERVER_PASSWORD: password, EXPECTED_SHA256: 'unused' },
+  });
+  const contents = readFileSync(log, 'utf8');
+  assert.equal(contents.includes(password), false);
+  assert.equal(statSync(log).mode & 0o777, 0o600);
+});
+
+test('group-slow permission reply rejects missing, non-pending, and always replies', async () => {
+  const scenario = await loadScenario('group-slow');
+  const handler = scenario.routes['POST /permission/:id/reply'];
+  const fake = { state: { permissions: { pending: { id: 'pending' } }, f3: { askSession: 'ses_ask', prompts: [] } }, emit() { throw new Error('must not emit'); } };
+  assert.equal(handler(fake, { params: { id: 'missing' }, body: { reply: 'once' } }).status, 400);
+  fake.state.permissions.pending = undefined;
+  assert.equal(handler(fake, { params: { id: 'pending' }, body: { reply: 'once' } }).status, 400);
+  fake.state.permissions.pending = { id: 'pending' };
+  assert.equal(handler(fake, { params: { id: 'pending' }, body: { reply: 'always' } }).status, 400);
 });
 
 test('f3 fake: fork copies only messages before messageID', async (t) => {

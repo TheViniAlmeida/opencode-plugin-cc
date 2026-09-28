@@ -1,14 +1,28 @@
 #!/usr/bin/env node
 // Fake tmux for tests: records argv and whether a password variable leaked into its
 // environment (never the value) into FAKE_TMUX_LOG, then prints a pane id.
-import { appendFileSync } from 'node:fs';
+import { closeSync, fchmodSync, openSync, writeSync } from 'node:fs';
+
+function redactArgs(args) {
+  const password = process.env.OPENCODE_SERVER_PASSWORD ?? '';
+  return args.map((arg, index) => {
+    if ((password && arg === password) || (/^(--password|-p)$/.test(args[index - 1] ?? '') && arg) || /:\/\/[^/@\s]+:[^/@\s]+@/.test(arg)) return '***';
+    return arg;
+  });
+}
 
 const log = process.env.FAKE_TMUX_LOG;
 if (log) {
-  appendFileSync(log, `${JSON.stringify({
-    argv: process.argv.slice(2),
-    hasPasswordEnv: 'OPENCODE_SERVER_PASSWORD' in process.env || 'OPC_SERVER_PASSWORD' in process.env,
-  })}\n`);
+  const fd = openSync(log, 'a', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `${JSON.stringify({
+      argv: redactArgs(process.argv.slice(2)),
+      hasPasswordEnv: 'OPENCODE_SERVER_PASSWORD' in process.env || 'OPC_SERVER_PASSWORD' in process.env,
+    })}\n`);
+  } finally {
+    closeSync(fd);
+  }
 }
 if (process.env.FAKE_TMUX_FAIL === '1') {
   process.stderr.write('tmux falso: nenhum servidor em execução\n');

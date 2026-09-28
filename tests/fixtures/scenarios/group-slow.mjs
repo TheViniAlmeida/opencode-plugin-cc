@@ -46,7 +46,11 @@ export default withF3({
   },
   routes: {
     'POST /permission/:id/reply': (fake, { params, body = {} }) => {
+      const request = fake.state.permissions?.[params.id];
+      if (!request) return { status: 400, body: { name: 'BadRequest', data: { message: `permission ${params.id} is not pending` } } };
+      if (!['once', 'reject'].includes(body.reply)) return { status: 400, body: { name: 'BadRequest', data: { message: 'reply must be once or reject' } } };
       const sessionID = fake.state.f3.askSession;
+      delete fake.state.permissions[params.id];
       fake.emit({ type: 'permission.replied', properties: { sessionID, requestID: params.id, reply: body.reply } });
       answerAfterReply(fake, sessionID);
       return ok(true);
