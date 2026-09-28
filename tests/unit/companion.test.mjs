@@ -63,6 +63,30 @@ test('main: JSON mode survives --cwd usage errors during argument extraction', a
   assert.match(JSON.parse(stdout.text()).error.message, /--cwd/);
 });
 
+test('main delegates invalid-config tolerance to the command module', async () => {
+  const stdout = sink();
+  const stderr = sink();
+  let receivedOptions;
+  const command = {
+    contextOptions: (argv) => ({ allowInvalidConfig: argv.includes('--command-allows-invalid-config') }),
+    run: async () => 0,
+  };
+  const code = await main(['stub', '--stop-server'], {
+    stdin: Readable.from([]), stdout, stderr, env: {}, cwd: '/nonexistent',
+    commandLoader: async () => command,
+    contextFactory: async (options) => { receivedOptions = options; return {}; },
+  });
+  assert.equal(code, 0);
+  assert.equal(receivedOptions.allowInvalidConfig, false, 'companion does not infer tolerance from --stop-server');
+
+  await main(['stub', '--command-allows-invalid-config'], {
+    stdin: Readable.from([]), stdout: sink(), stderr: sink(), env: {}, cwd: '/nonexistent',
+    commandLoader: async () => command,
+    contextFactory: async (options) => { receivedOptions = options; return {}; },
+  });
+  assert.equal(receivedOptions.allowInvalidConfig, true);
+});
+
 for (const json of [false, true]) {
   test(`unknown subcommand preview is bounded (json=${json})`, async () => {
     const sub = 'unknown-command-private-suffix';

@@ -9,10 +9,10 @@ import { buildCatalog } from '../lib/models.mjs';
 import { resolveCandidates, validateSelection } from '../lib/routing.mjs';
 import { buildPermissionRules, parseProfile, planPermissionSwitch } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
-import { appendJobLog, assertNotInsideServer, createJob, findResumeCandidate, readJob, resolveJobRef, spawnWorker, waitForJob } from '../lib/jobs.mjs';
+import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
-
-const PROMPTS_DIR = new URL('../../prompts/', import.meta.url);
+import { loadPrompt, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
+export { loadPrompt, projectContextBlock, summarize, sessionTitle } from '../lib/prompts.mjs';
 export const JOB_ID_RE = /^(task|review|ask|plan|sub|cmd|orch|conc|gate)-[0-9a-z]+-[0-9a-z]{6}$/;
 export const SESSION_REF_RE = /^ses[_0-9A-Za-z]+$/;
 const RESUME_REF_RE = /^((task|review|ask|plan|sub|cmd|orch|conc|gate)-[0-9a-z]+-[0-9a-z]{6}|ses[_0-9A-Za-z]+)$/;
@@ -74,33 +74,11 @@ export function normalizeResumeFlag(argv) {
   return out;
 }
 
-export function loadPrompt(name) {
-  return readFileSync(new URL(name, PROMPTS_DIR), 'utf8');
-}
-
-export function projectContextBlock(project) {
-  if (!project || typeof project !== 'object') return '';
-  const lines = [];
-  if (typeof project.goal === 'string' && project.goal.trim()) lines.push(`goal: ${project.goal.trim()}`);
-  if (Array.isArray(project.scope) && project.scope.length) lines.push(`scope: ${project.scope.join(', ')}`);
-  if (Array.isArray(project.taskTypes) && project.taskTypes.length) lines.push(`task types: ${project.taskTypes.join(', ')}`);
-  return lines.length ? `<project_context>\n${lines.join('\n')}\n</project_context>` : '';
-}
-
 export function buildPromptText({ userPrompt, template = null, project = null }) {
   // function replacer: `$&`, `$1`… in the user prompt must stay literal
   const body = template ? template.replace('{{USER_REQUEST}}', () => userPrompt) : userPrompt;
   const context = projectContextBlock(project);
   return context ? `${context}\n\n${body}` : body;
-}
-
-export function summarize(text, max = 56) {
-  const line = String(text ?? '').replace(/\s+/g, ' ').trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-}
-
-export function sessionTitle(kind, summary) {
-  return `OPC: ${kind}: ${summary}`;
 }
 
 export function resolveProfile(flags, { readOnly }) {
@@ -274,22 +252,21 @@ export async function runKindCommand(ctx, argv, kind) {
     permissionTimeoutMs: permissionTimeoutSec * 1000,
     ...statusPollOverride(ctx.env),
   };
-  const job = await createJob(ctx.stateDir, {
+  const job = await submitTurnJob(ctx, {
     kind,
     title: `opc ${kind}`,
     summary,
-    workspaceRoot: ctx.workspaceRoot,
-    claudeSessionId: ctx.claudeSessionId ?? null,
-    sessionID,
-    model: candidate.full,
-    agent: selection.agent,
-    variant: selection.variant,
-    permissionProfile: profile,
-    serverUrlRef: hostPort(server.url),
-    request,
-  }, { maxActive: config.jobs?.maxActive ?? 8 });
-  appendJobLog(ctx.stateDir, job.id, `Na fila: ${kind} (${candidate.full}, perfil ${profile}${sessionID ? ', retomando sessão' : ''}).`);
-  await spawnWorker(ctx, job.id);
+    request: { ...request, profile, title: request.newSession?.title ?? null, modelFull: candidate.full },
+    fields: {
+      sessionID,
+      model: candidate.full,
+      agent: selection.agent,
+      variant: selection.variant,
+      permissionProfile: profile,
+      serverUrlRef: hostPort(server.url),
+    },
+    queuedLog: `Na fila: ${kind} (${candidate.full}, perfil ${profile}${sessionID ? ', retomando sessão' : ''}).`,
+  });
   if (flags.background) {
     if (flags.json) ctx.json({ jobId: job.id, status: 'queued', kind, model: candidate.full });
     else ctx.out(renderQueuedJob(job));

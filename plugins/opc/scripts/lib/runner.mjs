@@ -4,12 +4,16 @@ import { randomBytes } from 'node:crypto';
 import { classifyError, retryExceedsCap } from './errors.mjs';
 import { ConnectionError, OpcError } from './opc-error.mjs';
 import { endsWithRules } from './policy.mjs';
-import { redactText } from './redact.mjs';
+import { redactText, safeOutputText, redactOutput } from './redact.mjs';
+import { readSessionMessages, rememberMessage, usePerMessageReads, isPerMessageSession } from './session-messages.mjs';
+import { extractTextJson } from './text-json.mjs';
+import { validateReviewOutput } from './render.mjs';
 
 const ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_STATUS_POLL_MS = 5000;
 const DEFAULT_IDLE_WAIT_MS = 10000;
+const STRUCTURED_IDLE_GRACE_MS = 10000;
 const INVESTIGATE_TOOLS = new Set(['read', 'grep', 'glob', 'list', 'lsp', 'webfetch', 'websearch', 'codesearch']);
 export const EDIT_TOOLS = new Set(['edit', 'write', 'apply_patch', 'patch', 'multiedit']);
 // OpenCode registers json_schema output as a tool named StructuredOutput (binary 1.18.32): it is
@@ -60,14 +64,14 @@ function toolArg(part) {
 }
 
 function displayValue(value) {
-  return redactText(String(value ?? ''));
+  return safeOutputText(value);
 }
 
 const TOOL_ERROR_MAX = 200;
 
 // Tool errors are free text from OpenCode; a permission denial echoes the whole rule list (user config included).
 export function toolErrorSummary(error) {
-  const firstLine = redactText(String(error ?? '')).split('\n')[0];
+  const firstLine = safeOutputText(error).split('\n')[0];
   const text = firstLine.replace(/\s*Here are some of the relevant rules\b.*$/s, '').trim();
   return text.length > TOOL_ERROR_MAX ? `${text.slice(0, TOOL_ERROR_MAX)}…` : text;
 }
@@ -141,7 +145,7 @@ async function sendPrompt(api, sessionID, body) {
   } catch (err) {
     if (!(err instanceof ConnectionError) || err.code !== 'TIMEOUT') throw err;
     // spec §5.2: resend only after confirming the messageID did not arrive
-    const messages = await api.messages(sessionID, { limit: 50 });
+    const messages = await readSessionMessages(api, sessionID, { limit: 50, ids: [body.messageID] });
     if (Array.isArray(messages) && messages.some((m) => m?.info?.id === body.messageID)) return;
     await api.promptAsync(sessionID, body);
   }
@@ -219,6 +223,16 @@ export async function runTurn({
     if (isServerDown(err)) return serverLostResult(sessionID, messageID);
     throw err;
   }
+  if (request.format) usePerMessageReads(api, sessionID);
+  const assistantIDs = new Set();
+  const rememberAssistant = (info) => {
+    if (info?.role !== 'assistant' || info.parentID !== messageID || !info.id) return;
+    rememberMessage(api, sessionID, info.id);
+    if (!assistantIDs.has(info.id)) {
+      assistantIDs.add(info.id);
+      progress({ assistantMessageID: info.id });
+    }
+  };
   progress({ phase: 'starting', sessionID, message: `Sessão ${displayValue(sessionID)}` });
 
   const tracked = new Set([sessionID]);
@@ -226,6 +240,9 @@ export async function runTurn({
   const seenRequests = new Set();
   const loggedCalls = new Set();
   let sawBusy = false;
+  let promptAccepted = false;
+  let idleGrace = null;
+  const clearIdleGrace = () => { clearTimeout(idleGrace?.timer); idleGrace = null; };
   let toolsRanLive = false;
   let lastPhase = 'starting';
   let forcedError = null;
@@ -243,7 +260,7 @@ export async function runTurn({
   const enqueue = (fn) => {
     queue = queue.then(fn).catch((err) => {
       if (isServerDown(err)) finish('server-lost');
-      else progress({ message: `Erro ao processar evento: ${displayValue(err.message)}` });
+      else progress({ message: `Erro ao processar evento: ${redactText(err.message)}` });
     });
     return queue;
   };
@@ -302,11 +319,28 @@ export async function runTurn({
 
   const checkFinished = async () => {
     if (settled) return;
-    const messages = await api.messages(sessionID, { limit: 200 });
+    const messages = await readSessionMessages(api, sessionID);
     const turn = turnMessages(messages, messageID);
     if (turn.some((m) => m.info?.role === 'assistant' && m.info?.parentID === messageID && m.info?.time?.completed)) return finish('idle');
+    for (const message of turn) rememberAssistant(message.info);
+    // Formatted turns, and any later turn of a session the list bug already hit, can only be read by id.
+    if ((request.format || isPerMessageSession(api, sessionID)) && assistantIDs.size === 0) {
+      if (!promptAccepted) return;
+      if (idleGrace?.expired) return finish('no-assistant-message');
+      if (idleGrace === null) {
+        const grace = { expired: false, timer: null };
+        idleGrace = grace;
+        grace.timer = setTimeout(() => enqueue(async () => {
+          if (idleGrace !== grace) return;
+          grace.expired = true;
+          await resync();
+        }), STRUCTURED_IDLE_GRACE_MS);
+      }
+      return;
+    }
+    clearIdleGrace();
     if (sawBusy) {
-      const resynced = await api.messages(sessionID, { limit: 200 });
+      const resynced = await readSessionMessages(api, sessionID);
       const recovered = turnMessages(resynced, messageID);
       if (recovered.some((m) => m.info?.role === 'assistant' && m.info?.parentID === messageID && m.info?.time?.completed)) return finish('idle');
       return finish('no-assistant-message');
@@ -326,9 +360,11 @@ export async function runTurn({
           if (props.sessionID !== sessionID) return;
           const status = props.status ?? {};
           if (status.type === 'busy') {
+            clearIdleGrace();
             sawBusy = true;
             if (lastPhase === 'starting') setPhase('running');
           } else if (status.type === 'retry') {
+            clearIdleGrace();
             sawBusy = true;
             await handleRetryStatus(status);
           } else if (status.type === 'idle') {
@@ -343,7 +379,8 @@ export async function runTurn({
           if (props.sessionID === sessionID && props.error) finish('session-error', { error: props.error });
           return;
         case 'message.updated':
-          if (props.sessionID === sessionID && props.info?.role === 'assistant' && props.info.parentID === messageID) {
+          if ((props.sessionID ?? props.info?.sessionID) === sessionID && props.info?.role === 'assistant' && props.info.parentID === messageID) {
+            rememberAssistant(props.info);
             sawBusy = true;
             if (props.info.time?.completed) setPhase('finalizing');
           }
@@ -352,7 +389,14 @@ export async function runTurn({
           const part = props.part;
           const owner = props.sessionID ?? part?.sessionID;
           if (!part || !tracked.has(owner)) return;
-          if (owner === sessionID) sawBusy = true;
+          if (owner === sessionID) {
+            sawBusy = true;
+            if (props.info) rememberAssistant(props.info);
+            else if (part.messageID && !assistantIDs.has(part.messageID) && typeof api.message === 'function') {
+              const message = await api.message(sessionID, part.messageID);
+              rememberAssistant(message?.info);
+            }
+          }
           if (part.type === 'tool') {
             const status = part.state?.status;
             if (status === 'completed' && part.tool !== STRUCTURED_OUTPUT_TOOL) toolsRanLive = true;
@@ -392,6 +436,7 @@ export async function runTurn({
     if (settled) return;
     const statuses = await api.sessionStatus();
     const own = statuses?.[sessionID];
+    if (own?.type === 'busy' || own?.type === 'retry') clearIdleGrace();
     if (own?.type === 'busy') sawBusy = true;
     if (own?.type === 'retry') await handleRetryStatus(own);
     for (const child of (await api.children(sessionID)) ?? []) await addChild(child?.id);
@@ -421,7 +466,10 @@ export async function runTurn({
 
   try {
     try {
-      if (!signal?.aborted) await sendPrompt(api, sessionID, buildBody(request, messageID));
+      if (!signal?.aborted) {
+        await sendPrompt(api, sessionID, buildBody(request, messageID));
+        promptAccepted = true;
+      }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
       else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada' } } });
@@ -430,10 +478,12 @@ export async function runTurn({
     pollTimer = setInterval(() => enqueue(resync), statusPollMs);
     const outcome = await done;
     clearInterval(pollTimer);
+    clearIdleGrace();
     clearTimeout(timeoutTimer);
     return await buildResult(outcome);
   } finally {
     clearInterval(pollTimer);
+    clearIdleGrace();
     clearTimeout(timeoutTimer);
     signal?.removeEventListener('abort', onAbort);
     untrack();
@@ -441,7 +491,7 @@ export async function runTurn({
   }
 
   async function buildResult(outcome) {
-    const base = { sessionID, messageID, childSessionIDs: [...children] };
+    const base = { sessionID, messageID, assistantMessageIDs: [...assistantIDs], childSessionIDs: [...children] };
     const safetyFailure = outcome.reason === 'child-permission-failed' || outcome.reason === 'callback-failed';
     if (safetyFailure) {
       const sessionAborts = [];
@@ -469,9 +519,9 @@ export async function runTurn({
     }
     let collected;
     try {
-      const messages = await api.messages(sessionID, { limit: 200 });
+      const messages = await readSessionMessages(api, sessionID);
       const childMessages = [];
-      for (const child of children) childMessages.push(...((await api.messages(child, { limit: 200 })) ?? []));
+      for (const child of children) childMessages.push(...((await readSessionMessages(api, child)) ?? []));
       let diffs = [];
       try {
         diffs = (await api.diff(sessionID)) ?? [];
@@ -486,16 +536,22 @@ export async function runTurn({
       }
       collected = extractTurn([]);
     }
+    let structuredSource = collected.structured != null ? 'tool' : null;
+    if (outcome.reason === 'idle' && !collected.error && !forcedError && collected.structured == null && ['review', 'adversarial-review'].includes(request.kind)) {
+      collected.structured = extractTextJson(collected.finalText, validateReviewOutput);
+      if (collected.structured !== null) structuredSource = 'text';
+    }
+    collected = redactOutput({ ...collected, structuredSource });
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };
     if (outcome.reason === 'no-assistant-message') {
       return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'NoAssistantMessage', errorCode: 'NO_ASSISTANT_MESSAGE', errorMessage: 'A sessão ficou idle sem uma mensagem assistant concluída para este turno.' };
     }
     if (outcome.reason === 'callback-failed') {
-      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'CallbackFailed', errorCode: 'CALLBACK_FAILED', errorMessage: `O callback do turno falhou: ${displayValue(outcome.detail?.message)}` };
+      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'CallbackFailed', errorCode: 'CALLBACK_FAILED', errorMessage: `O callback do turno falhou: ${redactText(outcome.detail?.message)}` };
     }
     if (outcome.reason === 'child-permission-failed') {
-      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'ChildPermissionFailed', errorCode: 'CHILD_PERMISSION_FAILED', errorMessage: `Não foi possível aplicar as regras de permissão à sessão filha: ${displayValue(outcome.detail?.message)}` };
+      return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'ChildPermissionFailed', errorCode: 'CHILD_PERMISSION_FAILED', errorMessage: `Não foi possível aplicar as regras de permissão à sessão filha: ${redactText(outcome.detail?.message)}` };
     }
     if (outcome.reason === 'forced-error' && forcedError) {
       const classified = classifyError(forcedError, { toolsRan });
@@ -506,7 +562,8 @@ export async function runTurn({
     }
     let error = collected.error;
     if (outcome.reason === 'timeout') error = { name: 'Timeout', data: { message: `O turno excedeu ${timeoutMs} ms e foi interrompido` } };
-    else if (outcome.reason === 'session-error' || outcome.reason === 'prompt-failed') error = outcome.error;
+    else if (outcome.reason === 'session-error') error = redactOutput(outcome.error);
+    else if (outcome.reason === 'prompt-failed') error = outcome.error;
     else if (forcedError) error = forcedError;
     if (!error) return { ...result, status: 'completed', error: null };
     const classified = classifyError(error, { toolsRan });

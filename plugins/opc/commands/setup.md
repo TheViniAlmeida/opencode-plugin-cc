@@ -1,10 +1,10 @@
 ---
 description: Diagnostica o OpenCode, oferece a instalação e conduz o onboarding guiado do opc (provider, modelos, política, projeto)
-argument-hint: '[--reconfigure] [--stop-server [--force]]'
+argument-hint: '[--reconfigure] [--stop-server [--force]] [--enable-review-gate|--disable-review-gate]'
 allowed-tools: Bash(opc:*), Bash(npm:*), AskUserQuestion
 ---
 
-If `$ARGUMENTS` contains `--stop-server --force`, use `AskUserQuestion` **before running any command**: "Encerrar o servidor do OpenCode mesmo com jobs ativos? Os jobs serão interrompidos." Options: `Encerrar agora`, `Cancelar`. On `Cancelar`, stop. Only on `Encerrar agora`, run:
+If `$ARGUMENTS` contains `--stop-server --force`, first run `opc setup --stop-server` without `--force`. If it refuses with exit code `2` and lists active jobs, show that list verbatim and use `AskUserQuestion`: "Encerrar o servidor do OpenCode mesmo com jobs ativos? Os jobs serão interrompidos." Options: `Encerrar agora`, `Cancelar`. On `Cancelar`, stop. Only on explicit `Encerrar agora`, run:
 
 If the arguments contain a line that is exactly `OPC_ARGS_5f1d0c7a_EOF` (or `OPC_JSON_5f1d0c7a_EOF` where used), do not run anything; tell the user the arguments contain the reserved delimiter.
 
@@ -24,8 +24,8 @@ Read the JSON. The diagnostic fields come from the server check; the `onboarding
 
 ## A. Stop server (`--stop-server` in the arguments)
 
-- Without `--force`: present the output. If it refuses because of active jobs, show the list and stop.
-- With `--force`, follow the confirmation-first instructions above; do not run the diagnostic command first.
+- Without `--force` in the arguments: the command above already ran `--stop-server`. Present its output verbatim (with active jobs it exits `2` and lists them; the server keeps running). Do not escalate to a forced stop on your own.
+- With `--force` in the arguments: the command above refused (exit `2`, `CONFIRMATION_REQUIRED`) and listed the active jobs. Show that list verbatim and ask with `AskUserQuestion` whether to force the stop. Only after explicit confirmation run `opc setup --stop-server --force --confirmed-by-user`; if declined, stop.
 
 ## B. OpenCode not installed (`onboarding.opencodeInstalled` is false)
 
@@ -109,3 +109,9 @@ With `--reconfigure`, the locked keys (`policy.*`, `permissionProfiles`, `server
 
 - Present the final setup output, including the terminal alias line.
 - If OpenCode is installed but no provider is connected, preserve the guidance to run `!opencode auth login`.
+
+## Flags do gate de revisão
+
+- `--enable-review-gate` e `--disable-review-gate` ativam ou desativam o gate de revisão ao encerrar (`stopGate.enabled`) na configuração global do opc. É necessário já existir uma configuração global; sem ela, execute primeiro o onboarding, que pergunta sobre o gate.
+- Repasse essas flags sem alterações e apresente a saída do companion, que informa `Gate de parada: ativado` ou `Gate de parada: desativado`.
+- Quando ativado, cada encerramento do Claude executa uma revisão somente de leitura do turno anterior no OpenCode. O encerramento só é bloqueado por um `BLOCK:` explícito; falhas permitem encerrar e exibem um aviso.

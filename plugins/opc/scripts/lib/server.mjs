@@ -15,7 +15,6 @@ import { readJson, writeFileAtomic } from './state.mjs';
 export const MIN_OPENCODE_VERSION = '1.18.0';
 const MAX_BOOT_ATTEMPTS = 3;
 const HEALTH_REUSE_TIMEOUT_MS = 2000;
-const DISPOSE_TIMEOUT_MS = 3000;
 const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 const LISTENING_RE = /opencode server listening on (https?:\/\/[^\s]+)/;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -106,14 +105,6 @@ async function probeHealth(url, password, timeoutMs) {
 }
 
 async function shutdownRecorded(stateDir, record) {
-  if (typeof record.url === 'string' && typeof record.password === 'string' && record.password.length > 0) {
-    const client = createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: DISPOSE_TIMEOUT_MS });
-    try {
-      await client.post('/global/dispose', undefined, { retryOnServerDown: false });
-    } catch {
-      // dispose is best effort; the signals below decide
-    }
-  }
   const result = await terminateProcessGroup({ pid: record.pid, startTime: record.startTime }, serverMatcher(record.port), {
     graceMs: 3000,
   });
@@ -419,31 +410,38 @@ export async function ensureServer(ctx) {
   });
 }
 
-export async function stopServer(ctx, { force = false, confirmedByUser = false } = {}) {
+async function stopServerUnlocked(ctx, { force = false, confirmedByUser = false } = {}) {
   if (force && !confirmedByUser) {
     throw new UsageError('CONFIRMATION_REQUIRED', '--force exige --confirmed-by-user (confirmação explícita do usuário).');
   }
   const { stateDir, config, env = process.env, hasActiveJobs = () => false } = ctx;
-  const settings = serverSettings(config);
-  return withLock(path.join(stateDir, 'server.lock'), { timeoutMs: 4 * settings.bootTimeoutSec * 1000, purpose: 'stop-server' }, async () => {
-    if (env.OPC_SERVER_URL) return { stopped: false, reason: 'attached' };
-    const record = readServerRecordData(stateDir);
-    if (record?.password) registerSecret(record.password);
-    if (!record) return { stopped: false, reason: 'not-running' };
-    if (hasActiveJobs() && !force) return { stopped: false, reason: 'active-jobs' };
-    const identity = getProcessIdentity(record.pid);
-    if (!identity) {
-      removeServerRecord(stateDir);
-      return { stopped: false, reason: 'not-running' };
-    }
-    if (!recordIdentityOk(record)) {
-      removeServerRecord(stateDir);
-      return { stopped: false, reason: 'identity-mismatch' };
-    }
-    const result = await shutdownRecorded(stateDir, record);
-    if (result === 'identity-mismatch') return { stopped: false, reason: 'identity-mismatch' };
-    return { stopped: true, reason: result === 'killed' ? 'killed' : 'terminated' };
-  });
+  if (env.OPC_SERVER_URL) return { stopped: false, reason: 'attached' };
+  const record = readServerRecordData(stateDir);
+  if (record?.password) registerSecret(record.password);
+  if (!record) return { stopped: false, reason: 'not-running' };
+  if (hasActiveJobs() && !force) return { stopped: false, reason: 'active-jobs' };
+  const identity = getProcessIdentity(record.pid);
+  if (!identity) {
+    removeServerRecord(stateDir);
+    return { stopped: false, reason: 'not-running' };
+  }
+  if (!recordIdentityOk(record)) {
+    removeServerRecord(stateDir);
+    return { stopped: false, reason: 'identity-mismatch' };
+  }
+  const result = await shutdownRecorded(stateDir, record);
+  if (result === 'identity-mismatch') return { stopped: false, reason: 'identity-mismatch' };
+  return { stopped: true, reason: result === 'killed' ? 'killed' : 'terminated' };
+}
+
+export async function stopServer(ctx, { force = false, confirmedByUser = false, lockHeld = false } = {}) {
+  const run = () => stopServerUnlocked(ctx, { force, confirmedByUser });
+  if (lockHeld) return run();
+  return withLock(
+    path.join(ctx.stateDir, 'server.lock'),
+    { timeoutMs: 4 * serverSettings(ctx.config).bootTimeoutSec * 1000, purpose: 'stop-server' },
+    run,
+  );
 }
 
 export function clientFor(ctx, server) {

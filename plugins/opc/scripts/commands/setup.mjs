@@ -8,11 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseArgs } from '../lib/args.mjs';
-import { globalConfigPath, workspaceConfigPath } from '../lib/config.mjs';
+import { globalConfigPath, workspaceConfigPath, setStopGateEnabled } from '../lib/config.mjs';
 import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
-import { renderSetup } from '../lib/render.mjs';
+import { renderSetup, renderReviewGate } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, stopServer } from '../lib/server.mjs';
 import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
+import { liveActiveJobs } from '../lib/jobs.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SPEC = {
@@ -21,6 +22,8 @@ const SPEC = {
     'stop-server': { type: 'boolean' },
     force: { type: 'boolean' },
     'confirmed-by-user': { type: 'boolean' },
+    'enable-review-gate': { type: 'boolean' },
+    'disable-review-gate': { type: 'boolean' },
   },
 };
 
@@ -47,6 +50,21 @@ export function detectOpencode(env, bin = 'opencode') {
     supported: version ? compareVersions(version, MIN_OPENCODE_VERSION) >= 0 : null,
     detail: res.status === 0 ? 'ok' : `saiu com ${res.status}`,
   };
+}
+
+export function reviewGateChange(flags) {
+  if (flags['enable-review-gate'] && flags['disable-review-gate']) {
+    throw new UsageError('USAGE', 'Escolha --enable-review-gate ou --disable-review-gate, não ambos.');
+  }
+  if (flags['enable-review-gate']) return true;
+  if (flags['disable-review-gate']) return false;
+  return null;
+}
+
+export function contextOptions(argv) {
+  return argv.some((arg) => ['--stop-server', '--enable-review-gate', '--disable-review-gate'].includes(arg))
+    ? { allowInvalidConfig: true }
+    : {};
 }
 
 function serverContext(ctx) {
@@ -79,6 +97,7 @@ function baseReport(ctx) {
     server: null,
     terminalAlias: terminalAlias(ctx.dataDir),
     nextSteps: [],
+    reviewGate: { enabled: ctx.config?.stopGate?.enabled === true, changed: ctx.reviewGateChanged === true },
   };
 }
 
@@ -137,29 +156,57 @@ async function diagnose(ctx, flags) {
   if (!report.config.hasGlobal) report.nextSteps.push('Ainda não há config global do opc; o onboarding guiado chega na F1.');
   report.ready = exitCode === ExitCode.OK;
   if (flags.json) ctx.json(report);
-  else ctx.out(renderSetup(report));
+  else { ctx.out(renderSetup(report)); ctx.out(renderReviewGate(report.reviewGate)); }
   return exitCode;
 }
 
 async function stop(ctx, flags) {
-  const result = await stopServer(serverContext(ctx), { force: flags.force, confirmedByUser: flags['confirmed-by-user'] });
+  let activeJobs = [];
+  const result = await stopServer({
+    ...serverContext(ctx),
+    hasActiveJobs: () => {
+      activeJobs = liveActiveJobs(ctx.stateDir);
+      return activeJobs.length > 0;
+    },
+  }, { force: flags.force, confirmedByUser: flags['confirmed-by-user'] });
   const report = {
     mode: 'stop',
     stop: result,
     warnings: ctx.configWarnings ?? [],
     activeJobs: result.reason === 'active-jobs'
-      ? listActiveJobs(ctx.stateDir).map((j) => ({ id: j.id, kind: j.kind, status: j.status, title: j.title ?? null }))
+      ? activeJobs.map((j) => ({ id: j.id, kind: j.kind, status: j.status, title: j.title ?? null }))
       : [],
+    reviewGate: { enabled: ctx.config?.stopGate?.enabled === true, changed: ctx.reviewGateChanged === true },
   };
   if (flags.json) ctx.json(report);
-  else ctx.out(renderSetup(report));
+  else { ctx.out(renderSetup(report)); ctx.out(renderReviewGate(report.reviewGate)); }
   return result.reason === 'active-jobs' ? ExitCode.USAGE : ExitCode.OK;
 }
 
 async function runDiagnostics(ctx, argv) {
   const { flags } = parseArgs(argv, SPEC);
+  const gateChange = reviewGateChange(flags);
+  if (gateChange !== null && ctx.configError) {
+    const { scope, path: configPath } = ctx.configError;
+    throw new UsageError(
+      'CONFIG_INVALID',
+      `Configuração ${scope} inválida em ${configPath}. Execute "opc config validate" antes de alterar o gate.`,
+      { details: ctx.configError.details },
+    );
+  }
   if ((flags.force || flags['confirmed-by-user']) && !flags['stop-server']) {
     throw new UsageError('USAGE', '--force e --confirmed-by-user só valem junto com --stop-server.');
+  }
+  if (flags.force && !flags['confirmed-by-user']) {
+    throw new UsageError('CONFIRMATION_REQUIRED', '--force exige --confirmed-by-user (confirmação explícita do usuário).');
+  }
+  if (flags['confirmed-by-user'] && !flags.force) {
+    throw new UsageError('USAGE', '--confirmed-by-user só vale junto com --stop-server --force.');
+  }
+  ctx.reviewGateChanged = gateChange !== null;
+  if (gateChange !== null) {
+    await setStopGateEnabled(ctx.dataDir, gateChange);
+    ctx.config = { ...ctx.config, stopGate: { ...ctx.config.stopGate, enabled: gateChange } };
   }
   if (flags['stop-server']) return stop(ctx, flags);
   return diagnose(ctx, flags);
@@ -329,9 +376,6 @@ const SetupOnboarding = {
 async function runCommand(ctx, argv) {
   const sub = argv[0];
   if (['models', 'apply', 'commit', 'discard'].includes(sub)) return SetupOnboarding[sub](ctx, argv.slice(1));
-  if (argv.some((arg) => arg === '--enable-review-gate' || arg === '--disable-review-gate')) {
-    throw new UsageError('USAGE', 'Os flags de review gate estarão disponíveis na F2b.');
-  }
   const reconfigure = argv.includes('--reconfigure');
   const rest = argv.filter((a) => a !== '--reconfigure');
   const isF0Control = rest.some((a) => SETUP_PASSTHROUGH_FLAGS.includes(a)

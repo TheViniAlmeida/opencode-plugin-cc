@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const COMMANDS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugins', 'opc', 'commands');
+const AGENTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugins', 'opc', 'agents');
 const F1 = {
   setup: { tools: ['Bash(opc:*)', 'Bash(npm:*)', 'AskUserQuestion'], disableModel: false },
   config: { tools: ['Bash(opc:*)'], disableModel: true },
@@ -24,6 +25,27 @@ function parse(name) {
   }));
   const bashBlocks = [...match[2].matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]);
   return { front, body: match[2], bashBlocks };
+}
+
+function findUnsafeOpcCommandLine(markdown) {
+  const bashBlocks = [...markdown.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
+  const unsafe = /\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\}|\$\(|`|\{\{[^}]*\}\}|<[^>]*>/;
+  for (const block of bashBlocks) {
+    let heredocTerminator = null;
+    for (const line of block.split('\n')) {
+      if (heredocTerminator) {
+        if (line === heredocTerminator) heredocTerminator = null;
+        continue;
+      }
+      if (!/^\s*opc\s/.test(line)) continue;
+      const heredoc = line.match(/<<['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
+      // Check the whole line except the heredoc operator itself (text after it is still shell).
+      const commandLine = heredoc ? line.slice(0, heredoc.index) + line.slice(heredoc.index + heredoc[0].length) : line;
+      if (unsafe.test(commandLine)) return line;
+      if (heredoc) heredocTerminator = heredoc[1];
+    }
+  }
+  return null;
 }
 
 for (const [name, expected] of Object.entries(F1)) {
@@ -89,4 +111,64 @@ test('models search quotes a free-text query with spaces as one argument', () =>
 test('providers output format documents the --json exception', () => {
   const { body } = parse('providers');
   assert.match(body, /Markdown unless `--json` is passed/i);
+});
+
+test('command and agent opc invocations keep user supplied values inside quoted heredocs', () => {
+  for (const dir of [COMMANDS, AGENTS]) {
+    for (const name of fs.readdirSync(dir).filter((entry) => entry.endsWith('.md'))) {
+      const text = fs.readFileSync(path.join(dir, name), 'utf8');
+      assert.equal(findUnsafeOpcCommandLine(text), null, `${name} has no shell expansion or placeholder on an opc command line`);
+    }
+  }
+});
+
+test('command-line lint rejects shell expansions and placeholders in memory fixtures', () => {
+  for (const form of ['$NAME', '${NAME}', '"$NAME"', "'$NAME'", '$ARGUMENTS', '{{value}}', '<user value>', '`command`', '$(command)']) {
+    const fixture = `\`\`\`bash\nopc review --focus ${form}\n\`\`\``;
+    assert.ok(findUnsafeOpcCommandLine(fixture), `${form} is rejected`);
+  }
+  for (const form of ['--model "$NAME"', "--model '$NAME'", '${NAME}', '$(command)']) {
+    const after = `\`\`\`bash\nopc review --raw-args-stdin <<'ARGS' ${form}\n$ARGUMENTS\nARGS\n\`\`\``;
+    assert.ok(findUnsafeOpcCommandLine(after), `${form} after the heredoc operator is rejected`);
+  }
+  const heredocFixture = "```bash\nopc review --raw-args-stdin <<'ARGS'\n$ARGUMENTS\nARGS\n```";
+  assert.equal(findUnsafeOpcCommandLine(heredocFixture), null, 'heredoc body remains allowed');
+});
+
+test('agent heredocs have the reserved-delimiter guard and standalone terminators', () => {
+  for (const name of fs.readdirSync(AGENTS).filter((entry) => entry.endsWith('.md'))) {
+    const text = fs.readFileSync(path.join(AGENTS, name), 'utf8');
+    if (!/<<'OPC_(?:ARGS|JSON)_5f1d0c7a_EOF'/.test(text)) continue;
+    assert.match(text, /Se os argumentos contiverem uma linha exatamente igual a `OPC_ARGS_5f1d0c7a_EOF` \(ou `OPC_JSON_5f1d0c7a_EOF` quando usado\), não execute nada; informe ao usuário que os argumentos contêm o delimitador reservado\./, `${name} reserved-delimiter guard`);
+    const block = [...text.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]).find((value) => /<<'OPC_/.test(value));
+    assert.ok(block, `${name} has a fenced heredoc example`);
+    assert.match(block, /(?:^|\n)OPC_ARGS_5f1d0c7a_EOF$/, `${name} heredoc terminator is alone on its line`);
+  }
+});
+
+test('opc-rescue routes every runtime flag and task text through the raw args heredoc and diagnoses empty failures', () => {
+  const rescue = fs.readFileSync(path.join(AGENTS, 'opc-rescue.md'), 'utf8');
+  assert.match(rescue, /opc task --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--write\n--wait-timeout 540\n<opções de execução, uma por linha>\n--\n<texto da tarefa exatamente como recebido>\nOPC_ARGS_5f1d0c7a_EOF/);
+  assert.match(rescue, /Se os argumentos contiverem uma linha exatamente igual a `OPC_ARGS_5f1d0c7a_EOF` \(ou `OPC_JSON_5f1d0c7a_EOF` quando usado\), não execute nada; informe ao usuário que os argumentos contêm o delimitador reservado\./);
+  assert.match(rescue, /terminador deve ficar sozinho em sua linha/i);
+  assert.match(rescue, /código de saída[\s\S]*primeiras linhas de stderr[\s\S]*nenhum resultado do OpenCode foi produzido/i);
+  assert.doesNotMatch(rescue, /return nothing/);
+});
+
+test('review commands share a byte-identical estimate/choose/execute flow', () => {
+  function sharedFlow(name) {
+    const text = fs.readFileSync(path.join(COMMANDS, `${name}.md`), 'utf8');
+    const match = text.match(/<!-- shared:review-flow -->\n([\s\S]*?)\n<!-- \/shared:review-flow -->/);
+    assert.ok(match, `${name}.md has shared review flow markers`);
+    return match[1].replaceAll('opc adversarial-review', 'opc review');
+  }
+  assert.equal(sharedFlow('review'), sharedFlow('adversarial-review'));
+  for (const name of ['review', 'adversarial-review']) {
+    const text = fs.readFileSync(path.join(COMMANDS, `${name}.md`), 'utf8');
+    const match = text.match(/<!-- shared:review-flow -->\n([\s\S]*?)\n<!-- \/shared:review-flow -->/);
+    assert.match(match[1], /--estimate --json/);
+    assert.match(match[1], /AskUserQuestion/);
+    assert.match(match[1], /--background/);
+    assert.match(match[1], /--wait/);
+  }
 });

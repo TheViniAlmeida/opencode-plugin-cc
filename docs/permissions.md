@@ -83,3 +83,15 @@ O `PATCH /session/:id {permission}` anexa regras, em vez de substituí-las (§15
 vivo). Mesmo perfil não envia nada. `read-only` ou `custom` após `write` anexa um novo `* * deny`
 e neutraliza regras anteriores. `write` após `read-only` retorna exit 2
 `PROFILE_SWITCH_UNSUPPORTED`: o deny antigo continuaria valendo; use `--fresh`.
+
+## Stop review gate
+
+O gate é opcional (`stopGate.enabled`, padrão `false`; ligue com `/opc:setup --enable-review-gate`). Ligado, cada parada do Claude roda um turno OpenCode que revisa o turno anterior; há uma chamada de modelo por parada.
+
+- **Perfil:** `read-only`: nega tudo por padrão e libera somente `read`, `glob`, `grep`, `list`, `lsp`, `skill` e `todowrite`, além das invariantes. Não libera Bash, edição ou web. Pedido de permissão recebe `reject` imediato.
+- **Entrada:** `last_assistant_message` ou, se ausente, a última mensagem de assistente em `transcript_path`, mais contexto do working tree de até 200 KB. Conteúdo de `policy.sensitivePaths` nunca é enviado.
+- **Modelo:** `stopGate.model` → `defaultModel` → padrão OpenCode, sempre sob política.
+- **Decisão:** apenas primeira linha `BLOCK: <motivo>` bloqueia; o Claude recebe `opc stop gate: <motivo>` e continua. `ALLOW:` permite.
+- **Infraestrutura:** OpenCode ausente, boot falho, modelo negado, limite de jobs, timeout de 840 s, resposta malformada ou falha de preparação permitem com `systemMessage` que informa a causa redigida.
+- **Laço:** com `stop_hook_active: true`, permite sem executar outro turno.
+- **Desvio do codex:** timeout ou saída inválida permitem com aviso; não bloqueiam.

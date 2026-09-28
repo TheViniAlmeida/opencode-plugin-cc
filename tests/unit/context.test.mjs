@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { createContext } from '../../plugins/opc/scripts/lib/context.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { makeTempDir, makeWorkspace, removeTempDir } from '../helpers.mjs';
+import { makeTempDir, makeWorkspace, removeTempDir, writeGlobalConfig } from '../helpers.mjs';
 
 function sink() {
   const chunks = [];
@@ -48,4 +48,30 @@ test('createContext fails with DATA_DIR_UNRESOLVED unless createDataDir is set',
   const ctx = await createContext({ env: { HOME: home }, cwd: ws, createDataDir: true });
   assert.equal(ctx.dataDir, path.join(home, '.claude', 'plugins', 'data', 'opc-opencode-plugin-cc'));
   assert.ok(fs.existsSync(ctx.stateDir));
+});
+
+test('createContext exposes invalid global and workspace config only when explicitly allowed', async (t) => {
+  const data = makeTempDir('opc-ctx-invalid-');
+  t.after(() => removeTempDir(data));
+  const ws = makeWorkspace(t);
+  const env = { OPC_DATA_DIR: data, HOME: data };
+  const globalFile = path.join(data, 'config.json');
+  fs.mkdirSync(data, { recursive: true });
+  fs.writeFileSync(globalFile, 'null');
+
+  const globalCtx = await createContext({ env, cwd: ws, allowInvalidConfig: true });
+  assert.deepEqual(globalCtx.configError, {
+    scope: 'global',
+    path: globalFile,
+    message: 'Config global inválida: precisa conter um objeto JSON.',
+    details: { path: globalFile },
+  });
+  await assert.rejects(createContext({ env, cwd: ws }), (err) => err.code === 'CONFIG_INVALID');
+
+  writeGlobalConfig(env, {});
+  const workspaceFile = path.join(ws, '.opc.json');
+  fs.writeFileSync(workspaceFile, 'null');
+  const workspaceCtx = await createContext({ env, cwd: ws, allowInvalidConfig: true });
+  assert.equal(workspaceCtx.configError.scope, 'workspace');
+  assert.equal(workspaceCtx.configError.path, workspaceFile);
 });

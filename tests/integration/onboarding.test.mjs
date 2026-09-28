@@ -166,14 +166,21 @@ test('invalid payloads: unknown key, ambiguous and unknown models (exit 2)', asy
   assert.equal((await apply({ defaultVariant: 'ultra' })).code, 2);
 });
 
-test('review-gate flags are recognized and deferred to F2b', async (t) => {
-  const { ws, env } = setup(t);
-  for (const flag of ['--enable-review-gate', '--disable-review-gate']) {
-    const r = await runInProcess('setup', [flag], { env, cwd: ws });
-    assert.equal(r.code, 2, all(r));
-    assert.match(all(r), /disponíveis na F2b/i);
-    assert.doesNotMatch(all(r), /unknown|desconhecid/i);
-  }
+test('review-gate flags toggle config and report JSON and Markdown output', async (t) => {
+  const { ws, env, cli } = setup(t, { config: { defaultModel: `${MV}/opencode-go/kimi-k3` } });
+  const enabled = await cli(['setup', '--enable-review-gate', '--json']);
+  assert.equal(enabled.code, 0, all(enabled));
+  assert.deepEqual(JSON.parse(enabled.stdout).reviewGate, { enabled: true, changed: true });
+  assert.equal(readGlobalConfig(env).stopGate.enabled, true);
+
+  const markdown = await cli(['setup']);
+  assert.equal(markdown.code, 0, all(markdown));
+  assert.match(markdown.stdout, /Gate de parada: ativado/);
+
+  const disabled = await cli(['setup', '--disable-review-gate', '--json']);
+  assert.equal(disabled.code, 0, all(disabled));
+  assert.deepEqual(JSON.parse(disabled.stdout).reviewGate, { enabled: false, changed: true });
+  assert.equal(readGlobalConfig(env).stopGate.enabled, false);
 });
 
 test('after bootstrap: locked keys refused from Claude with the terminal command', async (t) => {

@@ -28,7 +28,7 @@ export function resolveDataDir(env = process.env, { home = os.homedir(), pluginD
   );
 }
 
-export function resolveWorkspaceRoot(cwd, { runner = spawnSync, env = process.env } = {}) {
+export function resolveWorkspaceRoot(cwd, { runner = spawnSync, env = process.env, timeoutMs, fallbackOnFailure = false } = {}) {
   let real;
   try {
     real = fs.realpathSync.native(cwd);
@@ -37,9 +37,9 @@ export function resolveWorkspaceRoot(cwd, { runner = spawnSync, env = process.en
   }
   let res;
   try {
-    res = runner('git', ['rev-parse', '--show-toplevel'], { cwd: real, encoding: 'utf8', shell: false, env });
+    res = runner('git', ['rev-parse', '--show-toplevel'], { cwd: real, encoding: 'utf8', shell: false, env, ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}) });
   } catch (cause) {
-    if (cause.code === 'ENOENT') return real;
+    if (fallbackOnFailure || cause.code === 'ENOENT') return real;
     throw new OpcError('WORKSPACE_UNRESOLVED', 'Não foi possível resolver o workspace.', { exitCode: 2, details: { path: real }, cause });
   }
   if (res.status === 0 && res.stdout.trim()) {
@@ -49,7 +49,7 @@ export function resolveWorkspaceRoot(cwd, { runner = spawnSync, env = process.en
       return real;
     }
   }
-  if (res.error?.code === 'ENOENT' || (res.status === 128 && /not a git repository/i.test(res.stderr ?? ''))) return real;
+  if (fallbackOnFailure || res.error?.code === 'ENOENT' || (res.status === 128 && /not a git repository/i.test(res.stderr ?? ''))) return real;
   throw new OpcError('WORKSPACE_UNRESOLVED', 'Não foi possível resolver o workspace.', {
     exitCode: 2,
     details: { path: real, status: res.status, error: res.error?.code },
@@ -205,4 +205,51 @@ export async function updateState(stateDir, mutator) {
 
 export function listActiveJobs(stateDir) {
   return loadState(stateDir).jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
+}
+
+// ---- F2b: Claude session registry (spec §9.3) ----
+import { getProcessIdentity as f2bGetProcessIdentity } from './process.mjs';
+
+export const CLAUDE_SESSION_ORPHAN_MS = 24 * 60 * 60 * 1000;
+
+// Live = the recorded pid still has the recorded start time, or the entry is younger than 24 h
+// (fallback while spec §15 item 9 — "is the hook ppid the Claude process?" — is unconfirmed).
+export function isClaudeSessionLive(entry, { now = Date.now(), identityOf = f2bGetProcessIdentity } = {}) {
+  if (entry?.pid && entry?.pidStartTime) {
+    const identity = identityOf(entry.pid);
+    if (identity && identity.startTime === entry.pidStartTime) {
+      const argv0 = identity.cmdline?.[0];
+      const currentComm = argv0 ? path.basename(argv0) : null;
+      if (!entry.pidComm || currentComm === entry.pidComm) return true;
+    }
+  }
+  const started = Date.parse(entry?.startedAt ?? '');
+  return Number.isFinite(started) && now - started < CLAUDE_SESSION_ORPHAN_MS;
+}
+
+export async function registerClaudeSession(stateDir, entry, opts = {}) {
+  return updateState(stateDir, (state) => {
+    const others = (state.claudeSessions ?? []).filter(
+      (existing) => existing.sessionId !== entry.sessionId && isClaudeSessionLive(existing, opts),
+    );
+    state.claudeSessions = [...others, entry];
+    return state;
+  });
+}
+
+export async function removeClaudeSession(stateDir, sessionId, opts = {}) {
+  let removed = false;
+  await updateState(stateDir, (state) => {
+    const before = state.claudeSessions ?? [];
+    removed = before.some((existing) => existing.sessionId === sessionId);
+    state.claudeSessions = before.filter(
+      (existing) => existing.sessionId !== sessionId && isClaudeSessionLive(existing, opts),
+    );
+    return state;
+  });
+  return removed;
+}
+
+export function liveClaudeSessions(stateDir, opts = {}) {
+  return (loadState(stateDir).claudeSessions ?? []).filter((entry) => isClaudeSessionLive(entry, opts));
 }

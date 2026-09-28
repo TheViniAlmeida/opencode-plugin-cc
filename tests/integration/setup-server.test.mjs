@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
+import { createJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { acquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import {
   makeTempDir, makeWorkspace, parseJsonOutput, processAlive, readFakeState, runCli, testEnv, trackTempDir, waitFor,
 } from '../helpers.mjs';
@@ -49,16 +50,14 @@ test('CLI: --stop-server with active jobs exits 2 listing them; --force needs --
   const env = testEnv(t);
   const ws = makeWorkspace(t);
   const first = await setupJson(env, ws);
-  writeFileAtomic(path.join(first.report.stateDir, 'state.json'), {
-    version: 1, claudeSessions: [], jobs: [{ id: 'task-abc-123456', kind: 'task', status: 'running', title: 'long job' }],
-  });
+  const job = await createJob(first.report.stateDir, { kind: 'task', title: 'long job' });
   const refused = await runCli(['setup', '--stop-server', '--json'], { env, cwd: ws });
   assert.equal(refused.code, 2);
   const body = parseJsonOutput(refused.stdout);
   assert.equal(body.stop.reason, 'active-jobs');
-  assert.deepEqual(body.activeJobs.map((j) => j.id), ['task-abc-123456']);
+  assert.deepEqual(body.activeJobs.map((j) => j.id), [job.id]);
   const md = await runCli(['setup', '--stop-server'], { env, cwd: ws });
-  assert.match(md.stdout, /\| task-abc-123456 \| task \| running \| long job \|/);
+  assert.match(md.stdout, new RegExp(`\\| ${job.id} \\| task \\| queued \\| long job \\|`));
   const noConfirm = await runCli(['setup', '--stop-server', '--force', '--json'], { env, cwd: ws });
   assert.equal(noConfirm.code, 2);
   assert.equal(parseJsonOutput(noConfirm.stdout).error.code, 'CONFIRMATION_REQUIRED');
@@ -67,6 +66,25 @@ test('CLI: --stop-server with active jobs exits 2 listing them; --force needs --
   const forced = await runCli(['setup', '--stop-server', '--force', '--confirmed-by-user', '--json'], { env, cwd: ws });
   assert.equal(forced.code, 0);
   assert.equal(parseJsonOutput(forced.stdout).stop.stopped, true);
+});
+
+test('CLI: --stop-server rechecks jobs created while waiting for server.lock', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const first = await setupJson(env, ws);
+  assert.equal(first.code, 0, first.stderr);
+  const release = await acquireLock(path.join(first.report.stateDir, 'server.lock'), { timeoutMs: 1000, purpose: 'test-race' });
+  const stopping = runCli(['setup', '--stop-server', '--json'], { env, cwd: ws });
+  const job = await createJob(first.report.stateDir, { kind: 'task', title: 'created while stop waits' });
+  release();
+
+  const refused = await stopping;
+  assert.equal(refused.code, 2, refused.stdout + refused.stderr);
+  const body = parseJsonOutput(refused.stdout);
+  assert.equal(body.stop.reason, 'active-jobs');
+  assert.deepEqual(body.activeJobs.map((item) => item.id), [job.id]);
+  const forced = await runCli(['setup', '--stop-server', '--force', '--confirmed-by-user', '--json'], { env, cwd: ws });
+  assert.equal(forced.code, 0, forced.stdout + forced.stderr);
 });
 
 test('workspace-with-spaces: git (from a subdir) and non-git dirs with spaces/accents keep exact directory and hash', async (t) => {

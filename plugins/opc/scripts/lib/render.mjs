@@ -1,6 +1,6 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
-import { redact, redactText } from './redact.mjs';
+import { redact, redactText, redactOutput, redactTurnOutput } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
 
 function cell(value) {
@@ -272,7 +272,7 @@ export function renderQueuedJob(job) {
 
 function pendingLines(job, { timeoutSec = null } = {}) {
   const lines = [];
-  for (const req of job.pendingRequest ?? []) {
+  for (const req of redactOutput(job.pendingRequest ?? [])) {
     if (req.type === 'question') {
       lines.push(`## Pergunta ${req.id}`, '');
       if (req.sessionID && req.sessionID !== job.sessionID) lines.push(`- Sessão: ${req.sessionID} (sessão filha)`);
@@ -354,7 +354,7 @@ export function renderStatusList(jobs, { maxJobs = 8, progressById = {}, now = D
 }
 
 export function renderTurnResult(job) {
-  const r = job.result ?? {};
+  const r = redactTurnOutput(job.result ?? {});
   const lines = [];
   if (job.status === 'completed') {
     if (r.finalText) lines.push(r.finalText);
@@ -408,3 +408,227 @@ export function renderPermissionList(requests, jobs = []) {
   return redactText(`# opc permissions\n\n${renderTable(['Id', 'Tipo', 'Solicitação', 'Sessão', 'Tarefa'], rows)}\n`);
 }
 // ---- end F1 ----
+
+// ---- F2b: review rendering. Adapted from openai/codex-plugin-cc (Apache-2.0); modified ----
+const REVIEW_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low'];
+const REVIEW_LABELS = { review: 'Revisão', adversarial: 'Revisão Adversarial' };
+const REVIEW_KEYS = ['verdict', 'summary', 'findings', 'next_steps'];
+const REVIEW_FINDING_KEYS = ['severity', 'title', 'body', 'file', 'line_start', 'line_end', 'confidence', 'recommendation'];
+
+function reviewSeverityRank(severity) {
+  const index = REVIEW_SEVERITY_ORDER.indexOf(severity);
+  return index === -1 ? REVIEW_SEVERITY_ORDER.length : index;
+}
+
+function reviewCodeFence(text, lang = 'text') {
+  const longestRun = Math.max(0, ...(String(text).match(/`+/g) ?? []).map((run) => run.length));
+  const marks = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${marks}${lang}\n${text}\n${marks}`;
+}
+
+function reviewNonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validateReviewFinding(finding) {
+  if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return 'deve ser um objeto.';
+  if (!REVIEW_SEVERITY_ORDER.includes(finding.severity)) return '`severity` deve ser critical, high, medium ou low.';
+  for (const key of ['title', 'body', 'file']) {
+    if (!reviewNonEmpty(finding[key])) return `\`${key}\` deve ser uma string não vazia.`;
+  }
+  for (const key of ['line_start', 'line_end']) {
+    if (!Number.isInteger(finding[key]) || finding[key] < 1) return `\`${key}\` deve ser um inteiro >= 1.`;
+  }
+  if (typeof finding.confidence !== 'number' || finding.confidence < 0 || finding.confidence > 1) {
+    return '`confidence` deve ser um número entre 0 e 1.';
+  }
+  if (typeof finding.recommendation !== 'string') return '`recommendation` deve ser uma string.';
+  const extra = Object.keys(finding).filter((key) => !REVIEW_FINDING_KEYS.includes(key));
+  return extra.length ? `campo(s) inesperado(s): ${extra.join(', ')}.` : null;
+}
+
+export function validateReviewOutput(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return 'Esperado um objeto JSON no nível superior.';
+  if (!['approve', 'needs-attention'].includes(data.verdict)) return 'O campo `verdict` deve ser "approve" ou "needs-attention".';
+  if (!reviewNonEmpty(data.summary)) return 'Campo `summary` ausente ou inválido.';
+  if (!Array.isArray(data.findings)) return 'Campo `findings` deve ser uma lista.';
+  if (!Array.isArray(data.next_steps)) return 'Campo `next_steps` deve ser uma lista.';
+  for (const [index, finding] of data.findings.entries()) {
+    const error = validateReviewFinding(finding);
+    if (error) return `findings[${index}]: ${error}`;
+  }
+  for (const [index, step] of data.next_steps.entries()) {
+    if (!reviewNonEmpty(step)) return `next_steps[${index}] deve ser uma string não vazia.`;
+  }
+  const extra = Object.keys(data).filter((key) => !REVIEW_KEYS.includes(key));
+  return extra.length ? `Campo(s) inesperado(s): ${extra.join(', ')}.` : null;
+}
+
+function normalizeReviewFinding(finding, index) {
+  const source = finding && typeof finding === 'object' && !Array.isArray(finding) ? finding : {};
+  const lineStart = Number.isInteger(source.line_start) && source.line_start > 0 ? source.line_start : null;
+  const lineEnd = Number.isInteger(source.line_end) && source.line_end >= (lineStart ?? 1) ? source.line_end : lineStart;
+  return {
+    severity: reviewNonEmpty(source.severity) ? source.severity.trim() : 'low',
+    title: reviewNonEmpty(source.title) ? source.title.trim() : `Achado ${index + 1}`,
+    body: reviewNonEmpty(source.body) ? source.body.trim() : 'Nenhum detalhe informado.',
+    file: reviewNonEmpty(source.file) ? source.file.trim() : 'desconhecido',
+    lineStart,
+    lineEnd,
+    recommendation: typeof source.recommendation === 'string' ? source.recommendation.trim() : '',
+  };
+}
+
+function reviewLineRange({ lineStart, lineEnd }) {
+  if (!lineStart) return '';
+  if (!lineEnd || lineEnd === lineStart) return `:${lineStart}`;
+  return `:${lineStart}-${lineEnd}`;
+}
+
+function reviewIndent(text) {
+  return text.split('\n').map((line) => `  ${line}`).join('\n');
+}
+
+function reviewFinish(lines) {
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
+}
+
+export function reviewMetaFromJob(job) {
+  const review = job?.request?.review ?? {};
+  return {
+    variant: review.variant ?? 'review',
+    targetLabel: review.targetLabel ?? null,
+    model: job?.request?.modelFull ?? (typeof job?.model === 'string' ? job.model : null),
+    jobId: job?.id ?? null,
+  };
+}
+
+export function renderReview(result = {}, meta = {}) {
+  result = redactTurnOutput(result);
+  const label = REVIEW_LABELS[meta.variant] ?? REVIEW_LABELS.review;
+  const lines = [`# OPC ${label}`, ''];
+  if (meta.targetLabel) lines.push(`Alvo: ${meta.targetLabel}`);
+  if (meta.model) lines.push(`Modelo: ${meta.model}`);
+  if (meta.jobId) lines.push(`Job: ${meta.jobId}`);
+
+  if (isFailedResult(result)) {
+    if (result.status === 'cancelled') {
+      if (result.errorCode || result.errorClass) {
+        lines.push('', `Revisão cancelada: ${result.errorType ?? 'Cancelled'} (${result.errorCode ?? 'sem código'}; ${result.errorClass ?? 'sem classe'}): ${result.errorMessage ?? 'operação cancelada'}`);
+      } else {
+        lines.push('', 'Revisão cancelada.');
+      }
+    } else {
+      lines.push('', `Falha na revisão: ${result.errorType ?? result.errorName ?? 'Erro'}${result.errorCode || result.errorClass ? ` (${result.errorCode ?? 'sem código'}; ${result.errorClass ?? 'sem classe'})` : ''}: ${result.errorMessage ?? result.error ?? 'erro desconhecido'}`);
+    }
+    const partialError = validateReviewOutput(result.structured);
+    if (partialError === null) {
+      lines.push('', 'Dados parciais:', '', ...renderReviewStructured(result.structured).split('\n').slice(2));
+    } else if (result.structured != null) {
+      lines.push('', ...renderInvalidReviewStructured(result.structured, partialError));
+    } else if (result.errorType === 'StructuredOutputError' || result.errorName === 'StructuredOutputError') {
+      lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
+      if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
+    }
+    const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
+    if (raw) lines.push('', 'Mensagem final bruta:', '', reviewCodeFence(raw));
+    return reviewFinish(lines);
+  }
+
+  const structured = result.structured;
+  if (structured != null) {
+    const shapeError = validateReviewOutput(structured);
+    if (shapeError) {
+      lines.push('', ...renderInvalidReviewStructured(structured, shapeError));
+      return reviewFinish(lines);
+    }
+    lines.push('', ...renderReviewStructured(structured).split('\n'));
+    return reviewFinish(lines);
+  }
+
+  const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
+  if (result.errorType === 'StructuredOutputError' || result.status === 'completed') {
+    lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
+    if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
+    lines.push('', 'Mensagem final bruta:', '', raw ? reviewCodeFence(raw) : '(sem saída de texto)');
+    return reviewFinish(lines);
+  }
+
+  lines.push('', `Falha na revisão: ${result.errorType ?? result.errorName ?? 'Erro'}: ${result.errorMessage ?? result.error ?? 'erro desconhecido'}`);
+  if (raw) lines.push('', 'Mensagem final bruta:', '', reviewCodeFence(raw));
+  return reviewFinish(lines);
+}
+
+function isFailedResult(result) {
+  return result.status === 'failed' || result.status === 'cancelled'
+    || result.errorCode != null || result.errorClass != null || result.errorName != null || result.error != null;
+}
+
+function renderInvalidReviewStructured(structured, validationError) {
+  return [
+    'O OpenCode não retornou uma saída estruturada válida.',
+    '',
+    `- Erro de validação: ${validationError}`,
+    '',
+    'Saída estruturada bruta:',
+    '',
+    reviewCodeFence(JSON.stringify(structured, null, 2), 'json'),
+  ];
+}
+
+function renderReviewStructured(structured) {
+  const lines = [`Veredito: ${structured.verdict.trim()}`, '', structured.summary.trim(), ''];
+  const findings = structured.findings
+    .map(normalizeReviewFinding)
+    .map((finding, index) => ({ finding, index }))
+    .sort((a, b) => reviewSeverityRank(a.finding.severity) - reviewSeverityRank(b.finding.severity) || a.index - b.index)
+    .map(({ finding }) => finding);
+  if (findings.length === 0) {
+    lines.push('Nenhum achado relevante.');
+  } else {
+    lines.push('Achados:');
+    for (const finding of findings) {
+      lines.push(`- [${finding.severity}] ${finding.title} (${finding.file}${reviewLineRange(finding)})`);
+      lines.push(reviewIndent(finding.body));
+      if (finding.recommendation) lines.push(`  Recomendação: ${finding.recommendation}`);
+    }
+  }
+  const steps = structured.next_steps.filter(reviewNonEmpty).map((step) => step.trim());
+  if (steps.length) {
+    lines.push('', 'Próximos passos:');
+    for (const step of steps) lines.push(`- ${step}`);
+  }
+  return lines.join('\n');
+}
+
+function reviewResultFromJob(job) {
+  const result = job?.result ?? {};
+  return {
+    ...result,
+    status: ['cancelled', 'failed'].includes(job?.status) ? job.status : result.status ?? job?.status,
+    errorType: result.errorType ?? job?.errorType ?? null,
+    errorName: result.errorName ?? job?.errorName ?? null,
+    errorCode: result.errorCode ?? job?.errorCode ?? null,
+    errorClass: result.errorClass ?? job?.errorClass ?? null,
+    errorMessage: result.errorMessage ?? job?.errorMessage ?? null,
+    error: result.error ?? job?.error ?? null,
+  };
+}
+
+export function renderReviewJob(job) {
+  return renderReview(reviewResultFromJob(job), reviewMetaFromJob(job));
+}
+
+export function renderReviewEstimate(estimate) {
+  return reviewFinish([
+    '# Estimativa de revisão OPC',
+    '',
+    `Alvo: ${estimate.target.label}`,
+    `Arquivos: ${estimate.files} (+${estimate.insertions} -${estimate.deletions})`,
+    `Recomendação: ${estimate.recommendation}`,
+  ]);
+}
+
+export function renderReviewGate({ enabled, changed }) {
+  return redactText(`Gate de parada: ${enabled ? 'ativado' : 'desativado'}${changed ? ' (atualizado)' : ''}\n`);
+}

@@ -7,6 +7,7 @@ import { OpcError, UsageError } from './opc-error.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
 import { matchesAny, resolveModelRef, normalizeModelId, validateVariant } from './models.mjs';
 import { evaluate, evaluateAgent } from './policy.mjs';
+import { withLock } from './locks.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
 export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
@@ -43,6 +44,7 @@ export const DEFAULT_CONFIG = freezeDeep({
   defaultAgent: null,
   aliases: {},
   reviewModel: null,
+  review: { structuredOutput: 'text' },
   stopGate: { enabled: false, model: null },
   project: { goal: null, scope: [], taskTypes: [] },
   policy: {
@@ -74,6 +76,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   defaultAgent: schemaField('string', { nullable: true }),
   aliases: schemaField('model-map'),
   reviewModel: schemaField('modelref', { nullable: true }),
+  'review.structuredOutput': schemaField('enum', { values: ['text', 'tool'] }),
   'stopGate.enabled': schemaField('boolean'),
   'stopGate.model': schemaField('modelref', { nullable: true }),
   'project.goal': schemaField('string', { nullable: true }),
@@ -119,7 +122,7 @@ export const CONFIG_SCHEMA = Object.freeze({
 
 const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') });
 const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
-const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
+const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'review', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
 const WORKSPACE_POLICY_LISTS = ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny', 'policy.agents.allow', 'policy.agents.deny', 'policy.tools.deny', 'policy.sensitivePaths', 'policy.destructiveBash'];
 const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-map', 'modelref-list-map', 'modelref-list']);
 
@@ -391,6 +394,33 @@ export function loadConfig({ dataDir, workspaceRoot }) {
 
 export function saveGlobalConfig(dataDir, cfg) {
   writeFileAtomic(globalConfigPath(dataDir), cfg, { mode: 0o600 });
+}
+
+// F2b: toggle the stop review gate in the existing global config.
+export async function setStopGateEnabled(dataDir, enabled) {
+  const file = globalConfigPath(dataDir);
+  return withLock(joinPathF1(dataDir, 'config.lock'), { timeoutMs: 30000, purpose: 'setup-review-gate' }, () => {
+    if (!fs.existsSync(file)) {
+      throw new UsageError('NO_GLOBAL_CONFIG', 'Ainda não há configuração global do opc. Execute o onboarding com /opc:setup primeiro; ele pergunta sobre o gate de parada.');
+    }
+    let current;
+    try {
+      current = readJson(file);
+    } catch (err) {
+      if (err.code !== 'INVALID_JSON') throw err;
+      throw new OpcError('CONFIG_INVALID', `Config global inválida. Execute "opc config validate" antes de alterar o gate.`, { exitCode: 2, details: { path: file }, cause: err });
+    }
+    if (!isPlainObject(current)) {
+      throw new OpcError('CONFIG_INVALID', 'Config global inválida: precisa conter um objeto JSON. Execute "opc config validate" antes de alterar o gate.', { exitCode: 2, details: { path: file } });
+    }
+    const shape = validateConfigShape(current, { source: 'global' });
+    if (shape.errors.length) {
+      throw new OpcError('CONFIG_INVALID', `Config global inválida: ${shape.errors.map((e) => `${e.path}: ${e.message}`).join('; ')}. Execute "opc config validate" antes de alterar o gate.`, { exitCode: 2, details: { path: file, errors: shape.errors } });
+    }
+    const next = setPath(current, 'stopGate.enabled', Boolean(enabled));
+    saveGlobalConfig(dataDir, next);
+    return next;
+  });
 }
 
 export function saveWorkspaceConfig(workspaceRoot, cfg) {

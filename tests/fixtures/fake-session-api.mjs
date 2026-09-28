@@ -33,7 +33,9 @@ export function installSessionApi(fake) {
     return turn;
   };
   const persist = () => fake.persist();
-  const event = (type, properties) => fake.emit({ id: nextId('evt'), type, properties });
+  const event = (type, properties) => {
+    if (!fake.scenario?.dropSseEvents) fake.emit({ id: nextId('evt'), type, properties });
+  };
 
   const settle = (requestID, outcome) => {
     const resolve = waiters.get(requestID);
@@ -235,9 +237,14 @@ export function installSessionApi(fake) {
       fake.abortSession(m[1]);
       return ok(true);
     }],
+    ['GET', /^\/session\/(ses[^/]+)\/message\/(msg[^/]+)$/, (m) => {
+      const message = state.messages[m[1]]?.find((item) => item.info.id === m[2]);
+      return message ? ok(message) : notFound('NotFoundError', 'message not found');
+    }],
     ['GET', /^\/session\/(ses[^/]+)\/message$/, (m, query) => {
       const messages = state.messages[m[1]];
       if (!messages) return notFound('NotFoundError', `session ${m[1]} not found`);
+      if (fake.scenario?.formatListError && messages.some((message) => message.info?.format?.type === 'json_schema')) return invalid('Expected OutputFormatJsonSchema, got {...}');
       const limit = Number(query.get('limit'));
       return ok(Number.isFinite(limit) && limit > 0 ? messages.slice(-limit) : messages);
     }],
@@ -308,7 +315,7 @@ export function installSessionApi(fake) {
 // at the end of tests/fixtures/fake-opencode.mjs.
 export const SESSION_API_ROUTES = Object.freeze([
   'POST /session', 'GET /session', 'GET /session/status', 'GET /session/:id', 'PATCH /session/:id',
-  'POST /session/:id/prompt_async', 'POST /session/:id/abort', 'GET /session/:id/message',
+  'POST /session/:id/prompt_async', 'POST /session/:id/abort', 'GET /session/:id/message', 'GET /session/:id/message/:messageID',
   'GET /session/:id/children', 'GET /session/:id/diff',
   'GET /permission', 'POST /permission/:id/reply',
   'GET /question', 'POST /question/:id/reply', 'POST /question/:id/reject',

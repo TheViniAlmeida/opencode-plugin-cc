@@ -6,6 +6,22 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado (F2b — paridade Codex)
+
+- `/opc:review` e `/opc:adversarial-review`: estimativa, pergunta aguardar/background, schema `review-output`, modo em partes acima de 400 KB e render por severidade.
+- Stop review gate no hook `Stop` e `/opc:setup --enable-review-gate|--disable-review-gate`.
+- `/opc:rescue`, subagente `opc-rescue`, hooks `SessionStart`, `SessionEnd` e `Stop`.
+- Skills `opc-runtime`, `opc-result-handling` e `opc-prompting`.
+
+### Alterado
+
+- Jobs de `task`, `ask` e `plan` são registrados sob `server.lock`, fechando a corrida com o reaper.
+- `/opc:setup --stop-server` recusa enquanto houver jobs ativos e os lista.
+
+### Segurança
+
+- Coleta de diff não envia conteúdo de `policy.sensitivePaths` nem segue symlinks não rastreados.
+
 ### Adicionado (F2a — núcleo de execução)
 
 - `/opc:task`, `/opc:ask` e `/opc:plan`: workers destacados, resolução de modelo, `--effort`, `--resume`/`--resume-last`/`--fresh`, `--background`, timeouts, prompt por argumento/arquivo/stdin e `<project_context>`.

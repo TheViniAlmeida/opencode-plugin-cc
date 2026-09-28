@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderProviders, renderModels, renderAgents, renderCatalog, renderConfig, renderOnboarding } from '../../plugins/opc/scripts/lib/render.mjs';
+import { renderError, renderProviders, renderModels, renderAgents, renderCatalog, renderConfig, renderOnboarding } from '../../plugins/opc/scripts/lib/render.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 const model = { full: 'omniroute-personal/opencode-go/kimi-k3', name: 'Kimi K3', variants: ['low', 'high'], limit: { context: 262144, output: 32768 }, cost: { input: 0.6, output: 2.5 }, status: 'active', allowed: true };
@@ -74,4 +74,15 @@ test('renderOnboarding: state/models/apply/commit/discard', () => {
   assert.match(renderOnboarding({ kind: 'apply', applied: ['defaultModel'], nextStep: null, warnings: [] }), /Próxima etapa: commit/);
   assert.match(renderOnboarding({ kind: 'commit', scope: 'global', path: '/d/config.json', warnings: [] }), /global/);
   assert.match(renderOnboarding({ kind: 'discard', discarded: false }), /Nenhum rascunho/);
+});
+
+
+test('opc errors and config prose use registered redaction only', () => {
+  const pattern = 'sk-' + 'proj-' + 'A'.repeat(24);
+  assert.ok(renderError(new Error(pattern)).includes(pattern));
+  assert.equal(renderConfig({ kind: 'get', setting: 'project.goal', value: pattern }), `project.goal = ${JSON.stringify(pattern)}\n`);
+  const registered = 'registered-' + 'round-two-value';
+  registerSecret(registered);
+  assert.ok(!renderError(new Error(registered)).includes(registered));
+  assert.ok(!renderConfig({ kind: 'get', setting: 'project.goal', value: registered }).includes(registered));
 });

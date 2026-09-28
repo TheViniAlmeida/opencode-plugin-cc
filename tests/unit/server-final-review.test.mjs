@@ -40,7 +40,7 @@ for (const [scenario, status, body] of [
   });
 }
 
-for (const password of [undefined, '']) {
+for (const password of [undefined, '', 'fake-dispose-password']) {
   test(`stopServer stops an identity-matched child without a usable password (${JSON.stringify(password)})`, async (t) => {
     const dir = trackTempDir(t, makeTempDir('opc-stop-review-'));
     const script = path.join(dir, 'opencode');
@@ -54,9 +54,21 @@ for (const password of [undefined, '']) {
     });
     fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify({ schemaVersion: 1,
       ...proc, port: 43210, url: 'http://127.0.0.1:43210', password }));
-    t.mock.method(globalThis, 'fetch', () => { assert.fail('dispose must be skipped without a password'); });
+    let requests = 0;
+    t.mock.method(globalThis, 'fetch', () => { requests += 1; throw new Error('unexpected HTTP request'); });
+    const recordPath = path.join(dir, 'server.json');
+    const record = fs.readFileSync(recordPath, 'utf8');
+    fs.writeFileSync(recordPath, JSON.stringify({ ...JSON.parse(record), startTime: `${proc.startTime}-mismatch` }));
+    try {
+      assert.deepEqual(await stopServer({ stateDir: dir, config: {}, env: {} }), { stopped: false, reason: 'identity-mismatch' });
+      assert.equal(isPidAlive(proc.pid), true, 'stop must preserve a process whose identity no longer matches');
+      assert.equal(requests, 0);
+    } finally {
+      fs.writeFileSync(recordPath, record);
+    }
     const result = await stopServer({ stateDir: dir, config: {}, env: {} });
     assert.equal(result.stopped, true);
+    assert.equal(requests, 0, 'stop must never send dispose, even with a password');
     assert.equal(isPidAlive(proc.pid), false);
     assert.equal(fs.existsSync(path.join(dir, 'server.json')), false);
   });

@@ -1,0 +1,8 @@
+{
+  "description": "opc: ciclo de vida da sessão Claude (exportação de ambiente, registro da sessão, reaper destacado) e gate de revisão opcional. Adaptado de openai/codex-plugin-cc (Apache-2.0); modificado.",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/opc-companion.mjs\" hook-session-start", "timeout": 10 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/opc-companion.mjs\" hook-session-end" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/opc-companion.mjs\" hook-stop", "timeout": 900 }] }]
+  }
+}

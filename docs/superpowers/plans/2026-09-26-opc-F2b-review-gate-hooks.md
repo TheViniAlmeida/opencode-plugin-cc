@@ -14,6 +14,19 @@
 
 ---
 
+## Ajustes pós-F2a (28/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+Conferidos contra o código da F2a mergeado na `main`. Quando um trecho deste plano divergir, vale o que está aqui.
+
+1. **Heredoc (mestre T15).** Todo `commands/*.md` novo ou alterado (`review`, `adversarial-review`, `rescue`, `setup`): terminador sozinho na linha, cerca na linha seguinte e, antes do bloco, a frase de guarda de `commands/task.md`. `tests/unit/commands-md.test.mjs` já verifica todos os arquivos.
+2. **Textos.** Tudo o que o usuário vê é PT-BR. Regex de teste que cita texto em inglês deste plano deve ser adaptada ao texto PT-BR que o código emite (conferir no renderizador/worker). IDs do servidor e do opc saem **inteiros**; o corte em 12 caracteres + `…` é só para ecoar entrada inválida do usuário.
+3. **Jobs.** `createJob(stateDir, fields)` gera o id pelo `kind` (quem chama nunca passa id); `review`, `adversarial-review` e `stop-gate` já estão em `KIND_PREFIX`. O `fields.request` bruto vai para `jobs/<id>.input.json` (0600), que o worker consome uma vez de forma atômica; o registro `jobs/<id>.json` é gravado **redigido**. O adaptador `submitTurnJob` passa o pedido por `createJob` e nunca lê o prompt bruto do registro. `cancelJob` devolve `{ ok: false, code: 'CANCEL_FAILED' }` em vez de lançar quando o abort não se confirma; o reaper trata esse retorno. Limpeza de sobras de entrada usa `cleanupJobInputFiles`.
+4. **Worker.** `commands/task-worker.mjs` exporta `run`; o worker é iniciado por `spawnWorker(ctx, jobId)` (`lib/jobs.mjs`), que só destaca o processo depois de confirmar a identidade.
+5. **Permissões.** `policy.requiresUser` detecta destrutivos também dentro de `bash -c`, `eval`, `sudo`, `env`, `xargs`, `find -exec` e `$(…)`, e trata comando não analisável como destrutivo. O review e o gate continuam `read-only` (sem bash e sem grep).
+6. **Skill.** `skills/opc-result-handling/SKILL.md` já existe (F2a Task 15): a Task 13 **acrescenta** as seções de review/gate/rescue, mantém o rótulo citado `"Exige o usuário: sim"` e o teste de deriva `tests/unit/skill-result-handling.test.mjs`.
+7. **Testes ao vivo.** Seguir `tests/live/_f2a-helpers.mjs`: exigem `OPC_LIVE=1` **e** `OPC_LIVE_MODEL` (sem modelo padrão; `LIVE_SKIP`). O modelo da fase é `omniroute-personal/opencode-go/qwen3.8-max`, passado pela variável. O modelo pode recusar ações destrutivas por regras globais do operador carregadas pelo OpenCode: prompts de teste deixam claro que o alvo é descartável e que a decisão é da barreira de permissão.
+8. **Suíte.** `node scripts/run-tests.mjs` (unit + integração); os testes com socket rodam fora do sandbox do implementador.
+
 ## Global Constraints
 
 - Node ≥ 20; ESM; zero dependências de runtime e de dev (nada de `npm install`).

@@ -28,6 +28,10 @@ const emit = (ctx, flags, view, render) => { if (flags.json) ctx.json(redact(vie
 const touches = (key) => (e) => e.path === key || e.path.startsWith(`${key}.`) || e.path.startsWith(`${key}[`);
 const knownKey = (key) => Boolean(schemaFor(key)) || Object.keys(CONFIG_SCHEMA).some((k) => k.startsWith(`${key}.`));
 
+export function contextOptions(argv) {
+  return argv[0] === 'validate' ? { allowInvalidConfig: true } : {};
+}
+
 async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   const [sub, ...rest] = positionals;

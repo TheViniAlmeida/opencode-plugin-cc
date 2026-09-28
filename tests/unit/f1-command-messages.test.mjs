@@ -7,6 +7,7 @@ import { run as runAgents } from '../../plugins/opc/scripts/commands/agents.mjs'
 import { run as runCatalog } from '../../plugins/opc/scripts/commands/catalog.mjs';
 import { run as runConfig } from '../../plugins/opc/scripts/commands/config.mjs';
 import { run as runSetup } from '../../plugins/opc/scripts/commands/setup.mjs';
+import { reviewGateChange } from '../../plugins/opc/scripts/commands/setup.mjs';
 
 const invalidCommands = [
   ['providers', () => runProviders({}, ['unexpected'])],
@@ -51,12 +52,8 @@ test('setup apply errors redact malformed JSON and reject simultaneous stdin and
   );
 });
 
-test('setup review-gate flags are deferred to F2b with a clear usage error', async () => {
-  for (const flag of ['--enable-review-gate', '--disable-review-gate']) {
-    await assert.rejects(runSetup({}, [flag]), (err) => {
-      assert.equal(err.code, 'USAGE');
-      assert.match(err.message, /disponíveis na F2b/i);
-      return true;
-    });
-  }
+test('setup review-gate flags map to config changes and reject simultaneous use', () => {
+  assert.equal(reviewGateChange({ 'enable-review-gate': true }), true);
+  assert.equal(reviewGateChange({ 'disable-review-gate': true }), false);
+  assert.throws(() => reviewGateChange({ 'enable-review-gate': true, 'disable-review-gate': true }), (err) => err.code === 'USAGE');
 });

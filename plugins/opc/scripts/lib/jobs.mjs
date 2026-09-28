@@ -5,10 +5,10 @@ import { appendFileSync, closeSync, constants, fstatSync, openSync, readFileSync
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
-import { redact, redactText } from './redact.mjs';
+import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } from './redact.mjs';
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
-import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
+import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
 import { readServerRecord } from './server.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
@@ -122,8 +122,32 @@ function jobDefaults() {
   };
 }
 
+// Allowlist request metadata: raw prompts/schemas belong only in the consumed input file.
+function safeJob(job) {
+  if (!job) return job;
+  const safe = { ...job };
+  if (job.request) {
+    const request = job.request;
+    safe.request = Object.fromEntries(['kind', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID']
+      .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
+    if (request.format) safe.request.format = { type: request.format.type };
+    safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
+    safe.request.textBytes = request.textBytes ?? (request.parts ?? []).reduce((sum, part) => sum + Buffer.byteLength(part.text ?? ''), 0);
+    if (request.review) safe.request.review = Object.fromEntries(['variant', 'targetLabel', 'inputMode']
+      .filter((key) => request.review[key] !== undefined).map((key) => [key, request.review[key]]));
+  }
+  const masked = redact(safe);
+  for (const field of ['title', 'summary', 'pendingRequest']) {
+    if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
+  }
+  if (masked.request) masked.request = redactOutput(masked.request);
+  if (masked.result) masked.result = redactTurnOutput(masked.result);
+  if (typeof masked.summary === 'string') masked.summary = masked.summary.slice(0, 200);
+  return masked;
+}
+
 function writeJob(stateDir, job) {
-  writeFileAtomic(jobPath(stateDir, job.id), `${JSON.stringify(redact(job), null, 2)}\n`);
+  writeFileAtomic(jobPath(stateDir, job.id), `${JSON.stringify(safeJob(job), null, 2)}\n`);
   if (isTerminal(job)) discardJobInput(stateDir, job.id);
 }
 
@@ -135,7 +159,7 @@ function upsertIndex(state, job) {
 export function readJob(stateDir, id) {
   assertJobId(id);
   if (!JOB_ID_RE.test(id)) return null;
-  return readJson(jobPath(stateDir, id), null);
+  return safeJob(readJson(jobPath(stateDir, id), null));
 }
 
 export function listJobs(stateDir, { claudeSessionId = null, all = false } = {}) {
@@ -151,7 +175,7 @@ export function listJobs(stateDir, { claudeSessionId = null, all = false } = {})
     if (!name.endsWith('.json')) continue;
     const id = name.slice(0, -'.json'.length);
     if (!JOB_ID_RE.test(id)) continue;
-    const job = readJson(jobPath(stateDir, id), null);
+    const job = readJob(stateDir, id);
     if (job?.id === id) jobs.push(job);
   }
   const visible = all || !claudeSessionId ? jobs : jobs.filter((j) => j.claudeSessionId === claudeSessionId);
@@ -246,7 +270,7 @@ export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn
     }
     throw err;
   }
-  return created;
+  return safeJob(created);
 }
 
 export async function updateJob(stateDir, id, patch) {
@@ -264,7 +288,7 @@ export async function updateJob(stateDir, id, patch) {
     upsertIndex(state, updated);
     return state;
   });
-  return updated;
+  return safeJob(updated);
 }
 
 // Idempotently remove permission/question ids from a job and resume it when clear.
@@ -345,8 +369,8 @@ export function capLogFile(file, limit = LOG_LIMIT_BYTES) {
   writeFileAtomic(file, `[${nowIso()}] [registro reduzido: mantidos os últimos ${keep} bytes]\n${text}`);
 }
 
-export function appendJobLog(stateDir, id, line) {
-  const text = redactText(String(line ?? '')).replace(/\s+$/, '');
+export function appendJobLog(stateDir, id, line, { modelDerived = false } = {}) {
+  const text = (modelDerived ? safeOutputText : redactText)(String(line ?? '')).replace(/\s+$/, '');
   if (!text) return;
   ensurePrivateDir(jobsDir(stateDir));
   const file = jobLogPath(stateDir, id);
@@ -487,6 +511,78 @@ export async function waitForJob(ctx, id, { waitTimeoutMs = null, pollMs = 500, 
   }
 }
 
+// ---- F2b: turn-job adapter and server.lock coordination ----
+import { withLock } from './locks.mjs';
+import { buildPermissionRules, parseProfile } from './policy.mjs';
+import { newMessageId } from './runner.mjs';
+
+export function serverLockPath(stateDir) {
+  return join(stateDir, 'server.lock');
+}
+
+export function serverLockTimeoutMs(config) {
+  return 4 * (config?.server?.bootTimeoutSec ?? 60) * 1000;
+}
+
+export async function withServerLock(ctx, fn, { purpose = 'server-coordination' } = {}) {
+  return withLock(serverLockPath(ctx.stateDir), { timeoutMs: serverLockTimeoutMs(ctx.config), purpose }, fn);
+}
+
+export function turnJobRequest({ kind, profile, prompt, model, modelFull, variant = null, agent = null, format = null,
+  timeoutMs, title, config = {}, sessionID = null, extra = {} }) {
+  const policy = config.policy ?? {};
+  const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
+  const profileKind = parseProfile(profile).kind;
+  const controls = {
+    kind, profile, profileKind, title,
+    ...(sessionID ? { sessionID } : { newSession: { title, permission: rules } }),
+    childPermission: profileKind === 'read-only' ? null : rules,
+    parts: [{ type: 'text', text: prompt }],
+    model: { providerID: model.providerID, modelID: model.modelID },
+    modelFull, variant: variant ?? null, agent: agent ?? null, format: format ?? null,
+    messageID: newMessageId(), timeoutMs,
+    fallbackCfg: config.routing?.fallback ?? {},
+    permissionTimeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
+  };
+  const reserved = new Set([...Object.keys(controls), 'sessionID', 'permission']);
+  for (const key of Object.keys(extra ?? {})) {
+    if (reserved.has(key)) throw new UsageError('INTERNAL_FIELD_COLLISION', `campo interno do adaptador não pode ser sobrescrito: ${key}`);
+  }
+  return { ...extra, ...controls };
+}
+
+export async function submitTurnJob(ctx, { kind, title, summary, request, claudeSessionId = ctx.claudeSessionId ?? null, fields = {}, queuedLog = null }) {
+  for (const key of ['kind', 'request', 'id']) {
+    if (Object.hasOwn(fields ?? {}, key)) throw new UsageError('INTERNAL_FIELD_COLLISION', `campo interno do adaptador não pode ser sobrescrito: ${key}`);
+  }
+  const job = await withServerLock(ctx, () => createJob(ctx.stateDir, {
+    ...fields,
+    kind, title, summary, workspaceRoot: ctx.workspaceRoot, claudeSessionId,
+    sessionID: request.sessionID ?? null,
+    model: request.modelFull ?? null, agent: request.agent ?? null, variant: request.variant ?? null,
+    permissionProfile: request.profile ?? null, request,
+  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: `register-job:${kind}` });
+  if (queuedLog) appendJobLog(ctx.stateDir, job.id, queuedLog);
+  await spawnWorker(ctx, job.id);
+  return requirePersistedJob(ctx.stateDir, job.id);
+}
+
+export function requirePersistedJob(stateDir, id) {
+  const persisted = readJob(stateDir, id);
+  if (!persisted) throw new OpcError('JOB_RECORD_MISSING', `O registro da tarefa ${id} desapareceu após iniciar o worker.`, { exitCode: ExitCode.CONNECTION, details: { jobId: id } });
+  return persisted;
+}
+
+export function isJobLive(job, { now = Date.now() } = {}) {
+  return isActive(job) && !workerLost(job, now);
+}
+
+export function liveActiveJobs(stateDir, { claudeSessionId = null, now = Date.now() } = {}) {
+  return listJobs(stateDir, { all: true }).filter(
+    (job) => (claudeSessionId ? job.claudeSessionId === claudeSessionId : true) && isJobLive(job, { now }),
+  );
+}
+
 async function waitSessionIdle(api, sessionID, maxMs) {
   const deadline = performance.now() + maxMs;
   while (performance.now() < deadline) {
@@ -538,7 +634,8 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     const expected = { pid: job.pid, startTime: job.pidStartTime };
     const matcher = workerMatcher(id);
     if (!identityMatches(expected, matcher)) {
-      report.worker = isPidAlive(job.pid) ? 'identity-mismatch' : 'not-running';
+      if (await exitingWithoutCmdline(expected)) report.worker = 'exited';
+      else report.worker = isPidAlive(job.pid) ? 'identity-mismatch' : 'not-running';
     } else if (await waitWorkerExit(expected, matcher, exitWaitMs)) {
       report.worker = 'exited';
     } else {

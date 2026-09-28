@@ -25,6 +25,7 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `defaultAgent` | string \| null | `null` | global + workspace | Agente padrão de sessão |
 | `aliases` | model-map | `{}` | global + workspace | Apelidos para IDs completos, um nível |
 | `reviewModel` | modelref \| null | `null` | global + workspace | Modelo de review |
+| `review.structuredOutput` | `text` \| `tool` | `text` | global + workspace | `text`: JSON na resposta; `tool`: ferramenta de saída estruturada |
 | `stopGate.enabled` | boolean | `false` | só global | Liga o stop gate (F2b) |
 | `stopGate.model` | modelref \| null | `null` | global + workspace | Modelo do stop gate |
 | `project.goal` | string \| null | `null` | global + workspace | Objetivo enviado no contexto do projeto |
@@ -124,3 +125,14 @@ Um perfil de mundo pode negar um provider de trabalho, limitar modelos ao provid
 Valida forma, modelos, variants, aliases quebrados, agente padrão, pools, política e chaves com aparência de segredo. Quando o servidor está disponível, também valida contra seu catálogo; sem ele, retorna exit 5 e informa que a checagem remota não ocorreu. Exit 0 indica configuração válida; exit 2, erro de forma/valor; exit 4, violação de política.
 
 Uma execução offline de forma sem servidor retornou `SERVER_DOWN`/exit 5, como esperado para a validação que depende do catálogo. O portão da fase confirmou separadamente aliases quebrados e variants inválidas.
+
+### Saída estruturada de revisões
+
+`review.structuredOutput` controla `/opc:review` e `/opc:adversarial-review`.
+O padrão `text` pede somente um objeto JSON em uma única cerca `json`, conforme o esquema descrito no prompt, sem enviar `format` ao OpenCode. Assim, a leitura normal de mensagens continua disponível no OpenCode 1.18.32.
+
+Use `opc config set review.structuredOutput tool` para enviar `format: json_schema` e ler as mensagens individualmente. Se os eventos SSE se perderem e a sessão estiver idle sem assistente conhecido, o runner aguarda 10 segundos e consulta novamente; se continuar assim, termina com `NO_ASSISTANT_MESSAGE`.
+`opc config unset review.structuredOutput` restaura o padrão `text` quando não há uma substituição no workspace.
+
+A extração textual aceita apenas um objeto JSON no texto completo, na última cerca `json` ou como último objeto balanceado no nível superior da prosa. Arrays e valores primitivos são rejeitados, e nenhum erro do turno é convertido em sucesso por essa extração.
+O stop gate mantém seu contrato textual `ALLOW:`/`BLOCK:` e não envia `format` em nenhum dos modos. Falhas de infraestrutura permitem encerrar e incluem a causa mascarada (até 200 caracteres) em `systemMessage` e stderr.

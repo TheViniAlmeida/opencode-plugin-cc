@@ -43,9 +43,12 @@ export async function loadCommand(sub) {
 }
 
 export async function main(rawArgv, io = {}) {
+  const hookEnteredAt = performance.now();
+  let hook = ['hook-session-start', 'hook-session-end', 'hook-stop'].includes(rawArgv?.[0]) ? rawArgv[0] : null;
   const {
     stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env,
     cwd: defaultCwd = process.cwd(), onError = null,
+    commandLoader = loadCommand, contextFactory = null,
   } = io;
   if (!nodeVersionOk()) {
     stderr.write(`opc: Node.js >= ${MIN_NODE_MAJOR} é obrigatório (encontrado ${process.versions.node}).\n`);
@@ -60,13 +63,35 @@ export async function main(rawArgv, io = {}) {
     const resolved = await resolveArgv(rawArgv, { stdin });
     const { cwd, argv } = extractCwd(resolved);
     const [sub, ...rest] = argv;
+    hook = ['hook-session-start', 'hook-session-end', 'hook-stop'].includes(sub) ? sub : hook;
     wantsJson ||= rest.includes('--json');
     if (!sub) throw new UsageError('USAGE', `Uso: opc <subcomando> [flags]. Subcomandos: ${listSubcommands().join(', ')}.`);
-    const mod = await loadCommand(sub);
-    const { createContext } = await import('./lib/context.mjs');
-    const ctx = await createContext({ argv: rest, env, cwd: cwd ?? defaultCwd, stdin, stdout, stderr, createDataDir: sub === 'setup' });
+    const mod = await commandLoader(sub);
+    const { createContext } = contextFactory ? { createContext: contextFactory } : await import('./lib/context.mjs');
+    const ctx = await createContext({
+      argv: rest,
+      env,
+      cwd: cwd ?? defaultCwd,
+      stdin,
+      stdout,
+      stderr,
+      createDataDir: sub === 'setup',
+      ...(hook === 'hook-session-end' ? { workspaceTimeoutMs: 200, workspaceFallback: true } : {}),
+      ...(mod.contextOptions?.(rest) ?? {}),
+    });
+    if (hook) ctx.hookEnteredAt = hookEnteredAt;
     return await mod.run(ctx, rest);
   } catch (err) {
+    if (hook) {
+      const { maskSecretPatterns, redactText } = await import('./lib/redact.mjs');
+      const detail = maskSecretPatterns(redactText(String(err?.message ?? err))).replace(/\s+/g, ' ').trim();
+      const cause = `${err?.code ?? err?.name ?? 'ERRO'}${detail ? `: ${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}` : ''}`;
+      if (hook === 'hook-stop') {
+        stdout.write(`${JSON.stringify({ systemMessage: `opc stop gate foi ignorado por uma falha ao preparar o contexto (${cause}) e permitiu o encerramento. Execute /opc:setup para diagnosticar.` })}\n`);
+        stderr.write(`[opc] stop gate: falha ao preparar o contexto (${cause}).\n`);
+      } else if (hook === 'hook-session-start') stderr.write(`[opc] não foi possível preparar o contexto no início da sessão (${cause}).\n`);
+      return 0;
+    }
     if (onError) onError(err);
     stderr.write(renderError(err));
     if (wantsJson) {

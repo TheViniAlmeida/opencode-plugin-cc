@@ -57,3 +57,26 @@ Locks órfãos — dono morto ou PID reaproveitado — são quebrados automatica
 - `.opc.json` inválido ou que tente afrouxar a política é ignorado com aviso.
 - `DATA_DIR_UNRESOLVED` (exit 2): rode `/opc:setup` no Claude ou defina `OPC_DATA_DIR`.
 - `UNSAFE_DIR` (exit 2): o diretório pertence a outro usuário.
+
+## Servidor que não encerra (reaper)
+
+O `SessionEnd` tem orçamento curto; o opc dispara `opc reap` destacado. Cada decisão fica em `<estado do workspace>/reaper.log`, uma linha JSON por evento.
+
+- `keep:reason-clear` / `keep:reason-resume`: `/clear` ou `/resume` mantêm o servidor, pois outra sessão vem em seguida.
+- `keep:live-sessions`: há outra sessão Claude registrada no mesmo workspace. Até o §15 item 9 ser confirmado, entrada com menos de 24 h conta como viva mesmo com PID morto.
+- `keep:active-jobs`: há jobs ativos; o próximo fim de sessão ou `/opc:setup --stop-server` encerra.
+- `stop`: encerrou após carência de 60 s.
+
+Variáveis de diagnóstico: `OPC_REAP_GRACE_MS` (padrão 60000), `OPC_REAP_CANCEL_CAP_MS` (padrão 15000) e `OPC_STOP_GATE_WAIT_MS` (padrão 840000).
+
+## Gate permite por falha de infraestrutura
+
+O stop gate nunca bloqueia por infraestrutura. O `systemMessage` traz o código e a causa redigida, limitada; corrija a causa e tente a próxima parada. Casos conhecidos: OpenCode ausente ou que não sobe, modelo negado pela política, limite de jobs, timeout, resposta fora de `ALLOW:`/`BLOCK:` e erro de preparação do companion. `stop_hook_active: true` é uma permissão deliberada para evitar laço após um bloqueio.
+
+## Review estruturado e OpenCode 1.18.32
+
+Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/message` pode retornar 400 `Expected OutputFormatJsonSchema`; a leitura por mensagem individual funciona. Por isso `review.structuredOutput` é `text` por padrão: nenhum `format` é enviado, o modelo retorna um objeto em cerca `json` e o opc faz extração e validação estritas. `tool` é opt-in e usa schema/per-message reads com espera limitada.
+
+## Erros do provider
+
+Erro 402, como `This model requires an opencode API key`, vem do provider/credencial, não do opc. Verifique o provider conectado e a política de modelo; não grave nem exponha a credencial. No gate, o erro permite com aviso; em review/rescue, o comando informa a falha.
