@@ -1,30 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import {
-  createJob, readJob, updateJob, resolveJobRef, reconcileJob,
+  createJob, readJob, updateJob, resolveJobRef, reconcileJob, jobLogPath,
   GROUP_ROLE, isGroupMember, topLevelJobs, countsTowardLimit, selectJobsToPrune, addGroupMember, createGroup, listGroupMembers,
-  aggregateGroup, refreshGroup, runWithConcurrency,
+  aggregateGroup, refreshGroup, cancelJob, cancelGroup, runWithConcurrency,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { createRequestBridge, createSerialUpdater } from '../../plugins/opc/scripts/commands/task-worker.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 function tmpState(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'opc-groups-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = trackTempDir(t, makeTempDir('opc-groups-'));
   ensurePrivateDir(dir);
   return dir;
-}
-
-async function eventually(fn, timeoutMs = 2000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    if (await fn()) return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error('condition not met');
 }
 
 test('member helpers: isGroupMember, topLevelJobs, countsTowardLimit', () => {
@@ -101,6 +90,50 @@ test('refreshGroup aggregates members; cancelled group stays cancelled; final fo
   await updateJob(stateDir, other.group.id, { status: 'cancelled' });
   await updateJob(stateDir, other.members[0].id, { status: 'completed' });
   assert.equal((await refreshGroup(stateDir, other.group.id)).status, 'cancelled');
+});
+
+test('non-final refresh keeps completed group open for on-demand members', async (t) => {
+  const stateDir = tmpState(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'g', status: 'running' }, [{ title: 'a' }]);
+  await updateJob(stateDir, members[0].id, { status: 'completed', result: { finalText: 'first' } });
+
+  let refreshed = await refreshGroup(stateDir, group.id);
+  assert.equal(refreshed.status, 'running');
+  assert.equal(refreshed.completedAt, null);
+  assert.equal(refreshed.phase, '1/1 concluídas');
+  assert.deepEqual(refreshed.result.counts, { queued: 0, running: 0, waiting_permission: 0, completed: 1, failed: 0, cancelled: 0 });
+
+  const next = await addGroupMember(stateDir, group.id, { title: 'next' });
+  assert.deepEqual(readJob(stateDir, group.id).memberIds, [members[0].id, next.id]);
+  assert.deepEqual(listGroupMembers(stateDir, group.id).map((member) => member.id), [members[0].id, next.id]);
+
+  await updateJob(stateDir, next.id, { status: 'completed', result: { finalText: 'second' } });
+  refreshed = await refreshGroup(stateDir, group.id, { final: true });
+  assert.equal(refreshed.status, 'completed');
+  assert.ok(refreshed.completedAt);
+});
+
+test('cancelGroup reports failed member cancels and leaves the group active', async (t) => {
+  const stateDir = tmpState(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'g', status: 'running' }, [{ title: 'a', status: 'running' }]);
+  await updateJob(stateDir, group.id, { status: 'running' });
+  await updateJob(stateDir, members[0].id, { sessionID: 'ses_cancel_failure' });
+
+  // file: URLs are rejected by fetch before any network connection, exercising cancelJob's
+  // non-throwing CANCEL_FAILED result deterministically.
+  const ctx = { stateDir, env: { OPC_SERVER_URL: 'file:///tmp/opc-cancel-test' } };
+  const firstCancel = await cancelJob(ctx, members[0].id);
+  assert.equal(firstCancel.ok, false);
+  assert.equal(firstCancel.code, 'CANCEL_FAILED');
+  const result = await cancelGroup(ctx, group.id);
+
+  assert.deepEqual(result.cancelledMembers, []);
+  assert.deepEqual(result.failedMembers, [members[0].id]);
+  assert.equal(result.group.status, 'running');
+  assert.equal(readJob(stateDir, members[0].id).status, 'running');
+  const log = readFileSync(jobLogPath(stateDir, group.id), 'utf8');
+  assert.match(log, new RegExp(`cancel ${members[0].id} falhou: .+`));
+  assert.doesNotMatch(log, /ses_cancel_failure/);
 });
 
 test('maxActive counts a group as one job', async (t) => {

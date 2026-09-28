@@ -743,6 +743,7 @@ export async function refreshGroup(stateDir, groupId, { final = false } = {}) {
   const agg = aggregateGroup(members);
   let status = agg.status;
   if (status === 'queued' && group.status === 'running') status = 'running';
+  if (!final && TERMINAL_STATUSES.includes(status)) status = 'running';
   const warnings = [...agg.warnings];
   if (final && ACTIVE_STATUSES.includes(status)) {
     status = 'failed';
@@ -764,9 +765,26 @@ export async function refreshGroup(stateDir, groupId, { final = false } = {}) {
 export async function cancelGroup(ctx, groupId) {
   const group = readJob(ctx.stateDir, groupId);
   const active = listGroupMembers(ctx.stateDir, groupId).filter((m) => ACTIVE_STATUSES.includes(m.status));
-  await Promise.all(active.map((m) => cancelJob(ctx, m.id).catch((err) => appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${m.id} falhou: ${redactText(err.message)}`))));
-  const cancelled = ACTIVE_STATUSES.includes(group.status) ? await cancelJob(ctx, groupId) : group;
-  return { group: readJob(ctx.stateDir, groupId) ?? cancelled, cancelledMembers: active.map((m) => m.id) };
+  const results = await Promise.all(active.map(async (member) => {
+    try {
+      const result = await cancelJob(ctx, member.id);
+      if (result?.ok === false) {
+        const reason = redactText(result.reason ?? result.code ?? 'cancelamento recusado');
+        appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
+        return { id: member.id, ok: false };
+      }
+      return { id: member.id, ok: true };
+    } catch (err) {
+      const reason = redactText(err?.message ?? String(err));
+      appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
+      return { id: member.id, ok: false };
+    }
+  }));
+  const cancelledMembers = results.filter((result) => result.ok).map((result) => result.id);
+  const failedMembers = results.filter((result) => !result.ok).map((result) => result.id);
+  let cancelled = group;
+  if (failedMembers.length === 0 && ACTIVE_STATUSES.includes(group.status)) cancelled = await cancelJob(ctx, groupId);
+  return { group: readJob(ctx.stateDir, groupId) ?? cancelled, cancelledMembers, failedMembers };
 }
 
 export async function runWithConcurrency(items, limit, fn) {
