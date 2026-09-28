@@ -163,15 +163,15 @@ export function renderCatalog(view) {
 export function renderConfig(view) {
   switch (view.kind) {
     case 'path':
-      return `# opc config path\n\n- Dados: \`${view.dataDir}\`\n- Global: \`${view.global}\`\n- Workspace: \`${view.workspace}\`\n- Rascunho do onboarding: \`${view.draft}\`\n`;
+      return redactText(`# opc config path\n\n- Dados: \`${view.dataDir}\`\n- Global: \`${view.global}\`\n- Workspace: \`${view.workspace}\`\n- Rascunho do onboarding: \`${view.draft}\`\n`);
     case 'get':
       return RenderF1.finish(`${view.setting} = ${JSON.stringify(RenderF1.settingValue(view.setting, view.value))}\n`);
     case 'edit':
       return RenderF1.finish(`# opc config ${view.op}\n\n\`${view.setting}\` (${view.scope}) → \`${view.path}\`\n\nValor: \`${JSON.stringify(RenderF1.settingValue(view.setting, view.value ?? null))}\`\n${RenderF1.warnings(view.warnings)}`);
     case 'show':
-      return `# opc config\n\n## Global (\`${view.paths.global}\`)\n\n${view.global ? RenderF1.json(view.global) : '_sem config global (rode /opc:setup)_\n'}\n## Workspace (\`${view.paths.workspace}\`)\n\n${view.workspace ? RenderF1.json(view.workspace) : '_sem .opc.json_\n'}${RenderF1.warnings(view.warnings)}`;
+      return redactText(`# opc config\n\n## Global (\`${view.paths.global}\`)\n\n${view.global ? RenderF1.json(view.global) : '_sem config global (rode /opc:setup)_\n'}\n## Workspace (\`${view.paths.workspace}\`)\n\n${view.workspace ? RenderF1.json(view.workspace) : '_sem .opc.json_\n'}${RenderF1.warnings(view.warnings)}`);
     case 'effective':
-      return `# opc config efetiva\n\n${RenderF1.json(view.config)}${RenderF1.warnings(view.warnings)}`;
+      return redactText(`# opc config efetiva\n\n${RenderF1.json(view.config)}${RenderF1.warnings(view.warnings)}`);
     case 'validate': {
       const status = view.errors.length || view.valid === false ? '**Config inválida ou incompleta.**' : '**Config válida.**';
       const server = view.serverChecked ? '' : `\n_A checagem contra o servidor não foi realizada: ${view.serverError}_\n`;

@@ -97,10 +97,13 @@ test('todos os oito renderizadores F2a redigem o texto final', () => {
   registerSecret(secret);
   const outputs = [
     renderTable(['header'], [[secret]]),
-    renderJobStatus(job({ summary: secret, errorMessage: secret }), { progress: [secret] }),
+    renderJobStatus(job({ status: 'failed', phase: 'failed', summary: 'safe summary', errorMessage: secret })),
     renderStatusList([job({ summary: secret })]),
     renderTurnResult(job({ status: 'completed', result: { finalText: secret } })),
-    renderPermissionRequest(job({ pendingRequest: [{ type: 'permission', id: 'p', permission: 'bash', patterns: [secret] }] })),
+    renderPermissionRequest(job({ pendingRequest: [
+      { type: 'permission', id: 'p', permission: 'bash', patterns: ['safe pattern'] },
+      { type: 'question', id: 'q', questions: [{ header: 'safe header', question: secret, options: [{ label: secret }] }] },
+    ] })),
     renderQueuedJob(job({ id: secret })),
     renderCancel(job({ id: secret }), { aborted: true, idle: true, worker: secret }),
     renderPermissionList([{ type: 'permission', id: 'p', permission: 'bash', patterns: [secret], sessionID: 'ses_1' }]),
