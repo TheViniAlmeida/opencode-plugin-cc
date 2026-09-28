@@ -1,22 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, createJob, findResumeCandidate, groupStatus, jobLogPath,
   listJobs, newJobId, readJob, readJobProgress, resolveJobRef, updateJob, waitForJob, workerMatcher, acquireSessionLock,
-  assertNotInsideServer,
+  assertNotInsideServer, workerLogPath,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ACTIVE_JOB_STATUSES } from '../../plugins/opc/scripts/lib/state.mjs';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 function stateDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'opc-jobs-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
+  return trackTempDir(t, makeTempDir('opc-jobs-'));
 }
 const base = (over = {}) => ({ kind: 'task', title: 'opc task', summary: 's', workspaceRoot: '/ws', claudeSessionId: 'c1', permissionProfile: 'read-only', ...over });
+
+function killHard(pid) {
+  try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+}
 
 test('newJobId has the spec format per kind', () => {
   assert.match(newJobId('task'), /^task-[0-9a-z]+-[0-9a-z]{6}$/);
@@ -59,7 +62,17 @@ test('createJob writes a queued record with all spec fields; updateJob merges', 
   const updated = await updateJob(dir, job.id, { status: 'running', phase: 'starting' });
   assert.equal(updated.status, 'running');
   assert.equal(readJob(dir, job.id).phase, 'starting');
-  assert.equal(readJob(dir, '../etc/passwd'), null);
+  assert.throws(() => readJob(dir, '../etc/passwd'), (e) => e.code === 'INVALID_JOB_ID');
+});
+
+test('createJob always generates its id and path APIs reject unsafe ids', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ id: '../outside' }));
+  assert.match(job.id, /^task-/);
+  assert.notEqual(job.id, '../outside');
+  assert.throws(() => readJob(dir, '../x'), (e) => e.code === 'INVALID_JOB_ID');
+  assert.throws(() => jobLogPath(dir, '../x'), (e) => e.code === 'INVALID_JOB_ID');
+  await assert.rejects(cancelJob({ stateDir: dir, env: {} }, '../x'), (e) => e.code === 'INVALID_JOB_ID');
 });
 
 test('terminal status is frozen (cancel wins over late worker writes)', async (t) => {
@@ -69,7 +82,7 @@ test('terminal status is frozen (cancel wins over late worker writes)', async (t
   const late = await updateJob(dir, job.id, { status: 'completed', phase: 'done', result: { finalText: 'x' } });
   assert.equal(late.status, 'cancelled');
   assert.equal(late.phase, 'cancelled');
-  assert.equal(late.result.finalText, 'x');
+  assert.equal(late.result, null);
 });
 
 test('jobs.maxActive refuses new jobs with the active list; SESSION_BUSY per session', async (t) => {
@@ -116,6 +129,12 @@ test('listJobs filters by Claude session unless all', async (t) => {
   assert.equal(listJobs(dir, { claudeSessionId: 'c1' }).length, 1);
   assert.equal(listJobs(dir, { claudeSessionId: 'c1', all: true }).length, 2);
   assert.equal(listJobs(dir).length, 2);
+});
+
+test('listJobs propagates non-ENOENT errors from the jobs path', (t) => {
+  const dir = stateDir(t);
+  writeFileSync(join(dir, 'jobs'), 'not a directory');
+  assert.throws(() => listJobs(dir), (e) => e.code === 'ENOTDIR');
 });
 
 test('resolveJobRef: exact, unique prefix, ambiguous, single active in session, several active', async (t) => {
@@ -201,21 +220,111 @@ test('waitForJob returns terminal or waiting_permission, streams log, times out 
   await assert.rejects(waitForJob(ctx, slow.id, { waitTimeoutMs: 80, pollMs: 20 }), (e) => e.code === 'WAIT_TIMEOUT' && e.exitCode === 6 && e.details.jobId === slow.id);
 });
 
-test('cancelJob: aborts the session, never signals a pid whose identity does not match', async (t) => {
+test('cancelJob aborts session and child sessions, never signals an identity mismatch', async (t) => {
   const dir = stateDir(t);
-  const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
-  t.after(() => sleeper.kill('SIGKILL'));
-  const job = await createJob(dir, base({ sessionID: 'ses_x' }));
-  await updateJob(dir, job.id, { status: 'running', pid: sleeper.pid, pidStartTime: 'bogus' });
+  const job = await createJob(dir, base({ sessionID: 'ses_x', childSessionIDs: ['ses_child'] }));
+  await updateJob(dir, job.id, { status: 'running', pid: process.pid, pidStartTime: 'bogus' });
   const calls = [];
   const api = { async abort(id) { calls.push(id); return true; }, async sessionStatus() { return {}; } };
   const { job: final, report } = await cancelJob({ stateDir: dir, env: {} }, job.id, { api });
   assert.equal(final.status, 'cancelled');
-  assert.deepEqual(calls, ['ses_x']);
+  assert.deepEqual(calls, ['ses_x', 'ses_child']);
   assert.equal(report.worker, 'identity-mismatch');
-  assert.equal(sleeper.exitCode, null);
-  process.kill(sleeper.pid, 0);
   await assert.rejects(cancelJob({ stateDir: dir, env: {} }, job.id, { api }), (e) => e.code === 'NOT_ACTIVE');
+});
+
+test('cancelJob redacts the complete abort error before truncating it and leaves the job active', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ sessionID: 'ses_secret' }));
+  await updateJob(dir, job.id, { status: 'running' });
+  const secret = 'registered-secret-value';
+  registerSecret(secret);
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
+    api: { async abort() { throw new Error(`failed ${secret}`); }, async sessionStatus() { return {}; } },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CANCEL_FAILED');
+  assert.equal(readJob(dir, job.id).status, 'running');
+  const log = readFileSync(jobLogPath(dir, job.id), 'utf8');
+  assert.ok(!log.includes(secret.slice(0, 12)), 'no prefix of the registered secret is logged');
+});
+
+test('cancelJob returns failure and preserves status when abort returns false', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ sessionID: 'ses_false' }));
+  await updateJob(dir, job.id, { status: 'running' });
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
+    api: { async abort() { return false; }, async sessionStatus() { return {}; } },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CANCEL_FAILED');
+  assert.equal(readJob(dir, job.id).status, 'running');
+});
+
+test('cancelJob returns failure and preserves status when the session stays busy', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ sessionID: 'ses_busy' }));
+  await updateJob(dir, job.id, { status: 'running' });
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
+    idleWaitMs: 1,
+    api: { async abort() { return true; }, async sessionStatus() { return { ses_busy: { type: 'busy' } }; } },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CANCEL_FAILED');
+  assert.equal(readJob(dir, job.id).status, 'running');
+});
+
+test('cancelJob preserves a completed record when the worker finishes during abort', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base({ sessionID: 'ses_race' }));
+  await updateJob(dir, job.id, { status: 'running' });
+  const completedAt = '2026-09-27T12:00:00.000Z';
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
+    api: {
+      async abort() {
+        await updateJob(dir, job.id, { status: 'completed', phase: 'done', completedAt, result: { finalText: 'finished' } });
+        return true;
+      },
+      async sessionStatus() { return {}; },
+    },
+  });
+  assert.equal(result.job.status, 'completed');
+  assert.equal(result.job.phase, 'done');
+  assert.equal(result.job.completedAt, completedAt);
+  assert.equal(result.job.errorCode, null);
+  assert.deepEqual(result.job.result, { finalText: 'finished' });
+});
+
+test('cancelJob reports a worker that exits spontaneously', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base());
+  const script = join(dir, 'opc-companion.mjs');
+  writeFileSync(script, 'setTimeout(() => process.exit(0), 100);\n');
+  const worker = await spawnDetached(process.execPath, [script, 'task-worker', '--job-id', job.id], {
+    cwd: dir, env: process.env, logFile: workerLogPath(dir, job.id),
+  });
+  t.after(() => killHard(worker.pid));
+  await updateJob(dir, job.id, { status: 'running', pid: worker.pid, pidStartTime: worker.startTime });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, { api: null });
+  assert.equal(result.report.worker, 'exited');
+  assert.equal(result.job.status, 'cancelled');
+});
+
+test('cancelJob signals a detached worker after its identity matches', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base());
+  const script = join(dir, 'opc-companion.mjs');
+  writeFileSync(script, 'setInterval(() => {}, 1000);\n');
+  const worker = await spawnDetached(process.execPath, [script, 'task-worker', '--job-id', job.id], {
+    cwd: dir, env: process.env, logFile: workerLogPath(dir, job.id),
+  });
+  t.after(() => killHard(worker.pid));
+  await updateJob(dir, job.id, { status: 'running', pid: worker.pid, pidStartTime: worker.startTime });
+  assert.equal(workerMatcher(job.id)([process.execPath, script, 'task-worker', '--job-id', job.id]), true);
+  const result = await cancelJob({ stateDir: dir, env: {} }, job.id, { api: null, exitWaitMs: 10, graceMs: 1000 });
+  assert.equal(result.report.worker, 'terminated');
+  assert.equal(result.job.status, 'cancelled');
 });
 
 test('acquireSessionLock is exclusive and validates the id', (t) => {

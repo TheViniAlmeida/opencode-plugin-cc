@@ -26,6 +26,7 @@ const KIND_PREFIX = Object.freeze({
   conclave: 'conc', 'conclave-member': 'conc', 'conclave-judge': 'conc', 'stop-gate': 'gate',
 });
 const JOB_ID_RE = /^(task|review|ask|plan|sub|cmd|orch|conc|gate)-[0-9a-z]+-[0-9a-z]{6}$/;
+const SAFE_JOB_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const JOB_REF_RE = /^[0-9a-z-]+$/;
 const SESSION_ID_RE = /^ses[_0-9A-Za-z]+$/;
 const QUEUED_WITHOUT_WORKER_MS = 60_000;
@@ -38,9 +39,15 @@ const short = (value) => `${String(value ?? '').slice(0, 12)}…`;
 export const isActive = (job) => ACTIVE_STATUSES.includes(job?.status);
 export const isTerminal = (job) => TERMINAL_STATUSES.includes(job?.status);
 export const jobsDir = (stateDir) => join(stateDir, 'jobs');
-const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${id}.json`);
-export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${id}.log`);
-export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${id}.worker.log`);
+function assertJobId(id) {
+  if (typeof id !== 'string' || !SAFE_JOB_ID_RE.test(id)) {
+    throw new UsageError('INVALID_JOB_ID', `identificador de tarefa inválido "${short(id)}"`);
+  }
+  return id;
+}
+const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.json`);
+export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.log`);
+export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.worker.log`);
 
 export function newJobId(kind) {
   const prefix = KIND_PREFIX[kind];
@@ -69,7 +76,8 @@ function upsertIndex(state, job) {
 }
 
 export function readJob(stateDir, id) {
-  if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return null;
+  assertJobId(id);
+  if (!JOB_ID_RE.test(id)) return null;
   return readJson(jobPath(stateDir, id), null);
 }
 
@@ -77,8 +85,9 @@ export function listJobs(stateDir, { claudeSessionId = null, all = false } = {})
   let names;
   try {
     names = readdirSync(jobsDir(stateDir));
-  } catch {
-    return [];
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
   }
   const jobs = [];
   for (const name of names) {
@@ -150,7 +159,7 @@ export async function createJob(stateDir, fields, { maxActive = 8 } = {}) {
         throw new UsageError('SESSION_BUSY', `a sessão ${short(fields.sessionID)} já tem uma tarefa ativa (${busy.id}); aguarde ou execute /opc:cancel <valor>`, { details: { jobId: busy.id } });
       }
     }
-    const id = fields.id ?? newJobId(fields.kind);
+    const id = newJobId(fields.kind);
     const now = nowIso();
     created = { ...jobDefaults(), ...fields, id, status: 'queued', phase: 'queued', createdAt: now, updatedAt: now, logFile: jobLogPath(stateDir, id) };
     writeJob(stateDir, created);
@@ -166,11 +175,11 @@ export async function updateJob(stateDir, id, patch) {
   await updateState(stateDir, (state) => {
     const job = readJob(stateDir, id);
     if (!job) throw new NotFoundError('NOT_FOUND', `tarefa ${short(id)} não encontrada`);
-    const changes = { ...((typeof patch === 'function' ? patch(job) : patch) ?? {}) };
     if (isTerminal(job)) {
-      delete changes.status;
-      delete changes.phase;
+      updated = job;
+      return state;
     }
+    const changes = { ...((typeof patch === 'function' ? patch(job) : patch) ?? {}) };
     updated = { ...job, ...changes, id: job.id, updatedAt: nowIso() };
     writeJob(stateDir, updated);
     upsertIndex(state, updated);
@@ -390,19 +399,30 @@ async function waitWorkerExit(expected, matcher, maxMs) {
 }
 
 export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, exitWaitMs = 2000, graceMs = 3000 } = {}) {
+  assertJobId(id);
   const current = readJob(ctx.stateDir, id);
   if (!current) throw new NotFoundError('NOT_FOUND', `job ${id} not found`);
   if (!isActive(current)) throw new UsageError('NOT_ACTIVE', `a tarefa ${short(id)} já está ${current.status}`);
   const job = await updateJob(ctx.stateDir, id, { cancelRequestedAt: nowIso() });
   const report = { jobId: id, aborted: false, idle: false, worker: 'not-running' };
+  if (!isActive(job)) {
+    report.status = job.status;
+    return { job, report };
+  }
   const client = api === undefined ? existingServerApi(ctx) : api;
   if (client && job.sessionID) {
     try {
-      for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) await client.abort(sessionID);
+      for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
+        if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${short(sessionID)}`);
+      }
       report.aborted = true;
       report.idle = await waitSessionIdle(client, job.sessionID, idleWaitMs);
+      if (!report.idle) throw new Error('a sessão não ficou ociosa dentro do prazo');
     } catch (err) {
-      appendJobLog(ctx.stateDir, id, `falha ao solicitar cancelamento: ${short(err?.message)}`);
+      const message = short(redactText(err?.message ?? String(err)));
+      appendJobLog(ctx.stateDir, id, `falha ao solicitar cancelamento: ${message}`);
+      const latest = readJob(ctx.stateDir, id);
+      return { ok: false, code: 'CANCEL_FAILED', job: latest, report };
     }
   }
   if (job.pid) {
@@ -421,5 +441,6 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     status: 'cancelled', phase: 'cancelled', completedAt: nowIso(), pendingRequest: null,
     errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.',
   });
+  report.status = final.status;
   return { job: final, report };
 }
