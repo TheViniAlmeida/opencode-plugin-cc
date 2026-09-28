@@ -306,3 +306,15 @@ registerFakeExtension(() => Object.fromEntries(Object.entries(F1_DATA_ROUTES).ma
   return { body: file === 'config.json' ? { ...data, ...fake.configOverride } : data };
 }])));
 // ---- end F1 ----
+
+// ---- F2a: session, prompt, permission and question API (tests/fixtures/fake-session-api.mjs) ----
+import { SESSION_API_ROUTES, installSessionApi } from './fake-session-api.mjs';
+
+registerFakeExtension((fake) => {
+  const api = installSessionApi(fake);
+  const handler = (_fake, { method, path: pathname, query, body }) =>
+    api.handle(method, pathname, new URLSearchParams(query), body)
+    ?? { status: 404, body: { name: 'NotFoundError', data: { message: `no route ${method} ${pathname}` } } };
+  return Object.fromEntries(SESSION_API_ROUTES.map((key) => [key, handler]));
+});
+// ---- end F2a ----

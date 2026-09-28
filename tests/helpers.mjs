@@ -404,3 +404,62 @@ export async function runInProcess(sub, argv, { env, cwd, stdin = pipedStdin('')
   return { code, stdout: stdout.text(), stderr: stderr.text() };
 }
 // ---- end F1 additions ----
+
+// ---- F2a helpers (appended; F0/F1 helpers above stay unchanged) ----
+import { resolveWorkspaceRoot as f2aResolveWorkspaceRoot, workspaceStateDir as f2aWorkspaceStateDir } from '../plugins/opc/scripts/lib/state.mjs';
+import { listJobs as f2aListJobs, readJob as f2aReadJob } from '../plugins/opc/scripts/lib/jobs.mjs';
+
+export const F2A_PROVIDER = 'omniroute-personal';
+export const F2A_MODEL_ID = 'opencode-go/deepseek-v4.1-flash';
+export const F2A_MODEL = `${F2A_PROVIDER}/${F2A_MODEL_ID}`;
+export const F2A_POLICY = Object.freeze({
+  providers: { allow: [], deny: ['omniroute-work'] },
+  models: { allow: [], deny: [] },
+  agents: { allow: [], deny: ['work-*'] },
+  tools: { deny: ['gitlab_*'] },
+  sensitivePaths: ['*.env', '**/.ssh/**'],
+  destructiveBash: ['make nuke*'],
+  approver: 'user',
+  permissionTimeoutSec: 600,
+});
+
+export function stateDirFor(env, cwd) {
+  return f2aWorkspaceStateDir(env.OPC_DATA_DIR, f2aResolveWorkspaceRoot(cwd));
+}
+
+export function jobsIn(env, cwd) {
+  return f2aListJobs(stateDirFor(env, cwd), { all: true });
+}
+
+export function jobIn(env, cwd, id) {
+  return f2aReadJob(stateDirFor(env, cwd), id);
+}
+
+export function requestsTo(env, method, path) {
+  const requests = readFakeState(env).requests ?? [];
+  return requests.filter((r) => r.method === method && (typeof path === 'string' ? r.path === path : path.test(r.path)));
+}
+
+export function jobIdFrom(output) {
+  const match = /\b((?:task|ask|plan)-[0-9a-z]+-[0-9a-z]{6})\b/.exec(output);
+  if (!match) throw new Error(`no job id in: ${output.slice(0, 500)}`);
+  return match[1];
+}
+
+// Workspace + env + global config. Active jobs are cancelled by a registerStopper, which the F0 per-test
+// cleanup runs BEFORE it stops the servers and removes the temp dirs.
+export function setupF2a(t, { scenario = 'ok', config = {}, extraEnv = {}, git = true } = {}) {
+  const ctx = {};
+  ctx.cwd = makeWorkspace(t, { git });
+  ctx.env = testEnv(t, { scenario, extra: { OPC_COMPANION_SESSION_ID: 'claude-f2a', OPC_STATUS_POLL_MS: '200', ...extraEnv } });
+  registerStopper(t, async () => {
+    for (const job of jobsIn(ctx.env, ctx.cwd)) {
+      if (['queued', 'running', 'waiting_permission'].includes(job.status)) await runCli(['cancel', job.id], { env: ctx.env, cwd: ctx.cwd });
+    }
+  });
+  writeGlobalConfig(ctx.env, { defaultProvider: F2A_PROVIDER, defaultModel: F2A_MODEL, policy: F2A_POLICY, ...config });
+  return ctx;
+}
+
+export const opc = (ctx, args, { stdin = '', timeoutMs = 60000, env = {} } = {}) =>
+  runCli(args, { env: { ...ctx.env, ...env }, cwd: ctx.cwd, stdin, timeoutMs });
