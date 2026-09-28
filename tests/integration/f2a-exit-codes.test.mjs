@@ -19,7 +19,7 @@ test('exit codes (spec §4.1): 0, 2, 3, 4, 5, 6, 7, 130', async (t) => {
   const slow = setupF2a(t, { scenario: 'slow' });
   const waited = await opc(slow, ['task', '--wait-timeout', '1', 'slow']);
   assert.equal(waited.code, 6);
-  assert.match(waited.stdout, /keeps running/);
+  assert.match(waited.stdout, /A tarefa continua \S+ após o tempo limite de espera\. Acompanhe com: \/opc:status \S+ --wait/);
 
   const failed = setupF2a(t, { scenario: 'session-error-event' });
   assert.equal((await opc(failed, ['task', 'x'])).code, 7);

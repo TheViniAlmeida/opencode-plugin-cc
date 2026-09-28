@@ -23,7 +23,7 @@ Um job em `waiting_permission` imprimiu uma ou mais solicitações (permissões 
    - use AskUserQuestion com as opções "Permitir uma vez" e "Rejeitar" (inclua o campo de motivo para rejeitar);
    - permitir uma vez → `/opc:permissions reply <id> once --confirmed-by-user`;
    - rejeitar → `/opc:permissions reply <id> reject "<valor>"`.
-4. Aprovador `claude`: você pode responder `once` ou `reject`, exceto quando a solicitação disser "Precisa do usuário: sim" (comando destrutivo, diretório externo ou caminho sensível). Esses casos sempre devem ser encaminhados ao usuário como no passo 3.
+4. Aprovador `claude`: você pode responder `once` ou `reject`, exceto quando a solicitação disser "Exige o usuário: sim" (comando destrutivo, diretório externo ou caminho sensível). Esses casos sempre devem ser encaminhados ao usuário como no passo 3.
 5. Perguntas: faça cada pergunta ao usuário com AskUserQuestion (mesmas opções e rótulos; texto livre apenas quando a pergunta permitir) e envie `/opc:permissions answer <id> "<resposta 1>" "<resposta 2>" …`, usando `|` entre os rótulos de uma resposta de múltipla escolha. Para recusar: `/opc:permissions reply <id> reject`.
 6. Após responder, acompanhe o job com `/opc:status <job> --wait`.
 
