@@ -10,7 +10,7 @@ import { runTurn } from '../lib/runner.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { redact } from '../lib/redact.mjs';
-import { acquireSessionLock, appendJobLog, clearJobRequests, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
+import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
 
 const FINAL_LOG_LIMIT = 64 * 1024;
 const METADATA_LIMIT = 4000;
@@ -130,13 +130,16 @@ export function stateWriteFailure(err) {
   return new OpcError('STATE_WRITE_FAILED', `falha ao salvar o estado da tarefa: ${redact(err).message}`);
 }
 
-export async function run(ctx, argv) {
+export async function run(ctx, argv, {
+  ensureServer: ensure = ensureServer, createApi: makeApi = createApi,
+  createHub = (client) => new EventHub({ client }),
+  scheduleExit = (code) => setTimeout(() => process.exit(code), 2000).unref(),
+} = {}) {
   const { flags } = parseArgs(argv, { flags: { 'job-id': { type: 'string' }, cwd: { type: 'string' }, json: { type: 'boolean' } } });
   const jobId = flags['job-id'];
   if (!jobId) throw new UsageError('USAGE', 'task-worker exige --job-id');
   const stored = readJob(ctx.stateDir, jobId);
   if (!stored?.request) throw new NotFoundError('NOT_FOUND', `a tarefa ${jobId} não tem uma solicitação salva`);
-  const request = stored.request;
   const log = (line) => appendJobLog(ctx.stateDir, jobId, line);
   const jobUpdates = createSerialUpdater(ctx.stateDir, jobId);
   const identity = getProcessIdentity(process.pid);
@@ -151,21 +154,22 @@ export async function run(ctx, argv) {
   let releaseSession = null;
   let exitCode = 0;
   try {
+    const request = consumeJobInput(ctx.stateDir, jobId);
     if (readJob(ctx.stateDir, jobId)?.cancelRequestedAt) controller.abort();
     if (request.sessionID) {
       releaseSession = acquireSessionLock(ctx.stateDir, request.sessionID);
       if (!releaseSession) throw new OpcError('SESSION_BUSY', `a sessão ${request.sessionID} está bloqueada por outra tarefa`, { exitCode: 2 });
     }
     const sctx = serverContext(ctx);
-    const server = await ensureServer(sctx);
+    const server = await ensure(sctx);
     const client = createClient({
       baseUrl: server.url,
       password: server.password,
       directory: ctx.workspaceRoot,
       requestTimeoutMs: (ctx.config?.server?.requestTimeoutSec ?? 30) * 1000,
     });
-    const api = createApi(client);
-    hub = new EventHub({ client });
+    const api = makeApi(client);
+    hub = createHub(client);
     await hub.start();
     bridge = createRequestBridge({
       update: (patch) => jobUpdates.update(patch),
@@ -231,6 +235,7 @@ export async function run(ctx, argv) {
         childSessionIDs: result.childSessionIDs,
         usage: result.usage,
         error: result.error ?? null,
+        ...(result.abortConfirmed !== undefined ? { abortConfirmed: result.abortConfirmed, sessionAborts: result.sessionAborts } : {}),
       },
     });
     const statusLabel = { completed: 'concluído', failed: 'falhou', cancelled: 'cancelado', waiting_permission: 'aguardando permissão' }[status] ?? status;
@@ -260,7 +265,7 @@ export async function run(ctx, argv) {
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
     // a lingering keep-alive socket must not keep a detached worker alive
-    setTimeout(() => process.exit(exitCode), 2000).unref();
+    scheduleExit(exitCode);
   }
   return exitCode;
 }

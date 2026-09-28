@@ -1,11 +1,11 @@
 // Job records, worker lifecycle, limits and cancel (spec §9.1–§9.2).
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, openSync, readdirSync, readSync, rmSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
-import { redactText } from './redact.mjs';
+import { redact, redactText } from './redact.mjs';
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
@@ -48,6 +48,23 @@ function assertJobId(id) {
 const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.json`);
 export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.log`);
 export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.worker.log`);
+const jobInputPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.input.json`);
+
+// The sole unredacted handoff lives in our private job directory, never in the record.
+export function consumeJobInput(stateDir, id) {
+  const file = jobInputPath(stateDir, id);
+  try {
+    const request = readJson(file, null);
+    if (!request) throw new OpcError('JOB_INPUT_MISSING', 'A entrada privada da tarefa não está disponível.');
+    return request;
+  } finally {
+    discardJobInput(stateDir, id);
+  }
+}
+
+function discardJobInput(stateDir, id) {
+  try { unlinkSync(jobInputPath(stateDir, id)); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+}
 
 export function newJobId(kind) {
   const prefix = KIND_PREFIX[kind];
@@ -67,7 +84,8 @@ function jobDefaults() {
 }
 
 function writeJob(stateDir, job) {
-  writeFileAtomic(jobPath(stateDir, job.id), `${JSON.stringify(job, null, 2)}\n`);
+  writeFileAtomic(jobPath(stateDir, job.id), `${JSON.stringify(redact(job), null, 2)}\n`);
+  if (isTerminal(job)) discardJobInput(stateDir, job.id);
 }
 
 function upsertIndex(state, job) {
@@ -162,6 +180,7 @@ export async function createJob(stateDir, fields, { maxActive = 8 } = {}) {
     const id = newJobId(fields.kind);
     const now = nowIso();
     created = { ...jobDefaults(), ...fields, id, status: 'queued', phase: 'queued', createdAt: now, updatedAt: now, logFile: jobLogPath(stateDir, id) };
+    if (created.request) writeFileAtomic(jobInputPath(stateDir, id), `${JSON.stringify(created.request)}\n`);
     writeJob(stateDir, created);
     upsertIndex(state, created);
     pruneTerminal(stateDir, state, jobs);
@@ -340,13 +359,24 @@ export function existingServerApi(ctx) {
   return createApi(createClient({ baseUrl, password, directory: ctx.workspaceRoot, requestTimeoutMs: 5000 }));
 }
 
-export async function spawnWorker(ctx, jobId) {
+export async function spawnWorker(ctx, jobId, { spawn: start = spawnDetached } = {}) {
   ensurePrivateDir(jobsDir(ctx.stateDir));
-  const { pid, startTime } = spawnDetached(process.execPath, [COMPANION_PATH, 'task-worker', '--job-id', jobId], {
-    cwd: ctx.workspaceRoot,
-    env: { ...ctx.env, OPC_DATA_DIR: ctx.dataDir },
-    logFile: workerLogPath(ctx.stateDir, jobId),
-  });
+  let pid, startTime;
+  try {
+    ({ pid, startTime } = await start(process.execPath, [COMPANION_PATH, 'task-worker', '--job-id', jobId], {
+      cwd: ctx.workspaceRoot,
+      env: { ...ctx.env, OPC_DATA_DIR: ctx.dataDir },
+      logFile: workerLogPath(ctx.stateDir, jobId),
+    }));
+  } catch (cause) {
+    const message = 'Não foi possível iniciar o worker da tarefa.';
+    await updateJob(ctx.stateDir, jobId, {
+      status: 'failed', phase: 'failed', completedAt: nowIso(), pendingRequest: null,
+      errorCode: 'WORKER_SPAWN_FAILED', errorClass: 'fatal', errorType: 'WorkerSpawnFailed', errorMessage: message,
+    });
+    discardJobInput(ctx.stateDir, jobId);
+    throw new OpcError('WORKER_SPAWN_FAILED', message, { exitCode: ExitCode.JOB_FAILED, cause });
+  }
   return updateJob(ctx.stateDir, jobId, (job) => (job.pid ? {} : { pid, pidStartTime: startTime }));
 }
 
@@ -455,11 +485,11 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
       report.worker = await terminateProcessGroup(expected, matcher, { graceMs });
     }
   }
-  appendJobLog(ctx.stateDir, id, 'Cancelada pelo usuário.');
   const final = await updateJob(ctx.stateDir, id, {
     status: 'cancelled', phase: 'cancelled', completedAt: nowIso(), pendingRequest: null,
     errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.',
   });
+  if (final.status === 'cancelled') appendJobLog(ctx.stateDir, id, 'Cancelada pelo usuário.');
   report.status = final.status;
   return { job: final, report };
 }

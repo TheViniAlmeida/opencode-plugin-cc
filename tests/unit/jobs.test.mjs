@@ -336,6 +336,7 @@ test('cancelJob preserves a completed record when the worker finishes during abo
   assert.equal(result.job.completedAt, completedAt);
   assert.equal(result.job.errorCode, null);
   assert.deepEqual(result.job.result, { finalText: 'finished' });
+  assert.equal(readJobProgress(dir, job.id, 100).includes('Cancelada pelo usuário.'), false);
 });
 
 test('cancelJob reports a worker that exits spontaneously', async (t) => {

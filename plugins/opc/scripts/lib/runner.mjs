@@ -60,8 +60,7 @@ function toolArg(part) {
 }
 
 function displayValue(value) {
-  const text = redactText(String(value ?? ''));
-  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+  return redactText(String(value ?? ''));
 }
 
 export function filesFromToolPart(part) {
@@ -249,7 +248,7 @@ export async function runTurn({
   };
 
   const addChild = async (childID) => {
-    if (!childID || tracked.has(childID)) return;
+    if (settled || !childID || tracked.has(childID)) return;
     tracked.add(childID);
     children.add(childID);
     lastPhase = 'subagent';
@@ -264,7 +263,7 @@ export async function runTurn({
   };
 
   const handlePermission = async (req) => {
-    if (!req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
+    if (settled || !req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
     progress({ message: `Permissão solicitada (${displayValue(req.id)}): ${displayValue(req.permission)} ${(req.patterns ?? []).map(displayValue).join(' ')}`.trim() });
     try {
       await onPermission(req);
@@ -274,11 +273,19 @@ export async function runTurn({
     }
   };
   const handleQuestion = async (req) => {
-    if (!req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
+    if (settled || !req?.id || seenRequests.has(req.id) || !tracked.has(req.sessionID)) return;
     progress({ message: `Pergunta solicitada (${displayValue(req.id)}): ${(req.questions ?? []).map((q) => displayValue(q.header ?? q.question)).join(' | ')}` });
     try {
       await onQuestion(req);
       seenRequests.add(req.id);
+    } catch (err) {
+      finish('callback-failed', { detail: err });
+    }
+  };
+
+  const handleResolved = async (event) => {
+    try {
+      await onRequestResolved(event);
     } catch (err) {
       finish('callback-failed', { detail: err });
     }
@@ -362,11 +369,11 @@ export async function runTurn({
           await handleQuestion(props);
           return;
         case 'permission.replied':
-          if (tracked.has(props.sessionID)) await onRequestResolved({ type: 'permission', requestID: props.requestID, sessionID: props.sessionID, outcome: props.reply });
+          if (tracked.has(props.sessionID)) await handleResolved({ type: 'permission', requestID: props.requestID, sessionID: props.sessionID, outcome: props.reply });
           return;
         case 'question.replied':
         case 'question.rejected':
-          if (tracked.has(props.sessionID)) await onRequestResolved({ type: 'question', requestID: props.requestID, sessionID: props.sessionID, outcome: event.type === 'question.replied' ? 'replied' : 'rejected' });
+          if (tracked.has(props.sessionID)) await handleResolved({ type: 'question', requestID: props.requestID, sessionID: props.sessionID, outcome: event.type === 'question.replied' ? 'replied' : 'rejected' });
           return;
         default:
       }
@@ -426,6 +433,21 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, childSessionIDs: [...children] };
+    const safetyFailure = outcome.reason === 'child-permission-failed' || outcome.reason === 'callback-failed';
+    if (safetyFailure) {
+      const sessionAborts = [];
+      // Stop descendants first, but always attempt the parent even if a child abort fails.
+      for (const id of [...tracked].reverse()) {
+        let aborted = false;
+        try { aborted = await api.abort(id) === true; } catch { /* recorded as unconfirmed */ }
+        sessionAborts.push({ sessionID: id, aborted, idle: false });
+      }
+      await Promise.all(sessionAborts.map(async (entry) => {
+        entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs);
+      }));
+      base.sessionAborts = sessionAborts;
+      base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
+    }
     const serverLost = () => ({ ...serverLostResult(sessionID, messageID), ...base, toolsRan: toolsRanLive });
     if (outcome.reason === 'server-lost') return serverLost();
     if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
@@ -449,8 +471,11 @@ export async function runTurn({
       }
       collected = extractTurn(turnMessages(messages, messageID), { childMessages, diffs });
     } catch (err) {
-      if (isServerDown(err)) return serverLost();
-      throw err;
+      if (!safetyFailure) {
+        if (isServerDown(err)) return serverLost();
+        throw err;
+      }
+      collected = extractTurn([]);
     }
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };

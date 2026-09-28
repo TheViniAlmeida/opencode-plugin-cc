@@ -156,3 +156,62 @@ test('planPermissionSwitch: none when tail matches; patch only with leading catc
   assert.equal(planPermissionSwitch(ro, wr, 'replace'), 'patch');
   assert.equal(planPermissionSwitch(undefined, ro), 'patch');
 });
+
+const wrappedDestructive = [
+  'bash -c "rm -rf /tmp/x"', 'sh -c "rm -rf /tmp/x"',
+  'zsh -c "rm -rf /tmp/x"', 'dash -c "rm -rf /tmp/x"',
+  'bash -lc "env X=1 sh -c \'rm -rf /tmp/x\'"',
+  'eval "rm -rf /tmp/x"', 'exec -a custom rm -rf /tmp/x',
+  'env -u NAME X=1 rm -rf /tmp/x', 'xargs -I {} -n 1 sh -c "rm -rf /tmp/x"',
+  'sudo -u root rm -rf /tmp/x', 'doas -u root rm -rf /tmp/x',
+  'nohup rm -rf /tmp/x', 'time -p rm -rf /tmp/x',
+  'nice -n 10 rm -rf /tmp/x', 'command -- rm -rf /tmp/x',
+  'builtin eval "rm -rf /tmp/x"', 'find . -exec rm -rf {} \\;',
+  'find . -delete', 'echo $(bash -c "rm -rf /tmp/x")',
+  'echo `sh -c "rm -rf /tmp/x"`',
+];
+for (const command of wrappedDestructive) {
+  test(`gate 2: wrapper requires user: ${command}`, () => {
+    const request = { permission: 'bash', patterns: [command] };
+    assert.equal(requiresUser(request), true);
+    assert.equal(checkReply({ approver: 'claude', request, reply: 'once' }).code, 'NEEDS_USER');
+    assert.equal(checkReply({ approver: 'claude', request, reply: 'once', confirmedByUser: true }).ok, true);
+    assert.equal(requiresUser({ permission: 'bash', patterns: [], metadata: { command } }), true);
+  });
+}
+for (const command of ['bash -c "unterminated', 'cat <<EOF\ntext\nEOF', '$COMMAND harmless', 'env X=1 "$COMMAND"', 'sudo --unknown-option value ls']) {
+  test(`gate 2: ambiguous shell fails closed: ${command}`, () => {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+  });
+}
+
+for (const command of [
+  "bash -c 'if true; then rm -rf /tmp/x; fi'",
+  'xargs -I CMD CMD', 'source commands.sh',
+  'echo safe&rm -rf /tmp/x', '/bin/sh -c "/bin/rm -rf /tmp/x"',
+]) {
+  test(`gate 2: indirect or unsupported shell syntax requires user: ${command}`, () => {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+  });
+}
+for (const command of [
+  'bash -c "git status"', "sh -c 'env X=1 nice -n 2 git status'",
+  'eval "git status"', 'exec git status', 'env X=1 git status',
+  'sudo -u root git status', 'doas -u root git status',
+  'nohup git status', 'time -p git status', 'nice -n 2 git status',
+  'command -- git status', 'builtin printf safe', 'find . -exec printf {} \\;',
+  'echo $(sh -c "git status")', 'echo `sh -c "git status"`',
+]) {
+  test(`gate 2: inspectable benign wrapper stays eligible: ${command}`, () => {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), false);
+  });
+}
+
+for (const command of [
+  'xargs rm', 'xargs git', 'xargs -I {} sh -c "echo {}"',
+  'find . -exec sh -c "echo {}" \\;', 'find . -exec pre{}post \\;',
+]) {
+  test(`gate 2: runtime arguments cannot bypass inspection: ${command}`, () => {
+    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+  });
+}

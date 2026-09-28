@@ -198,10 +198,7 @@ export function requiresUser(request, policy = {}) {
     const commands = [...patterns];
     if (typeof request.metadata?.command === 'string') commands.push(request.metadata.command);
     const destructive = destructiveBashOf(policy);
-    return commands.some((command) => {
-      const segments = bashSegments(command);
-      return segments === null || segments.some((segment) => matchesAny(stripBashPrefixes(segment), destructive));
-    });
+    return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive));
   }
   if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || request.permission === 'edit') {
     return patterns.some((pattern) => matchesAny(pattern, sensitivePathsOf(policy)));
@@ -210,7 +207,8 @@ export function requiresUser(request, policy = {}) {
 }
 
 function bashSegments(command) {
-  function scan(source, allowUnmatchedClose = false) {
+  function scan(source, depth = 0) {
+    if (depth > 32) return null;
     const parts = [];
     let start = 0;
     let quote = null;
@@ -222,7 +220,7 @@ function bashSegments(command) {
         if (source[i + 1] === '`') {
           const end = source.indexOf('\\`', i + 2);
           if (end < 0) return null;
-          const nested = scan(source.slice(i + 2, end));
+          const nested = scan(source.slice(i + 2, end), depth + 1);
           if (nested === null) return null;
           parts.push(...nested);
           i = end + 1;
@@ -236,14 +234,14 @@ function bashSegments(command) {
         if (char === '`') {
           const end = findBacktick(source, i + 1);
           if (end < 0) return null;
-          const nested = scan(source.slice(i + 1, end));
+          const nested = scan(source.slice(i + 1, end), depth + 1);
           if (nested === null) return null;
           parts.push(...nested);
           i = end;
         } else if (char === '$' && source[i + 1] === '(') {
           const end = findParen(source, i + 1);
           if (end < 0) return null;
-          const nested = scan(source.slice(i + 2, end));
+          const nested = scan(source.slice(i + 2, end), depth + 1);
           if (nested === null) return null;
           parts.push(...nested);
           i = end;
@@ -254,7 +252,7 @@ function bashSegments(command) {
       if (char === '`') {
         const end = findBacktick(source, i + 1);
         if (end < 0) return null;
-        const nested = scan(source.slice(i + 1, end));
+        const nested = scan(source.slice(i + 1, end), depth + 1);
         if (nested === null) return null;
         parts.push(...nested);
         i = end;
@@ -263,7 +261,7 @@ function bashSegments(command) {
       if (char === '$' && source[i + 1] === '(') {
         const end = findParen(source, i + 1);
         if (end < 0) return null;
-        const nested = scan(source.slice(i + 2, end));
+        const nested = scan(source.slice(i + 2, end), depth + 1);
         if (nested === null) return null;
         parts.push(...nested);
         i = end;
@@ -273,21 +271,20 @@ function bashSegments(command) {
         const close = char === '(' ? ')' : '}';
         const end = findGroup(source, i, char, close);
         if (end < 0) return null;
-        const nested = scan(source.slice(i + 1, end));
+        const nested = scan(source.slice(i + 1, end), depth + 1);
         if (nested === null) return null;
         parts.push(...nested);
         i = end;
         continue;
       }
       if (char === ')' || char === '}') {
-        if (!allowUnmatchedClose) return null;
-        continue;
+        return null;
       }
-      if (char === ';' || char === '|' || char === '\n' || char === '\r' || (char === '&' && source[i + 1] === '&')) {
+      if (char === ';' || char === '|' || char === '\n' || char === '\r' || char === '&') {
         const end = char === '&' ? i : i;
         const segment = source.slice(start, end).trim();
         if (segment) parts.push(segment);
-        if (char === '&') i += 1;
+        if (char === '&' && source[i + 1] === '&') i += 1;
         start = i + 1;
       }
     }
@@ -345,16 +342,130 @@ function bashSegments(command) {
   return scan(String(command));
 }
 
-function stripBashPrefixes(segment) {
-  let command = segment.trim();
-  let previous;
-  do {
-    previous = command;
-    command = command.replace(/^sudo\s+/, '').replace(/^nice(?:\s+-n\s+\S+)?\s+/, '');
-    command = command.replace(/^env\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)+/, '');
-    command = command.replace(/^xargs\s+(?:-[^\s]+\s+)*?(?=(?:sudo|env|nice|rm|git|docker|kubectl|mkfs|dd|shred|truncate|find|shutdown|reboot|poweroff|systemctl)\b)/, '');
-  } while (command !== previous);
-  return command.trim();
+// Conservative shell inspection, never shell execution. Unknown syntax/options require a user.
+// bashSegments scans substitutions/groups; words preserves quoting for re-entry via -c/eval.
+function shellWords(source) {
+  const words = [];
+  let value = '', quote = null, active = false, dynamic = false;
+  const push = () => {
+    if (active) words.push({ value, dynamic });
+    value = ''; active = false; dynamic = false;
+  };
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === '\\' && quote !== "'") {
+      if (++i >= source.length) return null;
+      const next = source[i];
+      // In double quotes, only these escapes are interpreted by the shell.
+      if (quote === '"' && !'$`"\\\n'.includes(next)) value += '\\';
+      if (next !== '\n') value += next;
+      active = true;
+    } else if (quote) {
+      if (char === quote) quote = null;
+      else {
+        value += char;
+        if (quote === '"' && (char === '$' || char === '`')) dynamic = true;
+      }
+    } else if (char === "'" || char === '"') {
+      quote = char; active = true;
+    } else if (/\s/.test(char)) push();
+    else {
+      value += char; active = true;
+      if ('$`*?[]'.includes(char)) dynamic = true;
+    }
+  }
+  if (quote) return null;
+  push();
+  return words;
+}
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
+const UNSUPPORTED_SHELL_WORDS = new Set(['.', 'source', 'if', 'then', 'else', 'elif', 'fi', 'for', 'select', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '!', 'coproc']);
+const WRAPPER_OPTIONS = {
+  exec: { flags: ['-c', '-l'], values: ['-a'] },
+  env: { flags: ['-i', '--ignore-environment', '-0', '--null'], values: ['-u', '--unset', '-C', '--chdir'] },
+  xargs: { flags: ['-0', '--null', '-r', '--no-run-if-empty', '-t', '--verbose'], values: ['-I', '-n', '-P', '-s', '-L', '-d', '-E', '--replace', '--max-args', '--max-procs', '--delimiter'] },
+  sudo: { flags: ['-n', '-E', '-H', '-k', '-S'], values: ['-u', '-g', '-h', '-p', '-C', '-T', '--user', '--group', '--host'] },
+  doas: { flags: ['-n', '-L'], values: ['-u', '-C'] },
+  nohup: { flags: [], values: [] },
+  time: { flags: ['-p', '-v'], values: ['-f', '-o', '--format', '--output'] },
+  nice: { flags: [], values: ['-n', '--adjustment'] },
+  command: { flags: ['-p', '-v', '-V'], values: [] },
+  builtin: { flags: [], values: [] },
+};
+
+function bashRequiresUser(source, destructive, depth = 0) {
+  if (depth > 32 || source.includes('<<')) return true;
+  const segments = bashSegments(source);
+  if (!segments?.length) return true;
+  return segments.some((segment) => inspectWords(shellWords(segment), destructive, depth));
+}
+
+function inspectWords(words, destructive, depth) {
+  if (!words || depth > 32) return true;
+  // Literal environment assignments do not change the executable, but a later $CMD does.
+  let offset = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[offset]?.value ?? '')) offset += 1;
+  words = words.slice(offset);
+  if (!words.length) return false;
+  const [head, ...args] = words;
+  if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
+  const executable = head.value.split('/').at(-1);
+  if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
+  if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
+  if (SHELLS.has(executable)) {
+    // A shell script, stdin shell, or expansion in the script cannot be inspected here.
+    for (let i = 0; i < args.length; i += 1) {
+      const option = args[i];
+      if (option.dynamic) return true;
+      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
+        const script = args[i + 1];
+        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1);
+      }
+      if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
+    }
+    return true;
+  }
+  if (executable === 'eval') {
+    return !args.length || args.some((word) => word.dynamic)
+      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1);
+  }
+  if (executable === 'find') {
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i].value === '-delete') return true;
+      if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
+        const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
+        const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
+        if (end < 0 || inspectWords(command, destructive, depth + 1)) return true;
+        i = end;
+      }
+    }
+    return false;
+  }
+  if (!Object.hasOwn(WRAPPER_OPTIONS, executable)) return false;
+  const options = WRAPPER_OPTIONS[executable];
+  let i = 0;
+  while (i < args.length) {
+    const word = args[i];
+    if (word.dynamic) return true;
+    const option = word.value;
+    if (option === '--') { i += 1; break; }
+    if (executable === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(option)) { i += 1; continue; }
+    if (!option.startsWith('-')) break;
+    if (options.flags.includes(option)) { i += 1; continue; }
+    if (options.values.includes(option)) {
+      if (!args[i + 1] || args[i + 1].dynamic) return true;
+      i += 2; continue;
+    }
+    if (options.values.some((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name) && option.length > name.length)) {
+      i += 1; continue;
+    }
+    return true;
+  }
+  if (i === args.length) return true;
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1);
+  // Unknown stdin may add destructive options or replace executable/script text.
+  return nestedRequiresUser || executable === 'xargs';
 }
 
 export function checkReply({ approver = 'user', request, reply, confirmedByUser = false, policy = {} }) {

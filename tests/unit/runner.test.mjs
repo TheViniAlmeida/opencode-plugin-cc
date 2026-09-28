@@ -368,3 +368,63 @@ test('StructuredOutput tool does not count as tools ran (StructuredOutputError s
   assert.equal(r.errorClass, 'recoverable');
   assert.equal(r.finalText, 'raw');
 });
+
+for (const failure of ['patch', 'permission', 'question', 'resolved']) {
+  for (const abortMode of ['idle', 'refused', 'throws', 'busy']) {
+    test(`gate 3: ${failure} aborts children before parent (${abortMode})`, async () => {
+      const hub = stubHub();
+      const childID = 'ses_child_gate';
+      const api = stubApi({ hub, onPrompt: (sid) => {
+        api.statusMap[sid] = { type: 'busy' };
+        api.statusMap[childID] = { type: 'busy' };
+        hub.emit({ type: 'session.created', properties: { info: { id: childID, parentID: sid } } });
+        const type = failure === 'question' ? 'question.asked' : failure === 'resolved' ? 'permission.replied' : 'permission.asked';
+        hub.emit({ type, properties: { id: 'per_gate', requestID: 'per_gate', sessionID: childID, permission: 'bash', patterns: [] } });
+      } });
+      if (failure === 'patch') api.patchSession = async () => { throw new Error('falha no PATCH'); };
+      const abort = api.abort;
+      api.abort = async (id) => {
+        if (id === childID && abortMode !== 'idle') {
+          api.calls.push(['abort', id]);
+          if (abortMode === 'throws') throw new Error('falha no abort');
+          return abortMode === 'busy';
+        }
+        return abort(id);
+      };
+      const fail = async () => { throw new Error('falha na ponte'); };
+      const result = await runTurn({ api, hub,
+        request: baseRequest({ idleWaitMs: 5, childPermission: [{ permission: 'bash', pattern: '*', action: 'ask' }] }),
+        onPermission: failure === 'permission' ? fail : async () => {},
+        onQuestion: failure === 'question' ? fail : async () => {},
+        onRequestResolved: failure === 'resolved' ? fail : async () => {},
+      });
+      assert.equal(result.status, 'failed');
+      assert.equal(result.errorCode, failure === 'patch' ? 'CHILD_PERMISSION_FAILED' : 'CALLBACK_FAILED');
+      assert.deepEqual(api.calls.filter(([name]) => name === 'abort').map(([, id]) => id), [childID, 'ses_new']);
+      assert.equal(result.abortConfirmed, abortMode === 'idle');
+      assert.equal(result.sessionAborts.length, 2);
+      assert.ok(api.calls.some(([name]) => name === 'sessionStatus'));
+    });
+  }
+}
+
+test('gate 5: progress prints full server IDs and redacts them', async () => {
+  const { registerSecret } = await import('../../plugins/opc/scripts/lib/redact.mjs');
+  const secret = 'fake-gate-progress-secret';
+  registerSecret(secret);
+  const sid = 'ses_parent_identifier_long';
+  const child = `ses_child_identifier_long_${secret}`;
+  const permission = 'per_permission_identifier_long';
+  const question = 'que_question_identifier_long';
+  const hub = stubHub();
+  const lines = [];
+  const api = stubApi({ hub, onPrompt: (id, body) => {
+    hub.emit({ type: 'session.created', properties: { info: { id: child, parentID: id } } });
+    hub.emit({ type: 'permission.asked', properties: { id: permission, sessionID: id, permission: 'bash' } });
+    hub.emit({ type: 'question.asked', properties: { id: question, sessionID: id } });
+    completeTurn(hub, api, id, body);
+  } });
+  await runTurn({ api, hub, request: baseRequest({ sessionID: sid }), onProgress: (event) => lines.push(event.message ?? '') });
+  for (const id of [sid, child.replace(secret, '***'), permission, question]) assert.ok(lines.some((line) => line.includes(id)), id);
+  assert.equal(lines.join('\n').includes(secret), false);
+});

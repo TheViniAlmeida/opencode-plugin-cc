@@ -146,3 +146,21 @@ test('terminateProcessGroup never signals a process whose identity does not matc
   assert.equal(isPidAlive(other.pid), true);
   assert.equal(await terminateProcessGroup({ pid: await deadPid(), startTime: '1' }, () => true), 'not-running');
 });
+
+for (const mode of ['null', 'throw']) {
+  test(`gate 4: identity ${mode} kills the exact child through its handle`, async (t) => {
+    const dir = makeTempDir('opc-identity-');
+    t.after(() => removeTempDir(dir));
+    let pid;
+    await assert.rejects(spawnDetached(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], {
+      cwd: dir, logFile: path.join(dir, 'worker.log'), identityTimeoutMs: 10,
+      readIdentity(value) {
+        pid = value;
+        if (mode === 'throw') throw new Error('identidade indisponível');
+        return null;
+      },
+    }), (err) => err.code === 'SPAWN_FAILED');
+    assert.ok(pid > 0);
+    assert.equal(isPidAlive(pid), false);
+  });
+}
