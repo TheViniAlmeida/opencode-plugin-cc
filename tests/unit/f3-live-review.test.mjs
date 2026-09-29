@@ -10,7 +10,7 @@ import { appendSafeOutput, assertModelRouting, assertEndpointCoverage, compareSh
 test('F3 live report writer masks token patterns and registered secrets before writing', (t) => {
   const dir = trackTempDir(t, makeTempDir('opc-f3-report-'));
   const file = join(dir, 'report.md');
-  const token = 'sk-proj-1234567890abcdefghijklmnopqrstuvwxyz';
+  const token = ['sk', 'proj', '1234567890abcdefghijklmnopqrstuvwxyz'].join('-'); // built at runtime: no token literal in the repo
   const secret = 'registered-f3-secret-123';
   registerSecret(secret);
   appendSafeOutput(file, `token=${token} secret=${secret} paths=${dir} home=${homedir()}`, dir);
