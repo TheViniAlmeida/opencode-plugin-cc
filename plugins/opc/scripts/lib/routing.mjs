@@ -234,6 +234,8 @@ export async function runWithFallback({
   contextLimitOf = () => null,
   signal,
   cancelRequestedAt = null,
+  job = null,
+  isCancelled = () => false,
   now = () => new Date().toISOString(),
   onAttemptStart = async () => {},
   onAttemptEnd = async () => {},
@@ -243,7 +245,11 @@ export async function runWithFallback({
     throw new UsageError('NO_CANDIDATES', 'runWithFallback: a lista de candidatos está vazia');
   }
   if (typeof runAttempt !== 'function') throw new TypeError('runWithFallback: runAttempt é obrigatório');
-  const cancelPending = () => Boolean(typeof cancelRequestedAt === 'function' ? cancelRequestedAt() : cancelRequestedAt);
+  const cancelPending = () => Boolean(
+    (typeof cancelRequestedAt === 'function' ? cancelRequestedAt() : cancelRequestedAt)
+    || job?.cancelRequestedAt
+    || isCancelled(),
+  );
   const enabled = fallbackEligible === true && fallbackCfg.enabled !== false;
   const configuredMax = Number(fallbackCfg.maxAttempts ?? 3);
   const maxAttempts = enabled ? (Number.isFinite(configuredMax) ? Math.max(1, Math.floor(configuredMax)) : 3) : 1;
@@ -254,10 +260,11 @@ export async function runWithFallback({
   let stopReason = null;
 
   while (current) {
-    if (attempts.length > 0 && (signal?.aborted || cancelPending())) { stopReason = 'cancelled'; break; }
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
     const index = attempts.length;
     const startedAt = now();
     await onAttemptStart(current, index);
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
     result = await runAttempt(current, index);
     const record = {
       model: current.full,
@@ -309,7 +316,7 @@ export function describeStop({ stopReason, result, attempts }) {
     };
   }
   if ((stopReason === 'max-attempts' || stopReason === 'exhausted') && attempts.length > 1) {
-    const trail = attempts.map((attempt, index) => `${index + 1}) ${echo(attempt.model)}: ${safeOutputText(attempt.errorType ?? attempt.status)}`).join('; ');
+    const trail = attempts.map((attempt, index) => `${index + 1}) ${safeOutputText(attempt.model)}: ${safeOutputText(attempt.errorType ?? attempt.status)}`).join('; ');
     return {
       errorCode: 'FALLBACK_EXHAUSTED',
       errorMessage: `Todas as ${attempts.length} tentativas falharam (${trail}). Último erro: ${safeOutputText(result.errorMessage ?? result.errorType ?? 'desconhecido')}`,
