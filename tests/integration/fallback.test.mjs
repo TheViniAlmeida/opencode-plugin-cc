@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { testEnv, makeWorkspace, runCli, FIXTURE_MODELS as M, writeGlobalConfig, jobsIn, promptModels, requestsTo, waitFor } from '../helpers.mjs';
+import { testEnv, makeWorkspace, runCli, FIXTURE_MODELS as M, writeGlobalConfig, jobsIn, promptModels, requestsTo, waitFor, stateDirFor } from '../helpers.mjs';
+import { createJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 function config({ fallback = {}, tasks = {} } = {}) {
   return { defaultProvider: 'omniroute-personal', defaultModel: M.fast, reviewModel: null,
@@ -89,4 +92,50 @@ test('cancelar durante espera de fallback não cria outra sessão', async (t) =>
   const c = await runCli(['cancel', job.id], { env, cwd: ws }); assert.equal(c.code, 0, output(c));
   await waitFor(() => jobsIn(env, ws).find((j) => j.id === job.id && j.status === 'cancelled'), { timeoutMs: 20_000 });
   await delay(500); assert.deepEqual(promptModels(env), [M.fast]); assert.equal(sessionCreates(env), 1);
+});
+
+test('mascara texto de erro da tentativa em todos os canais de saída do CLI', async (t) => {
+  const secretLike = ['sk', 'proj', Math.random().toString(36).slice(2, 14)].join('-');
+  const { env, ws } = setup(t, 'secret-error', { extra: { FAKE_ERROR_TEXT: secretLike } });
+  const foreground = await runCli(['ask', 'Teste de erro mascarado'], { env, cwd: ws });
+  assert.equal(foreground.code, 7, output(foreground));
+  const [job] = jobsIn(env, ws);
+  const result = await runCli(['result', job.id, '--json'], { env, cwd: ws });
+  const status = await runCli(['status', job.id, '--json'], { env, cwd: ws });
+  const persisted = fs.readFileSync(path.join(stateDirFor(env, ws), 'jobs', `${job.id}.json`), 'utf8');
+  const log = fs.readFileSync(path.join(stateDirFor(env, ws), 'jobs', `${job.id}.log`), 'utf8');
+  for (const [label, content] of [
+    ['job JSON', persisted], ['job log', log], ['result JSON stdout', result.stdout],
+    ['status JSON stdout', status.stdout], ['foreground stdout/stderr', output(foreground)],
+  ]) {
+    assert.ok(!content.includes(secretLike), `${label} leaked runtime secret-like value`);
+    assert.ok(content.includes('***'), `${label} should show the redaction marker`);
+  }
+});
+
+test('worker encerra como cancelled com cancelamento anterior à primeira tentativa', async (t) => {
+  const { env, ws } = setup(t, 'model-429');
+  const stateDir = stateDirFor(env, ws);
+  const request = {
+    kind: 'ask', profileKind: 'read-only', newSession: { title: 'opc ask: cancelamento prévio', permission: [] },
+    childPermission: null, parts: [{ type: 'text', text: 'não deve ser enviado' }],
+    model: { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' },
+    agent: null, variant: null, format: null, messageID: 'msg_pre_cancel', timeoutMs: 5000,
+    fallbackCfg: config().routing.fallback,
+    candidates: [
+      { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash', full: M.fast },
+      { providerID: 'omniroute-personal', modelID: 'opencode-go/kimi-k3', full: M.k3 },
+    ], fallbackEligible: true,
+  };
+  const job = await createJob(stateDir, {
+    kind: 'ask', title: 'opc ask: cancelamento prévio', workspaceRoot: ws,
+    model: M.fast, permissionProfile: 'read-only', request,
+  });
+  await updateJob(stateDir, job.id, { cancelRequestedAt: new Date().toISOString() });
+  const worker = await runCli(['task-worker', '--job-id', job.id], { env, cwd: ws, timeoutMs: 30000 });
+  assert.equal(worker.code, 130, output(worker));
+  const terminal = jobsIn(env, ws).find((entry) => entry.id === job.id);
+  assert.equal(terminal.status, 'cancelled');
+  assert.deepEqual(terminal.attempts, []);
+  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/).length, 0);
 });
