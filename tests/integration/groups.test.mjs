@@ -42,6 +42,9 @@ test('grupo em segundo plano → status --wait agregado → resultado de todos o
   assert.equal((result.stdout.match(/RESULT general/g) ?? []).length, 3);
   const json = JSON.parse((await runCli(['result', group.id, '--json'], { env, cwd })).stdout);
   assert.equal(json.members.length, 3);
+  const latest = JSON.parse((await runCli(['result', '--json'], { env, cwd })).stdout);
+  assert.equal(latest.group.id, group.id);
+  assert.equal(latest.members.length, 3);
 });
 
 test('a lista de status mostra o grupo, nunca seus membros', async (t) => {

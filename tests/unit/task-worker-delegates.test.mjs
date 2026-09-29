@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { delegateWorker } from '../../plugins/opc/scripts/commands/task-worker.mjs';
-import { createGroup, readJob, listGroupMembers } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { createGroup, readJob, listGroupMembers, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import { runWorker } from '../../plugins/opc/scripts/commands/subagent.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
@@ -55,4 +55,27 @@ test('coordinator bridge setup rejection fails and logs the member lane', async 
   assert.match(log, /failed \*\*\*/);
   assert.doesNotMatch(log, /abcdefghijklmnop/);
   assert.match(member.errorMessage, /failed \*\*\*/);
+});
+
+test('coordinator records an aborted member with a cancellation request as cancelled', async (t) => {
+  const stateDir = state(t);
+  const spec = { agent: 'general', full: 'provider/model', model: { providerID: 'provider', modelID: 'model' } };
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'group' }, [{ title: 'member' }]);
+  const ctx = { stateDir, config: { policy: {} } };
+  const code = await runWorker(ctx, group, { prompt: 'p', members: [spec], maxParallel: 1, profile: 'read-only', rules: [], mechanism: 'child-session' }, {
+    openApi: async () => ({ api: { createSession: async () => ({ id: 'ses_parent' }) }, hub: {}, close() {} }),
+    dispatch: async ({ onSession }) => {
+      await onSession('ses_member');
+      await updateJob(stateDir, members[0].id, { cancelRequestedAt: new Date().toISOString() });
+      throw new Error('The operation was aborted.');
+    },
+  });
+
+  assert.equal(code, 130);
+  const member = readJob(stateDir, members[0].id);
+  assert.equal(member.status, 'cancelled');
+  assert.equal(member.phase, 'cancelled');
+  assert.equal(member.errorCode, 'cancelled');
+  assert.equal(member.errorType, 'Cancelled');
+  assert.equal(member.errorMessage, 'Cancelada pelo usuário.');
 });

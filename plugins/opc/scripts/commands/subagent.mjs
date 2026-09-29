@@ -169,16 +169,23 @@ export async function runWorker(ctx, groupJob, request, {
         }
         await updater.flush();
         const latest = readJob(stateDir, memberId);
-        const status = latest?.status === 'cancelled' ? 'cancelled' : res.status;
+        const wasCancelled = Boolean(latest?.cancelRequestedAt) || latest?.status === 'cancelled';
+        const status = wasCancelled ? 'cancelled' : res.status;
         await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), sessionID: res.sessionID ?? latest?.sessionID ?? null,
-          errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
+          ...(wasCancelled ? { errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' } : {
+            errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
+          }),
           childSessionIDs: res.childSessionIDs ?? [], pendingRequest: null, result: memberResult(res, spec, req.mechanism) });
         appendJobLog(stateDir, groupJob.id, `${tag} ${status}`);
       } catch (err) {
         const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
         const latest = readJob(stateDir, memberId);
         if (latest && ['queued', 'running', 'waiting_permission'].includes(latest.status)) {
-          await updateJob(stateDir, memberId, { status: 'failed', phase: 'failed', completedAt: now(), errorCode: err.code ?? 'member_setup_failed', errorClass: 'fatal', errorType: err.code ?? err.name ?? 'Error', errorMessage });
+          const wasCancelled = Boolean(latest.cancelRequestedAt);
+          await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(),
+            errorCode: wasCancelled ? 'cancelled' : err.code ?? 'member_setup_failed', errorClass: 'fatal',
+            errorType: wasCancelled ? 'Cancelled' : err.code ?? err.name ?? 'Error',
+            errorMessage: wasCancelled ? 'Cancelada pelo usuário.' : errorMessage });
         }
         appendJobLog(stateDir, groupJob.id, `${tag} falhou: ${errorMessage}`);
       } finally { bridge?.dispose(); }
@@ -190,7 +197,11 @@ export async function runWorker(ctx, groupJob, request, {
       const errorMessage = safeOutputText(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
       const latest = readJob(stateDir, memberId);
       if (latest && ACTIVE_STATUSES.includes(latest.status)) {
-        await updateJob(stateDir, memberId, { status: 'failed', phase: 'failed', completedAt: now(), errorCode: outcome.reason?.code ?? 'member_lane_failed', errorClass: 'fatal', errorType: outcome.reason?.code ?? outcome.reason?.name ?? 'Error', errorMessage });
+        const wasCancelled = Boolean(latest.cancelRequestedAt) || latest.status === 'cancelled';
+        await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(),
+          errorCode: wasCancelled ? 'cancelled' : outcome.reason?.code ?? 'member_lane_failed', errorClass: 'fatal',
+          errorType: wasCancelled ? 'Cancelled' : outcome.reason?.code ?? outcome.reason?.name ?? 'Error',
+          errorMessage: wasCancelled ? 'Cancelada pelo usuário.' : errorMessage });
       }
       appendJobLog(stateDir, groupJob.id, `[#${index + 1}] falha da lane: ${errorMessage}`);
       await refresh();

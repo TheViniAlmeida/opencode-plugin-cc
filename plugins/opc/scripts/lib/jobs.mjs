@@ -745,8 +745,11 @@ export async function refreshGroup(stateDir, groupId, { final = false, decorate 
   let status = agg.status;
   if (status === 'queued' && group.status === 'running') status = 'running';
   if (!final && TERMINAL_STATUSES.includes(status)) status = 'running';
+  if (final && group.cancelRequestedAt) {
+    status = members.some((member) => ACTIVE_STATUSES.includes(member.status)) ? 'running' : 'cancelled';
+  }
   const warnings = [...agg.warnings];
-  if (final && ACTIVE_STATUSES.includes(status)) {
+  if (final && ACTIVE_STATUSES.includes(status) && !group.cancelRequestedAt) {
     status = 'failed';
     warnings.push('O coordenador terminou com membros ainda ativos.');
   }
@@ -765,7 +768,8 @@ export async function refreshGroup(stateDir, groupId, { final = false, decorate 
 }
 
 export async function cancelGroup(ctx, groupId) {
-  const group = readJob(ctx.stateDir, groupId);
+  const group = await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: nowIso() });
+  if (!group) throw new NotFoundError('NOT_FOUND', `grupo ${groupId} não encontrado`);
   const active = listGroupMembers(ctx.stateDir, groupId).filter((m) => ACTIVE_STATUSES.includes(m.status));
   const results = await Promise.all(active.map(async (member) => {
     try {
@@ -785,8 +789,30 @@ export async function cancelGroup(ctx, groupId) {
   const cancelledMembers = results.filter((result) => result.ok).map((result) => result.id);
   const failedMembers = results.filter((result) => !result.ok).map((result) => result.id);
   let cancelled = group;
-  if (failedMembers.length === 0 && ACTIVE_STATUSES.includes(group.status)) cancelled = await cancelJob(ctx, groupId);
-  return { group: readJob(ctx.stateDir, groupId) ?? cancelled, cancelledMembers, failedMembers };
+  let ok = failedMembers.length === 0;
+  if (ok) {
+    const latest = readJob(ctx.stateDir, groupId);
+    if (ACTIVE_STATUSES.includes(latest?.status)) {
+      try {
+        const result = await cancelJob(ctx, groupId);
+        cancelled = result.job ?? latest;
+        ok = result.ok !== false;
+      } catch (err) {
+        const final = readJob(ctx.stateDir, groupId);
+        if (err?.code === 'NOT_ACTIVE' && final?.status === 'cancelled') {
+          cancelled = final;
+        } else {
+          throw err;
+        }
+      }
+    } else if (latest?.status === 'cancelled') {
+      cancelled = latest;
+    } else {
+      ok = false;
+      cancelled = latest ?? group;
+    }
+  }
+  return { group: readJob(ctx.stateDir, groupId) ?? cancelled, cancelledMembers, failedMembers, ok };
 }
 
 export async function runWithConcurrency(items, limit, fn) {

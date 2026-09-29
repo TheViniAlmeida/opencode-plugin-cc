@@ -2,7 +2,7 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
-import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
+import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef, topLevelJobs } from '../lib/jobs.mjs';
 import { renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 
@@ -23,9 +23,9 @@ export async function run(ctx, argv) {
     for (const candidate of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null })) {
       jobs.push(await reconcileJob(ctx.stateDir, candidate));
     }
-    job = jobs.find(isTerminal) ?? null;
+    job = topLevelJobs(jobs).find(isTerminal) ?? null;
     if (!job) {
-      const active = jobs.find(isActive);
+      const active = topLevelJobs(jobs).find(isActive);
       if (active) throw stillRunning(active);
       throw new NotFoundError('NO_FINISHED_JOB', 'ainda não há tarefa concluída nesta sessão do Claude');
     }

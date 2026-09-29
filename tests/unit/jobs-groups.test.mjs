@@ -134,6 +134,8 @@ test('cancelGroup reports failed member cancels and leaves the group active', as
   assert.deepEqual(result.cancelledMembers, []);
   assert.deepEqual(result.failedMembers, [members[0].id]);
   assert.equal(result.group.status, 'running');
+  assert.ok(result.group.cancelRequestedAt);
+  assert.equal((await refreshGroup(stateDir, group.id, { final: true })).status, 'running');
   assert.equal(readJob(stateDir, members[0].id).status, 'running');
   const log = readFileSync(jobLogPath(stateDir, group.id), 'utf8');
   assert.match(log, new RegExp(`cancel ${members[0].id} falhou: .+`));
@@ -148,6 +150,19 @@ test('refreshGroup final writes decorate() fields in the terminal update', async
   const g = await refreshGroup(stateDir, group.id, { final: true, decorate: (grp, ms) => ({ rendered: `${grp.status} ${ms.length}` }) });
   assert.equal(g.status, 'completed');
   assert.equal(readJob(stateDir, group.id).rendered, 'completed 1');
+});
+
+test('refreshGroup final honours group cancellation after its members stop', async (t) => {
+  const stateDir = tmpState(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'g', status: 'running' }, [
+    { title: 'a', status: 'completed' }, { title: 'b', status: 'running' },
+  ]);
+  await updateJob(stateDir, group.id, { status: 'running', cancelRequestedAt: new Date().toISOString() });
+  await updateJob(stateDir, members[1].id, { status: 'cancelled' });
+
+  const final = await refreshGroup(stateDir, group.id, { final: true });
+
+  assert.equal(final.status, 'cancelled');
 });
 
 test('maxActive counts a group as one job', async (t) => {

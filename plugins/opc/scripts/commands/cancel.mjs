@@ -27,8 +27,13 @@ export async function run(ctx, argv) {
 
 export async function cancelForGroup(ctx, job, flags) {
   if (job?.role !== GROUP_ROLE) return null;
-  const { group, cancelledMembers } = await cancelGroup(ctx, job.id);
-  if (flags.json) ctx.json({ group, cancelledMembers });
+  const { group, cancelledMembers, failedMembers = [], ok = true } = await cancelGroup(ctx, job.id);
+  if (failedMembers.length || !ok) {
+    if (flags.json) ctx.json({ group, cancelledMembers, failedMembers, error: 'CANCEL_FAILED' });
+    else ctx.err(`Falha ao cancelar o grupo ${group.id}; membros que falharam: ${failedMembers.join(', ') || group.id}`);
+    return ExitCode.CONNECTION;
+  }
+  if (flags.json) ctx.json({ group, cancelledMembers, failedMembers });
   else ctx.out(`# Grupo ${group.id} cancelado\n\nMembros cancelados: ${cancelledMembers.join(', ') || '(nenhum ativo)'}\n`);
   return ExitCode.OK;
 }
