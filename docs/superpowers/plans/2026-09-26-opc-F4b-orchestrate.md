@@ -12,6 +12,21 @@
 
 ---
 
+## Ajustes pós-F4a (29/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+Conferidos contra o código da F0–F4a mergeado na `main`. Onde este plano divergir, vale o que está aqui (e o código real: leia cada módulo antes de estendê-lo). Os "Ajustes pós-F3" do plano da F4a e os anteriores continuam valendo (heredoc, PT-BR, IDs inteiros, jobs só com metadados + entrada privada consumida uma vez, `readSessionMessages`, mascaramento, chaves JSON sem nome de segredo, credenciais falsas montadas em tempo de execução).
+
+1. **Delegados de worker.** O despacho real é `mod.runWorker(ctx, job, request)` com o pedido já consumido por `consumeJobInput` (F3); o registro do job não tem `request` bruto. O delegado `orch` segue esse formato (não `runWorker(ctx, stored)` nem `runWorker(ctx, job)`); o precedente de worker de grupo é `runWorker(ctx, groupJob, request, …)` em `commands/subagent.mjs` (F3).
+2. **`runWithFallback` (real).** Além do que o plano cita, aceita `isCancelled()` (checado antes de cada tentativa, depois de `onAttemptStart` e durante o backoff; `abortableSleep(ms, signal, isCancelled)`). O coordenador deve passar `isCancelled` lendo `cancelRequestedAt` do grupo e do membro. Cada registro de tentativa pode trazer `abortConfirmed: false`.
+3. **Teto de retries.** O runner só libera fallback depois de abort confirmado + sessão ociosa; senão devolve `AbortUnconfirmed` (fatal, `errorCode: 'ABORT_UNCONFIRMED'`). Falhas de segurança (`CallbackFailed`, `ChildPermissionFailed`) trazem `abortConfirmed`/`sessionAborts`.
+4. **Tentativas nos membros.** `safeJob` mascara `job.attempts[]`; grave as tentativas de um membro no mesmo `updateJob` que o torna terminal (jobs terminais são congelados) ou com `recordAttempt` antes da transição. Se o coordenador quiser o cancelamento entre tentativas com a semântica da F4a, mantenha `attemptInFlight` no membro (true antes do turno, false ao registrar a tentativa); `cancelJob` só dispensa o abort de tentativa encerrada com abort confirmado.
+5. **Classificação.** Fallback só em erro recuperável por `errorClass`/`errorType` (retry cap, `APIError` com `isRetryable` ou 404, `Timeout`, casos de saída estruturada/contexto). `APIError` 400/402 é fatal. Nunca classificar por texto.
+6. **Avisos de roteamento.** IDs de modelo e nomes de regra vindos da config saem completos (sem corte de 12 caracteres) e uma vez por execução (`routingWarnings`, `routingWarningsReported`).
+7. **Saídas.** `attempts` aparece em `status/result --json` (mascarado); a seção de texto `## Tentativas (N)` só no texto. O monitor (`opc monitor`) já aninha membros de grupo e lê só metadados: grupos de orquestração aparecem nele sem mudança.
+8. **Agentes e comandos `.md`.** Nada fornecido pelo usuário ou pelo lead vai na linha de shell: flags e texto ficam no corpo do heredoc citado (`--raw-args-stdin` extrai as flags iniciais). A guarda do delimitador é a frase PT-BR exigida por `tests/unit/commands-md.test.mjs`.
+9. **Ao vivo.** `OPC_LIVE=1` + `OPC_LIVE_MODEL` (e `_2`/`_3`); rotas que responderam na F4a: `omniroute-personal/cmd/deepseek/deepseek-v4-flash`, `…/cmd/Qwen/Qwen3.7-Flash`, `…/cmd/moonshotai/Kimi-K2.6`. `opencode-go/*` responde 402 e MiniMax 400 (fatais). Nenhuma rota disponível falha de modo recuperável: fallback ao vivo fica NÃO VALIDADO se nada mudar. Saída ao vivo sanitizada para `omniroute-personal` antes do commit.
+10. **Config.** `routing.fallback.maxProviderRetries` aceita 0–20 e `maxRetryWaitSec` 0–3600; testes não podem usar valores fora disso. `delegation.auto` liga só na global. `DELEGATION_COMMANDS` vive em `lib/render.mjs` (a F4b acrescenta `orchestrate`).
+
 ## Global Constraints
 
 - Node ≥ 20; ESM; zero dependências de runtime e de desenvolvimento (nada de `npm install`).
