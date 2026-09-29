@@ -790,13 +790,16 @@ export async function cancelGroup(ctx, groupId) {
   const failedMembers = results.filter((result) => !result.ok).map((result) => result.id);
   let cancelled = group;
   let ok = failedMembers.length === 0;
+  // a member kept running: withdraw the request so the coordinator's final refresh aggregates normally (a retry sets it again)
+  if (!ok) await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: null });
   if (ok) {
     const latest = readJob(ctx.stateDir, groupId);
     if (ACTIVE_STATUSES.includes(latest?.status)) {
       try {
         const result = await cancelJob(ctx, groupId);
-        cancelled = result.job ?? latest;
-        ok = result.ok !== false;
+        cancelled = result.job ?? readJob(ctx.stateDir, groupId) ?? latest;
+        // the coordinator may finalize the group between cancelJob's active check and its update
+        ok = result.ok !== false && cancelled?.status === 'cancelled';
       } catch (err) {
         const final = readJob(ctx.stateDir, groupId);
         if (err?.code === 'NOT_ACTIVE' && final?.status === 'cancelled') {

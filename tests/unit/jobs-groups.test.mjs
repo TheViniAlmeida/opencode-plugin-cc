@@ -134,9 +134,12 @@ test('cancelGroup reports failed member cancels and leaves the group active', as
   assert.deepEqual(result.cancelledMembers, []);
   assert.deepEqual(result.failedMembers, [members[0].id]);
   assert.equal(result.group.status, 'running');
-  assert.ok(result.group.cancelRequestedAt);
-  assert.equal((await refreshGroup(stateDir, group.id, { final: true })).status, 'running');
+  assert.equal(result.group.cancelRequestedAt, null, 'a failed member cancel withdraws the group cancel request');
+  assert.equal(result.ok, false);
   assert.equal(readJob(stateDir, members[0].id).status, 'running');
+  // the member that kept running later finishes: the group aggregates normally instead of ending cancelled
+  await updateJob(stateDir, members[0].id, { status: 'completed' });
+  assert.equal((await refreshGroup(stateDir, group.id, { final: true })).status, 'completed');
   const log = readFileSync(jobLogPath(stateDir, group.id), 'utf8');
   assert.match(log, new RegExp(`cancel ${members[0].id} falhou: .+`));
   assert.doesNotMatch(log, /ses_cancel_failure/);
