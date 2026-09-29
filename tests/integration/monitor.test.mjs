@@ -58,7 +58,7 @@ test('monitor --json prints the snapshot', async (t) => {
   const env = testEnv(t);
   const ws = makeWorkspace(t);
   const { running } = await seed(env, ws);
-  const r = await runCli(['monitor', '--json'], { env, cwd: ws });
+  const r = await runCli(['monitor', '--once', '--json'], { env, cwd: ws });
   assert.equal(r.code, 0, r.stderr);
   const snap = JSON.parse(r.stdout);
   assert.equal(snap.focus, null);
@@ -66,6 +66,78 @@ test('monitor --json prints the snapshot', async (t) => {
   const entry = snap.jobs.find((j) => j.id === running.id);
   assert.deepEqual(entry.attempt, { current: 2, limit: 3 });
   assert.equal(entry.model, M.k3);
+});
+
+test('monitor --once --json masks unregistered secret-like values in titles, logs and attempt errors', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const stateDir = stateDirFor(env, ws);
+  ensurePrivateDir(stateDir);
+  const secret = `ghp_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  const job = await createJob(stateDir, { kind: 'ask', title: `title ${secret}` });
+  await updateJob(stateDir, job.id, {
+    status: 'failed', completedAt: new Date().toISOString(),
+    attempts: [{ status: 'failed', errorMessage: `attempt failed ${secret}` }],
+  });
+  appendJobLog(stateDir, job.id, `log ${secret}`);
+  const r = await runCli(['monitor', '--once', '--json'], { env, cwd: ws });
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, new RegExp(secret));
+  assert.ok(r.stdout.includes('***'), r.stdout);
+});
+
+test('monitor shows every member of a visible group beyond the top-level recent cap', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const stateDir = stateDirFor(env, ws);
+  ensurePrivateDir(stateDir);
+  const group = await createJob(stateDir, { kind: 'orchestrate', title: 'group' });
+  await updateJob(stateDir, group.id, { status: 'running' });
+  const completed = await createJob(stateDir, { kind: 'task', title: 'completed member', groupId: group.id });
+  await updateJob(stateDir, completed.id, { status: 'completed', completedAt: new Date().toISOString() });
+  const running = await createJob(stateDir, { kind: 'task', title: 'running member', groupId: group.id });
+  await updateJob(stateDir, running.id, { status: 'running' });
+  for (let i = 0; i < 15; i += 1) {
+    const job = await createJob(stateDir, { kind: 'ask', title: `recent ${i}` });
+    await updateJob(stateDir, job.id, { status: 'completed', completedAt: new Date(Date.now() + i).toISOString() });
+  }
+  const snap = JSON.parse((await runCli(['monitor', '--json'], { env, cwd: ws })).stdout);
+  assert.ok(snap.jobs.some((j) => j.id === completed.id), JSON.stringify(snap.jobs.map((j) => j.id)));
+  assert.ok(snap.jobs.some((j) => j.id === running.id), JSON.stringify(snap.jobs.map((j) => j.id)));
+});
+
+test('monitor skips malformed job ids and continues rendering valid records', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const { stateDir, running } = await seed(env, ws);
+  fs.writeFileSync(path.join(stateDir, 'jobs', 'x.json'), JSON.stringify({ id: '../evil', status: 'running' }));
+  fs.writeFileSync(path.join(stateDir, 'jobs', 'task-wrong-123456.json'), JSON.stringify({ id: running.id, status: 'failed' }));
+  const r = await runCli(['monitor', '--once'], { env, cwd: ws });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.includes(running.id), r.stdout);
+  assert.doesNotMatch(r.stdout, /evil|task-wrong/);
+});
+
+test('monitor reports jobs directory read errors and --once exits 5', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const stateDir = stateDirFor(env, ws);
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'jobs'), 'not a directory');
+  const r = await runCli(['monitor', '--once'], { env, cwd: ws });
+  assert.equal(r.code, 5, r.stderr);
+  assert.match(r.stdout, /aviso: não foi possível ler .*jobs: ENOTDIR/);
+});
+
+test('monitor warns about a per-file read error and continues with valid jobs', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const { stateDir, running } = await seed(env, ws);
+  fs.mkdirSync(path.join(stateDir, 'jobs', 'ask-extra-123456.json'));
+  const r = await runCli(['monitor', '--once'], { env, cwd: ws });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /aviso: não foi possível ler ask-extra-123456\.json: EISDIR/);
+  assert.ok(r.stdout.includes(running.id), r.stdout);
 });
 
 test('monitor --job <prefix> focuses one job and lists its attempts', async (t) => {

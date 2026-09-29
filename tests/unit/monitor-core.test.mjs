@@ -1,18 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import {
   normalizePending, toMonitorEntry, selectJobs, readJobRecords, pickJobId, buildMonitorSnapshot,
   monitorLoop, CLEAR_SCREEN,
 } from '../../plugins/opc/scripts/commands/monitor.mjs';
 
-function tempDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-f4a-monitor-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
+function tempDir(t) { return trackTempDir(t, makeTempDir('opc-f4a-monitor-')); }
 
 test('normalizePending handles permission, question, arrays and null', () => {
   assert.deepEqual(normalizePending(null), []);
@@ -47,8 +43,18 @@ test('selectJobs puts active first, recent terminal next, groups together, respe
     { id: 'mem', status: 'completed', groupId: 'grp', createdAt: '4', completedAt: '2026-09-26T11:30:00Z' },
   ];
   assert.deepEqual(selectJobs(jobs).map((j) => j.id), ['grp', 'mem', 'run', 'new', 'old']);
-  assert.deepEqual(selectJobs(jobs, { limit: 3 }).map((j) => j.id), ['grp', 'mem', 'run']);
+  assert.deepEqual(selectJobs(jobs, { limit: 3 }).map((j) => j.id), ['grp', 'mem', 'run', 'new']);
   assert.deepEqual(selectJobs(jobs, { focusId: 'grp' }).map((j) => j.id), ['grp', 'mem']);
+});
+
+test('selectJobs keeps every member nested under a visible group; limit counts top-level entries', () => {
+  const jobs = [
+    { id: 'grp', status: 'running', createdAt: '0' },
+    { id: 'done-member', status: 'completed', groupId: 'grp', completedAt: '9' },
+    { id: 'run-member', status: 'running', groupId: 'grp', createdAt: '1' },
+    ...Array.from({ length: 4 }, (_, i) => ({ id: `terminal-${i}`, status: 'completed', completedAt: `2026-09-${30 - i}` })),
+  ];
+  assert.deepEqual(selectJobs(jobs, { limit: 2 }).map((j) => j.id), ['grp', 'done-member', 'run-member', 'terminal-0']);
 });
 
 test('readJobRecords merges state.json with job files and skips corrupted files', (t) => {
@@ -62,6 +68,16 @@ test('readJobRecords merges state.json with job files and skips corrupted files'
   assert.equal(records.find((r) => r.id === 'ask-1').model, 'p/b');
   assert.equal(fs.readFileSync(path.join(d, 'jobs', 'bad.json'), 'utf8'), '{not json');
   assert.deepEqual(readJobRecords(path.join(d, 'missing')), []);
+});
+
+test('readJobRecords skips unsafe ids, mismatched ids, and input JSON files', (t) => {
+  const d = tempDir(t);
+  fs.mkdirSync(path.join(d, 'jobs'));
+  fs.writeFileSync(path.join(d, 'jobs', 'ask-abc-123456.json'), JSON.stringify({ id: 'ask-abc-123456', status: 'running' }));
+  fs.writeFileSync(path.join(d, 'jobs', 'x.json'), JSON.stringify({ id: '../evil', status: 'running' }));
+  fs.writeFileSync(path.join(d, 'jobs', 'task-abc-123456.json'), JSON.stringify({ id: 'ask-abc-123456', status: 'failed' }));
+  fs.writeFileSync(path.join(d, 'jobs', 'plan-abc-123456.input.json'), JSON.stringify({ id: 'plan-abc-123456', status: 'running' }));
+  assert.deepEqual(readJobRecords(d).map((j) => j.id), ['ask-abc-123456']);
 });
 
 test('pickJobId resolves exact id or unique prefix; unknown → NOT_FOUND; ambiguous → AMBIGUOUS_JOB', () => {

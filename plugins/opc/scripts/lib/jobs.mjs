@@ -46,6 +46,7 @@ function assertJobId(id) {
   }
   return id;
 }
+export const isValidJobId = (id) => typeof id === 'string' && SAFE_JOB_ID_RE.test(id);
 const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.json`);
 export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.log`);
 export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.worker.log`);

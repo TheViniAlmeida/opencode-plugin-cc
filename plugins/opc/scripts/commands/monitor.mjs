@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError, NotFoundError } from '../lib/opc-error.mjs';
-import { readJobProgress } from '../lib/jobs.mjs';
+import { isValidJobId, readJobProgress } from '../lib/jobs.mjs';
 import { renderMonitor, MONITOR_ACTIVE } from '../lib/render.mjs';
 import { abortableSleep } from '../lib/routing.mjs';
-import { redactText } from '../lib/redact.mjs';
+import { maskDeep, redactText } from '../lib/redact.mjs';
 
 export const CLEAR_SCREEN = '\x1b[2J\x1b[H';
 
@@ -82,38 +82,48 @@ export function selectJobs(jobs, { focusId = null, limit = 12 } = {}) {
     const members = jobs.filter((j) => j.groupId === focusId).sort(byCreated);
     return [...focus, ...members];
   }
-  const active = jobs.filter((j) => MONITOR_ACTIVE.includes(j.status)).sort(byCreated);
+  const ids = new Set(jobs.map((j) => j.id));
+  const topLevel = jobs.filter((j) => !j.groupId || !ids.has(j.groupId));
+  const active = topLevel.filter((j) => MONITOR_ACTIVE.includes(j.status)).sort(byCreated);
   const endedAt = (j) => String(j.completedAt ?? j.updatedAt ?? j.createdAt ?? '');
-  const terminal = jobs.filter((j) => !MONITOR_ACTIVE.includes(j.status)).sort((a, b) => endedAt(b).localeCompare(endedAt(a)));
+  const terminal = topLevel.filter((j) => !MONITOR_ACTIVE.includes(j.status)).sort((a, b) => endedAt(b).localeCompare(endedAt(a)));
   const recent = terminal.slice(0, Math.max(0, limit - active.length));
-  return orderWithGroups([...active, ...recent]);
+  const visibleTop = [...active, ...recent];
+  const visibleIds = new Set(visibleTop.map((j) => j.id));
+  const members = jobs.filter((j) => j.groupId && visibleIds.has(j.groupId));
+  return orderWithGroups([...visibleTop, ...members]);
 }
 
-function safeReadJson(file) {
+function safeReadJson(file, warnings, { missingIsSilent = true } = {}) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
+  } catch (err) {
+    if (err.code === 'ENOENT' && missingIsSilent) return null;
+    if (err instanceof SyntaxError) return null;
+    warnings.push(`aviso: não foi possível ler ${path.basename(file)}: ${err.code ?? 'ERRO'}`);
     return null;
   }
 }
 
 // Leitura crua e sem efeitos colaterais: nunca repara, reconcilia ou grava estado.
-export function readJobRecords(stateDir) {
+export function readJobRecords(stateDir, warnings = []) {
   const byId = new Map();
-  const state = safeReadJson(path.join(stateDir, 'state.json'));
+  const state = safeReadJson(path.join(stateDir, 'state.json'), warnings);
   for (const entry of Array.isArray(state?.jobs) ? state.jobs : []) {
     if (entry && typeof entry.id === 'string') byId.set(entry.id, entry);
   }
   const jobsDir = path.join(stateDir, 'jobs');
   let files = [];
   try {
-    files = fs.readdirSync(jobsDir).filter((f) => f.endsWith('.json'));
-  } catch {
-    files = [];
+    files = fs.readdirSync(jobsDir).filter((f) => f.endsWith('.json') && !f.endsWith('.input.json'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') warnings.push(`aviso: não foi possível ler ${path.basename(jobsDir)}: ${err.code ?? 'ERRO'}`);
   }
   for (const file of files) {
-    const record = safeReadJson(path.join(jobsDir, file));
-    if (record && typeof record.id === 'string') byId.set(record.id, { ...(byId.get(record.id) ?? {}), ...record });
+    const fileId = file.slice(0, -'.json'.length);
+    if (!isValidJobId(fileId)) continue;
+    const record = safeReadJson(path.join(jobsDir, file), warnings);
+    if (record && isValidJobId(record.id) && record.id === fileId) byId.set(record.id, { ...(byId.get(record.id) ?? {}), ...record });
   }
   return [...byId.values()];
 }
@@ -128,13 +138,26 @@ export function pickJobId(records, ref) {
 }
 
 export function buildMonitorSnapshot(stateDir, { jobId = null, now = Date.now(), logLines = 3, focusLogLines = 10, limit = 12 } = {}) {
-  const records = readJobRecords(stateDir);
+  const warnings = [];
+  const records = readJobRecords(stateDir, warnings);
   const selected = selectJobs(records, { focusId: jobId, limit });
-  return {
+  const jobs = [];
+  for (const job of selected) {
+    let log = [];
+    try {
+      log = readJobProgress(stateDir, job.id, job.id === jobId ? focusLogLines : logLines);
+    } catch (err) {
+      warnings.push(`aviso: não foi possível ler ${job.id}.log: ${err.code ?? 'ERRO'}`);
+    }
+    jobs.push(toMonitorEntry(job, { log }));
+  }
+  const snapshot = {
     now,
     focus: jobId,
-    jobs: selected.map((job) => toMonitorEntry(job, { log: readJobProgress(stateDir, job.id, job.id === jobId ? focusLogLines : logLines) })),
+    jobs,
   };
+  if (warnings.length) snapshot.warnings = warnings;
+  return snapshot;
 }
 
 export async function monitorLoop({ read, render, write, intervalMs = 1000, sleep = abortableSleep, signal, once = false, clear = false }) {
@@ -161,8 +184,9 @@ export async function run(ctx, argv) {
   const jobId = flags.job ? pickJobId(readJobRecords(ctx.stateDir), flags.job) : null;
   const read = () => buildMonitorSnapshot(ctx.stateDir, { jobId, now: Date.now() });
   if (flags.json) {
-    ctx.json(read());
-    return ExitCode.OK;
+    const snapshot = read();
+    ctx.json(maskDeep(snapshot));
+    return (snapshot.warnings ?? []).some((warning) => warning.includes('jobs:')) ? ExitCode.CONNECTION : ExitCode.OK;
   }
   const tty = Boolean(ctx.stdout.isTTY);
   const color = flags.color === 'always' || (flags.color === 'auto' && tty && !ctx.env.NO_COLOR);
@@ -175,7 +199,7 @@ export async function run(ctx, argv) {
     await monitorLoop({
       read,
       render: (snapshot) => renderMonitor(snapshot, { color }),
-      write: (text) => ctx.stdout.write(redactText(text)),
+      write: (text) => ctx.stdout.write(maskDeep(text)),
       intervalMs: flags.interval,
       signal: controller.signal,
       once,
@@ -185,5 +209,6 @@ export async function run(ctx, argv) {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-  return ExitCode.OK;
+  const snapshot = read();
+  return (snapshot.warnings ?? []).some((warning) => warning.includes('jobs:')) ? ExitCode.CONNECTION : ExitCode.OK;
 }

@@ -967,7 +967,7 @@ export function renderMonitor(snapshot, { color = false } = {}) {
   const { now, jobs, focus } = snapshot;
   const active = jobs.filter((job) => MONITOR_ACTIVE.includes(job.status)).length;
   const header = `${paint('opc monitor', 'bold', color)} — ${monitorClock(now)} — ${active} ativo(s), ${jobs.length - active} recente(s) — Ctrl+C para sair`;
-  if (jobs.length === 0) return redactText(`${header}\n\nNenhum job neste workspace.\n`);
+  if (jobs.length === 0) return redactText(`${header}\n\nNenhum job neste workspace.\n${(snapshot.warnings ?? []).map((warning) => `${warning}\n`).join('')}`);
   const out = [header, ''];
   for (const job of jobs) {
     const indent = job.groupId && jobs.some((item) => item.id === job.groupId) ? '  ' : '';
@@ -986,5 +986,6 @@ export function renderMonitor(snapshot, { color = false } = {}) {
     }
     for (const line of job.log ?? []) out.push(paint(`${indent}    │ ${monitorText(line)}`, 'gray', color));
   }
+  for (const warning of snapshot.warnings ?? []) out.push(warning);
   return redactText(`${out.join('\n')}\n`);
 }
