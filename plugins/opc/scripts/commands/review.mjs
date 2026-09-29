@@ -2,7 +2,7 @@ import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { collectReviewContext, diffSizeEstimate, resolveReviewTarget } from '../lib/git.mjs';
 import { connectApi } from '../lib/context.mjs';
-import { resolveTurnModel } from '../lib/routing.mjs';
+import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { assertNotInsideServer, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, loadSchema, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
 import { renderReviewEstimate, renderReviewJob, validateReviewOutput } from '../lib/render.mjs';
@@ -112,7 +112,10 @@ export async function runReviewCommand(ctx, argv, { variant }) {
     kind: 'review', profile: 'read-only', prompt,
     model: resolved.model, modelFull: resolved.full, variant: resolved.variant,
     format: ctx.config?.review?.structuredOutput === 'tool' ? { type: 'json_schema', schema: loadSchema('review-output') } : null, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
-    config: ctx.config ?? {}, extra: { review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus } },
+    config: ctx.config ?? {}, extra: {
+      ...routingFields(resolved.resolution, { resume: false, catalog: resolved.catalog }),
+      review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus },
+    },
   });
   const job = await submitTurnJob(ctx, { kind: 'review', title, summary: `${label} de ${target.label}`, request });
   if (flags.background) {

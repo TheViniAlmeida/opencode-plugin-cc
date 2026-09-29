@@ -6,11 +6,10 @@ import { ensureServer } from '../lib/server.mjs';
 import { createClient } from '../lib/http.mjs';
 import { createApi } from '../lib/api.mjs';
 import { EventHub } from '../lib/sse.mjs';
-import { runTurn } from '../lib/runner.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { redact, redactText, redactTurnOutput } from '../lib/redact.mjs';
-import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
+import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, runJobTurn, serverContext, updateJob } from '../lib/jobs.mjs';
 
 // F3: group and command workers live in their own command modules.
 // Later phases extend this single dispatch table.
@@ -224,37 +223,34 @@ export async function run(ctx, argv, {
     let lastProgressLine = null;
     const childIDs = new Set(stored.childSessionIDs ?? []);
     const assistantIDs = new Set(stored.assistantMessageIDs ?? []);
-    const result = redactTurnOutput(await runTurn({
-      api,
-      hub,
-      request,
-      signal: controller.signal,
-      onProgress: (event) => {
-        if (event.message && event.message !== lastProgressLine) {
-          lastProgressLine = event.message;
-          log(event.message);
-        }
-        const patch = {};
-        if (event.assistantMessageID) {
-          assistantIDs.add(event.assistantMessageID);
-          patch.assistantMessageIDs = [...assistantIDs];
-        }
-        if (event.sessionID) patch.sessionID = event.sessionID;
-        if (event.childSessionID && !childIDs.has(event.childSessionID)) {
-          childIDs.add(event.childSessionID);
-          patch.childSessionIDs = [...childIDs];
-        }
-        if (event.phase && event.phase !== lastPhase) {
-          lastPhase = event.phase;
-          patch.phase = event.phase;
-        }
-        if (Object.keys(patch).length === 0) return;
-        void queueProgressUpdate(jobUpdates, (job) => (job.status === 'waiting_permission' ? { ...patch, phase: job.phase } : patch), log);
-      },
-      onPermission: (req) => bridge.onPermission(req),
-      onQuestion: (req) => bridge.onQuestion(req),
-      onRequestResolved: (event) => bridge.onResolved(event),
-    }));
+    const onProgress = (event) => {
+      if (event.message && event.message !== lastProgressLine) {
+        lastProgressLine = event.message;
+        log(event.message);
+      }
+      const patch = {};
+      if (event.assistantMessageID) {
+        assistantIDs.add(event.assistantMessageID);
+        patch.assistantMessageIDs = [...assistantIDs];
+      }
+      if (event.sessionID) patch.sessionID = event.sessionID;
+      if (event.childSessionID && !childIDs.has(event.childSessionID)) {
+        childIDs.add(event.childSessionID);
+        patch.childSessionIDs = [...childIDs];
+      }
+      if (event.phase && event.phase !== lastPhase) {
+        lastPhase = event.phase;
+        patch.phase = event.phase;
+      }
+      if (Object.keys(patch).length === 0) return;
+      void queueProgressUpdate(jobUpdates, (job) => (job.status === 'waiting_permission' ? { ...patch, phase: job.phase } : patch), log);
+    };
+    const { result: rawResult, attempts, stop } = await runJobTurn({
+      stateDir: ctx.stateDir, job: { ...stored, request }, config: ctx.config, env: ctx.env, baseTurnRequest: request,
+      runTurnOptions: { api, hub, signal: controller.signal, onProgress, onPermission: (req) => bridge.onPermission(req),
+        onQuestion: (req) => bridge.onQuestion(req), onRequestResolved: (event) => bridge.onResolved(event) },
+    });
+    const result = redactTurnOutput(rawResult);
     await jobUpdates.flush();
     const cancelRequested = Boolean(readJob(ctx.stateDir, jobId)?.cancelRequestedAt);
     const status = cancelRequested ? 'cancelled' : result.status;
@@ -264,25 +260,28 @@ export async function run(ctx, argv, {
       phase: status === 'completed' ? 'done' : status,
       completedAt,
       pendingRequest: null,
-      sessionID: result.sessionID,
       childSessionIDs: result.childSessionIDs,
       assistantMessageIDs: result.assistantMessageIDs ?? [...assistantIDs],
       errorCode: status === 'completed' ? null : cancelRequested ? 'cancelled' : result.errorCode ?? null,
       errorClass: status === 'completed' ? null : result.errorClass ?? null,
       errorType: status === 'completed' ? null : cancelRequested ? 'Cancelled' : result.errorType ?? null,
       errorMessage: status === 'completed' ? null : cancelRequested ? 'Cancelado pelo usuário.' : result.errorMessage ?? null,
-      attempts: [...(stored.attempts ?? []), { model: stored.model, sessionID: result.sessionID, status, errorClass: result.errorClass ?? null, startedAt, endedAt: completedAt }],
       result: {
         finalText: result.finalText,
         structured: result.structured,
         structuredSource: result.structuredSource ?? null,
         touchedFiles: result.touchedFiles,
         toolsRan: result.toolsRan,
+        toolNames: result.toolNames,
         childSessionIDs: result.childSessionIDs,
         usage: result.usage,
         error: result.error ?? null,
+        attempts,
         ...(result.abortConfirmed !== undefined ? { abortConfirmed: result.abortConfirmed, sessionAborts: result.sessionAborts } : {}),
       },
+      model: attempts.at(-1)?.model ?? stored.model,
+      sessionID: attempts.at(-1)?.sessionID ?? result.sessionID,
+      ...(stop ? { errorCode: stop.errorCode, errorMessage: stop.errorMessage } : {}),
     });
     const statusLabel = { completed: 'concluído', failed: 'falhou', cancelled: 'cancelado', waiting_permission: 'aguardando permissão' }[status] ?? status;
     log(`Turno ${statusLabel}${result.errorType ? ` (${result.errorType})` : ''}.`);

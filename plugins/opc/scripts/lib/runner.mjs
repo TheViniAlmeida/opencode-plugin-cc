@@ -118,6 +118,7 @@ export function extractTurn(turn, { childMessages = [], diffs = [] } = {}) {
   const error = [...turn].reverse().find((m) => m.info?.error)?.info.error ?? null;
   const toolParts = [...turn, ...childMessages].flatMap((m) => m?.parts ?? []).filter((p) => p?.type === 'tool' && p.tool !== STRUCTURED_OUTPUT_TOOL);
   const completed = toolParts.filter((p) => p.state?.status === 'completed');
+  const toolNames = [...new Set(completed.map((p) => p.tool).filter(Boolean))];
   const touched = new Set();
   for (const part of completed) if (EDIT_TOOLS.has(part.tool)) for (const file of filesFromToolPart(part)) touched.add(file);
   for (const d of Array.isArray(diffs) ? diffs : []) if (typeof d?.file === 'string') touched.add(d.file);
@@ -133,7 +134,7 @@ export function extractTurn(turn, { childMessages = [], diffs = [] } = {}) {
     }
     usage.cost += m.info?.cost ?? 0;
   }
-  return { finalText, structured, error, touchedFiles: [...touched].sort(), toolsRan: completed.length > 0, usage };
+  return { finalText, structured, error, touchedFiles: [...touched].sort(), toolsRan: completed.length > 0, toolNames, usage };
 }
 
 const isServerDown = (err) => err instanceof ConnectionError && err.code === 'SERVER_DOWN';
@@ -162,7 +163,7 @@ function serverLostResult(sessionID, messageID) {
   return {
     sessionID, messageID, childSessionIDs: [], status: 'failed', errorClass: 'fatal', errorType: 'ServerLost', errorCode: 'server_lost',
     errorMessage: `Servidor OpenCode desconectado durante o turno; sessão ${displayValue(sessionID)} preservada. Continue com --resume <valor>`,
-    finalText: '', structured: null, error: null, touchedFiles: [], toolsRan: false, usage: null,
+    finalText: '', structured: null, error: null, touchedFiles: [], toolsRan: false, toolNames: [], usage: null,
   };
 }
 
@@ -512,7 +513,7 @@ export async function runTurn({
       base.sessionAborts = sessionAborts;
       base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
     }
-    const serverLost = () => ({ ...serverLostResult(sessionID, messageID), ...base, toolsRan: toolsRanLive });
+    const serverLost = () => ({ ...serverLostResult(sessionID, messageID), ...base, toolsRan: toolsRanLive, toolNames: [] });
     if (outcome.reason === 'server-lost') return serverLost();
     if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
       try {
