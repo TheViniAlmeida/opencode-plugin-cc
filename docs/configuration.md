@@ -77,6 +77,59 @@ Um ID completo é `provider/modelo`; o nome do modelo pode conter barras. Um nom
 
 Aliases têm um único nível e mapeiam um nome para um ID completo. Eles podem aparecer em `reviewModel`, `routing.*`, `conclave.*` e `orchestrate.*`; um alias não pode apontar para outro alias.
 
+## `routing`
+
+Listas de modelos por tipo de tarefa e por tier, com política de fallback. Valores aceitam alias ou ID completo; `*` casa qualquer sequência, inclusive `/`.
+
+| Chave | Tipo | Padrão | Significado |
+|---|---|---|---|
+| `routing.tasks.ask` | lista | `[]` | Candidatos de `/opc:ask`, em ordem |
+| `routing.tasks.plan` | lista | `[]` | Candidatos de `/opc:plan` |
+| `routing.tasks.review` | lista | `[]` | Candidatos de review quando `reviewModel` é nulo |
+| `routing.tasks.task` | lista | `[]` | Candidatos de `/opc:task` |
+| `routing.tiers.light` | lista | `[]` | Usada por `--tier light` |
+| `routing.tiers.heavy` | lista | `[]` | Usada por `--tier heavy` |
+| `routing.fallback.enabled` | booleano | `true` | Liga fallback entre candidatos de lista |
+| `routing.fallback.maxAttempts` | inteiro 1–10 | `3` | Tentativas totais por turno, incluindo a primeira |
+| `routing.fallback.maxProviderRetries` | inteiro 0–20 | `3` | Retries do OpenCode tolerados antes de abortar a sessão |
+| `routing.fallback.maxRetryWaitSec` | inteiro 0–3600 | `60` | Espera máxima pelo próximo retry antes de abortar a sessão |
+
+Entradas negadas pela política ou inexistentes são puladas com aviso. `--model` e níveis de valor único, como `reviewModel` e `stopGate.model`, não têm fallback. O backoff fixo entre tentativas é 2 s, 4 s e 8 s. O `.opc.json` pode definir preferências de `routing`, mas cada modelo continua sujeito à política efetiva.
+
+Os exemplos abaixo supõem os aliases `fast`, `k3` e `strong` já definidos em `aliases` (sem eles, `config` recusa o valor com `UNKNOWN_MODEL`).
+
+```bash
+opc config set routing.tasks.ask '["fast","k3"]'
+opc config add routing.tiers.heavy strong
+opc config set routing.fallback.maxAttempts 2
+opc config show --effective
+```
+
+## `delegation`
+
+| Chave | Tipo | Padrão | Significado |
+|---|---|---|---|
+| `delegation.auto` | booleano | `false` | Com `true` na configuração global, o `SessionStart` injeta o lembrete de delegação |
+
+O `.opc.json` só pode desligar esse lembrete com `false`; `true` no workspace é ignorado.
+
+```bash
+opc config set delegation.auto true
+```
+
+## `jobs`
+
+| Chave | Tipo | Padrão | Significado |
+|---|---|---|---|
+| `jobs.maxActive` | inteiro 1–64 | `8` | Jobs ativos (`queued`, `running`, `waiting_permission`) no workspace |
+| `jobs.maxParallel` | inteiro 1–32 | `4` | Turnos simultâneos dentro de grupo |
+
+Fallback não cria jobs: as tentativas pertencem ao mesmo job, em `attempts[]`.
+
+```bash
+opc config set jobs.maxActive 4
+```
+
 ## Merge restritivo do `.opc.json`
 
 O arquivo de workspace serve para preferências permitidas e para restringir política. `deny` é unido; `allow` é intersectado por `allowWorkspace`; `sensitivePaths` e `destructiveBash` são unidos. Preferências como `defaultModel`, `project` e rotas podem ser sobrescritas no workspace. Chaves globais, travadas ou desconhecidas são ignoradas com aviso em `opc config show --effective`.

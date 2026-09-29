@@ -6,6 +6,16 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado — F4a (roteamento, fallback, delegação, worker, monitor)
+
+- Fallback de modelo para rotas em lista (`routing.tasks.<tipo>` e `--tier light|heavy`): nova sessão por tentativa, backoff de 2/4/8 s, até `routing.fallback.maxAttempts`; cada tentativa registrada em `attempts[]` do job e exibida em `opc result`.
+- Teto de retries do OpenCode: a sessão é abortada quando o retry passa de `maxProviderRetries` ou agenda além de `maxRetryWaitSec`, e o erro é tratado como recuperável (`RetryCapExceeded`).
+- Sem fallback para `--model` explícito, níveis de valor único, `--resume`, erros fatais, queda do servidor, cancelamento e turnos `--write` que já executaram ferramentas (a falha lista arquivos tocados e ferramentas).
+- Entradas negadas pela política ou inexistentes nas listas de rota são puladas com aviso; `--tier` inválido ou vazio é erro de uso.
+- Skill `opc-delegation` e lembrete de delegação no `SessionStart` com `delegation.auto` (só pela config global; o `.opc.json` só desliga).
+- Agente `opc-worker` para Agent Teams (regras inline, um comando `opc` por tarefa, protocolo `⚡`/`✓`/`⏸`/`✗`, nunca responde permissões, sem ferramenta Agent).
+- `opc monitor` no terminal: acompanhamento ao vivo dos jobs (fase, modelo, tentativa, pedidos pendentes, log), com `--job`, `--once`, `--json`, `--color` e `--interval`.
+
 ### Adicionado (F3 — sessões, subagentes, commands, attach)
 
 - `/opc:sessions` e `/opc:session`: criação, consulta, fork, revert/unrevert com confirmação, resumo, filhas, diff e tarefas.

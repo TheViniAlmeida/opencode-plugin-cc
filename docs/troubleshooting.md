@@ -81,6 +81,14 @@ Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/mes
 
 Erro 402, como `This model requires an opencode API key`, vem do provider/credencial, não do opc. Verifique o provider conectado e a política de modelo; não grave nem exponha a credencial. No gate, o erro permite com aviso; em review/rescue, o comando informa a falha.
 
+## Roteamento e fallback
+
+Somente erros recuperáveis avançam para o próximo candidato de uma rota em lista: `APIError` recuperável, 404, timeout, teto de retries do provider e alguns casos de saída estruturada ou contexto. As respostas 400 e 402 são fatais e não acionam fallback. O `AbortUnconfirmed` também bloqueia fallback, pois a sessão anterior não foi confirmada como encerrada.
+
+Para investigar uma rota ao vivo, use `OPC_LIVE_FAILING_MODEL` com o probe da fase. A sonda disponível não encontrou rota com falha recuperável: modelos inexistentes foram recusados antes do job, e as respostas observadas 400/402 foram fatais. Portanto, fallback ao vivo permanece **NÃO VALIDADO**; os cenários recuperáveis são cobertos pelo servidor falso de teste.
+
+Se a configuração for inválida no `SessionStart`, o lembrete de delegação é desativado e o hook imprime uma única linha em stderr com `CONFIG_INVALID`; o início da sessão continua.
+
 ## TUI do OpenCode e o servidor do opc no mesmo projeto (storage concorrente)
 
 O OpenCode guarda sessões em storage compartilhado. A TUI (`opencode`) e o servidor gerenciado (`opencode serve`) podem usá-lo no mesmo projeto.
