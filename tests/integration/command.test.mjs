@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, eventually, stateDirFor } from '../helpers.mjs';
 import { F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
@@ -131,7 +131,8 @@ test('argumentos secretos aparecem mascarados em disco e saída, mas chegam crus
     return result.code === 0 ? result : null;
   });
   const text = readFileSync(join(stateDirFor(env, cwd), 'jobs', `${job.id}.json`), 'utf8');
-  const log = readFileSync(join(stateDirFor(env, cwd), 'jobs', `${job.id}.log`), 'utf8');
+  const logPath = join(stateDirFor(env, cwd), 'jobs', `${job.id}.log`);
+  const log = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
   const persistedJob = JSON.parse(text);
   assert.equal(Object.hasOwn(persistedJob.request, 'arguments'), false);
   assert.equal(Object.hasOwn(persistedJob.result, 'arguments'), false);

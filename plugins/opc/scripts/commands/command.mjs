@@ -30,8 +30,9 @@ export function textFromParts(parts) {
 }
 
 export function safeFailureMessage(value, rawArguments = '') {
-  const safe = safeOutputText(value);
-  return rawArguments ? safe.split(rawArguments).join('***') : safe;
+  // remove the raw arguments before masking: masking first can split them so they no longer match
+  const text = String(value ?? '');
+  return safeOutputText(rawArguments ? text.split(rawArguments).join('***') : text);
 }
 
 function positiveSeconds(value, flag) {

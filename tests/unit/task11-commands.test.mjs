@@ -4,6 +4,7 @@ import { createJob, updateJob, readJob } from '../../plugins/opc/scripts/lib/job
 import { run as runStatus } from '../../plugins/opc/scripts/commands/status.mjs';
 import { run as runResult } from '../../plugins/opc/scripts/commands/result.mjs';
 import { run as runCancel } from '../../plugins/opc/scripts/commands/cancel.mjs';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { safeFailureMessage } from '../../plugins/opc/scripts/commands/command.mjs';
 import { deadPid, makeTempDir, trackTempDir } from '../helpers.mjs';
 
@@ -17,6 +18,12 @@ function context(t) {
 test('command worker failures preserve messages when arguments are empty and mask raw arguments', () => {
   assert.equal(safeFailureMessage('connection unavailable'), 'connection unavailable');
   assert.equal(safeFailureMessage('request included private-value', 'private-value'), 'request included ***');
+  // a registered secret inside the arguments must not break the substitution of the whole argument text
+  const registered = ['reg', 'arg', 'secret', '7d3e91'].join('-');
+  registerSecret(registered);
+  const args = `${registered} ${'t'.repeat(220)}`;
+  const masked = safeFailureMessage(`bad command args: ${args}`, args);
+  assert.equal(masked, 'bad command args: ***');
 });
 
 for (const [name, run] of [['status', runStatus], ['result', runResult], ['cancel', runCancel]]) {

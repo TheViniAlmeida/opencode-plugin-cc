@@ -160,7 +160,7 @@ test('renderCommandResult masks and bounds a legacy arguments field', () => {
   const rendered = renderCommandResult({ command: 'echo', arguments: `${registered} ${token} ${'x'.repeat(205)}`, finalText: 'OK' });
   assert.ok(!rendered.includes(registered));
   assert.ok(!rendered.includes(token));
-  assert.match(rendered, /Argumentos: `\*\*\* \*\*\* x{[^`]{0,200}…`/);
+  assert.match(rendered, /Argumentos: `\*\*\* \*\*\* x[^`]{0,200}…`/);
 });
 
 test('renderAttach: command reads the password from file or env, never inline', () => {

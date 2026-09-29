@@ -57,9 +57,18 @@ export function resultForGroupOrCommand(ctx, job, flags) {
   } else if (flags.json) {
     ctx.json({ job });
   } else {
-    ctx.out(job.rendered ?? renderCommandResult(job.result ?? { command: job.request?.command ?? '?', arguments: job.request?.arguments ?? '' }));
+    ctx.out(job.rendered ?? renderCommandResult(job.result ?? commandResultFromJob(job)));
   }
   return exitCodeForJob(job);
+}
+
+// A job that failed before its worker wrote a result (e.g. the worker never started): render its stored failure.
+function commandResultFromJob(job) {
+  return {
+    status: job.status, command: job.request?.command ?? '?', argumentsPreview: job.request?.argumentsPreview ?? '',
+    sessionID: job.sessionID ?? null, model: job.model ?? null, agent: job.agent ?? null, finalText: '',
+    error: job.errorMessage ? { name: job.errorType ?? job.errorCode ?? 'Error', message: job.errorMessage } : null,
+  };
 }
 
 function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }

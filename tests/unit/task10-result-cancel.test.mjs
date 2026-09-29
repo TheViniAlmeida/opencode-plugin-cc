@@ -89,3 +89,13 @@ test('successful group cancellation JSON includes an empty failedMembers list', 
   assert.deepEqual(output[0].failedMembers, []);
   assert.equal(output[0].group.status, 'cancelled');
 });
+
+test('result renders a cmd job that failed before its worker wrote a result', async (t) => {
+  const stateDir = state(t);
+  const job = await createJob(stateDir, { kind: 'cmd', title: 'command', request: { command: 'echo', argumentsPreview: 'a b' } });
+  const failed = await updateJob(stateDir, job.id, { status: 'failed', errorCode: 'WORKER_SPAWN_FAILED', errorType: 'WorkerSpawnFailed', errorMessage: 'Não foi possível iniciar o worker da tarefa.' });
+  const output = [];
+  resultForGroupOrCommand({ stateDir, json: (value) => output.push(value), out: (value) => output.push(value) }, failed, {});
+  assert.match(output[0], /Status: failed[\s\S]*Erro: WorkerSpawnFailed: Não foi possível iniciar o worker/);
+  assert.doesNotMatch(output[0], /sem texto final/);
+});
