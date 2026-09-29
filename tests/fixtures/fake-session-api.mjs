@@ -244,7 +244,7 @@ export function installSessionApi(fake) {
     ['GET', /^\/session\/(ses[^/]+)\/message$/, (m, query) => {
       const messages = state.messages[m[1]];
       if (!messages) return notFound('NotFoundError', `session ${m[1]} not found`);
-      if (fake.scenario?.formatListError && messages.some((message) => message.info?.format?.type === 'json_schema')) return invalid('Expected OutputFormatJsonSchema, got {...}');
+      if ((fake.scenario?.formatListError && messages.some((message) => message.info?.format?.type === 'json_schema')) || process.env.FAKE_FORMAT_LIST_BUG === '1') return invalid('Expected OutputFormatJsonSchema, got {...}');
       const limit = Number(query.get('limit'));
       return ok(Number.isFinite(limit) && limit > 0 ? messages.slice(-limit) : messages);
     }],

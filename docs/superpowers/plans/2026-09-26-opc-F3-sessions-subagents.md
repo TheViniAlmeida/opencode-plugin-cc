@@ -13,6 +13,22 @@
 
 ---
 
+## Ajustes pós-F2b (28/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+Conferidos contra o código da F0–F2b mergeado na `main`. Onde este plano divergir, vale o que está aqui (e o código real: leia cada módulo antes de estendê-lo). Os "Ajustes pós-F2a" do plano da F2b continuam valendo.
+
+1. **Comandos e agentes `.md`.** Heredoc com terminador sozinho na linha e a frase de guarda (mestre T15). Nenhum valor do usuário na linha de comando do `opc`: flags e texto vão no corpo do heredoc (`--raw-args-stdin` lê as flags da sequência inicial). `tests/unit/commands-md.test.mjs` verifica `commands/` e `agents/`.
+2. **Textos e identificadores.** Texto ao usuário em PT-BR; regex de teste segue o texto real emitido. IDs do servidor e do opc sempre inteiros; corte em 12 caracteres só para entrada inválida. Marcadores de teste (sentinelas) ficam exatamente como no plano.
+3. **Jobs.** Todo job de turno (inclusive membros de grupo) passa por `turnJobRequest`/`submitTurnJob` (`lib/jobs.mjs`), que recusa campos que colidam com os controles do adaptador. O registro `jobs/<id>.json` guarda só metadados; o texto do pedido fica apenas no arquivo privado de entrada consumido pelo worker. `status`/`result` leem metadados locais.
+4. **Leitura de mensagens (bug do OpenCode 1.18.32).** Depois de um `prompt_async` com `format: json_schema`, `GET /session/:id/message` responde 400 para sempre naquela sessão. Toda leitura de mensagens de sessão (`session show/diff/children/fork/revert`, resume, grupos) usa `readSessionMessages` de `lib/session-messages.mjs`, que cai para a leitura por id. Sessões de review criadas no modo `tool` são exemplos desse caso.
+5. **Mascaramento.** `maskSecretPatterns` (`lib/redact.mjs`) só em texto derivado do modelo ou do repositório; mensagens do próprio opc passam apenas por `redactText`.
+6. **Contexto.** Comando que precisa tolerar config inválida exporta `contextOptions(argv)`; o companion não inspeciona argv de subcomandos. Hooks nunca saem com erro por falha de preparação.
+7. **Processos.** `terminateProcessGroup` trata processo saindo (`cmdline` vazio com start time igual) como encerrado; parada do servidor só por terminação vinculada à identidade (sem `/global/dispose`).
+8. **Testes.** Callbacks de limpeza devolvem o resultado real de `stopServer`. Fixtures de credencial são **montadas em tempo de execução** (a push protection do GitHub bloqueia tokens falsos com formato real, mesmo em testes).
+9. **Ao vivo.** Exigem `OPC_LIVE=1` e `OPC_LIVE_MODEL` (sem padrão). No portão da F2b o `qwen3.8-max` estava em cooldown e os modelos `opencode-go` responderam 402; a rota que respondeu foi `omniroute-personal/cmd/deepseek/deepseek-v4-flash`. Os "três modelos" do portão desta fase usam as rotas que responderem na hora (registrar quais no relatório). Os modelos dessa rota não chamam a ferramenta `StructuredOutput`: onde esta fase precisar de JSON, use o contrato de texto (`review.structuredOutput: text`).
+10. **Premissas E4/E8.** O worker não lê mais `stored.request`: o pedido bruto vem de `consumeJobInput(stateDir, id)` (arquivo privado, consumido uma vez, com rename atômico, `O_NOFOLLOW` e `O_NONBLOCK`), e o registro só tem metadados. A delegação por `kind` da Task 9 entra depois desse consumo. `createJob` gera o id pelo `kind` e grava a entrada; campos de grupo (`groupId`, `role`, `memberIds`) continuam aceitos como metadados.
+11. **Config.** `review.structuredOutput` (`text` | `tool`) já existe.
+
 ## Global Constraints
 
 - Node ≥ 20 (`engines: {"node": ">=20"}`); zero dependências de runtime e de dev (nada de `npm install`).

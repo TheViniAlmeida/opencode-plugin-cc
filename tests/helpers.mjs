@@ -470,3 +470,38 @@ export function fakeRequests(env) {
   return readFakeState(env).requests ?? [];
 }
 // ---- end F2b ----
+
+// ---- F3 helpers (appended) ----
+import { randomBytes as f3RandomBytes } from 'node:crypto';
+
+// Starts a fake OpenCode server in-process (not spawned by opc) for OPC_SERVER_URL tests. Its temp dir goes to
+// the F0 per-test cleanup; fake.close() is a plain t.after (it must stay up while the cleanup runs
+// `setup --stop-server` in attach mode).
+export async function startExternalFake(t, { scenario = 'f3-sessions' } = {}) {
+  const { startFake } = await import('./fixtures/fake-opencode.mjs');
+  const { pickFreePort } = await import('../plugins/opc/scripts/lib/server.mjs');
+  const dir = trackTempDir(t, makeTempDir('opc-ext-'));
+  const password = f3RandomBytes(24).toString('hex');
+  const stateFile = path.join(dir, 'fake-state.json');
+  const fake = await startFake({ port: await pickFreePort(), password, scenario, stateFile });
+  t.after(() => fake.close());
+  return { url: fake.url, password, stateFile, fake };
+}
+
+// waitFor (F0) that also treats a throwing predicate as "not yet"; the last error goes into the timeout message.
+export async function eventually(fn, { timeoutMs = 15000, intervalMs = 200 } = {}) {
+  let lastError;
+  try {
+    return await waitFor(async () => {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        return false;
+      }
+    }, { timeoutMs, intervalMs, message: 'eventually' });
+  } catch {
+    throw new Error(`eventually: condition not met in ${timeoutMs} ms${lastError ? `: ${lastError.message}` : ''}`);
+  }
+}
+// ---- end F3 ----

@@ -239,6 +239,20 @@ test('400 on prompt_async is a fatal BadRequest', async () => {
   assert.equal(r.errorClass, 'fatal');
 });
 
+test('400 on prompt_async keeps the server reason, masked and first line only', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub });
+  const token = ['sk', 'proj', 'Z9y8X7w6V5u4T3s2'].join('-');
+  api.promptAsync = async () => {
+    throw new RequestError('BAD_REQUEST', 'recusada', { details: { status: 400, body: { name: 'BadRequest', data: { message: `Agent explore is a subagent (${token})\nsecond line` } } } });
+  };
+  const r = await runTurn({ api, hub, request: baseRequest() });
+  assert.equal(r.errorType, 'BadRequest');
+  assert.match(r.errorMessage, /^A requisição do turno foi rejeitada: Agent explore is a subagent/);
+  assert.ok(!r.errorMessage.includes(token), r.errorMessage);
+  assert.ok(!r.errorMessage.includes('second line'), r.errorMessage);
+});
+
 test('prompt_async timeout: resend only when the messageID did not arrive', async () => {
   for (const arrived of [true, false]) {
     const hub = stubHub();

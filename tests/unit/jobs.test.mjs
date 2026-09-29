@@ -51,6 +51,26 @@ test('a cmd job id is readable (JOB_ID_RE accepts cmd)', async (t) => {
   assert.equal(readJob(dir, job.id)?.id, job.id);
 });
 
+test('safeJob strips raw request arguments and masks bounded legacy result arguments', async (t) => {
+  const dir = stateDir(t);
+  const secret = 'fake-job-argument-secret';
+  const token = ['sk', 'proj', 'runtimefakevalue123456'].join('-');
+  registerSecret(secret);
+  const args = `${secret} ${token} ${'x'.repeat(205)}`;
+  const job = await createJob(dir, base({ kind: 'cmd', request: { command: 'echo', arguments: args, argumentsPreview: args, argumentsBytes: Buffer.byteLength(args) } }));
+  const diskBefore = readFileSync(join(dir, 'jobs', `${job.id}.json`), 'utf8');
+  assert.ok(!diskBefore.includes(secret));
+  assert.ok(!diskBefore.includes(token));
+  await updateJob(dir, job.id, { result: { command: 'echo', arguments: args, finalText: 'ok' } });
+  const disk = readFileSync(join(dir, 'jobs', `${job.id}.json`), 'utf8');
+  assert.ok(!disk.includes(secret));
+  assert.ok(!disk.includes(token));
+  const result = readJob(dir, job.id).result;
+  assert.equal(result.arguments.length, 200);
+  assert.ok(result.arguments.startsWith('*** *** x'));
+  assert.ok(result.arguments.endsWith('…'));
+});
+
 test('createJob writes a queued record with all spec fields; updateJob merges', async (t) => {
   const dir = stateDir(t);
   const job = await createJob(dir, base());

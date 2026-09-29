@@ -2,7 +2,7 @@
 // commands, jobs or rendering: the caller wires progress, permissions and questions.
 import { randomBytes } from 'node:crypto';
 import { classifyError, retryExceedsCap } from './errors.mjs';
-import { ConnectionError, OpcError } from './opc-error.mjs';
+import { ConnectionError, OpcError, UsageError } from './opc-error.mjs';
 import { endsWithRules } from './policy.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
 import { readSessionMessages, rememberMessage, usePerMessageReads, isPerMessageSession } from './session-messages.mjs';
@@ -472,7 +472,12 @@ export async function runTurn({
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
-      else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada' } } });
+      else if (err instanceof OpcError && err.code === 'BAD_REQUEST') {
+        // keep the server's reason (masked, first line, bounded): dispatchSubagent's fallback detects agent-mode refusals by it
+        const body = err.details?.body;
+        const reason = toolErrorSummary(body?.data?.message ?? body?.message ?? '');
+        finish('prompt-failed', { error: { name: 'BadRequest', data: { message: reason ? `A requisição do turno foi rejeitada: ${reason}` : 'A requisição do turno foi rejeitada' } } });
+      }
       else throw err;
     }
     pollTimer = setInterval(() => enqueue(resync), statusPollMs);
@@ -577,4 +582,92 @@ export async function runTurn({
       errorCode: ERROR_CODES[classified.errorType] ?? 'model_error',
     };
   }
+}
+
+// --- F3: subagents ------------------------------------------------------------------
+export const SUBAGENT_MECHANISMS = Object.freeze(['child-session', 'subtask']);
+
+export function isAgentModeRefusal(errOrResult) {
+  if (!errOrResult) return false;
+  const text = typeof errOrResult === 'string'
+    ? errOrResult
+    : [errOrResult.message, errOrResult.errorMessage, errOrResult.errorType, errOrResult.details ? JSON.stringify(errOrResult.details) : '']
+      .filter(Boolean).join(' ');
+  return /\bagent\b/i.test(text) && /(subagent|primary|\bmode\b)/i.test(text);
+}
+
+export function extractTaskOutput(messages) {
+  for (let i = (messages?.length ?? 0) - 1; i >= 0; i -= 1) {
+    const parts = messages[i]?.parts ?? [];
+    for (let j = parts.length - 1; j >= 0; j -= 1) {
+      const part = parts[j];
+      if (part.type === 'tool' && part.tool === 'task' && part.state?.status === 'completed' && typeof part.state.output === 'string') {
+        return part.state.output;
+      }
+    }
+  }
+  return '';
+}
+
+// Runs one subagent member. Default: a child session with the agent (spec §13.3 F3).
+// If OpenCode refuses a subagent-mode agent as session agent (§15 item 7), falls back to a
+// `subtask` part sent to a carrier child session (one carrier per member: one prompt per session).
+export async function dispatchSubagent({
+  api, hub, parentSessionID, member, prompt, rules, mechanism = 'child-session', allowFallback = true,
+  timeoutMs, fallbackCfg, onSession = () => {}, onProgress = () => {}, onPermission = async () => {},
+  onQuestion = async () => {}, onRequestResolved = async () => {}, signal, runTurnImpl = runTurn,
+}) {
+  if (!SUBAGENT_MECHANISMS.includes(mechanism)) {
+    const value = String(mechanism ?? '');
+    const shown = value.length > 12 ? `${value.slice(0, 12)}…` : value;
+    throw new UsageError('INVALID_MECHANISM', `Mecanismo inválido: ${shown} (use ${SUBAGENT_MECHANISMS.join(' ou ')})`);
+  }
+  // onRequestResolved is forwarded to runTurn so the F2a request bridge (bridge.onResolved) releases pending requests.
+  const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, signal };
+  const baseRequest = { model: member.model, variant: member.variant, timeoutMs, fallbackCfg };
+
+  const viaSubtask = async (fellBack) => {
+    const carrier = await api.createSession({
+      parentID: parentSessionID,
+      title: `${member.title} (subtask)`,
+      permission: [...rules, { permission: 'task', pattern: member.agent, action: 'allow' }],
+    });
+    await onSession(carrier.id);
+    const result = await runTurnImpl({
+      ...common,
+      request: {
+        ...baseRequest,
+        sessionID: carrier.id,
+        messageID: newMessageId(),
+        parts: [{ type: 'subtask', prompt, description: member.title, agent: member.agent, model: member.model }],
+      },
+    });
+    let finalText = result.finalText;
+    // task tool output is model-derived raw text: read through the list-bug-aware reader and mask it like runTurn's finalText
+    if (!finalText && result.status === 'completed') finalText = safeOutputText(extractTaskOutput(await readSessionMessages(api, carrier.id)));
+    return { ...result, finalText, mechanism: 'subtask', fellBack, carrierSessionID: carrier.id };
+  };
+
+  if (mechanism === 'subtask') return viaSubtask(false);
+
+  let child;
+  try {
+    child = await api.createSession({ parentID: parentSessionID, title: member.title, agent: member.agent, permission: rules });
+  } catch (err) {
+    if (allowFallback && isAgentModeRefusal(err)) return viaSubtask(true);
+    throw err;
+  }
+  await onSession(child.id);
+  let result;
+  try {
+    result = await runTurnImpl({
+      ...common,
+      request: { ...baseRequest, sessionID: child.id, messageID: newMessageId(), agent: member.agent, parts: [{ type: 'text', text: prompt }] },
+    });
+  } catch (err) {
+    if (allowFallback && isAgentModeRefusal(err)) return viaSubtask(true);
+    throw err;
+  }
+  if (result.status === 'failed' && allowFallback && isAgentModeRefusal(result)) return viaSubtask(true);
+  return { ...result, mechanism: 'child-session', fellBack: false };
 }

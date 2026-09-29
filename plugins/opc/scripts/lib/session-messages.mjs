@@ -26,6 +26,11 @@ export async function readSessionMessages(api, sessionID, { limit = 200, ids } =
     } catch (err) {
       if (err?.code !== 'BAD_REQUEST' || !JSON.stringify(err.details?.body ?? '').includes('OutputFormatJsonSchema')) throw err;
       state.perMessage = true;
+      if (state.ids.size === 0 && !ids) {
+        const unavailable = [];
+        unavailable.messagesUnavailable = true;
+        return unavailable;
+      }
     }
   }
   const messages = [];

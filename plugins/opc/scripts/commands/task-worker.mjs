@@ -9,8 +9,12 @@ import { EventHub } from '../lib/sse.mjs';
 import { runTurn } from '../lib/runner.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
-import { redact, redactTurnOutput } from '../lib/redact.mjs';
+import { redact, redactText, redactTurnOutput } from '../lib/redact.mjs';
 import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
+
+// F3: group and command workers live in their own command modules.
+// Later phases extend this single dispatch table.
+export const WORKER_DELEGATES = Object.freeze({ sub: './subagent.mjs', cmd: './command.mjs' });
 
 const FINAL_LOG_LIMIT = 64 * 1024;
 const METADATA_LIMIT = 4000;
@@ -130,6 +134,32 @@ export function stateWriteFailure(err) {
   return new OpcError('STATE_WRITE_FAILED', `falha ao salvar o estado da tarefa: ${redact(err).message}`);
 }
 
+export async function delegateWorker(ctx, stored, { consumeInput = consumeJobInput, loadDelegate = (path) => import(path) } = {}) {
+  const delegate = WORKER_DELEGATES[stored.kind];
+  if (!delegate) throw new TypeError(`no worker delegate for ${stored.kind}`);
+  let request;
+  try {
+    request = consumeInput(ctx.stateDir, stored.id);
+  } catch (err) {
+    const errorMessage = redactText(err instanceof Error ? err.message : String(err));
+    const failedAt = nowIso();
+    appendJobLog(ctx.stateDir, stored.id, `Falha ao consumir a entrada privada: ${errorMessage}`);
+    for (const id of stored.memberIds ?? []) {
+      const member = readJob(ctx.stateDir, id);
+      if (member && ['queued', 'running', 'waiting_permission'].includes(member.status)) {
+        await updateJob(ctx.stateDir, id, { status: 'failed', phase: 'failed', completedAt: failedAt, errorCode: err.code ?? 'JOB_INPUT_INVALID', errorClass: 'fatal', errorType: err.code ?? err.name ?? 'Error', errorMessage });
+      }
+    }
+    const latest = readJob(ctx.stateDir, stored.id);
+    if (latest && ['queued', 'running', 'waiting_permission'].includes(latest.status)) {
+      await updateJob(ctx.stateDir, stored.id, { status: 'failed', phase: 'failed', completedAt: failedAt, errorCode: err.code ?? 'JOB_INPUT_INVALID', errorClass: 'fatal', errorType: err.code ?? err.name ?? 'Error', errorMessage });
+    }
+    return 7;
+  }
+  const mod = await loadDelegate(delegate);
+  return mod.runWorker(ctx, stored, request);
+}
+
 export async function run(ctx, argv, {
   ensureServer: ensure = ensureServer, createApi: makeApi = createApi,
   createHub = (client) => new EventHub({ client }),
@@ -139,7 +169,16 @@ export async function run(ctx, argv, {
   const jobId = flags['job-id'];
   if (!jobId) throw new UsageError('USAGE', 'task-worker exige --job-id');
   const stored = readJob(ctx.stateDir, jobId);
-  if (!stored?.request) throw new NotFoundError('NOT_FOUND', `a tarefa ${jobId} não tem uma solicitação salva`);
+  if (!stored) throw new NotFoundError('NOT_FOUND', `a tarefa ${jobId} não existe`);
+  if (stored.groupId) {
+    throw new UsageError('GROUP_MEMBER_WORKER', `o job ${stored.id} é membro do grupo ${stored.groupId} e roda dentro do coordenador`);
+  }
+  const delegate = WORKER_DELEGATES[stored.kind];
+  if (delegate) {
+    const code = await delegateWorker(ctx, stored);
+    setTimeout(() => process.exit(code), 2000).unref();
+    return code;
+  }
   const log = (line) => appendJobLog(ctx.stateDir, jobId, line);
   const jobUpdates = createSerialUpdater(ctx.stateDir, jobId);
   const identity = getProcessIdentity(process.pid);

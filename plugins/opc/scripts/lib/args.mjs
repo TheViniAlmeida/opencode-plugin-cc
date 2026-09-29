@@ -357,3 +357,11 @@ export async function readRawArgs(argv, flagSpec, { stdin = process.stdin } = {}
   const { argv: flagArgv, prompt } = parsePromptArgs(await readStdin(stdin), flagSpec);
   return { argv: [...argv, ...flagArgv], text: prompt };
 }
+
+
+// POSIX single-quote quoting for display and for tmux shell-commands. Safe tokens stay bare.
+export function shellQuote(value) {
+  const s = String(value);
+  if (s !== '' && /^[A-Za-z0-9_\/.:@%+=,-]+$/.test(s)) return s;
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}

@@ -5,6 +5,14 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { redact, redactText } from './redact.mjs';
 import { defaultDataDir, ensurePrivateDir, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
+import { ensureServer } from './server.mjs';
+import { createClient } from './http.mjs';
+import { createApi } from './api.mjs';
+import { EventHub } from './sse.mjs';
+import { buildCatalog } from './models.mjs';
+import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
+import { resolveCandidates, validateSelection } from './routing.mjs';
+import { UsageError } from './opc-error.mjs';
 
 export async function createContext({
   argv = [],
@@ -119,4 +127,67 @@ export function contextForCwd(ctx, cwd) {
     configWarnings: loaded.warnings,
     configMeta: { hasGlobal: loaded.hasGlobal, workspaceFound: loaded.workspace !== null },
   };
+}
+
+// --- F3: connection, discovery and policy helpers shared by the F3 commands ------------
+
+// respawn: true uses the foreground connection with server recovery. Workers do not
+// bring up another server mid-turn and use a client without onServerDown.
+export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
+  let server;
+  let client;
+  let api;
+  if (respawn) {
+    ({ api, server, client } = await connectApi(ctx));
+  } else {
+    const { serverContext } = await import('./jobs.mjs');
+    server = await ensureServer(serverContext(ctx));
+    client = createClient({
+      baseUrl: server.url,
+      password: server.password,
+      directory: ctx.workspaceRoot,
+      requestTimeoutMs: (ctx.config?.server?.requestTimeoutSec ?? 30) * 1000,
+    });
+    api = createApi(client);
+  }
+  let hub = null;
+  if (withHub) {
+    hub = new EventHub({ client });
+    await hub.start();
+  }
+  return { server, client, api, hub, close() { hub?.stop(); } };
+}
+
+export async function loadDiscovery(api) {
+  const [providers, opencodeConfig, agents] = await Promise.all([api.providers(), api.getConfig(), api.agents()]);
+  return { catalog: buildCatalog(providers), opencodeConfig, agents: agents ?? [] };
+}
+
+export function resolveModel(ctx, discovery, kind, modelInput, { variant = null } = {}) {
+  const flags = modelInput ? { model: modelInput } : {};
+  const { candidates, warnings } = resolveCandidates({ kind, flags, config: ctx.config, catalog: discovery.catalog, opencodeConfig: discovery.opencodeConfig });
+  for (const warning of warnings ?? []) ctx.err(`[opc] ${warning}\n`);
+  const candidate = candidates[0];
+  const selection = validateSelection({ candidate, variant, catalog: discovery.catalog, policy: ctx.config.policy ?? {} });
+  return { ...candidate, variant: selection.variant };
+}
+
+export function requireAgent(discovery, name, policy, { modes = null } = {}) {
+  const agent = discovery.agents.find((a) => a.name === name);
+  if (!agent) throw new UsageError('UNKNOWN_AGENT', `agente desconhecido: ${name.slice(0, 12)}${name.length > 12 ? '…' : ''} (veja /opc:agents)`);
+  if (modes && !modes.includes(agent.mode)) {
+    throw new UsageError('AGENT_MODE', `o agente ${name.slice(0, 12)}${name.length > 12 ? '…' : ''} tem modo "${agent.mode}"; aqui só ${modes.join(' ou ')} (para agentes primários use /opc:task --agent)`);
+  }
+  assertAgentUsable(agent, policy);
+  return agent;
+}
+
+export function profileRules(ctx, profile, extra = []) {
+  const policy = ctx.config.policy ?? {};
+  const base = buildPermissionRules(profile, {
+    policy,
+    permissionProfiles: ctx.config.permissionProfiles ?? {},
+    deniedAgentGlobs: policy.agents?.deny ?? [],
+  });
+  return [...base, ...extra];
 }

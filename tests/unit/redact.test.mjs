@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SECRET_KEYS, redact, redactText, registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { SECRET_KEYS, maskDeep, redact, redactText, registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 test('SECRET_KEYS lists the keys of spec §3.1', () => {
   for (const k of ['key', 'apiKey', 'apikey', 'password', 'authorization', 'headers', 'responseHeaders', 'token', 'secret']) {
@@ -64,4 +64,12 @@ test('redact masks registered secrets in Error code and name', () => {
   assert.ok(!out.code.includes(secret));
   assert.ok(out.name.includes('***'));
   assert.ok(!out.name.includes(secret));
+});
+
+test('maskDeep pattern-masks nested strings, leaves keys untouched, and does not mutate', () => {
+  const token = `sk-proj-${'Q'.repeat(24)}`;
+  const input = { [token]: [ `before ${token}`, { value: token } ], unchanged: null };
+  const out = maskDeep(input);
+  assert.deepEqual(out, { [token]: [`before ***`, { value: '***' }], unchanged: null });
+  assert.equal(input[token][0], `before ${token}`);
 });

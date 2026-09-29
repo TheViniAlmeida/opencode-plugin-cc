@@ -2,9 +2,9 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
-import { isActive, listJobs, readJobProgress, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
-import { renderJobStatus, renderStatusList } from '../lib/render.mjs';
-import { followJob } from './task.mjs';
+import { GROUP_ROLE, isActive, listJobs, listGroupMembers, readJobProgress, reconcileJob, resolveJobRef, topLevelJobs, waitForJob } from '../lib/jobs.mjs';
+import { renderGroupStatus, renderJobStatus, renderStatusList } from '../lib/render.mjs';
+import { exitCodeForJob, followJob } from './task.mjs';
 
 const FLAGS = {
   json: { type: 'boolean' },
@@ -25,6 +25,8 @@ export async function run(ctx, argv) {
   if (flags.wait && !ref) throw new UsageError('USAGE', '`status --wait` exige um identificador de tarefa');
   if (ref) {
     const job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref));
+    const groupExit = await statusForGroup(ctx, job, flags);
+    if (groupExit !== null) return groupExit;
     if (flags.wait) {
       return followJob(ctx, job.id, {
         waitTimeoutMs: flags['timeout-ms'],
@@ -43,10 +45,26 @@ export async function run(ctx, argv) {
   for (const job of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null, all: flags.all })) {
     jobs.push(await reconcileJob(ctx.stateDir, job));
   }
-  const progressById = Object.fromEntries(jobs.filter(isActive).map((j) => [j.id, readJobProgress(ctx.stateDir, j.id, 4)]));
-  if (flags.json) ctx.json({ jobs, progress: progressById });
-  else ctx.out(renderStatusList(jobs, { maxJobs: flags.all ? Infinity : 8, progressById }));
+  const visibleJobs = topLevelJobs(jobs);
+  const progressById = Object.fromEntries(visibleJobs.filter(isActive).map((j) => [j.id, readJobProgress(ctx.stateDir, j.id, 4)]));
+  if (flags.json) ctx.json({ jobs: visibleJobs, progress: progressById });
+  else ctx.out(renderStatusList(visibleJobs, { maxJobs: flags.all ? Infinity : 8, progressById }));
   return ExitCode.OK;
+}
+
+export async function statusForGroup(ctx, job, flags) {
+  if (job?.role !== GROUP_ROLE) return null;
+  const final = flags.wait
+    ? await waitForJob(ctx, job.id, {
+      waitTimeoutMs: flags['timeout-ms'] ?? 240000,
+      pollMs: flags['poll-interval-ms'] ?? 2000,
+      onLog: (line) => ctx.err(line.endsWith('\n') ? line : `${line}\n`),
+    })
+    : job;
+  const members = listGroupMembers(ctx.stateDir, job.id);
+  if (flags.json) ctx.json({ group: final, members });
+  else ctx.out(renderGroupStatus(final, members));
+  return flags.wait ? exitCodeForJob(final) : ExitCode.OK;
 }
 
 function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }

@@ -2,13 +2,15 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
-import { cancelJob, resolveJobRef } from '../lib/jobs.mjs';
+import { cancelGroup, cancelJob, GROUP_ROLE, resolveJobRef } from '../lib/jobs.mjs';
 import { renderCancel } from '../lib/render.mjs';
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
   if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
   const target = resolveJobRef(ctx.stateDir, positionals[0] ?? null, { claudeSessionId: ctx.claudeSessionId ?? null, activeOnly: true });
+  const groupExit = await cancelForGroup(ctx, target, flags);
+  if (groupExit !== null) return groupExit;
   const result = await cancelJob(ctx, target.id);
   const { job, report } = result;
   if (result.ok === false) {
@@ -20,6 +22,19 @@ export async function run(ctx, argv) {
   }
   if (flags.json) ctx.json({ jobId: job.id, status: job.status, report });
   else ctx.out(renderCancel(job, report));
+  return ExitCode.OK;
+}
+
+export async function cancelForGroup(ctx, job, flags) {
+  if (job?.role !== GROUP_ROLE) return null;
+  const { group, cancelledMembers, failedMembers = [], ok = true } = await cancelGroup(ctx, job.id);
+  if (failedMembers.length || !ok) {
+    if (flags.json) ctx.json({ group, cancelledMembers, failedMembers, error: 'CANCEL_FAILED' });
+    else ctx.err(`Falha ao cancelar o grupo ${group.id}; membros que falharam: ${failedMembers.join(', ') || group.id}`);
+    return ExitCode.CONNECTION;
+  }
+  if (flags.json) ctx.json({ group, cancelledMembers, failedMembers });
+  else ctx.out(`# Grupo ${group.id} cancelado\n\nMembros cancelados: ${cancelledMembers.join(', ') || '(nenhum ativo)'}\n`);
   return ExitCode.OK;
 }
 

@@ -72,22 +72,40 @@ function compileRoute(key) {
       return seg.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
     })
     .join('/');
-  return { method, regex: new RegExp(`^${source}$`), names };
+  const segments = pattern.split('/').filter(Boolean);
+  return {
+    method,
+    regex: new RegExp(`^${source}$`),
+    names,
+    staticSegments: segments.filter((seg) => !seg.startsWith(':')).length,
+  };
 }
 
-function matchRoute(table, method, pathname) {
-  for (const [key, handler] of Object.entries(table)) {
-    const route = compileRoute(key);
-    if (route.method !== method) continue;
+export function matchRoute(table, method, pathname) {
+  const candidates = Object.entries(table)
+    .map(([key, handler], index) => ({ key, handler, route: compileRoute(key), index }))
+    .filter(({ route }) => route.method === method)
+    .sort((a, b) => {
+      const aStatic = a.route.names.length === 0;
+      const bStatic = b.route.names.length === 0;
+      if (aStatic !== bStatic) return aStatic ? -1 : 1;
+      return b.route.staticSegments - a.route.staticSegments || a.index - b.index;
+    });
+  for (const { handler, route } of candidates) {
     const m = route.regex.exec(pathname);
     if (!m) continue;
     const params = {};
     route.names.forEach((n, i) => {
       params[n] = decodeURIComponent(m[i + 1]);
     });
-    return { handler, params };
+    return { handler, params, route };
   }
   return null;
+}
+
+// Higher is more specific: a static pattern beats any parametrized one, then more static segments win.
+export function routeSpecificity(route) {
+  return (route.names.length === 0 ? 1000 : 0) + route.staticSegments;
 }
 
 function parseConfigContent(text) {
@@ -233,8 +251,11 @@ export async function startFake({
     const query = Object.fromEntries(url.searchParams.entries());
     state.requests.push({ method: req.method, path: url.pathname, query, body, at: Date.now() });
     writeStateFile(stateFile, state);
-    const scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
+    let scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
     const baseHit = matchRoute(baseRoutes, req.method, url.pathname);
+    // A scenario route only shadows a base route that is not more specific (e.g. scenario
+    // 'GET /session/:id' must not capture the base 'GET /session/status').
+    if (scenarioHit && baseHit && routeSpecificity(baseHit.route) > routeSpecificity(scenarioHit.route)) scenarioHit = null;
     if (!scenarioHit && !baseHit) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ name: 'NotFoundError', data: { message: `no route ${req.method} ${url.pathname}` } }));

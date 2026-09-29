@@ -16,6 +16,7 @@ import { createApi } from './api.mjs';
 // Single source of truth for the active states is F0 state.mjs (the setup already uses it).
 export const ACTIVE_STATUSES = ACTIVE_JOB_STATUSES;
 export const TERMINAL_STATUSES = Object.freeze(['completed', 'failed', 'cancelled']);
+export const GROUP_ROLE = 'group';
 export const MAX_TERMINAL_JOBS = 50;
 export const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 export const COMPANION_PATH = fileURLToPath(new URL('../opc-companion.mjs', import.meta.url));
@@ -128,7 +129,7 @@ function safeJob(job) {
   const safe = { ...job };
   if (job.request) {
     const request = job.request;
-    safe.request = Object.fromEntries(['kind', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID']
+    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes']
       .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
     if (request.format) safe.request.format = { type: request.format.type };
     safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
@@ -141,7 +142,19 @@ function safeJob(job) {
     if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
   }
   if (masked.request) masked.request = redactOutput(masked.request);
-  if (masked.result) masked.result = redactTurnOutput(masked.result);
+  if (masked.request && Object.hasOwn(masked.request, 'argumentsPreview')) {
+    const preview = safeOutputText(masked.request.argumentsPreview);
+    masked.request.argumentsPreview = preview.length > 200 ? `${preview.slice(0, 199)}…` : preview;
+  }
+  if (masked.result) {
+    masked.result = redactTurnOutput(masked.result);
+    for (const field of ['argumentsPreview', 'arguments']) {
+      if (Object.hasOwn(masked.result, field)) {
+        const safeText = safeOutputText(masked.result[field]);
+        masked.result[field] = safeText.length > 200 ? `${safeText.slice(0, 199)}…` : safeText;
+      }
+    }
+  }
   if (typeof masked.summary === 'string') masked.summary = masked.summary.slice(0, 200);
   return masked;
 }
@@ -190,7 +203,7 @@ export function workerMatcher(jobId) {
 }
 
 function workerLost(job, now = Date.now()) {
-  if (!isActive(job)) return false;
+  if (!isActive(job) || isGroupMember(job)) return false;
   if (job.pid) return !identityMatches({ pid: job.pid, startTime: job.pidStartTime }, workerMatcher(job.id));
   return job.status === 'queued' && now - Date.parse(job.createdAt) > QUEUED_WITHOUT_WORKER_MS;
 }
@@ -201,16 +214,8 @@ const lostPatch = () => ({
 });
 
 function pruneTerminal(stateDir, state, jobs) {
-  const topLevel = jobs.filter((j) => !j.groupId || j.groupId === j.id);
-  const terminal = topLevel.filter((j) => isTerminal(j) && !jobs.some((m) => m.groupId === j.id && isActive(m)));
-  terminal.sort((a, b) => String(b.completedAt ?? b.updatedAt).localeCompare(String(a.completedAt ?? a.updatedAt)));
-  const doomed = terminal.slice(MAX_TERMINAL_JOBS);
-  if (doomed.length === 0) return;
-  const ids = new Set();
-  for (const job of doomed) {
-    ids.add(job.id);
-    for (const member of jobs) if (member.groupId === job.id) ids.add(member.id);
-  }
+  const ids = new Set(selectJobsToPrune(jobs, MAX_TERMINAL_JOBS));
+  if (ids.size === 0) return;
   for (const id of ids) {
     cleanupJobInputFiles(stateDir, id);
     for (const file of [jobPath(stateDir, id), jobLogPath(stateDir, id), workerLogPath(stateDir, id)]) rmSync(file, { force: true });
@@ -225,16 +230,25 @@ export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn
   try {
     await updateStateFn(stateDir, (state) => {
       const jobs = listJobs(stateDir, { all: true });
+      const lostGroups = new Set();
       for (const job of jobs) {
         if (!workerLost(job)) continue;
         Object.assign(job, lostPatch(), { updatedAt: nowIso() });
         writeJob(stateDir, job);
         upsertIndex(state, job);
+        if (job.role === GROUP_ROLE) lostGroups.add(job.id);
+      }
+      for (const member of jobs) {
+        if (!lostGroups.has(member.groupId) || !isActive(member)) continue;
+        Object.assign(member, lostPatch(), { updatedAt: nowIso() });
+        writeJob(stateDir, member);
+        upsertIndex(state, member);
       }
       const active = jobs.filter(isActive);
-      if (active.length >= maxActive) {
-        throw new UsageError('TOO_MANY_JOBS', `jobs.maxActive (${maxActive}) atingido; tarefas ativas:\n${active.map((j) => `- ${j.id} (${j.kind}, ${j.status})`).join('\n')}`, {
-          details: { active: active.map((j) => ({ id: j.id, kind: j.kind, status: j.status })) },
+      const counted = jobs.filter(countsTowardLimit);
+      if (!fields.groupId && counted.length >= maxActive) {
+        throw new UsageError('TOO_MANY_JOBS', `jobs.maxActive (${maxActive}) atingido; tarefas ativas:\n${counted.map((j) => `- ${j.id} (${j.kind}, ${j.status})`).join('\n')}`, {
+          details: { active: counted.map((j) => ({ id: j.id, kind: j.kind, status: j.status })) },
         });
       }
       if (fields.sessionID) {
@@ -307,7 +321,13 @@ export async function clearJobRequests(stateDir, id, requestIds) {
 
 export async function reconcileJob(stateDir, job) {
   if (!workerLost(job)) return job;
-  return updateJob(stateDir, job.id, lostPatch());
+  const lost = await updateJob(stateDir, job.id, lostPatch());
+  if (job.role === GROUP_ROLE) {
+    for (const member of listJobs(stateDir, { all: true })) {
+      if (member.groupId === job.id && isActive(member)) await updateJob(stateDir, member.id, lostPatch());
+    }
+  }
+  return lost;
 }
 
 export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnly = false } = {}) {
@@ -321,7 +341,7 @@ export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnl
     if (matches.length > 1) throw new UsageError('AMBIGUOUS_JOB', `a referência "${short(ref)}" corresponde a ${matches.length} tarefas; informe um identificador mais longo`);
     throw new NotFoundError('NOT_FOUND', activeOnly ? `nenhuma tarefa ativa corresponde a "${short(ref)}"` : `nenhuma tarefa corresponde a "${short(ref)}" (consulte /opc:status)`);
   }
-  const scoped = pool.filter((j) => isActive(j) && (!claudeSessionId || j.claudeSessionId === claudeSessionId));
+  const scoped = topLevelJobs(pool).filter((j) => isActive(j) && (!claudeSessionId || j.claudeSessionId === claudeSessionId));
   if (scoped.length === 1) return scoped[0];
   if (scoped.length > 1) {
     throw new UsageError('MULTIPLE_ACTIVE_JOBS', `há várias tarefas ativas; informe um identificador:\n${scoped.map((j) => `- ${j.id} (${j.kind}, ${j.status})`).join('\n')}`, {
@@ -649,4 +669,182 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   if (final.status === 'cancelled') appendJobLog(ctx.stateDir, id, 'Cancelada pelo usuário.');
   report.status = final.status;
   return { job: final, report };
+}
+
+export function isGroupMember(job) {
+  return Boolean(job && job.groupId);
+}
+
+export function topLevelJobs(jobs) {
+  return jobs.filter((job) => !isGroupMember(job));
+}
+
+export function countsTowardLimit(job) {
+  return ACTIVE_STATUSES.includes(job.status) && !isGroupMember(job);
+}
+
+export function selectJobsToPrune(jobs, keep = 50) {
+  const hasActiveMember = (group) => jobs.some((m) => m.groupId === group.id && ACTIVE_STATUSES.includes(m.status));
+  const terminalTop = topLevelJobs(jobs)
+    .filter((j) => TERMINAL_STATUSES.includes(j.status) && !(j.role === GROUP_ROLE && hasActiveMember(j)))
+    .sort((a, b) => String(b.completedAt ?? b.updatedAt ?? '').localeCompare(String(a.completedAt ?? a.updatedAt ?? '')));
+  const ids = new Set(terminalTop.slice(keep).map((j) => j.id));
+  for (const j of jobs) if (j.groupId && ids.has(j.groupId)) ids.add(j.id);
+  return [...ids];
+}
+
+export async function addGroupMember(stateDir, groupId, fields = {}) {
+  const group = readJob(stateDir, groupId);
+  if (!group || group.role !== GROUP_ROLE) throw new NotFoundError('NOT_FOUND', `grupo ${groupId} não encontrado`);
+  let member = await createJob(stateDir, {
+    workspaceRoot: group.workspaceRoot ?? null,
+    claudeSessionId: group.claudeSessionId ?? null,
+    ...fields,
+    kind: fields.kind ?? group.kind,
+    groupId,
+    role: fields.role ?? `member:${(group.memberIds ?? []).length + 1}`,
+  });
+  if (fields.status && fields.status !== member.status) {
+    member = await updateJob(stateDir, member.id, { status: fields.status, phase: fields.phase ?? fields.status });
+  }
+  await updateJob(stateDir, groupId, (g) => ({ memberIds: [...(g.memberIds ?? []), member.id] }));
+  return member;
+}
+
+export async function createGroup(stateDir, groupFields, memberFieldsList, { maxActive = 8 } = {}) {
+  const group = await createJob(stateDir, { ...groupFields, role: GROUP_ROLE, groupId: null, memberIds: [] }, { maxActive });
+  const members = [];
+  try {
+    for (const fields of memberFieldsList) members.push(await addGroupMember(stateDir, group.id, fields));
+  } catch (err) {
+    const failed = { status: 'failed', errorCode: 'group_create_failed', errorMessage: 'Não foi possível criar o grupo de tarefas.', completedAt: new Date().toISOString() };
+    for (const m of members) await updateJob(stateDir, m.id, failed);
+    await updateJob(stateDir, group.id, failed);
+    throw err;
+  }
+  return { group: readJob(stateDir, group.id), members };
+}
+
+export function listGroupMembers(stateDir, groupId) {
+  const group = readJob(stateDir, groupId);
+  const ids = group?.memberIds ?? listJobs(stateDir, { all: true }).filter((j) => j.groupId === groupId).map((j) => j.id);
+  return ids.map((id) => readJob(stateDir, id)).filter(Boolean);
+}
+
+export function aggregateGroup(members) {
+  const counts = { queued: 0, running: 0, waiting_permission: 0, completed: 0, failed: 0, cancelled: 0 };
+  for (const m of members) counts[m.status] = (counts[m.status] ?? 0) + 1;
+  const total = members.length;
+  const done = counts.completed + counts.failed + counts.cancelled;
+  const status = total > 0 && counts.queued === total ? 'queued' : groupStatus(members);
+  const warnings = status === 'completed' && done > counts.completed ? [`${counts.failed} falharam, ${counts.cancelled} canceladas`] : [];
+  return { status, counts, total, done, phase: `${done}/${total} concluídas`, warnings };
+}
+
+function memberSummary(m) {
+  return {
+    id: m.id, role: m.role, agent: m.agent ?? null, model: m.model ?? null, status: m.status,
+    sessionID: m.sessionID ?? null, mechanism: m.result?.mechanism ?? null, errorMessage: m.errorMessage ?? null,
+  };
+}
+
+// decorate(group, members) → extra fields written in the same update (a terminal job is frozen afterwards).
+export async function refreshGroup(stateDir, groupId, { final = false, decorate = null } = {}) {
+  const group = readJob(stateDir, groupId);
+  if (!group || group.status === 'cancelled') return group;
+  const members = listGroupMembers(stateDir, groupId);
+  const agg = aggregateGroup(members);
+  let status = agg.status;
+  if (status === 'queued' && group.status === 'running') status = 'running';
+  if (!final && TERMINAL_STATUSES.includes(status)) status = 'running';
+  if (final && group.cancelRequestedAt) {
+    status = members.some((member) => ACTIVE_STATUSES.includes(member.status)) ? 'running' : 'cancelled';
+  }
+  const warnings = [...agg.warnings];
+  if (final && ACTIVE_STATUSES.includes(status) && !group.cancelRequestedAt) {
+    status = 'failed';
+    warnings.push('O coordenador terminou com membros ainda ativos.');
+  }
+  const pending = members
+    .filter((m) => m.status === 'waiting_permission')
+    .flatMap((m) => (m.pendingRequest ?? []).map((req) => ({ ...req, memberId: m.id })));
+  const patch = {
+    status,
+    phase: agg.phase,
+    pendingRequest: pending.length ? pending : null,
+    result: { counts: agg.counts, warnings, members: members.map(memberSummary) },
+  };
+  if (TERMINAL_STATUSES.includes(status)) patch.completedAt = group.completedAt ?? new Date().toISOString();
+  if (decorate) Object.assign(patch, decorate({ ...group, ...patch }, members));
+  return updateJob(stateDir, groupId, patch);
+}
+
+export async function cancelGroup(ctx, groupId) {
+  const group = await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: nowIso() });
+  if (!group) throw new NotFoundError('NOT_FOUND', `grupo ${groupId} não encontrado`);
+  const active = listGroupMembers(ctx.stateDir, groupId).filter((m) => ACTIVE_STATUSES.includes(m.status));
+  const results = await Promise.all(active.map(async (member) => {
+    try {
+      const result = await cancelJob(ctx, member.id);
+      if (result?.ok === false) {
+        const reason = redactText(result.reason ?? result.code ?? 'cancelamento recusado');
+        appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
+        return { id: member.id, ok: false };
+      }
+      return { id: member.id, ok: true };
+    } catch (err) {
+      const reason = redactText(err?.message ?? String(err));
+      appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
+      return { id: member.id, ok: false };
+    }
+  }));
+  const cancelledMembers = results.filter((result) => result.ok).map((result) => result.id);
+  const failedMembers = results.filter((result) => !result.ok).map((result) => result.id);
+  let cancelled = group;
+  let ok = failedMembers.length === 0;
+  // a member kept running: withdraw the request so the coordinator's final refresh aggregates normally (a retry sets it again)
+  if (!ok) await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: null });
+  if (ok) {
+    const latest = readJob(ctx.stateDir, groupId);
+    if (ACTIVE_STATUSES.includes(latest?.status)) {
+      try {
+        const result = await cancelJob(ctx, groupId);
+        cancelled = result.job ?? readJob(ctx.stateDir, groupId) ?? latest;
+        // the coordinator may finalize the group between cancelJob's active check and its update
+        ok = result.ok !== false && cancelled?.status === 'cancelled';
+      } catch (err) {
+        const final = readJob(ctx.stateDir, groupId);
+        if (err?.code === 'NOT_ACTIVE' && final?.status === 'cancelled') {
+          cancelled = final;
+        } else {
+          throw err;
+        }
+      }
+    } else if (latest?.status === 'cancelled') {
+      cancelled = latest;
+    } else {
+      ok = false;
+      cancelled = latest ?? group;
+    }
+  }
+  return { group: readJob(ctx.stateDir, groupId) ?? cancelled, cancelledMembers, failedMembers, ok };
+}
+
+export async function runWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const laneCount = Math.max(1, Math.min(Number(limit) || 1, items.length || 1));
+  const lanes = Array.from({ length: laneCount }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await fn(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  });
+  await Promise.all(lanes);
+  return results;
 }

@@ -21,6 +21,14 @@ export function redactText(text) {
   return out;
 }
 
+// Mask model- and repository-derived payloads without interpreting property names as secrets.
+export function maskDeep(value) {
+  if (typeof value === 'string') return redactText(maskSecretPatterns(value));
+  if (Array.isArray(value)) return value.map(maskDeep);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskDeep(item)]));
+  return value;
+}
+
 function maskMatches(text, pattern) {
   return text.replace(pattern, '***');
 }
