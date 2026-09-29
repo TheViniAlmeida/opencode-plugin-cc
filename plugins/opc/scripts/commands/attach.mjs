@@ -41,10 +41,10 @@ export async function persistManagedAttachSecret(ctx, server) {
   const { withServerLock } = await import('../lib/jobs.mjs');
   return withServerLock(ctx, () => {
     const current = readServerRecord(ctx.stateDir);
+    // ensureServer returns url/pid/port/password (no startTime); the per-server random password pins the identity
     const sameIdentity = current
       && current.url === server.url
       && current.pid === server.pid
-      && String(current.startTime) === String(server.startTime)
       && current.port === server.port
       && current.password === server.password;
     if (!sameIdentity) {
