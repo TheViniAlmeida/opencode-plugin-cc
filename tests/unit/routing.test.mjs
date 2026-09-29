@@ -84,20 +84,20 @@ test('single value denied → PolicyError; disconnected provider → usage error
     assert.throws(() => resolveCandidates({ kind: 'task', flags: { model }, config: baseConfig, catalog }), (e) => {
       assert.ok(e instanceof PolicyError);
       assert.equal(e.code, 'POLICY_DENIED');
-      assert.match(e.message, /provider omniroute-wo… negado pela política/);
+      assert.match(e.message, /provider omniroute-work negado pela política/);
       return true;
     });
   }
   assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: 'ollama/llama9' }, config: baseConfig, catalog }), (e) => e instanceof UsageError && e.code === 'PROVIDER_NOT_CONNECTED');
 });
 
-test('routing messages are PT-BR and truncate echoed user values', () => {
+test('routing messages preserve config identifiers and truncate invalid user values', () => {
   const longModel = `${P}/abcdefghijklmnop`;
   const modelDenied = { ...baseConfig, policy: { models: { deny: [longModel] } } };
   assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: longModel }, config: modelDenied, catalog }), (e) => {
     assert.equal(e.code, 'POLICY_DENIED');
-    assert.match(e.message, /modelo omniroute-pe… negado pela política/);
-    assert.ok(!e.message.includes(longModel));
+    assert.ok(e.message.includes(`modelo ${longModel} negado pela política`));
+    assert.ok(e.message.includes(`policy.models.deny: ${longModel}`));
     return true;
   });
   assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'tier-abcdefghijk' }, config: baseConfig, catalog }), (e) => {
@@ -120,7 +120,7 @@ test('routing messages are PT-BR and truncate echoed user values', () => {
   });
   const aliasRoute = { ...baseConfig, routing: { tasks: { ask: ['alias-abcdefghijk', 'fast'] } } };
   const skipped = resolveCandidates({ kind: 'ask', config: aliasRoute, catalog });
-  assert.match(skipped.warnings[0], /ignorado alias-abcdef…/);
+  assert.match(skipped.warnings[0], /ignorado alias-abcdefghijk/);
 });
 
 test('validateSelection: variant (F1 validateVariant), agent existence, policy (F1 assertAgentUsable), mode and pinned model', () => {

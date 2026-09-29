@@ -10,7 +10,7 @@ const BODY = parseFrontmatter(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', '
 const TEMPLATE = [...BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]).find((block) => block.includes("<<'OPC_ARGS_5f1d0c7a_EOF'"));
 assert.ok(TEMPLATE, 'opc-worker must contain the canonical quoted-heredoc template');
 function command(sub, prompt) {
-  return TEMPLATE.replace('<ask|plan|task>', sub).replace('[flags from the lead]', `--model ${FAST}`).replace('<task text exactly as received>', prompt);
+  return TEMPLATE.replace('<ask|plan|task>', sub).replace('[flags from the lead]', () => `--model ${FAST}`).replace('<task text exactly as received>', () => prompt);
 }
 function runBash(script, env, cwd) {
   return new Promise((resolve, reject) => {

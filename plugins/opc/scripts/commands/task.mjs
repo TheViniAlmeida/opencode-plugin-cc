@@ -252,7 +252,7 @@ export async function runKindCommand(ctx, argv, kind) {
     fallbackCfg: config.routing?.fallback ?? {},
     permissionTimeoutMs: permissionTimeoutSec * 1000,
     ...statusPollOverride(ctx.env),
-    ...routingFields(resolution, { resume: Boolean(sessionID), catalog }),
+    ...routingFields(resolution, { resume: Boolean(sessionID), catalog, warningsReported: true }),
   };
   const job = await submitTurnJob(ctx, {
     kind,

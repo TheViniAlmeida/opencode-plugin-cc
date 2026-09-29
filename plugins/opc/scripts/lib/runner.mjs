@@ -450,9 +450,14 @@ export async function runTurn({
     lastPhase = 'retrying';
     progress({ phase: 'retrying', message: `Nova tentativa (${displayValue(status.attempt)}): ${displayValue(status.message ?? '')}`.trim() });
     if (!forcedError && retryExceedsCap(status, request.fallbackCfg ?? {})) {
-      forcedError = retryCapError(status);
+      // Fail closed even if the turn deadline fires while confirmation is pending.
+      forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
       progress({ message: 'Interrompendo sessão: limite de tentativas excedido' });
-      await api.abort(sessionID);
+      try {
+        if (await api.abort(sessionID) === true && await waitIdle(api, sessionID, idleWaitMs)) {
+          forcedError = retryCapError(status);
+        }
+      } catch { /* Keep the fatal error when abort or status confirmation fails. */ }
       finish('forced-error');
     }
   };
@@ -550,6 +555,9 @@ export async function runTurn({
     collected = redactOutput({ ...collected, structuredSource });
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };
+    if (forcedError?.name === 'AbortUnconfirmed') {
+      return { ...result, status: 'failed', error: forcedError, errorClass: 'fatal', errorType: 'AbortUnconfirmed', errorCode: 'ABORT_UNCONFIRMED', errorMessage: forcedError.data.message };
+    }
     if (outcome.reason === 'no-assistant-message') {
       return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'NoAssistantMessage', errorCode: 'NO_ASSISTANT_MESSAGE', errorMessage: 'A sessão ficou idle sem uma mensagem assistant concluída para este turno.' };
     }

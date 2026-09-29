@@ -22,6 +22,7 @@ export async function createContext({
   stdout = process.stdout,
   stderr = process.stderr,
   createDataDir = false,
+  readOnly = false,
   allowInvalidConfig = false,
   workspaceTimeoutMs,
   workspaceFallback = false,
@@ -34,10 +35,13 @@ export async function createContext({
     if (!(createDataDir && err.code === 'DATA_DIR_UNRESOLVED')) throw err;
     dataDir = defaultDataDir({ home });
   }
-  ensurePrivateDir(dataDir);
   const workspaceRoot = resolveWorkspaceRoot(path.resolve(cwd), { env, timeoutMs: workspaceTimeoutMs, fallbackOnFailure: workspaceFallback });
-  ensurePrivateDir(path.join(dataDir, 'state'));
-  const stateDir = ensurePrivateDir(workspaceStateDir(dataDir, workspaceRoot));
+  const stateDir = workspaceStateDir(dataDir, workspaceRoot);
+  if (!readOnly) {
+    ensurePrivateDir(dataDir);
+    ensurePrivateDir(path.join(dataDir, 'state'));
+    ensurePrivateDir(stateDir);
+  }
   let loaded;
   let configError = null;
   try {

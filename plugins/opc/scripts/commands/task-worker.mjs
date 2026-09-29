@@ -255,36 +255,43 @@ export async function run(ctx, argv, {
       finalText: null, structured: null, touchedFiles: [], toolsRan: false, toolNames: [], usage: null,
     };
     await jobUpdates.flush();
-    const cancelRequested = Boolean(readJob(ctx.stateDir, jobId)?.cancelRequestedAt);
-    const status = cancelRequested ? 'cancelled' : result.status;
+    let cancelRequested;
+    let status;
     const completedAt = nowIso();
-    await updateJob(ctx.stateDir, jobId, {
-      status,
-      phase: status === 'completed' ? 'done' : status,
-      completedAt,
-      pendingRequest: null,
-      childSessionIDs: result.childSessionIDs,
-      assistantMessageIDs: result.assistantMessageIDs ?? [...assistantIDs],
-      errorCode: status === 'completed' ? null : cancelRequested ? 'cancelled' : result.errorCode ?? null,
-      errorClass: status === 'completed' ? null : result.errorClass ?? null,
-      errorType: status === 'completed' ? null : cancelRequested ? 'Cancelled' : result.errorType ?? null,
-      errorMessage: status === 'completed' ? null : cancelRequested ? 'Cancelado pelo usuário.' : result.errorMessage ?? null,
-      result: {
-        finalText: result.finalText,
-        structured: result.structured,
-        structuredSource: result.structuredSource ?? null,
-        touchedFiles: result.touchedFiles,
-        toolsRan: result.toolsRan,
-        toolNames: result.toolNames,
+    const finalized = await updateJob(ctx.stateDir, jobId, (latest) => {
+      cancelRequested = Boolean(latest.cancelRequestedAt);
+      status = cancelRequested ? 'cancelled' : result.status;
+      return {
+        status,
+        attempts,
+        attemptInFlight: false,
+        phase: status === 'completed' ? 'done' : status,
+        completedAt,
+        pendingRequest: null,
         childSessionIDs: result.childSessionIDs,
-        usage: result.usage,
-        error: result.error ?? null,
-        ...(result.abortConfirmed !== undefined ? { abortConfirmed: result.abortConfirmed, sessionAborts: result.sessionAborts } : {}),
-      },
-      model: attempts.at(-1)?.model ?? stored.model,
-      sessionID: attempts.at(-1)?.sessionID ?? result.sessionID,
-      ...(stop ? { errorCode: stop.errorCode, errorMessage: stop.errorMessage } : {}),
+        assistantMessageIDs: result.assistantMessageIDs ?? [...assistantIDs],
+        errorCode: status === 'completed' ? null : cancelRequested ? 'cancelled' : result.errorCode ?? null,
+        errorClass: status === 'completed' ? null : result.errorClass ?? null,
+        errorType: status === 'completed' ? null : cancelRequested ? 'Cancelled' : result.errorType ?? null,
+        errorMessage: status === 'completed' ? null : cancelRequested ? 'Cancelado pelo usuário.' : result.errorMessage ?? null,
+        result: {
+          finalText: result.finalText,
+          structured: result.structured,
+          structuredSource: result.structuredSource ?? null,
+          touchedFiles: result.touchedFiles,
+          toolsRan: result.toolsRan,
+          toolNames: result.toolNames,
+          childSessionIDs: result.childSessionIDs,
+          usage: result.usage,
+          error: result.error ?? null,
+          ...(result.abortConfirmed !== undefined ? { abortConfirmed: result.abortConfirmed, sessionAborts: result.sessionAborts } : {}),
+        },
+        model: attempts.at(-1)?.model ?? stored.model,
+        sessionID: attempts.at(-1)?.sessionID ?? result.sessionID,
+        ...(stop && !cancelRequested ? { errorCode: stop.errorCode, errorMessage: stop.errorMessage } : {}),
+      };
     });
+    status = finalized.status;
     if (cancelRequested && status === 'cancelled' && attempts.length === 0) exitCode = 130;
     const statusLabel = { completed: 'concluído', failed: 'falhou', cancelled: 'cancelado', waiting_permission: 'aguardando permissão' }[status] ?? status;
     log(`Turno ${statusLabel}${result.errorType ? ` (${result.errorType})` : ''}.`);

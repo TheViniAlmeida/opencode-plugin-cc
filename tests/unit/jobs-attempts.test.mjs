@@ -216,3 +216,90 @@ test('runJobTurn respects routing.fallback.maxAttempts in attemptLimit', async (
   assert.equal(readJob(stateDir, job.id).attemptLimit, 2);
   assert.equal(out.stop.errorCode, 'FALLBACK_EXHAUSTED');
 });
+
+for (const mode of ['intent', 'cancel-false', 'signal']) {
+  test(`F4a C2: backoff wakes promptly on ${mode} without a new prompt`, async (t) => {
+    const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+    const stateDir = tempStateDir(t);
+    const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a', request: { candidates: [A, B], fallbackEligible: true } });
+    const ac = new AbortController();
+    let calls = 0;
+    let aborts = 0;
+    const running = runJobTurn({ stateDir, job, config: CONFIG, baseTurnRequest: BASE,
+      backoffMs: [1500], runTurnOptions: { signal: ac.signal },
+      runTurnImpl: async (o) => { calls++; return failTurn(o.request); },
+    });
+    while (readJob(stateDir, job.id).phase !== 'fallback') await new Promise((r) => setTimeout(r, 5));
+    const start = performance.now();
+    if (mode === 'signal') ac.abort();
+    else if (mode === 'intent') await updateJob(stateDir, job.id, { cancelRequestedAt: new Date().toISOString() });
+    else {
+      const cancelled = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+      assert.notEqual(cancelled.ok, false);
+      assert.equal(cancelled.job.status, 'cancelled');
+      assert.ok(cancelled.job.cancelRequestedAt);
+    }
+    const outcome = await running;
+    assert.equal(outcome.result.status, 'cancelled');
+    assert.equal(calls, 1, 'zero new prompt_async after cancellation');
+    assert.equal(aborts, 0, 'finished session must not be aborted');
+    assert.ok(performance.now() - start < 800, 'must wake before the backoff ends');
+  });
+}
+
+test('F4a I1: cancel racing with completion waits for the final attempt to be persisted', async (t) => {
+  const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a', request: { candidates: [A], fallbackEligible: false } });
+  let finishTurn;
+  let entered;
+  const started = new Promise((r) => { entered = r; });
+  const completing = new Promise((r) => { finishTurn = r; });
+  const running = runJobTurn({ stateDir, job, config: CONFIG, baseTurnRequest: BASE,
+    runTurnImpl: async () => { entered(); return completing; },
+  });
+  await started;
+  const cancelling = cancelJob({ stateDir }, job.id, { api: {
+    abort: async () => { setTimeout(() => finishTurn(okTurn(BASE)), 30); return true; },
+    sessionStatus: async () => ({}),
+  }, exitWaitMs: 500 });
+  await Promise.all([running, cancelling]);
+  const saved = readJob(stateDir, job.id);
+  assert.equal(saved.status, 'cancelled');
+  assert.equal(saved.attempts.length, 1);
+  assert.equal(saved.attempts[0].status, 'completed');
+  assert.equal(saved.attempts[0].sessionID, 'ses_a');
+});
+
+for (const status of ['completed', 'failed']) {
+  test(`F4a I1: cancellation after recording a ${status} attempt respects session liveness`, async (t) => {
+    const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+    const stateDir = tempStateDir(t);
+    const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a' });
+    await recordAttempt(stateDir, job.id, { model: 'p/a', sessionID: 'ses_a', status,
+      ...(status === 'failed' ? { errorType: 'AbortUnconfirmed', errorClass: 'fatal' } : {}),
+    });
+    let aborts = 0;
+    const outcome = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+    assert.equal(aborts, status === 'completed' ? 0 : 1);
+    assert.equal(outcome.job.attempts.length, 1);
+    assert.equal(outcome.job.status, status === 'completed' ? 'cancelled' : 'queued');
+    if (status === 'failed') assert.equal(outcome.ok, false);
+  });
+}
+
+test('F4a I1: a pending attempt keeps cancellation intent if publication exceeds the bounded wait', async (t) => {
+  const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a' });
+  await updateJob(stateDir, job.id, { attemptInFlight: true });
+  const pending = await cancelJob({ stateDir }, job.id, {
+    api: { abort: async () => true, sessionStatus: async () => ({}) }, exitWaitMs: 1,
+  });
+  assert.equal(pending.ok, false);
+  assert.ok(pending.job.cancelRequestedAt);
+  assert.equal(pending.job.status, 'queued', 'never freeze a record before its final attempt');
+  await recordAttempt(stateDir, job.id, { model: 'p/a', sessionID: 'ses_a', status: 'completed' });
+  await updateJob(stateDir, job.id, { status: 'cancelled' });
+  assert.equal(readJob(stateDir, job.id).attempts.length, 1);
+});

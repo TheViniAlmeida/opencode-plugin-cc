@@ -9,6 +9,8 @@ import { maskDeep, redactText } from '../lib/redact.mjs';
 
 export const CLEAR_SCREEN = '\x1b[2J\x1b[H';
 
+export function contextOptions() { return { readOnly: true }; }
+
 const FLAGS = {
   flags: {
     job: { type: 'string' },

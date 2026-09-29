@@ -5,8 +5,8 @@ import { FAST, SECOND, THIRD, INVALID, SKIP, TIMEOUT, PROMPT, baseConfig, liveSe
 for (const [name, args, cfg, expected, check] of [
   ['routing-first', ['ask', PROMPT], baseConfig(), FAST, () => {}],
   ['routing-tier-heavy', ['ask', '--tier', 'heavy', PROMPT], baseConfig(), THIRD, () => {}],
-  ['routing-denied-entry', ['ask', PROMPT], baseConfig({ deny: [`*${FAST.split('/').at(-1)}*`] }), SECOND, (r) => assert.match(r.stderr, /\[opc\] warning:/)],
-  ['routing-invalid-entry', ['ask', PROMPT], baseConfig({ ask: [INVALID, FAST] }), FAST, (r) => assert.match(r.stderr, /does-not-exist-f4a/)],
+  ['routing-denied-entry', ['ask', PROMPT], baseConfig({ deny: [`*${FAST.split('/').at(-1)}*`] }), SECOND, (r) => { assert.match(r.stderr, /\[opc\] aviso: ignorado /); assert.ok(r.stderr.includes(FAST)); }],
+  ['routing-invalid-entry', ['ask', PROMPT], baseConfig({ ask: [INVALID, FAST] }), FAST, (r) => assert.ok(r.stderr.includes(INVALID))],
 ]) {
   const skip = SKIP || (name === 'routing-denied-entry' && SECOND === FAST
     ? 'OPC_LIVE_MODEL_2 não definida com uma rota distinta; não há candidato alternativo para testar a negação.'

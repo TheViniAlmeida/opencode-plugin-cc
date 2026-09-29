@@ -220,3 +220,20 @@ test('monitor refreshes until SIGINT and exits 0', async (t) => {
   assert.equal(signal, null);
   assert.equal(code, 0);
 });
+
+for (const existingDataDir of [true, false]) {
+  test(`F4a I5: monitor --once creates nothing (data dir exists: ${existingDataDir})`, async (t) => {
+    const env = testEnv(t);
+    const ws = makeWorkspace(t);
+    if (!existingDataDir) env.OPC_DATA_DIR = path.join(env.OPC_DATA_DIR, 'absent-data');
+    else fs.mkdirSync(env.OPC_DATA_DIR, { recursive: true });
+    const beforeWorkspace = fs.readdirSync(ws, { recursive: true }).sort();
+    const beforeData = existingDataDir ? fs.readdirSync(env.OPC_DATA_DIR, { recursive: true }).sort() : null;
+    const r = await runCli(['monitor', '--once'], { env, cwd: ws });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /Nenhum job neste workspace/);
+    assert.deepEqual(fs.readdirSync(ws, { recursive: true }).sort(), beforeWorkspace);
+    if (existingDataDir) assert.deepEqual(fs.readdirSync(env.OPC_DATA_DIR, { recursive: true }).sort(), beforeData);
+    else assert.equal(fs.existsSync(env.OPC_DATA_DIR), false);
+  });
+}

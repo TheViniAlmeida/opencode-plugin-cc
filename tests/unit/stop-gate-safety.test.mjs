@@ -53,7 +53,7 @@ test('Stop hook reports a failed cancellation in systemMessage and stderr, while
     const { ctx, output } = await hookContext(t);
     const result = await runStopHook(ctx, {
       connectApiFn: async () => ({ api: {} }),
-      resolveTurnModelFn: async () => ({ model: 'model', full: 'provider/model', variant: null }),
+      resolveTurnModelFn: async () => ({ model: 'model', full: 'provider/model', variant: null, resolution: { candidates: [], fallbackEligible: false } }),
       turnJobRequestFn: () => ({ title: 'gate request' }),
       submitTurnJobFn: async () => ({ id: 'gate-job-1' }),
       waitForJobFn: async () => {
@@ -80,7 +80,7 @@ test('Stop wait uses entry deadline minus slow setup and cancellation reserve', 
   await runStopHook(ctx, {
     now: () => clock,
     connectApiFn: async () => { clock += 120_000; return { api: {} }; },
-    resolveTurnModelFn: async () => { clock += 40_000; return { model: 'm', full: 'p/m' }; },
+    resolveTurnModelFn: async () => { clock += 40_000; return { model: 'm', full: 'p/m', resolution: { candidates: [], fallbackEligible: false } }; },
     turnJobRequestFn: () => ({ title: 'gate' }),
     submitTurnJobFn: async () => { clock += 10_000; return { id: 'gate-1' }; },
     waitForJobFn: async (_ctx, _id, options) => { budget = options.waitTimeoutMs; return { status: 'completed', result: { finalText: 'ALLOW: certo' } }; },
@@ -96,7 +96,7 @@ test('Stop cancels and allows when setup consumes the entire wait budget', async
   await runStopHook(ctx, {
     now: () => clock,
     connectApiFn: async () => ({ api: {} }),
-    resolveTurnModelFn: async () => ({ model: 'm', full: 'p/m' }),
+    resolveTurnModelFn: async () => ({ model: 'm', full: 'p/m', resolution: { candidates: [], fallbackEligible: false } }),
     turnJobRequestFn: () => ({ title: 'gate' }),
     submitTurnJobFn: async () => { clock = 850_000; return { id: 'gate-exhausted' }; },
     waitForJobFn: async () => { assert.fail('no wait remains'); },
@@ -129,7 +129,7 @@ for (const source of ['job', 'turn', 'exception', 'error-code']) {
         if (source === 'exception') throw Object.assign(new Error(message), { name: 'APIError' });
         return { api: {} };
       },
-      resolveTurnModelFn: async () => ({ model: { providerID: 'p', modelID: 'm' }, full: 'p/m' }),
+      resolveTurnModelFn: async () => ({ model: { providerID: 'p', modelID: 'm' }, full: 'p/m', resolution: { candidates: [], fallbackEligible: false } }),
       submitTurnJobFn: async () => ({ id: 'gate-error' }),
       waitForJobFn: async () => ({ id: 'gate-error', status: 'failed', ...(source === 'error-code' ? { errorCode: 'APIError', errorMessage: message } : source === 'job' ? failure : { result: failure }) }),
     });
@@ -152,7 +152,7 @@ for (const mode of ['text', 'tool']) {
     ctx.config.review = { structuredOutput: mode };
     await runStopHook(ctx, {
       connectApiFn: async () => ({ api: {} }),
-      resolveTurnModelFn: async () => ({ model: { providerID: 'p', modelID: 'm' }, full: 'p/m' }),
+      resolveTurnModelFn: async () => ({ model: { providerID: 'p', modelID: 'm' }, full: 'p/m', resolution: { candidates: [], fallbackEligible: false } }),
       submitTurnJobFn: async (_ctx, { request }) => { assert.equal(request.format, null); return { id: 'gate-text' }; },
       waitForJobFn: async () => ({ status: 'completed', result: { finalText: 'ALLOW: Tudo certo.' } }),
     });
@@ -167,4 +167,21 @@ test('Stop context failure also exposes the short cause and allows', async (t) =
   const payload = JSON.parse(output.stdout);
   assert.equal(payload.decision, undefined);
   for (const text of [payload.systemMessage, output.stderr]) assert.match(text, /STOP_GATE_FAILED \(CONTEXT_FAILED: Contexto indisponível\.\)/);
+});
+
+test('F4a I2: stop-gate request preserves route candidates and fallback eligibility', async (t) => {
+  const { ctx, output } = await hookContext(t);
+  ctx.config.routing = { tasks: { 'stop-gate': ['p/first', 'p/second'] } };
+  let submitted;
+  await runStopHook(ctx, {
+    connectApiFn: async () => ({ api: {
+      providers: async () => ({ connected: ['p'], all: [{ id: 'p', models: { first: { id: 'first' }, second: { id: 'second' } } }] }),
+      getConfig: async () => ({}),
+    } }),
+    submitTurnJobFn: async (_ctx, { request }) => { submitted = request; return { id: 'gate-routed' }; },
+    waitForJobFn: async () => ({ status: 'completed', result: { finalText: 'ALLOW: certo' } }),
+  });
+  assert.equal(output.stdout, '');
+  assert.equal(submitted.fallbackEligible, true);
+  assert.deepEqual(submitted.candidates.map((c) => c.full), ['p/first', 'p/second']);
 });

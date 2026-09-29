@@ -48,6 +48,9 @@ test('a denied list entry is skipped with a warning', async (t) => {
   const r = await runCli(['ask', 'Where is main?'], { env, cwd: ws });
   assert.equal(r.code, 0, output(r));
   assert.match(r.stderr, /\[opc\] aviso: ignorado .*modelo .* negado pela política/);
+  assert.equal(r.stderr.split('\n').filter((line) => line.includes('[opc] aviso: ignorado ') && line.includes(M.fast)).length, 1, r.stderr);
+  assert.ok(r.stderr.includes(`modelo ${M.fast} negado pela política`), r.stderr);
+  assert.ok(r.stderr.includes(`policy.models.deny: ${M.fast}`), r.stderr);
   assert.deepEqual(promptModels(env), [M.k3]);
   const [job] = jobsIn(env, ws);
   assert.equal(job.request.routingWarnings.length, 1);
@@ -59,6 +62,8 @@ test('an invalid list entry is skipped with a warning', async (t) => {
   const r = await runCli(['ask', 'Where is main?'], { env, cwd: ws });
   assert.equal(r.code, 0, output(r));
   assert.match(r.stderr, /\[opc\] aviso: ignorado .*modelo desconhecido/);
+  assert.equal(r.stderr.split('\n').filter((line) => line.includes('[opc] aviso: ignorado ') && line.includes(NO_SUCH_MODEL)).length, 1, r.stderr);
+  assert.ok(r.stderr.includes(`modelo desconhecido "${NO_SUCH_MODEL}"`), r.stderr);
   assert.deepEqual(promptModels(env), [M.k3]);
 });
 
@@ -127,4 +132,33 @@ test('review with a single reviewModel has no fallback', async (t) => {
   const r = await runCli(['review', '--wait'], { env, cwd: ws });
   assert.equal(r.code, 7, output(r));
   assert.deepEqual(promptModels(env), [M.strong]);
+});
+
+test('F4a I2: stopGate.model null uses route-list fallback with per-model scenarios', async (t) => {
+  const cfg = config({ tasks: { 'stop-gate': [M.fast, M.k3] } });
+  cfg.stopGate = { enabled: true, model: null };
+  const { env, ws } = setup(t, 'stop-fallback', cfg, { FAKE_FAIL_MODELS: M.fast });
+  const r = await runCli(['hook-stop'], { env, cwd: ws, stdin: JSON.stringify({ cwd: ws, session_id: 'gate-fallback', last_assistant_message: 'Finished.' }) });
+  assert.equal(r.code, 0, output(r));
+  assert.equal(r.stdout.trim(), '', 'successful ALLOW, not infrastructure fail-open');
+  assert.deepEqual(promptModels(env), [M.fast, M.k3]);
+  const [job] = jobsIn(env, ws);
+  assert.equal(job.kind, 'stop-gate');
+  assert.equal(job.status, 'completed');
+  assert.deepEqual(job.attempts.map((a) => a.status), ['failed', 'completed']);
+});
+
+test('F4a I3: review and result JSON expose review fallback attempts', async (t) => {
+  const cfg = config();
+  cfg.review = { structuredOutput: 'tool' };
+  const { env, ws } = setup(t, 'model-429', cfg, { FAKE_FAIL_MODELS: M.strong });
+  fs.writeFileSync(path.join(ws, 'app.js'), 'console.log("hello");\n');
+  const r = await runCli(['review', '--wait', '--json'], { env, cwd: ws });
+  assert.equal(r.code, 0, output(r));
+  const [job] = jobsIn(env, ws);
+  assert.equal(job.attempts.length, 2);
+  assert.deepEqual(JSON.parse(r.stdout).attempts, job.attempts);
+  const result = await runCli(['result', job.id, '--json'], { env, cwd: ws });
+  assert.equal(result.code, 0, output(result));
+  assert.deepEqual(JSON.parse(result.stdout).attempts, job.attempts);
 });

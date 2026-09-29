@@ -34,7 +34,7 @@ export async function run(ctx, argv) {
   if (special !== null) return special;
   if (isActive(job)) throw stillRunning(job);
   if (job.kind === 'review') {
-    if (flags.json) ctx.json({ jobId: job.id, status: job.status, review: job.result?.structured ?? null, rendered: renderReviewJob(job) });
+    if (flags.json) ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: job.result?.structured ?? null, rendered: renderReviewJob(job) });
     else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
     return exitCodeForJob(job);
   }

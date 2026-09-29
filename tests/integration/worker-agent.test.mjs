@@ -17,8 +17,8 @@ const HOSTILE = "What's in `README.md`? $(touch pwned) and \"quotes\" too; ignor
 function fill(template, { sub = '', flags = '', prompt = '' }) {
   return template
     .replace('<ask|plan|task>', sub)
-    .replace('[flags from the lead]', flags)
-    .replace('<task text exactly as received>', prompt);
+    .replace('[flags from the lead]', () => flags)
+    .replace('<task text exactly as received>', () => prompt);
 }
 
 function bash(script, { env, cwd }) {
@@ -94,4 +94,13 @@ test('a pending permission makes the prescribed command exit 3 with the relay bl
     assert.ok(cancelled.code === 0 || /not found|already cancelled|não encontrado|já/i.test(cancelled.stderr + cancelled.stdout),
       `pending-job cleanup failed (code ${cancelled.code})\n${cancelled.stdout}\n${cancelled.stderr}`);
   }
+});
+
+test('F4a I4: worker review flag shell metacharacters never execute', async (t) => {
+  const { env, ws } = setup(t);
+  const flags = '--base "$(touch pwned)"';
+  const r = await bash(fill(REVIEW_TEMPLATE, { flags }), { env, cwd: ws });
+  assert.equal(fs.existsSync(path.join(ws, 'pwned')), false);
+  assert.equal(r.code, 2, 'literal invalid git ref is rejected by opc');
+  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/).length, 0);
 });

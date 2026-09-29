@@ -1,7 +1,7 @@
 // Model, agent and variant resolution (spec §6). Fallback execution is F4a; here we only
 // compute the candidate list and whether it is eligible for fallback.
 import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
-import { expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
+import { configModelLabel, expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
 import { assertAgentUsable, evaluate } from './policy.mjs';
 import { safeOutputText } from './redact.mjs';
 
@@ -48,23 +48,23 @@ function pickLevel({ kind, flags, config, opencodeConfig }) {
   throw new UsageError('NO_MODEL', 'nenhum modelo foi resolvido (sem --model, --tier, rota, defaultModel ou modelo padrão do OpenCode); informe --model <provider>/<model>');
 }
 
-function checkCandidate(value, { catalog, config }) {
+function checkCandidate(value, { catalog, config, fromConfig = false }) {
   const raw = typeof value === 'string' ? value.trim() : value;
   const expanded = expandAlias(typeof raw === 'string' && raw.startsWith('=') ? raw.slice(1) : raw, config.aliases ?? {});
   const { providerID, modelID } = parseFullId(expanded);
   const known = providerID ? catalog.byFull.get(`${providerID}/${modelID}`) : null;
   const parsed = known && !catalog.connected.has(providerID)
     ? { providerID, modelID, full: known.full, entry: known }
-    : normalizeModelId(value, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+    : normalizeModelId(value, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {}, fromConfig });
   const policy = config.policy ?? {};
   for (const [kind, subject] of [['provider', parsed.providerID], ['model', parsed.full]]) {
     const verdict = evaluate(kind, subject, policy);
     if (!verdict.allowed) {
-      throw new PolicyError('POLICY_DENIED', `${kind === 'provider' ? 'provider' : 'modelo'} ${echo(subject)} negado pela política${verdict.rule ? ` (regra: ${echo(verdict.rule)})` : ''}`);
+      throw new PolicyError('POLICY_DENIED', `${kind === 'provider' ? 'provider' : 'modelo'} ${safeOutputText(subject)} negado pela política${verdict.rule ? ` (regra: ${safeOutputText(verdict.rule)})` : ''}`);
     }
   }
   if (!catalog.connected.has(parsed.providerID)) {
-    throw new UsageError('PROVIDER_NOT_CONNECTED', `provider ${echo(parsed.providerID)} não está conectado (execute: opencode auth login)`);
+    throw new UsageError('PROVIDER_NOT_CONNECTED', `provider ${safeOutputText(parsed.providerID)} não está conectado (execute: opencode auth login)`);
   }
   return parsed;
 }
@@ -73,7 +73,7 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
   assertTier(flags?.tier, config);
   const { source, values } = pickLevel({ kind, flags, config, opencodeConfig });
   if (!LIST_SOURCES.has(source)) {
-    const candidate = checkCandidate(values[0], { catalog, config });
+    const candidate = checkCandidate(values[0], { catalog, config, fromConfig: source !== 'flag' });
     return { candidates: [{ ...candidate, source }], warnings: [], fallbackEligible: false };
   }
   const candidates = [];
@@ -82,13 +82,13 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
   let denied = 0;
   for (const value of values) {
     try {
-      const candidate = checkCandidate(value, { catalog, config });
+      const candidate = checkCandidate(value, { catalog, config, fromConfig: true });
       if (!candidates.some((c) => c.full === candidate.full)) candidates.push({ ...candidate, source });
     } catch (err) {
       if (!(err instanceof OpcError)) throw err;
       if (err instanceof PolicyError) denied += 1;
-      problems.push(`${echo(value)}: ${err.message}`);
-      warnings.push(`ignorado ${echo(value)}: ${err.message}`);
+      problems.push(`${configModelLabel(value)}: ${err.message}`);
+      warnings.push(`ignorado ${configModelLabel(value)}: ${err.message}`);
     }
   }
   if (candidates.length === 0) {
@@ -117,7 +117,7 @@ export function assertTier(tier, config) {
 
 // ---- F4a: campos de roteamento gravados no request do job --------------------
 
-export function routingFields(resolution, { resume = false, catalog = null } = {}) {
+export function routingFields(resolution, { resume = false, catalog = null, warningsReported = false } = {}) {
   const { candidates, warnings = [], fallbackEligible } = resolution;
   return {
     candidates: candidates.map(({ providerID, modelID, full, source }) => {
@@ -126,6 +126,7 @@ export function routingFields(resolution, { resume = false, catalog = null } = {
     }),
     fallbackEligible: fallbackEligible === true && !resume,
     routingWarnings: [...warnings],
+    routingWarningsReported: warningsReported,
   };
 }
 
@@ -154,21 +155,26 @@ export function backoffDelay(backoffMs, retryIndex) {
   return backoffMs[Math.min(retryIndex, backoffMs.length - 1)];
 }
 
-export function abortableSleep(ms, signal) {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve(false);
-      return;
-    }
-    const onAbort = () => {
+export function abortableSleep(ms, signal, isCancelled = () => false) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const finish = (value, error) => {
       clearTimeout(timer);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
-      resolve(true);
-    }, ms);
+      if (error) reject(error); else resolve(value);
+    };
+    const onAbort = () => finish(false);
+    const deadline = performance.now() + ms;
+    const poll = () => {
+      try {
+        if (signal?.aborted || isCancelled()) return finish(false);
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) return finish(true);
+        timer = setTimeout(poll, Math.min(100, remaining));
+      } catch (error) { finish(false, error); }
+    };
     signal?.addEventListener('abort', onAbort, { once: true });
+    poll();
   });
 }
 
@@ -298,7 +304,7 @@ export async function runWithFallback({
     const delay = backoffDelay(backoffMs, index);
     await onBackoff(delay, next, record);
     if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
-    const slept = await sleep(delay, signal);
+    const slept = await sleep(delay, signal, cancelPending);
     if (!slept || signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
     current = next;
   }

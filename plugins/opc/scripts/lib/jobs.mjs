@@ -130,7 +130,7 @@ function safeJob(job) {
   const safe = { ...job };
   if (job.request) {
     const request = job.request;
-    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes', 'candidates', 'fallbackEligible', 'routingWarnings']
+    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes', 'candidates', 'fallbackEligible', 'routingWarnings', 'routingWarningsReported']
       .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
     if (request.format) safe.request.format = { type: request.format.type };
     safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
@@ -649,7 +649,9 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     return { job, report };
   }
   const client = api === undefined ? existingServerApi(ctx) : api;
-  if (client && job.sessionID) {
+  const lastAttempt = job.attempts?.at(-1);
+  const previousFinished = job.attemptInFlight === false && lastAttempt?.sessionID === job.sessionID && lastAttempt?.status === 'completed';
+  if (client && job.sessionID && job.phase !== 'fallback' && !previousFinished) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
         if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
@@ -664,6 +666,18 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
       appendJobLog(ctx.stateDir, id, 'Intenção de cancelamento retirada após falha; aguardando o resultado real da tarefa.');
       return { ok: false, code: 'CANCEL_FAILED', reason: message, job: latest, report };
     }
+  }
+  // A completed turn still needs to publish its attempt before the record is frozen.
+  // A confirmed dead worker cannot publish anything further; otherwise retain intent
+  // and leave finalization to the worker if the bounded wait is exhausted.
+  const attemptDeadline = performance.now() + exitWaitMs;
+  let latest = readJob(ctx.stateDir, id);
+  while (isActive(latest) && latest.attemptInFlight && (!job.pid || identityMatches({ pid: job.pid, startTime: job.pidStartTime }, workerMatcher(id)))) {
+    if (performance.now() >= attemptDeadline) {
+      return { ok: false, code: 'CANCEL_FAILED', reason: 'Aguardando o registro da tentativa; intenção de cancelamento mantida.', job: latest, report };
+    }
+    await sleep(25);
+    latest = readJob(ctx.stateDir, id);
   }
   if (job.pid) {
     const expected = { pid: job.pid, startTime: job.pidStartTime };
@@ -865,10 +879,11 @@ export async function runWithConcurrency(items, limit, fn) {
 }
 
 export async function recordAttempt(stateDir, id, attempt) {
-  const job = readJob(stateDir, id);
-  if (!job) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${id}`);
-  const attempts = Array.isArray(job.attempts) ? job.attempts : [];
-  return updateJob(stateDir, id, { attempts: [...attempts, attempt] });
+  if (!readJob(stateDir, id)) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${id}`);
+  return updateJob(stateDir, id, (job) => ({
+    attempts: [...(Array.isArray(job.attempts) ? job.attempts : []), attempt],
+    attemptInFlight: false,
+  }));
 }
 
 export async function runJobTurn({
@@ -895,7 +910,9 @@ export async function runJobTurn({
     ? Math.min(candidates.length, Math.max(1, Math.floor(Number(fallbackCfg.maxAttempts ?? 3))))
     : 1;
   await updateJob(stateDir, job.id, { attemptLimit });
-  for (const warning of request.routingWarnings ?? []) appendJobLog(stateDir, job.id, `aviso: ${warning}`);
+  if (!request.routingWarningsReported) {
+    for (const warning of request.routingWarnings ?? []) appendJobLog(stateDir, job.id, `aviso: ${warning}`);
+  }
 
   const outcome = await runWithFallback({
     candidates,
@@ -908,7 +925,9 @@ export async function runJobTurn({
     signal: runTurnOptions.signal,
     cancelRequestedAt: () => Boolean(readJob(stateDir, job.id)?.cancelRequestedAt),
     job,
-    runAttempt: (candidate, index) => {
+    runAttempt: async (candidate, index) => {
+      const current = await updateJob(stateDir, job.id, (latest) => latest.cancelRequestedAt ? {} : { attemptInFlight: true });
+      if (current.cancelRequestedAt || isTerminal(current)) return { status: 'cancelled' };
       const ids = index === 0 && baseTurnRequest.messageID ? () => baseTurnRequest.messageID : messageId;
       const turnRequest = attemptRequest({ ...baseTurnRequest, fallbackCfg }, candidate, { messageId: ids });
       return runTurnImpl({ ...runTurnOptions, request: turnRequest });
