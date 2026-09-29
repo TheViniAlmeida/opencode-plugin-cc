@@ -109,7 +109,29 @@ async function shutdownRecorded(stateDir, record) {
     graceMs: 3000,
   });
   removeServerRecord(stateDir);
+  if (result === 'terminated' || result === 'killed') removeAttachSecret(stateDir);
   return result;
+}
+
+// --- F3: attach secret (spec §10.5) ---------------------------------------------------
+// Dedicated 0600 file holding only the server password, read inside the tmux pane.
+export const ATTACH_SECRET_FILE = 'attach.secret';
+
+export function attachSecretPath(stateDir) {
+  return path.join(stateDir, ATTACH_SECRET_FILE);
+}
+
+export function writeAttachSecret(stateDir, password) {
+  if (!password) return;
+  writeFileAtomic(attachSecretPath(stateDir), password, { mode: 0o600 });
+}
+
+export function removeAttachSecret(stateDir) {
+  try {
+    fs.unlinkSync(attachSecretPath(stateDir));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
 }
 
 function truncateLogIfLarge(logFile) {
@@ -345,6 +367,7 @@ async function bootServer(ctx, settings) {
       cmdline: identity.cmdline,
       world: checked.world,
     };
+    writeAttachSecret(stateDir, password);
     writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
     return { url: res.url, password, version: health.version, pid: res.pid, port: res.port, attached: false, reused: false, world: checked.world, warnings };
   }
