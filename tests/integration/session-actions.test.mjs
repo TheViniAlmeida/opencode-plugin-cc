@@ -140,6 +140,17 @@ test('session diff: whole session, per message, and huge diffs truncated inline'
   assert.ok(Buffer.byteLength(text.stdout) < 450 * 1024);
 });
 
+test('session diff: empty aggregate (OpenCode 1.18.32) falls back to per-message diffs with a notice', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_EMPTY_SESSION_DIFF: '1' } });
+  const out = JSON.parse((await runCli(['session', 'diff', SEED.session, '--json'], { env, cwd })).stdout);
+  assert.equal(out.source, 'per-message');
+  assert.deepEqual(out.diffs.map((d) => [d.messageID, d.file]), [[SEED.m1, 'notes.txt'], [SEED.m3, 'notes.txt'], [SEED.m3, 'extra.txt']]);
+  assert.match(out.notices[0], /diff agregado da sessão/);
+  const text = await runCli(['session', 'diff', SEED.session], { env, cwd });
+  assert.equal(text.code, 0);
+  assert.match(text.stdout, /# Diff da sessão ses_seed\n\nO OpenCode não calculou o diff agregado/);
+});
+
 test('session todo lists todos', async (t) => {
   const { cwd, env } = await setup(t);
   const out = JSON.parse((await runCli(['session', 'todo', SEED.session, '--json'], { env, cwd })).stdout);

@@ -80,12 +80,41 @@ async function actionChildren(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
+// OpenCode 1.18.32 returns an empty session-level diff (summary not computed); per-message diffs work.
+// Without --message and with an empty aggregate, collect the diff of each user message (oldest first).
+async function perMessageDiffs(api, sessionID) {
+  const messages = (await readSessionMessages(api, sessionID)) ?? [];
+  const userIds = messages.filter((m) => (m.info?.role ?? m.role) === 'user').map((m) => m.info?.id ?? m.id).filter(Boolean);
+  const ids = userIds.slice(-MAX_DIFF_MESSAGES);
+  const diffs = [];
+  for (const id of ids) {
+    for (const entry of (await api.diff(sessionID, { messageID: id })) ?? []) diffs.push({ ...entry, messageID: id });
+  }
+  return { diffs, truncated: userIds.length > ids.length, unavailable: Boolean(messages.messagesUnavailable) };
+}
+
 async function actionDiff(ctx, api, { flags, sessionID }) {
   const messageID = flags.message !== undefined ? assertId('msg', flags.message, 'mensagem') : undefined;
-  const diffs = (await api.diff(sessionID, { messageID })) ?? [];
+  let diffs = (await api.diff(sessionID, { messageID })) ?? [];
+  let source = messageID ? 'message' : 'session';
+  const notices = [];
+  if (!messageID && diffs.length === 0) {
+    const collected = await perMessageDiffs(api, sessionID);
+    if (collected.diffs.length) {
+      diffs = collected.diffs;
+      source = 'per-message';
+      notices.push('O OpenCode não calculou o diff agregado da sessão; mostrando o diff de cada mensagem do usuário (da mais antiga para a mais recente).');
+      if (collected.truncated) notices.push(`Limitado às ${MAX_DIFF_MESSAGES} mensagens do usuário mais recentes.`);
+    } else if (collected.unavailable) {
+      notices.push('As mensagens desta sessão não puderam ser listadas; use --message <id> para ver o diff de uma mensagem.');
+    }
+  }
   const safeDiffs = maskDeep(diffs);
-  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, diffs: safeDiffs }));
-  else ctx.out(renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` }));
+  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, source, notices, diffs: safeDiffs }));
+  else {
+    const rendered = renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` });
+    ctx.out(notices.length ? rendered.replace(/\n\n/, `\n\n${notices.join('\n')}\n\n`) : rendered);
+  }
   return ExitCode.OK;
 }
 
