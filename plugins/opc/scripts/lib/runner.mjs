@@ -472,7 +472,12 @@ export async function runTurn({
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
-      else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada' } } });
+      else if (err instanceof OpcError && err.code === 'BAD_REQUEST') {
+        // keep the server's reason (masked, first line, bounded): dispatchSubagent's fallback detects agent-mode refusals by it
+        const body = err.details?.body;
+        const reason = toolErrorSummary(body?.data?.message ?? body?.message ?? '');
+        finish('prompt-failed', { error: { name: 'BadRequest', data: { message: reason ? `A requisição do turno foi rejeitada: ${reason}` : 'A requisição do turno foi rejeitada' } } });
+      }
       else throw err;
     }
     pollTimer = setInterval(() => enqueue(resync), statusPollMs);

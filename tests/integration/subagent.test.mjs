@@ -84,7 +84,7 @@ test('falha de um membro conclui grupo com avisos', async (t) => {
   const res = await runCli(['subagent', '--agent', 'general', '--model', 'fast,strong,k3', '--json', 'p'], { env, cwd });
   assert.equal(res.code, 0, res.stderr); const { group, members } = JSON.parse(res.stdout);
   assert.equal(group.status, 'completed'); assert.deepEqual(members.map((m) => m.status), ['completed', 'completed', 'failed']);
-  assert.deepEqual(group.result.warnings, ['1 failed, 0 cancelled']);
+  assert.deepEqual(group.result.warnings, ['1 falharam, 0 canceladas']);
   const sd = await stateDirFor(env, cwd); assert.match(readJob(sd, group.id).rendered, /ProviderAuthError|invalid api key/);
 });
 
@@ -116,7 +116,7 @@ test('pedido de permissão de membro pode ser respondido e grupo conclui', async
   const res = await runCli(['subagent', '--write', '--agent', 'general', '--model', 'fast,k3', '--json', 'p'], { env, cwd });
   assert.equal(res.code, 3, res.stderr); const { group, members } = JSON.parse(res.stdout);
   assert.equal(group.status, 'waiting_permission'); assert.equal(group.pendingRequest[0].memberId, members[1].id); assert.equal(members[1].status, 'waiting_permission');
-  const reply = await runCli(['permissions', 'reply', 'per_f3_1', 'once'], { env, cwd }); assert.equal(reply.code, 0, reply.stdout + reply.stderr);
+  const reply = await runCli(['permissions', 'reply', 'per_f3_1', 'once', '--confirmed-by-user'], { env, cwd }); assert.equal(reply.code, 0, reply.stdout + reply.stderr);
   const sd = await stateDirFor(env, cwd); await eventually(() => readJob(sd, group.id)?.status === 'completed');
   const completed = readJob(sd, group.id);
   assert.equal(completed.result.members[1].status, 'completed');

@@ -140,6 +140,16 @@ test('cancelGroup reports failed member cancels and leaves the group active', as
   assert.doesNotMatch(log, /ses_cancel_failure/);
 });
 
+test('refreshGroup final writes decorate() fields in the terminal update', async (t) => {
+  const stateDir = tmpState(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'g' }, [{ title: 'a' }]);
+  await updateJob(stateDir, group.id, { status: 'running' });
+  await updateJob(stateDir, members[0].id, { status: 'completed' });
+  const g = await refreshGroup(stateDir, group.id, { final: true, decorate: (grp, ms) => ({ rendered: `${grp.status} ${ms.length}` }) });
+  assert.equal(g.status, 'completed');
+  assert.equal(readJob(stateDir, group.id).rendered, 'completed 1');
+});
+
 test('maxActive counts a group as one job', async (t) => {
   const stateDir = tmpState(t);
   await createGroup(stateDir, { kind: 'sub', title: 'g', status: 'running' }, Array.from({ length: 6 }, (_, i) => ({ title: `m${i}`, status: 'running' })));

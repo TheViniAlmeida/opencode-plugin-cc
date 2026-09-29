@@ -196,8 +196,7 @@ export async function runWorker(ctx, groupJob, request, {
       await refresh();
     }
     await chain;
-    const finalGroup = await refreshGroup(stateDir, groupJob.id, { final: true });
-    await updateJob(stateDir, groupJob.id, { rendered: renderGroupResult(finalGroup, listGroupMembers(stateDir, groupJob.id)) });
+    const finalGroup = await refreshGroup(stateDir, groupJob.id, { final: true, decorate: (group, members) => ({ rendered: renderGroupResult(group, members) }) });
     return exitCodeForJob(finalGroup);
   } catch (err) {
     const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));

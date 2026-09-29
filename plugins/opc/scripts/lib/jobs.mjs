@@ -736,7 +736,8 @@ function memberSummary(m) {
   };
 }
 
-export async function refreshGroup(stateDir, groupId, { final = false } = {}) {
+// decorate(group, members) → extra fields written in the same update (a terminal job is frozen afterwards).
+export async function refreshGroup(stateDir, groupId, { final = false, decorate = null } = {}) {
   const group = readJob(stateDir, groupId);
   if (!group || group.status === 'cancelled') return group;
   const members = listGroupMembers(stateDir, groupId);
@@ -759,6 +760,7 @@ export async function refreshGroup(stateDir, groupId, { final = false } = {}) {
     result: { counts: agg.counts, warnings, members: members.map(memberSummary) },
   };
   if (TERMINAL_STATUSES.includes(status)) patch.completedAt = group.completedAt ?? new Date().toISOString();
+  if (decorate) Object.assign(patch, decorate({ ...group, ...patch }, members));
   return updateJob(stateDir, groupId, patch);
 }
 
