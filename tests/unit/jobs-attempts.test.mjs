@@ -5,7 +5,7 @@ import path from 'node:path';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
-  createJob, readJob, recordAttempt, runJobTurn,
+  createJob, readJob, recordAttempt, runJobTurn, updateJob,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 function tempStateDir(t) {
@@ -71,6 +71,20 @@ test('recordAttempt masks provider text in persisted attempts and fallback log',
   assert.ok(!log.includes(secretLike));
   assert.match(persisted, /\*\*\*/);
   assert.match(log, /\*\*\*/);
+});
+
+test('redactTurnOutput masks provider-derived text in result.attempts', async (t) => {
+  const { redactTurnOutput } = await import('../../plugins/opc/scripts/lib/redact.mjs');
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', title: 'OPC: ask: x' });
+  const secretLike = ['sk', 'proj', Math.random().toString(36).slice(2, 14)].join('-');
+  const safe = redactTurnOutput({ attempts: [{ errorType: `ProviderError ${secretLike}`, errorMessage: `failed ${secretLike}` }] });
+  assert.ok(!JSON.stringify(safe).includes(secretLike));
+  assert.match(safe.attempts[0].errorType, /\*\*\*/);
+  assert.match(safe.attempts[0].errorMessage, /\*\*\*/);
+  await updateJob(stateDir, job.id, { result: safe });
+  const persisted = fs.readFileSync(path.join(stateDir, 'jobs', `${job.id}.json`), 'utf8');
+  assert.ok(!persisted.includes(secretLike));
 });
 
 test('runJobTurn falls back, records attempts, model, attemptLimit and log lines', async (t) => {
@@ -173,6 +187,21 @@ test('runJobTurn reports a cancel during backoff as a cancelled result', async (
   assert.equal(out.stopReason, 'cancelled');
   assert.equal(out.result.status, 'cancelled');
   assert.equal(readJob(stateDir, job.id).attempts.length, 1);
+});
+
+test('runJobTurn cancelled before the first attempt records no attempt and returns null result', async (t) => {
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', title: 'OPC: ask: x', request: { candidates: [A, B], fallbackEligible: true } });
+  await updateJob(stateDir, job.id, { cancelRequestedAt: new Date().toISOString() });
+  let calls = 0;
+  const out = await runJobTurn({
+    stateDir, job: readJob(stateDir, job.id), config: CONFIG, baseTurnRequest: BASE,
+    runTurnImpl: async () => { calls += 1; return okTurn(BASE); },
+  });
+  assert.equal(calls, 0, 'must issue no prompt_async request');
+  assert.deepEqual(out.result, { status: 'cancelled' });
+  assert.equal(out.stopReason, 'cancelled');
+  assert.deepEqual(readJob(stateDir, job.id).attempts, []);
 });
 
 test('runJobTurn respects routing.fallback.maxAttempts in attemptLimit', async (t) => {

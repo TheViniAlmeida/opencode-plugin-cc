@@ -21,6 +21,10 @@ test('model-429 faz fallback e registra tentativas', async (t) => {
   const r = await runCli(['ask', 'Qual arquivo define o ponto de entrada?'], { env, cwd: ws });
   assert.equal(r.code, 0, output(r)); assert.deepEqual(promptModels(env), [M.fast, M.k3]); assert.equal(sessionCreates(env), 2);
   const [job] = jobsIn(env, ws); assert.equal(job.status, 'completed'); assert.equal(job.model, M.k3); assert.equal(job.attemptLimit, 2);
+  assert.deepEqual(job.attempts.map(({ status, errorClass, errorType }) => ({ status, errorClass, errorType })), [
+    { status: 'failed', errorClass: 'recoverable', errorType: 'APIError' },
+    { status: 'completed', errorClass: null, errorType: null },
+  ]);
   assert.equal(job.attempts.length, 2); assert.notEqual(job.attempts[0].sessionID, job.attempts[1].sessionID);
   assert.equal(job.sessionID, job.attempts[1].sessionID); assert.match(r.stderr, /fallback/);
 });

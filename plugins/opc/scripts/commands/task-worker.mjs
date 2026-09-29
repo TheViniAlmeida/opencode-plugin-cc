@@ -250,7 +250,10 @@ export async function run(ctx, argv, {
       runTurnOptions: { api, hub, signal: controller.signal, onProgress, onPermission: (req) => bridge.onPermission(req),
         onQuestion: (req) => bridge.onQuestion(req), onRequestResolved: (event) => bridge.onResolved(event) },
     });
-    const result = redactTurnOutput(rawResult);
+    const result = redactTurnOutput(rawResult) ?? {
+      status: 'cancelled', childSessionIDs: stored.childSessionIDs ?? [], assistantMessageIDs: [...assistantIDs],
+      finalText: null, structured: null, touchedFiles: [], toolsRan: false, toolNames: [], usage: null,
+    };
     await jobUpdates.flush();
     const cancelRequested = Boolean(readJob(ctx.stateDir, jobId)?.cancelRequestedAt);
     const status = cancelRequested ? 'cancelled' : result.status;
@@ -276,13 +279,13 @@ export async function run(ctx, argv, {
         childSessionIDs: result.childSessionIDs,
         usage: result.usage,
         error: result.error ?? null,
-        attempts,
         ...(result.abortConfirmed !== undefined ? { abortConfirmed: result.abortConfirmed, sessionAborts: result.sessionAborts } : {}),
       },
       model: attempts.at(-1)?.model ?? stored.model,
       sessionID: attempts.at(-1)?.sessionID ?? result.sessionID,
       ...(stop ? { errorCode: stop.errorCode, errorMessage: stop.errorMessage } : {}),
     });
+    if (cancelRequested && status === 'cancelled' && attempts.length === 0) exitCode = 130;
     const statusLabel = { completed: 'concluído', failed: 'falhou', cancelled: 'cancelado', waiting_permission: 'aguardando permissão' }[status] ?? status;
     log(`Turno ${statusLabel}${result.errorType ? ` (${result.errorType})` : ''}.`);
     if (result.finalText) {

@@ -99,5 +99,14 @@ export function redactTurnOutput(value) {
   for (const field of ['finalText', 'structured', 'touchedFiles', 'error', 'errorMessage', 'errorType']) {
     if (Object.hasOwn(safe, field)) safe[field] = redactOutput(safe[field]);
   }
+  if (Array.isArray(safe.attempts)) {
+    safe.attempts = safe.attempts.map((attempt) => {
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) return attempt;
+      for (const field of ['error', 'errorMessage', 'errorType']) {
+        if (Object.hasOwn(attempt, field)) attempt[field] = redactOutput(attempt[field]);
+      }
+      return attempt;
+    });
+  }
   return safe;
 }
