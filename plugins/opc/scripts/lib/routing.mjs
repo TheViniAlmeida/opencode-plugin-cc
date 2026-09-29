@@ -69,6 +69,7 @@ function checkCandidate(value, { catalog, config }) {
 }
 
 export function resolveCandidates({ kind, flags = {}, config = {}, catalog, opencodeConfig = null }) {
+  assertTier(flags?.tier, config);
   const { source, values } = pickLevel({ kind, flags, config, opencodeConfig });
   if (!LIST_SOURCES.has(source)) {
     const candidate = checkCandidate(values[0], { catalog, config });
@@ -96,6 +97,78 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
     throw new UsageError('NO_VALID_CANDIDATE', message);
   }
   return { candidates, warnings, fallbackEligible: candidates.length > 1 };
+}
+
+// ---- F4a: tiers ---------------------------------------------------------------
+
+export const TIERS = Object.freeze(['light', 'heavy']);
+
+export function assertTier(tier, config) {
+  if (tier === undefined || tier === null || tier === '') return;
+  if (!TIERS.includes(tier)) {
+    throw new UsageError('INVALID_TIER', `--tier deve ser um de: ${TIERS.join(', ')} (recebido: "${echo(tier)}")`);
+  }
+  const list = config?.routing?.tiers?.[tier];
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new UsageError('EMPTY_TIER', `routing.tiers.${tier} está vazio; configure com: opc config add routing.tiers.${tier} <modelo>`);
+  }
+}
+
+// ---- F4a: campos de roteamento gravados no request do job --------------------
+
+export function routingFields(resolution, { resume = false, catalog = null } = {}) {
+  const { candidates, warnings = [], fallbackEligible } = resolution;
+  return {
+    candidates: candidates.map(({ providerID, modelID, full, source }) => {
+      const limit = catalog?.byFull?.get?.(full)?.limit?.context;
+      return { providerID, modelID, full, source, contextLimit: typeof limit === 'number' ? limit : null };
+    }),
+    fallbackEligible: fallbackEligible === true && !resume,
+    routingWarnings: [...warnings],
+  };
+}
+
+export function attemptRequest(base, candidate, { messageId }) {
+  return {
+    ...base,
+    model: { providerID: candidate.providerID, modelID: candidate.modelID },
+    messageID: messageId(),
+  };
+}
+
+// ---- F4a: backoff -------------------------------------------------------------
+
+export const DEFAULT_BACKOFF_MS = Object.freeze([2000, 4000, 8000]);
+
+export function backoffFromEnv(env = process.env) {
+  const raw = env.OPC_FALLBACK_BACKOFF_MS;
+  if (raw === undefined || raw === '') return [...DEFAULT_BACKOFF_MS];
+  const parts = String(raw).split(',').map((s) => Number(s.trim()));
+  if (parts.some((n) => !Number.isFinite(n) || n < 0)) return [...DEFAULT_BACKOFF_MS];
+  return parts;
+}
+
+export function backoffDelay(backoffMs, retryIndex) {
+  if (!Array.isArray(backoffMs) || backoffMs.length === 0) return 0;
+  return backoffMs[Math.min(retryIndex, backoffMs.length - 1)];
+}
+
+export function abortableSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 // Variant rules live in F1 validateVariant; agent policy (name + pinned provider/model) in F1

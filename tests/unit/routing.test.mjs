@@ -44,7 +44,7 @@ test('level 2: --tier list, eligible for fallback', () => {
   const r = resolveCandidates({ kind: 'ask', flags: { tier: 'heavy' }, config: baseConfig, catalog });
   assert.deepEqual(r.candidates.map((c) => c.full), [QWEN, KIMI]);
   assert.equal(r.fallbackEligible, true);
-  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'nope' }, config: baseConfig, catalog }), (e) => e.code === 'UNKNOWN_TIER');
+  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'nope' }, config: baseConfig, catalog }), (e) => e.code === 'INVALID_TIER');
 });
 
 test('level 3: kind-specific model beats the route', () => {
@@ -101,15 +101,15 @@ test('routing messages are PT-BR and truncate echoed user values', () => {
     return true;
   });
   assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'tier-abcdefghijk' }, config: baseConfig, catalog }), (e) => {
-    assert.equal(e.code, 'UNKNOWN_TIER');
-    assert.match(e.message, /routing\.tiers\.tier-abcdefg… não está configurado/);
+    assert.equal(e.code, 'INVALID_TIER');
+    assert.match(e.message, /--tier deve ser um de: light, heavy \(recebido: "tier-abcdefg…"\)/);
     return true;
   });
   const longTier = 'tier-abcdefghijk';
   const invalidTierConfig = { ...baseConfig, routing: { ...baseConfig.routing, tiers: { ...baseConfig.routing.tiers, [longTier]: ['ghost'] } } };
   assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: longTier }, config: invalidTierConfig, catalog }), (e) => {
-    assert.equal(e.code, 'NO_VALID_CANDIDATE');
-    assert.match(e.message, /routing\.tiers\.tier-abcdefg…/);
+    assert.equal(e.code, 'INVALID_TIER');
+    assert.match(e.message, /tier-abcdefg…/);
     assert.ok(!e.message.includes(longTier));
     return true;
   });
