@@ -77,8 +77,11 @@ Siga o [procedimento único de permissões e perguntas](#procedimento-único-de-
 - Mostre ao usuário os arquivos e os trechos do diff e pergunte com AskUserQuestion:
   "Reverter a sessão <id> a partir de <mensagem>?" (opções "Reverter" e "Cancelar"; para
   unrevert, "Desfazer o revert" e "Cancelar").
-- Só com a resposta afirmativa, rode **exatamente** o comando impresso (ele já traz
-  `--confirmed-by-user`). A confirmação vale para aquela sessão e aquela mensagem, e só.
+- Só com a resposta afirmativa, confirme pelo heredoc de `/opc:session`
+  (`opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`, terminador sozinho na linha): o corpo
+  é a linha impressa sem o prefixo `opc session`, inalterada (subcomando, IDs, `--part` se
+  houver e `--confirmed-by-user`). Nenhum ID vai na linha de comando do `opc`. A confirmação
+  vale para aquela sessão e aquela mensagem, e só.
 - "Cancelar" ou silêncio: não rode nada e diga que nada foi alterado.
 
 ## Grupos de subagentes
