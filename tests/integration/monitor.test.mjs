@@ -129,6 +129,20 @@ test('monitor reports jobs directory read errors and --once exits 5', async (t) 
   assert.match(r.stdout, /aviso: não foi possível ler .*jobs: ENOTDIR/);
 });
 
+test('monitor --job with an unreadable jobs directory reports the read error and exits 5', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const stateDir = stateDirFor(env, ws);
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'jobs'), 'not a directory');
+  for (const extra of [[], ['--json']]) {
+    const r = await runCli(['monitor', '--once', '--job', 'task-abc', ...extra], { env, cwd: ws });
+    assert.equal(r.code, 5, r.stdout + r.stderr);
+    assert.match(r.stderr, /aviso: não foi possível ler .*jobs: ENOTDIR/);
+    assert.doesNotMatch(r.stdout + r.stderr, /job não encontrado/);
+  }
+});
+
 test('monitor warns about a per-file read error and continues with valid jobs', async (t) => {
   const env = testEnv(t);
   const ws = makeWorkspace(t);

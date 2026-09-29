@@ -181,12 +181,25 @@ export async function run(ctx, argv) {
   if (!Number.isFinite(flags.interval) || flags.interval < 100) {
     throw new UsageError('USAGE', '--interval deve ser um número de milissegundos >= 100');
   }
-  const jobId = flags.job ? pickJobId(readJobRecords(ctx.stateDir), flags.job) : null;
-  const read = () => buildMonitorSnapshot(ctx.stateDir, { jobId, now: Date.now() });
+  let jobId = null;
+  if (flags.job) {
+    const warnings = [];
+    const records = readJobRecords(ctx.stateDir, warnings);
+    // an unreadable jobs dir must surface as a read failure, not as "job not found"
+    if (jobsUnreadable({ warnings })) {
+      ctx.err(`${maskDeep(warnings.join('\n'))}\n`);
+      return ExitCode.CONNECTION;
+    }
+    jobId = pickJobId(records, flags.job);
+  }
+  let last = null;
+  const read = () => {
+    last = buildMonitorSnapshot(ctx.stateDir, { jobId, now: Date.now() });
+    return last;
+  };
   if (flags.json) {
-    const snapshot = read();
-    ctx.json(maskDeep(snapshot));
-    return (snapshot.warnings ?? []).some((warning) => warning.includes('jobs:')) ? ExitCode.CONNECTION : ExitCode.OK;
+    ctx.json(maskDeep(read()));
+    return jobsUnreadable(last) ? ExitCode.CONNECTION : ExitCode.OK;
   }
   const tty = Boolean(ctx.stdout.isTTY);
   const color = flags.color === 'always' || (flags.color === 'auto' && tty && !ctx.env.NO_COLOR);
@@ -209,6 +222,10 @@ export async function run(ctx, argv) {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-  const snapshot = read();
-  return (snapshot.warnings ?? []).some((warning) => warning.includes('jobs:')) ? ExitCode.CONNECTION : ExitCode.OK;
+  // exit code follows the last frame actually shown, never a fresh read
+  return jobsUnreadable(last) ? ExitCode.CONNECTION : ExitCode.OK;
+}
+
+function jobsUnreadable(snapshot) {
+  return (snapshot?.warnings ?? []).some((warning) => warning.includes('ler jobs:'));
 }
