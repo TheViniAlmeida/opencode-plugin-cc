@@ -17,7 +17,7 @@ function stubFake() {
   const calls = { turns: [], events: [] };
   return {
     calls,
-    state: { requests: [] },
+    state: { requests: [], aborts: [] },
     emitTurn(sessionID, opts) { calls.turns.push({ sessionID, ...opts }); },
     emit(event) { calls.events.push(event); },
     setStatus(sessionID, status) { calls.events.push({ type: 'session.status', properties: { sessionID, status } }); },
@@ -118,10 +118,10 @@ test('retry-over-cap emits increasing retry statuses until the session is aborte
   assert.ok(retries.length >= 2, `esperados >= 2 eventos de retry, recebidos ${retries.length}`);
   retries.forEach((s, i) => assert.equal(s.attempt, i + 1));
   assert.ok(retries[1].next > retries[0].next);
-  fake.state.requests.push({ method: 'POST', path: '/session/ses_1/abort', body: null });
+  // the fake's abort route closes the turn itself; the scenario only stops retrying
+  fake.state.aborts.push('ses_1');
   await delay(120);
-  assert.equal(fake.calls.turns.length, 1);
-  assert.equal(fake.calls.turns[0].error.name, 'MessageAbortedError');
+  assert.equal(fake.calls.turns.length, 0);
   const count = fake.calls.events.length;
   await delay(100);
   assert.equal(fake.calls.events.length, count, 'nenhum evento após o cancelamento');
@@ -137,9 +137,10 @@ test('retry-over-cap updates polled fake status and abort finishes idle', async 
   const status = api.handle('GET', '/session/status', new URLSearchParams(), {}).body[session.id];
   assert.equal(status.type, 'retry');
   assert.ok(status.attempt >= 2);
-  fake.state.requests.push({ method: 'POST', path: `/session/${session.id}/abort`, body: null });
-  await delay(100);
+  assert.equal(api.handle('POST', `/session/${session.id}/abort`, new URLSearchParams(), {}).status, 200);
+  await delay(150);
   assert.equal(fake.state.statuses[session.id], undefined);
+  assert.equal(api.handle('GET', '/session/status', new URLSearchParams(), {}).body[session.id], undefined);
   const aborted = fake.state.messages[session.id].find((m) => m.info.error?.name === 'MessageAbortedError');
   assert.ok(aborted, 'aborted turn should finish with MessageAbortedError');
 });

@@ -14,8 +14,12 @@ export default {
     fake.setStatus(sessionID, { type: 'busy' });
     let attempt = 0;
     const timer = setInterval(() => {
-      const aborted = fake.state.requests.some((r) => r.method === 'POST' && r.path === `/session/${sessionID}/abort`);
-      if (aborted || attempt >= MAX_TICKS) {
+      // a rota de abort do fake já fecha o turno (erro MessageAbortedError + status idle)
+      if (fake.state.aborts.includes(sessionID)) {
+        clearInterval(timer);
+        return;
+      }
+      if (attempt >= MAX_TICKS) {
         clearInterval(timer);
         fake.emitTurn(sessionID, { text: '', error: { name: 'MessageAbortedError', data: { message: 'A operação foi cancelada.' } } });
         return;
