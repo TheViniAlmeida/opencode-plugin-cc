@@ -129,7 +129,7 @@ function safeJob(job) {
   const safe = { ...job };
   if (job.request) {
     const request = job.request;
-    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes']
+    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes', 'candidates', 'fallbackEligible', 'routingWarnings']
       .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
     if (request.format) safe.request.format = { type: request.format.type };
     safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
@@ -534,7 +534,8 @@ export async function waitForJob(ctx, id, { waitTimeoutMs = null, pollMs = 500, 
 // ---- F2b: turn-job adapter and server.lock coordination ----
 import { withLock } from './locks.mjs';
 import { buildPermissionRules, parseProfile } from './policy.mjs';
-import { newMessageId } from './runner.mjs';
+import { runTurn, newMessageId } from './runner.mjs';
+import { runWithFallback, attemptRequest, backoffFromEnv, describeStop } from './routing.mjs';
 
 export function serverLockPath(stateDir) {
   return join(stateDir, 'server.lock');
@@ -848,4 +849,76 @@ export async function runWithConcurrency(items, limit, fn) {
   });
   await Promise.all(lanes);
   return results;
+}
+
+export async function recordAttempt(stateDir, id, attempt) {
+  let job = null;
+  try {
+    job = readJob(stateDir, id);
+  } catch {
+    job = null;
+  }
+  if (!job) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${short(id)}`);
+  const attempts = Array.isArray(job.attempts) ? job.attempts : [];
+  return updateJob(stateDir, id, { attempts: [...attempts, attempt] });
+}
+
+export async function runJobTurn({
+  stateDir,
+  job,
+  config = {},
+  env = process.env,
+  baseTurnRequest,
+  runTurnOptions = {},
+  runTurnImpl = runTurn,
+  sleep: sleepImpl,
+  backoffMs = backoffFromEnv(env),
+  messageId = newMessageId,
+}) {
+  const request = job.request ?? {};
+  const fallbackCfg = config.routing?.fallback ?? {};
+  const baseModel = baseTurnRequest.model;
+  const fromBase = baseModel
+    ? [{ providerID: baseModel.providerID, modelID: baseModel.modelID, full: `${baseModel.providerID}/${baseModel.modelID}`, source: 'request', contextLimit: null }]
+    : [];
+  const candidates = Array.isArray(request.candidates) && request.candidates.length > 0 ? request.candidates : fromBase;
+  const eligible = request.fallbackEligible === true && !baseTurnRequest.sessionID;
+  const attemptLimit = eligible && fallbackCfg.enabled !== false
+    ? Math.min(candidates.length, Math.max(1, Math.floor(Number(fallbackCfg.maxAttempts ?? 3))))
+    : 1;
+  await updateJob(stateDir, job.id, { attemptLimit });
+  for (const warning of request.routingWarnings ?? []) appendJobLog(stateDir, job.id, `aviso: ${warning}`);
+
+  const outcome = await runWithFallback({
+    candidates,
+    fallbackEligible: eligible,
+    fallbackCfg,
+    write: job.permissionProfile === 'write',
+    backoffMs,
+    ...(sleepImpl ? { sleep: sleepImpl } : {}),
+    contextLimitOf: (candidate) => (typeof candidate.contextLimit === 'number' ? candidate.contextLimit : null),
+    signal: runTurnOptions.signal,
+    cancelRequestedAt: () => Boolean(readJob(stateDir, job.id)?.cancelRequestedAt),
+    job,
+    runAttempt: (candidate, index) => {
+      const ids = index === 0 && baseTurnRequest.messageID ? () => baseTurnRequest.messageID : messageId;
+      const turnRequest = attemptRequest({ ...baseTurnRequest, fallbackCfg }, candidate, { messageId: ids });
+      return runTurnImpl({ ...runTurnOptions, request: turnRequest });
+    },
+    onAttemptStart: async (candidate, index) => {
+      await updateJob(stateDir, job.id, { model: candidate.full, phase: 'starting' });
+      if (attemptLimit > 1) appendJobLog(stateDir, job.id, `tentativa ${index + 1}/${attemptLimit}: ${candidate.full}`);
+    },
+    onAttemptEnd: async (record) => {
+      await recordAttempt(stateDir, job.id, record);
+    },
+    onBackoff: async (delayMs, next, record) => {
+      await updateJob(stateDir, job.id, { phase: 'fallback' });
+      appendJobLog(stateDir, job.id, `fallback: ${record.errorType ?? record.status} em ${record.model}; próximo ${next.full} em ${delayMs / 1000}s`);
+    },
+  });
+  const result = outcome.stopReason === 'cancelled' && outcome.result?.status !== 'cancelled'
+    ? { ...outcome.result, status: 'cancelled' }
+    : outcome.result;
+  return { ...outcome, result, stop: describeStop(outcome) };
 }
