@@ -46,6 +46,7 @@ function assertJobId(id) {
   }
   return id;
 }
+export const isValidJobId = (id) => typeof id === 'string' && SAFE_JOB_ID_RE.test(id);
 const jobPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.json`);
 export const jobLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.log`);
 export const workerLogPath = (stateDir, id) => join(jobsDir(stateDir), `${assertJobId(id)}.worker.log`);
@@ -129,7 +130,7 @@ function safeJob(job) {
   const safe = { ...job };
   if (job.request) {
     const request = job.request;
-    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes']
+    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes', 'candidates', 'fallbackEligible', 'routingWarnings', 'routingWarningsReported']
       .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
     if (request.format) safe.request.format = { type: request.format.type };
     safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
@@ -140,6 +141,18 @@ function safeJob(job) {
   const masked = redact(safe);
   for (const field of ['title', 'summary', 'pendingRequest', 'error', 'errorMessage', 'errorType']) {
     if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
+  }
+  if (Array.isArray(masked.attempts)) {
+    const verbatim = new Set(['id', 'jobId', 'attemptId', 'model', 'modelFull', 'providerID', 'modelID', 'status']);
+    masked.attempts = masked.attempts.map((attempt) => {
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) return attempt;
+      return Object.fromEntries(Object.entries(attempt).map(([key, value]) => [
+        key,
+        typeof value === 'string' && !verbatim.has(key) && !/(?:At|AtMs|Timestamp|timestamp)$/.test(key)
+          ? safeOutputText(value)
+          : value,
+      ]));
+    });
   }
   if (masked.request) masked.request = redactOutput(masked.request);
   if (masked.request && Object.hasOwn(masked.request, 'argumentsPreview')) {
@@ -534,7 +547,8 @@ export async function waitForJob(ctx, id, { waitTimeoutMs = null, pollMs = 500, 
 // ---- F2b: turn-job adapter and server.lock coordination ----
 import { withLock } from './locks.mjs';
 import { buildPermissionRules, parseProfile } from './policy.mjs';
-import { newMessageId } from './runner.mjs';
+import { runTurn, newMessageId } from './runner.mjs';
+import { runWithFallback, attemptRequest, backoffFromEnv, describeStop } from './routing.mjs';
 
 export function serverLockPath(stateDir) {
   return join(stateDir, 'server.lock');
@@ -635,7 +649,16 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     return { job, report };
   }
   const client = api === undefined ? existingServerApi(ctx) : api;
-  if (client && job.sessionID) {
+  const lastAttempt = job.attempts?.at(-1);
+  // attemptInFlight=false + an attempt recorded for the current session means that turn already ended
+  // (completed or failed, e.g. during the fallback backoff): there is no live session to abort, and a
+  // refused abort must not withdraw the cancellation (progress updates may overwrite phase meanwhile).
+  // Exception: an attempt whose abort was not confirmed (AbortUnconfirmed, or a safety failure with
+  // abortConfirmed=false) may still have the session or its children running.
+  const previousFinished = job.attemptInFlight === false && Boolean(lastAttempt)
+    && lastAttempt.sessionID === job.sessionID
+    && lastAttempt.errorType !== 'AbortUnconfirmed' && lastAttempt.abortConfirmed !== false;
+  if (client && job.sessionID && job.phase !== 'fallback' && !previousFinished) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
         if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
@@ -650,6 +673,18 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
       appendJobLog(ctx.stateDir, id, 'Intenção de cancelamento retirada após falha; aguardando o resultado real da tarefa.');
       return { ok: false, code: 'CANCEL_FAILED', reason: message, job: latest, report };
     }
+  }
+  // A completed turn still needs to publish its attempt before the record is frozen.
+  // A confirmed dead worker cannot publish anything further; otherwise retain intent
+  // and leave finalization to the worker if the bounded wait is exhausted.
+  const attemptDeadline = performance.now() + exitWaitMs;
+  let latest = readJob(ctx.stateDir, id);
+  while (isActive(latest) && latest.attemptInFlight && (!job.pid || identityMatches({ pid: job.pid, startTime: job.pidStartTime }, workerMatcher(id)))) {
+    if (performance.now() >= attemptDeadline) {
+      return { ok: false, code: 'CANCEL_FAILED', reason: 'Aguardando o registro da tentativa; intenção de cancelamento mantida.', job: latest, report };
+    }
+    await sleep(25);
+    latest = readJob(ctx.stateDir, id);
   }
   if (job.pid) {
     const expected = { pid: job.pid, startTime: job.pidStartTime };
@@ -848,4 +883,76 @@ export async function runWithConcurrency(items, limit, fn) {
   });
   await Promise.all(lanes);
   return results;
+}
+
+export async function recordAttempt(stateDir, id, attempt) {
+  if (!readJob(stateDir, id)) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${id}`);
+  return updateJob(stateDir, id, (job) => ({
+    attempts: [...(Array.isArray(job.attempts) ? job.attempts : []), attempt],
+    attemptInFlight: false,
+  }));
+}
+
+export async function runJobTurn({
+  stateDir,
+  job,
+  config = {},
+  env = process.env,
+  baseTurnRequest,
+  runTurnOptions = {},
+  runTurnImpl = runTurn,
+  sleep: sleepImpl,
+  backoffMs = backoffFromEnv(env),
+  messageId = newMessageId,
+}) {
+  const request = job.request ?? {};
+  const fallbackCfg = config.routing?.fallback ?? {};
+  const baseModel = baseTurnRequest.model;
+  const fromBase = baseModel
+    ? [{ providerID: baseModel.providerID, modelID: baseModel.modelID, full: `${baseModel.providerID}/${baseModel.modelID}`, source: 'request', contextLimit: null }]
+    : [];
+  const candidates = Array.isArray(request.candidates) && request.candidates.length > 0 ? request.candidates : fromBase;
+  const eligible = request.fallbackEligible === true && !baseTurnRequest.sessionID;
+  const attemptLimit = eligible && fallbackCfg.enabled !== false
+    ? Math.min(candidates.length, Math.max(1, Math.floor(Number(fallbackCfg.maxAttempts ?? 3))))
+    : 1;
+  await updateJob(stateDir, job.id, { attemptLimit });
+  if (!request.routingWarningsReported) {
+    for (const warning of request.routingWarnings ?? []) appendJobLog(stateDir, job.id, `aviso: ${warning}`);
+  }
+
+  const outcome = await runWithFallback({
+    candidates,
+    fallbackEligible: eligible,
+    fallbackCfg,
+    write: job.permissionProfile === 'write',
+    backoffMs,
+    ...(sleepImpl ? { sleep: sleepImpl } : {}),
+    contextLimitOf: (candidate) => (typeof candidate.contextLimit === 'number' ? candidate.contextLimit : null),
+    signal: runTurnOptions.signal,
+    cancelRequestedAt: () => Boolean(readJob(stateDir, job.id)?.cancelRequestedAt),
+    job,
+    runAttempt: async (candidate, index) => {
+      const current = await updateJob(stateDir, job.id, (latest) => latest.cancelRequestedAt ? {} : { attemptInFlight: true });
+      if (current.cancelRequestedAt || isTerminal(current)) return { status: 'cancelled' };
+      const ids = index === 0 && baseTurnRequest.messageID ? () => baseTurnRequest.messageID : messageId;
+      const turnRequest = attemptRequest({ ...baseTurnRequest, fallbackCfg }, candidate, { messageId: ids });
+      return runTurnImpl({ ...runTurnOptions, request: turnRequest });
+    },
+    onAttemptStart: async (candidate, index) => {
+      await updateJob(stateDir, job.id, { model: candidate.full, phase: 'starting' });
+      if (attemptLimit > 1) appendJobLog(stateDir, job.id, `tentativa ${index + 1}/${attemptLimit}: ${candidate.full}`);
+    },
+    onAttemptEnd: async (record) => {
+      await recordAttempt(stateDir, job.id, record);
+    },
+    onBackoff: async (delayMs, next, record) => {
+      await updateJob(stateDir, job.id, { phase: 'fallback' });
+      appendJobLog(stateDir, job.id, `fallback: ${record.errorType ?? record.errorMessage ?? record.status} em ${record.model}; próximo ${next.full} em ${delayMs / 1000}s`, { modelDerived: true });
+    },
+  });
+  const result = outcome.stopReason === 'cancelled' && outcome.result?.status !== 'cancelled'
+    ? { ...outcome.result, status: 'cancelled' }
+    : outcome.result;
+  return { ...outcome, result, stop: describeStop(outcome) };
 }

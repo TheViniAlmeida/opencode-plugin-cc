@@ -44,7 +44,7 @@ test('level 2: --tier list, eligible for fallback', () => {
   const r = resolveCandidates({ kind: 'ask', flags: { tier: 'heavy' }, config: baseConfig, catalog });
   assert.deepEqual(r.candidates.map((c) => c.full), [QWEN, KIMI]);
   assert.equal(r.fallbackEligible, true);
-  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'nope' }, config: baseConfig, catalog }), (e) => e.code === 'UNKNOWN_TIER');
+  assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'nope' }, config: baseConfig, catalog }), (e) => e.code === 'INVALID_TIER');
 });
 
 test('level 3: kind-specific model beats the route', () => {
@@ -84,32 +84,32 @@ test('single value denied → PolicyError; disconnected provider → usage error
     assert.throws(() => resolveCandidates({ kind: 'task', flags: { model }, config: baseConfig, catalog }), (e) => {
       assert.ok(e instanceof PolicyError);
       assert.equal(e.code, 'POLICY_DENIED');
-      assert.match(e.message, /provider omniroute-wo… negado pela política/);
+      assert.match(e.message, /provider omniroute-work negado pela política/);
       return true;
     });
   }
   assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: 'ollama/llama9' }, config: baseConfig, catalog }), (e) => e instanceof UsageError && e.code === 'PROVIDER_NOT_CONNECTED');
 });
 
-test('routing messages are PT-BR and truncate echoed user values', () => {
+test('routing messages preserve config identifiers and truncate invalid user values', () => {
   const longModel = `${P}/abcdefghijklmnop`;
   const modelDenied = { ...baseConfig, policy: { models: { deny: [longModel] } } };
   assert.throws(() => resolveCandidates({ kind: 'task', flags: { model: longModel }, config: modelDenied, catalog }), (e) => {
     assert.equal(e.code, 'POLICY_DENIED');
-    assert.match(e.message, /modelo omniroute-pe… negado pela política/);
-    assert.ok(!e.message.includes(longModel));
+    assert.ok(e.message.includes(`modelo ${longModel} negado pela política`));
+    assert.ok(e.message.includes(`policy.models.deny: ${longModel}`));
     return true;
   });
   assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: 'tier-abcdefghijk' }, config: baseConfig, catalog }), (e) => {
-    assert.equal(e.code, 'UNKNOWN_TIER');
-    assert.match(e.message, /routing\.tiers\.tier-abcdefg… não está configurado/);
+    assert.equal(e.code, 'INVALID_TIER');
+    assert.match(e.message, /--tier deve ser um de: light, heavy \(recebido: "tier-abcdefg…"\)/);
     return true;
   });
   const longTier = 'tier-abcdefghijk';
   const invalidTierConfig = { ...baseConfig, routing: { ...baseConfig.routing, tiers: { ...baseConfig.routing.tiers, [longTier]: ['ghost'] } } };
   assert.throws(() => resolveCandidates({ kind: 'ask', flags: { tier: longTier }, config: invalidTierConfig, catalog }), (e) => {
-    assert.equal(e.code, 'NO_VALID_CANDIDATE');
-    assert.match(e.message, /routing\.tiers\.tier-abcdefg…/);
+    assert.equal(e.code, 'INVALID_TIER');
+    assert.match(e.message, /tier-abcdefg…/);
     assert.ok(!e.message.includes(longTier));
     return true;
   });
@@ -120,7 +120,7 @@ test('routing messages are PT-BR and truncate echoed user values', () => {
   });
   const aliasRoute = { ...baseConfig, routing: { tasks: { ask: ['alias-abcdefghijk', 'fast'] } } };
   const skipped = resolveCandidates({ kind: 'ask', config: aliasRoute, catalog });
-  assert.match(skipped.warnings[0], /ignorado alias-abcdef…/);
+  assert.match(skipped.warnings[0], /ignorado alias-abcdefghijk/);
 });
 
 test('validateSelection: variant (F1 validateVariant), agent existence, policy (F1 assertAgentUsable), mode and pinned model', () => {

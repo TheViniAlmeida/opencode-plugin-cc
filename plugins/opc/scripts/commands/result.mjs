@@ -3,7 +3,7 @@
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
 import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef, topLevelJobs } from '../lib/jobs.mjs';
-import { renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
+import { renderAttempts, renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 
 const stillRunning = (job) => {
@@ -34,9 +34,8 @@ export async function run(ctx, argv) {
   if (special !== null) return special;
   if (isActive(job)) throw stillRunning(job);
   if (job.kind === 'review') {
-    const rendered = renderReviewJob(job);
-    if (flags.json) ctx.json({ jobId: job.id, status: job.status, review: job.result?.structured ?? null, rendered });
-    else ctx.out(rendered);
+    if (flags.json) ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: job.result?.structured ?? null, rendered: renderReviewJob(job) });
+    else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
     return exitCodeForJob(job);
   }
   if (flags.json) ctx.json({ job });

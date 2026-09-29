@@ -43,10 +43,22 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
   }
 }
 
+export const RETRY_CAP_ERROR_NAME = 'RetryCapExceeded';
+
+// `next` é o instante agendado da próxima tentativa, em epoch ms (OpenCode 1.18.32: `next: data.at`).
 export function retryExceedsCap(status, fallbackCfg = {}, now = Date.now()) {
-  const maxRetries = fallbackCfg.maxProviderRetries ?? 3;
-  const maxWaitSec = fallbackCfg.maxRetryWaitSec ?? 60;
-  if (typeof status?.attempt === 'number' && status.attempt > maxRetries) return true;
-  if (typeof status?.next === 'number' && (status.next - now) / 1000 > maxWaitSec) return true;
-  return false;
+  if (!status || (status.type !== undefined && status.type !== 'retry')) return false;
+  const maxRetries = Number(fallbackCfg?.maxProviderRetries ?? 3);
+  const maxWaitSec = Number(fallbackCfg?.maxRetryWaitSec ?? 60);
+  if (Number(status.attempt) > maxRetries) return true;
+  const next = Number(status.next);
+  if (!Number.isFinite(next)) return false;
+  return next - now > maxWaitSec * 1000;
+}
+
+export function retryCapError(status, now = Date.now()) {
+  const next = Number(status?.next);
+  const wait = Number.isFinite(next) ? `, próxima em ${Math.max(0, Math.round((next - now) / 1000))}s` : '';
+  const message = `teto de retries do OpenCode excedido (tentativa ${status?.attempt ?? '?'}${wait}): ${status?.message ?? ''}`.trim();
+  return { name: RETRY_CAP_ERROR_NAME, data: { message } };
 }

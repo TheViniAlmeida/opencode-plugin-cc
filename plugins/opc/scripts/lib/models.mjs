@@ -1,5 +1,6 @@
 // Model catalog, ID parsing, aliases and normalization (spec §3.2 "IDs de modelo", §6).
 import { UsageError } from './opc-error.mjs';
+import { safeOutputText } from './redact.mjs';
 
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
 
@@ -88,9 +89,15 @@ function modelEcho(value) {
   return value.length > 12 ? `${value.slice(0, 12)}…` : value;
 }
 
-export function normalizeModelId(input, { catalog, defaultProvider = null, aliases = {}, fullOnly = false } = {}) {
+export function configModelLabel(value) {
+  return safeOutputText(typeof value === 'string' && value.length > 0 && !/[\s\x00-\x1f\x7f]/u.test(value)
+    ? value : modelEcho(String(value ?? '')));
+}
+
+export function normalizeModelId(input, { catalog, defaultProvider = null, aliases = {}, fullOnly = false, fromConfig = false } = {}) {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new UsageError('UNKNOWN_MODEL', 'identificador de modelo vazio');
+  const label = fromConfig ? configModelLabel(raw) : modelEcho(raw);
   let text = raw;
   let forceFull = fullOnly;
   if (text.startsWith('=')) {
@@ -106,8 +113,8 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
     : null;
   if (fullReading && shortReading) {
     throw new UsageError('AMBIGUOUS_MODEL',
-      `o modelo "${modelEcho(raw)}" é ambíguo: "${fullReading.full}" ou "${shortReading.full}". Use "=${fullReading.full}" ou "${shortReading.full}".`,
-      { details: { inputPreview: modelEcho(raw), candidates: [fullReading.full, shortReading.full] } });
+      `o modelo "${label}" é ambíguo: "${fullReading.full}" ou "${shortReading.full}". Use "=${fullReading.full}" ou "${shortReading.full}".`,
+      { details: { inputPreview: label, candidates: [fullReading.full, shortReading.full] } });
   }
   const hit = fullReading ?? shortReading;
   if (hit) return { providerID: hit.providerID, modelID: hit.modelID, full: hit.full, entry: hit };
@@ -115,8 +122,8 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
   const reason = known && !catalog.connected.has(known.providerID)
     ? `o provider "${known.providerID}" não está conectado (execute: opencode auth login)`
     : 'não encontrado em /provider';
-  throw new UsageError('UNKNOWN_MODEL', `modelo desconhecido "${modelEcho(raw)}": ${reason}`,
-    { details: { inputPreview: modelEcho(raw), suggestions: suggestionsFor(catalog, expanded) } });
+  throw new UsageError('UNKNOWN_MODEL', `modelo desconhecido "${label}": ${reason}`,
+    { details: { inputPreview: label, suggestions: suggestionsFor(catalog, expanded) } });
 }
 
 export function resolveModelRef(value, { catalog, defaultProvider = null, aliases = {}, allowClaude = false } = {}) {

@@ -452,3 +452,20 @@ test('toolErrorSummary drops the echoed rule list and caps free text', () => {
   assert.ok(long.endsWith('…'));
   assert.equal(toolErrorSummary(undefined), '');
 });
+
+for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
+  test(`F4a C1: retry cap requires confirmed abort (${mode})`, async () => {
+    const hub = stubHub();
+    const api = stubApi({ hub, onPrompt: (sid) => setStatus(hub, api, sid, { type: 'retry', attempt: 4 }) });
+    let idleObserved = false;
+    api.abort = async (sid) => {
+      if (mode === 'throws') throw new Error('abort unavailable');
+      if (mode === 'delayed-idle') setTimeout(() => { delete api.statusMap[sid]; idleObserved = true; }, 10);
+      return mode !== 'false';
+    };
+    const result = await runTurn({ api, hub, request: baseRequest({ timeoutMs: 400, idleWaitMs: mode === 'delayed-idle' ? 350 : 20 }) });
+    assert.equal(result.errorType, mode === 'delayed-idle' ? 'RetryCapExceeded' : 'AbortUnconfirmed');
+    assert.equal(result.errorClass, mode === 'delayed-idle' ? 'recoverable' : 'fatal');
+    if (mode === 'delayed-idle') assert.equal(idleObserved, true);
+  });
+}

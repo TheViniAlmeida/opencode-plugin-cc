@@ -12,6 +12,21 @@
 
 ---
 
+## Ajustes pós-F3 (29/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+Conferidos contra o código da F0–F3 mergeado na `main`. Onde este plano divergir, vale o que está aqui (e o código real: leia cada módulo antes de estendê-lo). Os "Ajustes pós-F2b" do plano da F3 continuam valendo (heredoc, textos PT-BR e IDs inteiros, jobs só com metadados + entrada privada consumida uma vez, `readSessionMessages`, mascaramento, `contextOptions`, identidade de processo, credenciais falsas montadas em tempo de execução).
+
+1. **Premissas P1–P10.** Conferidas: `runTurn` só é chamado por `commands/task-worker.mjs` (jobs de turno) e, via `runTurnImpl`, por `dispatchSubagent` em `lib/runner.mjs` (membros de grupo, sem fallback por D4.4); `command` usa `api.runCommand`. `resolveCandidates` devolve `{ candidates, warnings, fallbackEligible }`. O `task-worker` grava hoje uma tentativa sintética em `attempts` no `updateJob` terminal (`task-worker.mjs`, bloco final) — a Task 8 a substitui por `recordAttempt`. `DELEGATION_REMINDER` e a condição `config.delegation.auto` existem em `hook-session-start.mjs`.
+2. **Delegados de worker.** `WORKER_DELEGATES` (`sub`, `cmd`) recebem `runWorker(ctx, job, request)` com o pedido já consumido; o `task-worker` não exige `stored.request` para eles. `runJobTurn` (novo, Task 7) substitui só a chamada de `runTurn` do caminho de turno, depois de `consumeJobInput`; os delegados não passam por ele.
+3. **Mensagem de 400.** Um `prompt_async` recusado vira `failed`/`BadRequest` com `errorMessage` "A requisição do turno foi rejeitada: <motivo do servidor, mascarado, 1ª linha>". A classificação de fallback deve usar `errorClass`/`errorType`, nunca o texto.
+4. **Campos de erro mascarados.** `error`, `errorMessage` e `errorType` de turnos e jobs passam por mascaramento de padrões ao persistir e ao sair em `--json` (portão F3, C2). `attempts[]` recebe o mesmo tratamento: nada de texto bruto de provedor em `attempts[].error*`.
+5. **Chaves JSON.** `ctx.json` troca por `***` o valor de qualquer chave cujo nome pareça segredo (`token|password|passwd|secret|apikey|credential|authorization|headers`). Não use esses nomes em campos de saída (a F3 renomeou `credential` para `authSource`); `retryCapError`, `attempts` e o monitor devem usar nomes neutros.
+6. **Cancelamento.** `cancelJob` grava `cancelRequestedAt` antes de abortar; se o abort falhar (`CANCEL_FAILED`), retira a intenção (`cancelRequestedAt: null`). O laço de fallback deve checar `cancelRequestedAt` (e o `signal`) antes de cada nova tentativa e durante o backoff (Review Focus 1).
+7. **Grupos.** Membros (`groupId`) não contam no `maxActive`; `status`/`result`/`cancel` sem id consideram só `topLevelJobs`; `refreshGroup(..., { final, decorate })` é o único que torna um grupo terminal. O monitor lista grupos com seus membros aninhados e não trata membro como job de topo.
+8. **Sessões.** No OpenCode 1.18.32 o diff agregado da sessão vem vazio; `session diff` cai para o diff por mensagem. Não dependa de `GET /session/:id/diff` sem `messageID`.
+9. **Ao vivo.** `OPC_LIVE=1` e `OPC_LIVE_MODEL` (sem padrão; `OPC_LIVE_MODEL_2`/`_3` opcionais). As rotas `opencode-go/*` do plano respondem 402 ("requires an opencode API key"); no portão da F3 responderam `omniroute-personal/cmd/deepseek/deepseek-v4-flash`, `…/cmd/Qwen/Qwen3.7-Flash` e `…/cmd/moonshotai/Kimi-K2.6`. Sonde antes e registre as rotas usadas; modelos de fronteira não são usados. Para testar fallback ao vivo, a lista de rota combina uma rota que falha (402) com uma que responde. Relatório ao vivo passa por `safeOutputText` e troca caminhos por `<tmp>`/`~`; o id de provedor no repositório é sempre `omniroute-personal`.
+10. **Agentes e skills.** Hoje existem `agents/opc-rescue.md` e as skills `opc-prompting`, `opc-result-handling`, `opc-runtime`; `opc-worker` e `opc-delegation` são novos. O lint `tests/unit/commands-md.test.mjs` cobre `commands/` e `agents/`.
+
 ## Global Constraints
 
 - Node ≥ 20 (`engines: {"node": ">=20"}`), ESM `.mjs`, zero dependências de runtime e de dev (nada de `npm install`).

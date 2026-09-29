@@ -1,8 +1,9 @@
 // Model, agent and variant resolution (spec §6). Fallback execution is F4a; here we only
 // compute the candidate list and whether it is eligible for fallback.
 import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
-import { expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
+import { configModelLabel, expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
 import { assertAgentUsable, evaluate } from './policy.mjs';
+import { safeOutputText } from './redact.mjs';
 
 const LIST_SOURCES = new Set(['tier', 'route']);
 const echo = (value) => {
@@ -47,31 +48,32 @@ function pickLevel({ kind, flags, config, opencodeConfig }) {
   throw new UsageError('NO_MODEL', 'nenhum modelo foi resolvido (sem --model, --tier, rota, defaultModel ou modelo padrão do OpenCode); informe --model <provider>/<model>');
 }
 
-function checkCandidate(value, { catalog, config }) {
+function checkCandidate(value, { catalog, config, fromConfig = false }) {
   const raw = typeof value === 'string' ? value.trim() : value;
   const expanded = expandAlias(typeof raw === 'string' && raw.startsWith('=') ? raw.slice(1) : raw, config.aliases ?? {});
   const { providerID, modelID } = parseFullId(expanded);
   const known = providerID ? catalog.byFull.get(`${providerID}/${modelID}`) : null;
   const parsed = known && !catalog.connected.has(providerID)
     ? { providerID, modelID, full: known.full, entry: known }
-    : normalizeModelId(value, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+    : normalizeModelId(value, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {}, fromConfig });
   const policy = config.policy ?? {};
   for (const [kind, subject] of [['provider', parsed.providerID], ['model', parsed.full]]) {
     const verdict = evaluate(kind, subject, policy);
     if (!verdict.allowed) {
-      throw new PolicyError('POLICY_DENIED', `${kind === 'provider' ? 'provider' : 'modelo'} ${echo(subject)} negado pela política${verdict.rule ? ` (regra: ${echo(verdict.rule)})` : ''}`);
+      throw new PolicyError('POLICY_DENIED', `${kind === 'provider' ? 'provider' : 'modelo'} ${safeOutputText(subject)} negado pela política${verdict.rule ? ` (regra: ${safeOutputText(verdict.rule)})` : ''}`);
     }
   }
   if (!catalog.connected.has(parsed.providerID)) {
-    throw new UsageError('PROVIDER_NOT_CONNECTED', `provider ${echo(parsed.providerID)} não está conectado (execute: opencode auth login)`);
+    throw new UsageError('PROVIDER_NOT_CONNECTED', `provider ${safeOutputText(parsed.providerID)} não está conectado (execute: opencode auth login)`);
   }
   return parsed;
 }
 
 export function resolveCandidates({ kind, flags = {}, config = {}, catalog, opencodeConfig = null }) {
+  assertTier(flags?.tier, config);
   const { source, values } = pickLevel({ kind, flags, config, opencodeConfig });
   if (!LIST_SOURCES.has(source)) {
-    const candidate = checkCandidate(values[0], { catalog, config });
+    const candidate = checkCandidate(values[0], { catalog, config, fromConfig: source !== 'flag' });
     return { candidates: [{ ...candidate, source }], warnings: [], fallbackEligible: false };
   }
   const candidates = [];
@@ -80,13 +82,13 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
   let denied = 0;
   for (const value of values) {
     try {
-      const candidate = checkCandidate(value, { catalog, config });
+      const candidate = checkCandidate(value, { catalog, config, fromConfig: true });
       if (!candidates.some((c) => c.full === candidate.full)) candidates.push({ ...candidate, source });
     } catch (err) {
       if (!(err instanceof OpcError)) throw err;
       if (err instanceof PolicyError) denied += 1;
-      problems.push(`${echo(value)}: ${err.message}`);
-      warnings.push(`ignorado ${echo(value)}: ${err.message}`);
+      problems.push(`${configModelLabel(value)}: ${err.message}`);
+      warnings.push(`ignorado ${configModelLabel(value)}: ${err.message}`);
     }
   }
   if (candidates.length === 0) {
@@ -96,6 +98,84 @@ export function resolveCandidates({ kind, flags = {}, config = {}, catalog, open
     throw new UsageError('NO_VALID_CANDIDATE', message);
   }
   return { candidates, warnings, fallbackEligible: candidates.length > 1 };
+}
+
+// ---- F4a: tiers ---------------------------------------------------------------
+
+export const TIERS = Object.freeze(['light', 'heavy']);
+
+export function assertTier(tier, config) {
+  if (tier === undefined || tier === null || tier === '') return;
+  if (!TIERS.includes(tier)) {
+    throw new UsageError('INVALID_TIER', `--tier deve ser um de: ${TIERS.join(', ')} (recebido: "${echo(tier)}")`);
+  }
+  const list = config?.routing?.tiers?.[tier];
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new UsageError('EMPTY_TIER', `routing.tiers.${tier} está vazio; configure com: opc config add routing.tiers.${tier} <modelo>`);
+  }
+}
+
+// ---- F4a: campos de roteamento gravados no request do job --------------------
+
+export function routingFields(resolution, { resume = false, catalog = null, warningsReported = false } = {}) {
+  const { candidates, warnings = [], fallbackEligible } = resolution;
+  return {
+    candidates: candidates.map(({ providerID, modelID, full, source }) => {
+      const limit = catalog?.byFull?.get?.(full)?.limit?.context;
+      return { providerID, modelID, full, source, contextLimit: typeof limit === 'number' ? limit : null };
+    }),
+    fallbackEligible: fallbackEligible === true && !resume,
+    routingWarnings: [...warnings],
+    routingWarningsReported: warningsReported,
+  };
+}
+
+export function attemptRequest(base, candidate, { messageId }) {
+  return {
+    ...base,
+    model: { providerID: candidate.providerID, modelID: candidate.modelID },
+    messageID: messageId(),
+  };
+}
+
+// ---- F4a: backoff -------------------------------------------------------------
+
+export const DEFAULT_BACKOFF_MS = Object.freeze([2000, 4000, 8000]);
+
+export function backoffFromEnv(env = process.env) {
+  const raw = env.OPC_FALLBACK_BACKOFF_MS;
+  if (raw === undefined || raw === '') return [...DEFAULT_BACKOFF_MS];
+  const parts = String(raw).split(',').map((s) => Number(s.trim()));
+  if (parts.some((n) => !Number.isFinite(n) || n < 0)) return [...DEFAULT_BACKOFF_MS];
+  return parts;
+}
+
+export function backoffDelay(backoffMs, retryIndex) {
+  if (!Array.isArray(backoffMs) || backoffMs.length === 0) return 0;
+  return backoffMs[Math.min(retryIndex, backoffMs.length - 1)];
+}
+
+export function abortableSleep(ms, signal, isCancelled = () => false) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const finish = (value, error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) reject(error); else resolve(value);
+    };
+    const onAbort = () => finish(false);
+    const deadline = performance.now() + ms;
+    const poll = () => {
+      try {
+        if (signal?.aborted || isCancelled()) return finish(false);
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) return finish(true);
+        timer = setTimeout(poll, Math.min(100, remaining));
+      } catch (error) { finish(false, error); }
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    poll();
+  });
 }
 
 // Variant rules live in F1 validateVariant; agent policy (name + pinned provider/model) in F1
@@ -132,4 +212,123 @@ export async function resolveTurnModel({ api, kind, flags = {}, config }) {
     catalog,
     opencodeConfig,
   };
+}
+
+// ---- F4a: laço de fallback -----------------------------------------------------------
+
+function isServerLost(result) {
+  return result.errorCode === 'server_lost' || result.errorType === 'server_lost';
+}
+
+function largerContextCandidates(queue, current, contextLimitOf) {
+  const base = contextLimitOf(current);
+  if (typeof base !== 'number') return [];
+  return queue.filter((candidate) => {
+    const limit = contextLimitOf(candidate);
+    return typeof limit === 'number' && limit > base;
+  });
+}
+
+export async function runWithFallback({
+  candidates,
+  fallbackEligible,
+  fallbackCfg = {},
+  write = false,
+  runAttempt,
+  sleep = abortableSleep,
+  backoffMs = DEFAULT_BACKOFF_MS,
+  contextLimitOf = () => null,
+  signal,
+  cancelRequestedAt = null,
+  job = null,
+  isCancelled = () => false,
+  now = () => new Date().toISOString(),
+  onAttemptStart = async () => {},
+  onAttemptEnd = async () => {},
+  onBackoff = async () => {},
+}) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new UsageError('NO_CANDIDATES', 'runWithFallback: a lista de candidatos está vazia');
+  }
+  if (typeof runAttempt !== 'function') throw new TypeError('runWithFallback: runAttempt é obrigatório');
+  const cancelPending = () => Boolean(
+    (typeof cancelRequestedAt === 'function' ? cancelRequestedAt() : cancelRequestedAt)
+    || job?.cancelRequestedAt
+    || isCancelled(),
+  );
+  const enabled = fallbackEligible === true && fallbackCfg.enabled !== false;
+  const configuredMax = Number(fallbackCfg.maxAttempts ?? 3);
+  const maxAttempts = enabled ? (Number.isFinite(configuredMax) ? Math.max(1, Math.floor(configuredMax)) : 3) : 1;
+  let queue = candidates.slice(1);
+  let current = candidates[0];
+  const attempts = [];
+  let result = null;
+  let stopReason = null;
+
+  while (current) {
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    const index = attempts.length;
+    const startedAt = now();
+    await onAttemptStart(current, index);
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    result = await runAttempt(current, index);
+    const record = {
+      model: current.full,
+      sessionID: result.sessionID ?? null,
+      status: result.status,
+      errorClass: result.errorClass ?? null,
+      errorType: result.errorType ?? null,
+      startedAt,
+      endedAt: now(),
+    };
+    // a safety failure whose aborts were not confirmed may leave the session (or children) running
+    if (result.abortConfirmed === false) record.abortConfirmed = false;
+    attempts.push(record);
+    await onAttemptEnd(record, result, index);
+
+    if (result.status === 'completed') { stopReason = 'completed'; break; }
+    if (result.status === 'cancelled' || signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    if (isServerLost(result)) { stopReason = 'server-lost'; break; }
+    if (!enabled) { stopReason = 'not-eligible'; break; }
+
+    let recoverable = result.errorClass === 'recoverable';
+    if (result.errorType === 'ContextOverflowError') {
+      const larger = largerContextCandidates(queue, current, contextLimitOf);
+      recoverable = larger.length > 0;
+      if (recoverable) queue = larger;
+    }
+    if (!recoverable) { stopReason = 'fatal'; break; }
+    if (write && result.toolsRan) { stopReason = 'write-tools-ran'; break; }
+    if (attempts.length >= maxAttempts) { stopReason = 'max-attempts'; break; }
+    if (queue.length === 0) { stopReason = 'exhausted'; break; }
+
+    const next = queue.shift();
+    const delay = backoffDelay(backoffMs, index);
+    await onBackoff(delay, next, record);
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    const slept = await sleep(delay, signal, cancelPending);
+    if (!slept || signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    current = next;
+  }
+
+  return { result, attempts, stopReason, fallbackUsed: attempts.length > 1 };
+}
+
+export function describeStop({ stopReason, result, attempts }) {
+  if (stopReason === 'write-tools-ran') {
+    const files = result.touchedFiles?.length ? result.touchedFiles.map(safeOutputText).join(', ') : '(nenhum registrado)';
+    const tools = result.toolNames?.length ? result.toolNames.map(safeOutputText).join(', ') : '(desconhecidas)';
+    return {
+      errorCode: 'WRITE_NO_FALLBACK',
+      errorMessage: `${safeOutputText(result.errorType ?? 'Erro')}: ${safeOutputText(result.errorMessage ?? 'o turno falhou')}. Sem fallback: este turno --write já executou ferramentas (risco de efeito duplicado). Arquivos tocados: ${files}. Ferramentas executadas: ${tools}.`,
+    };
+  }
+  if ((stopReason === 'max-attempts' || stopReason === 'exhausted') && attempts.length > 1) {
+    const trail = attempts.map((attempt, index) => `${index + 1}) ${safeOutputText(attempt.model)}: ${safeOutputText(attempt.errorType ?? attempt.status)}`).join('; ');
+    return {
+      errorCode: 'FALLBACK_EXHAUSTED',
+      errorMessage: `Todas as ${attempts.length} tentativas falharam (${trail}). Último erro: ${safeOutputText(result.errorMessage ?? result.errorType ?? 'desconhecido')}`,
+    };
+  }
+  return null;
 }

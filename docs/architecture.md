@@ -71,3 +71,11 @@ Cada membro cria sua própria ponte de pedidos da F2a. A atualização do membro
 No boot gerenciado, `server.json` é publicado antes de `attach.secret`; o segredo tem modo 600 e é escrito sob `server.lock` somente se a identidade do registro ainda confere. Falha de publicação faz rollback do processo e dos arquivos. `stopServerUnlocked`, usado pelo encerramento normal, remove `attach.secret` inclusive quando encontra o registro órfão ou ausente.
 
 `/opc:attach --pane` cria `<stateDir>/attach-pane.sh` com modo 700. O tmux recebe só o caminho desse script, do arquivo de segredo, do binário e dos argumentos de attach. Dentro do pane, o script lê o arquivo, exporta `OPENCODE_SERVER_PASSWORD` e executa o OpenCode; a senha não vai para argv. Em modo externo, `OPC_SERVER_URL` usa `OPC_SERVER_PASSWORD` do ambiente e não há arquivo local nem suporte a `--pane`.
+
+## Roteamento, fallback e monitor (F4a)
+
+`resolveCandidates` seleciona a origem do modelo; quando ela é uma lista elegível, `runJobTurn` compõe o turno com `runWithFallback`. Cada chamada de `runAttempt` abre uma sessão própria para o mesmo prompt e `recordAttempt` persiste seu resultado em `attempts[]` do job. Assim, uma falha recuperável não reutiliza uma sessão potencialmente incompleta e o resultado mantém o histórico de modelo, sessão, estado, erro e horários.
+
+O runner limita retries anunciados pelo OpenCode. Se a interrupção não for confirmada, produz `AbortUnconfirmed` e bloqueia fallback; se for confirmada, `RetryCapExceeded` pode avançar ao próximo candidato. Cancelamento, falhas fatais, `--resume`, modelo explícito e turno de escrita que já executou ferramenta não fazem fallback.
+
+`opc monitor` cria contexto somente leitura e lê diretamente `state.json`, `jobs/*.json` e os trechos finais dos logs. Ele não reconcilia jobs, não cria diretórios e não grava estado. O snapshot alimenta tanto o quadro de terminal quanto `--json`; cada item calcula tentativa atual/limite a partir de `attempts[]` e `attemptLimit`.

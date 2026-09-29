@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F3 — sessões, subagentes, commands e attach entregue**. Descoberta, onboarding,
-> turnos, reviews, sessões e delegação em grupos estão disponíveis.
+> Estado: **F4a — roteamento, fallback, delegação, worker e monitor entregue**. Descoberta,
+> onboarding, turnos, reviews, sessões, delegação e acompanhamento de jobs estão disponíveis.
 
 ## Requisitos
 
@@ -51,7 +51,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:task`, `/opc:ask`, `/opc:plan`, `/opc:status`, `/opc:result`, `/opc:cancel`, `/opc:permissions` | F2a | disponível |
 | `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | disponível |
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | disponível |
-| roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | planejado |
+| roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | disponível |
 | `/opc:orchestrate` | F4b | planejado |
 | `/opc:conclave` | F4c | planejado |
 | servidor MCP, `/opc:transfer` | F5 | planejado |
@@ -66,6 +66,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:rescue` | Delega investigação ou correção ao OpenCode, continuando ou iniciando sessão |
 | `/opc:task`, `/opc:ask`, `/opc:plan` | Turnos avulsos de escrita, pergunta e plano |
 | `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
+| `opc monitor` | Acompanha jobs do workspace no terminal, sem alterar estado |
 | `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo, diff e tarefas |
 | `/opc:subagent` | Executa agentes/modelos em paralelo como grupo de jobs |
 | `/opc:command` | Roda um slash command do OpenCode em job próprio |
@@ -85,6 +86,8 @@ Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 - [Comandos F1](docs/commands.md)
 - [Relatório da F1](docs/phases/F1-report.md)
 - [Relatório da F3](docs/phases/F3-report.md)
+- [Swarm: roteamento, fallback e monitor](docs/swarm.md)
+- [Relatório da F4a](docs/phases/F4a-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos

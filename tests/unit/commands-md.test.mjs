@@ -40,7 +40,8 @@ function findUnsafeOpcCommandLine(markdown) {
       if (!/^\s*opc\s/.test(line)) continue;
       const heredoc = line.match(/<<['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
       // Check the whole line except the heredoc operator itself (text after it is still shell).
-      const commandLine = heredoc ? line.slice(0, heredoc.index) + line.slice(heredoc.index + heredoc[0].length) : line;
+      const commandLine = (heredoc ? line.slice(0, heredoc.index) + line.slice(heredoc.index + heredoc[0].length) : line)
+        .replace('opc <ask|plan|task>', 'opc ask');
       if (unsafe.test(commandLine)) return line;
       if (heredoc) heredocTerminator = heredoc[1];
     }

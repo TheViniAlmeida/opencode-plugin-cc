@@ -2,10 +2,10 @@ import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { collectReviewContext, diffSizeEstimate, resolveReviewTarget } from '../lib/git.mjs';
 import { connectApi } from '../lib/context.mjs';
-import { resolveTurnModel } from '../lib/routing.mjs';
+import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { assertNotInsideServer, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, loadSchema, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
-import { renderReviewEstimate, renderReviewJob, validateReviewOutput } from '../lib/render.mjs';
+import { renderAttempts, renderReviewEstimate, renderReviewJob, validateReviewOutput } from '../lib/render.mjs';
 import { redactText, safeOutputText } from '../lib/redact.mjs';
 import { exitCodeForJob } from './task.mjs';
 
@@ -63,17 +63,16 @@ function renderBackgroundStart(label, job) {
   return [`# OPC ${label}`, '', `Revisão iniciada em segundo plano: ${job.id}`,
     `- Progresso: /opc:status ${job.id}`, `- Aguardar: /opc:status ${job.id} --wait`, `- Resultado: /opc:result ${job.id}`, ''].join('\n');
 }
-function emitReviewResult(ctx, job, { json }) {
+export function emitReviewResult(ctx, job, { json }) {
   if (job.status === 'waiting_permission') {
     if (json) ctx.json({ job, pendingRequest: job.pendingRequest ?? null });
     else ctx.out(`# OPC Revisão\n\nJob ${job.id} aguarda resposta de permissão. Execute /opc:permissions list.\n`);
     return ExitCode.WAITING;
   }
-  const rendered = renderReviewJob(job);
   if (json) {
     const structured = job.result?.structured ?? null;
-    ctx.json({ jobId: job.id, status: job.status, review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered });
-  } else ctx.out(rendered);
+    ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered: renderReviewJob(job) });
+  } else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
   return exitCodeForJob(job);
 }
 
@@ -106,13 +105,16 @@ export async function runReviewCommand(ctx, argv, { variant }) {
   if (context.truncated) writeLog(ctx, `[opc] diff tem ${context.diffBytes} bytes; enviando estatísticas e ${context.includedFiles.length} de ${context.files.length} diffs de arquivos (menores primeiro).`);
   const { api } = await connectApi(ctx);
   const resolved = await resolveTurnModel({ api, kind: 'review', flags: { model: flags.model, variant: flags.variant ?? flags.effort }, config: ctx.config });
-  for (const warning of resolved.warnings) writeLog(ctx, `[opc] ${warning}`);
+  for (const warning of resolved.warnings) writeLog(ctx, `[opc] aviso: ${warning}`);
   const title = sessionTitle(variant === 'review' ? 'review' : 'adversarial-review', summarize(focus ? `${target.label} — ${focus}` : target.label));
   const request = turnJobRequest({
     kind: 'review', profile: 'read-only', prompt,
     model: resolved.model, modelFull: resolved.full, variant: resolved.variant,
     format: ctx.config?.review?.structuredOutput === 'tool' ? { type: 'json_schema', schema: loadSchema('review-output') } : null, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
-    config: ctx.config ?? {}, extra: { review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus } },
+    config: ctx.config ?? {}, extra: {
+      ...routingFields(resolved.resolution, { resume: false, catalog: resolved.catalog, warningsReported: true }),
+      review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus },
+    },
   });
   const job = await submitTurnJob(ctx, { kind: 'review', title, summary: `${label} de ${target.label}`, request });
   if (flags.background) {

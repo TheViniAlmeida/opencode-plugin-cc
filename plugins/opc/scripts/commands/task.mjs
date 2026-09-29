@@ -6,7 +6,7 @@ import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
 import { buildCatalog } from '../lib/models.mjs';
-import { resolveCandidates, validateSelection } from '../lib/routing.mjs';
+import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
 import { buildPermissionRules, parseProfile, planPermissionSwitch } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
@@ -211,7 +211,8 @@ export async function runKindCommand(ctx, argv, kind) {
   const { api, server } = await connectApi(ctx);
   const catalog = buildCatalog(await api.providers());
   const opencodeConfig = await api.getConfig();
-  const { candidates, warnings } = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
+  const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
+  const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
   const agentName = flags.agent ?? config.defaultAgent ?? null;
@@ -251,6 +252,7 @@ export async function runKindCommand(ctx, argv, kind) {
     fallbackCfg: config.routing?.fallback ?? {},
     permissionTimeoutMs: permissionTimeoutSec * 1000,
     ...statusPollOverride(ctx.env),
+    ...routingFields(resolution, { resume: Boolean(sessionID), catalog, warningsReported: true }),
   };
   const job = await submitTurnJob(ctx, {
     kind,

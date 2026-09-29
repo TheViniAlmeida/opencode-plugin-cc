@@ -89,7 +89,7 @@ Todo turno roda num **worker destacado** (`opc task-worker`), registrado como jo
           [--prompt-file <arquivo>] [--timeout <s>] [--wait-timeout <s>] <prompt>
 ```
 
-Sem `--write`, usa `read-only`; `--write` usa `write`; `--profile <nome>` usa `custom:<nome>`. `--model` aceita alias, id completo (`provider/modelo`) ou nome curto no provider padrão. `--effort` é alias de `--variant`; `--tier` usa `routing.tiers.<tier>`. Agentes são validados contra a política; agentes apenas-subagente são recusados.
+Sem `--write`, usa `read-only`; `--write` usa `write`; `--profile <nome>` usa `custom:<nome>`. `--model` aceita alias, id completo (`provider/modelo`) ou nome curto no provider padrão. `--effort` é alias de `--variant`; `--tier` aceita somente `light` ou `heavy` e usa `routing.tiers.<tier>`; tier desconhecido ou vazio retorna exit 2. Agentes são validados contra a política; agentes apenas-subagente são recusados.
 
 `--resume [id]` continua job ou sessão (`ses_…`); sem id equivale a `--resume-last`. `--fresh` conflita com `--resume`. `--timeout` limita o turno (padrão 1800 s); `--wait-timeout` limita só a espera (padrão 540 s). Prompt pode vir por argumento, stdin ou `--prompt-file` (bytes intactos); resume sem prompt usa `prompts/continue.md`.
 
@@ -128,7 +128,15 @@ Aceitam flags de modelo, `--background`, `--resume`/`--fresh`, `--timeout` e `--
 /opc:cancel [job-id]
 ```
 
-`status` sem id lista jobs desta sessão; `--all` inclui todas. Com id, mostra fase, modelo, sessão, filhas, erro, pedidos e log. `--wait` retorna 0 (`completed`), 3 (`waiting_permission`), 7 (`failed`), 130 (`cancelled`) ou 6 sem parar o job. `result` mostra texto final, saída estruturada, arquivos tocados e continuação; job ativo retorna 2. `cancel` aborta sessão principal e filhas, espera idle por até 10 s e encerra worker somente após conferir identidade.
+`status` sem id lista jobs desta sessão; `--all` inclui todas. Com id, mostra fase, modelo, sessão, filhas, erro, pedidos e log; com `--json`, inclui `attempts[]`. `--wait` retorna 0 (`completed`), 3 (`waiting_permission`), 7 (`failed`), 130 (`cancelled`) ou 6 sem parar o job. `result` mostra texto final, saída estruturada, arquivos tocados, continuação e `## Tentativas (N)` quando houve fallback; `result --json` também inclui `attempts[]`. Job ativo retorna 2. `cancel` aborta sessão principal e filhas, espera idle por até 10 s e encerra worker somente após conferir identidade.
+
+### `opc monitor`
+
+```text
+opc monitor [--job <id|prefixo>] [--once] [--json] [--color auto|always|never] [--interval <ms>]
+```
+
+Leitor puro de `state.json`, jobs e logs do workspace. Mostra fase, modelo, tentativa, pedidos pendentes e linhas recentes de log. `--job` foca um job ou grupo; `--once` desenha um quadro e sai; `--json` imprime o snapshot e sai. O intervalo padrão é 1000 ms e o mínimo é 100 ms. Ctrl+C encerra com exit 0.
 
 ### `/opc:permissions`
 

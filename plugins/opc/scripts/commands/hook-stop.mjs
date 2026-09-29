@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { parseHookInput, readStdin } from '../lib/args.mjs';
 import { connectApi, contextForCwd } from '../lib/context.mjs';
 import { OpcError } from '../lib/opc-error.mjs';
-import { resolveTurnModel } from '../lib/routing.mjs';
+import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { ACTIVE_STATUSES, cancelJob, liveActiveJobs, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, projectContextBlock } from '../lib/prompts.mjs';
 import { collectReviewContext, resolveReviewTarget } from '../lib/git.mjs';
@@ -153,6 +153,7 @@ async function runStopGate(ctx, input, sessionId, dependencies = {}) {
     prompt: buildStopGatePrompt({ lastMessage: redactText(lastMessage), repositoryContext: repositoryContextFor(ctx), project: ctx.config?.project ?? null }),
     model: resolved.model, modelFull: resolved.full, variant: resolved.variant,
     timeoutMs: STOP_GATE_TURN_TIMEOUT_MS, title: 'OPC: stop-gate: revisão da resposta anterior', config: ctx.config ?? {},
+    extra: routingFields(resolved.resolution, { catalog: resolved.catalog }),
   });
   const job = await submitTurnJobFn(ctx, { kind: 'stop-gate', title: request.title, summary: 'Revisão de bloqueio da resposta anterior do Claude', request, claudeSessionId: sessionId });
   let done;

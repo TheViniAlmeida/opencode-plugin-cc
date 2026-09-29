@@ -3,6 +3,7 @@ import { OpcError } from './opc-error.mjs';
 import { shellQuote } from './args.mjs';
 import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns, safeOutputText, maskDeep } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
+import { ACTIVE_JOB_STATUSES } from './state.mjs';
 
 function cell(value) {
   return redactText(String(value ?? '')).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
@@ -13,6 +14,23 @@ export function renderTable(headers, rows) {
   const sep = `| ${headers.map(() => '---').join(' | ')} |`;
   const body = rows.map((row) => `| ${row.map(cell).join(' | ')} |`);
   return redactText(`${[head, sep, ...body].join('\n')}\n`);
+}
+
+// ---- F4a: lembrete de delegação (SessionStart) ------------------------------
+
+export const DELEGATION_COMMANDS = [
+  { cli: 'opc ask', slash: '/opc:ask', use: 'dúvidas sobre o código, investigação e análise de causa raiz' },
+  { cli: 'opc plan', slash: '/opc:plan', use: 'planos de implementação: arquivos, ordem, escolhas, riscos e testes' },
+  { cli: 'opc review --wait', slash: '/opc:review', use: 'revisão das alterações atuais' },
+];
+
+export function delegationReminder(commands = DELEGATION_COMMANDS) {
+  const lines = commands.map((c) => `- ${c.use}: \`${c.cli}\` (${c.slash})`);
+  return [
+    'A delegação opc está ativa nesta sessão (delegation.auto). Para análises relevantes, encaminhe o trabalho ao OpenCode:',
+    ...lines,
+    'Siga a skill opc-delegation: evite perguntas triviais e pequenas edições, valide cada resultado antes de apresentá-lo e respeite a política do opc e a pessoa aprovadora. Siga também a opc-result-handling para pedidos de permissão; nunca responda sem o usuário. Nunca encadeie delegações.',
+  ].join('\n');
 }
 
 export function renderError(err) {
@@ -384,7 +402,20 @@ export function renderTurnResult(job) {
   if (r.touchedFiles?.length) lines.push(`Arquivos alterados: ${r.touchedFiles.join(', ')}`);
   const hint = resumeHint(job);
   if (hint) lines.push(`Continuar: ${hint}`);
-  return redactText(`${lines.join('\n').trimEnd()}\n`);
+  return redactText(`${lines.join('\n').trimEnd()}\n${renderAttempts(job.attempts)}`);
+}
+
+// ---- F4a: tentativas ---------------------------------------------------------------
+
+export function renderAttempts(attempts) {
+  if (!Array.isArray(attempts) || attempts.length < 2) return '';
+  const lines = attempts.map((a, i) => {
+    const outcome = a.status === 'completed'
+      ? 'concluída'
+      : `${a.status}${a.errorClass ? ` (${a.errorClass}${a.errorType ? ` ${a.errorType}` : ''})` : ''}`;
+    return `${i + 1}. \`${a.model}\` — ${outcome}${a.sessionID ? ` — sessão \`${a.sessionID}\`` : ''}`;
+  });
+  return redactText(`\n## Tentativas (${attempts.length})\n\n${lines.join('\n')}\n`);
 }
 
 export function renderCancel(job, report) {
@@ -870,4 +901,108 @@ export function renderAttach(info) {
   lines.push(`    ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
   return f3Finish(lines);
+}
+
+// ---- F4a: monitor ----------------------------------------------------------
+
+const ANSI = Object.freeze({ reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m', gray: '\x1b[90m' });
+
+const STATUS_STYLE = Object.freeze({
+  queued: { icon: '○', color: 'gray' },
+  running: { icon: '●', color: 'cyan' },
+  waiting_permission: { icon: '⏸', color: 'yellow' },
+  completed: { icon: '✓', color: 'green' },
+  failed: { icon: '✗', color: 'red' },
+  cancelled: { icon: '⊘', color: 'gray' },
+});
+
+// The monitor uses the canonical active-job list from state.mjs (F0).
+export const MONITOR_ACTIVE = ACTIVE_JOB_STATUSES;
+
+function paint(text, color, enabled) {
+  return enabled && ANSI[color] ? `${ANSI[color]}${text}${ANSI.reset}` : text;
+}
+
+// Snapshot data is untrusted display text. Strip terminal controls before it can
+// be wrapped in renderer-owned ANSI styling, then apply both redaction layers.
+function monitorText(value) {
+  const text = String(value ?? '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    // every monitor field renders on a single line
+    .replace(/\r\n|[\t\n\r]/g, ' ');
+  return safeOutputText(text);
+}
+
+export function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function elapsedOf(job, now) {
+  const start = Date.parse(job.startedAt ?? job.createdAt ?? '');
+  if (!Number.isFinite(start)) return '--:--';
+  const end = job.completedAt ? Date.parse(job.completedAt) : now;
+  return formatElapsed((Number.isFinite(end) ? end : now) - start);
+}
+
+function monitorClock(now) {
+  return new Date(now).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function pendingMonitorLines(job, color) {
+  if (!Array.isArray(job.pending) || job.pending.length === 0) return [];
+  return job.pending.map((pending) => {
+    if (pending.kind === 'question') {
+      return paint(`    ⏸ pergunta ${monitorText(pending.id)}: ${monitorText(pending.what)} → /opc:permissions answer ${monitorText(pending.id)} <resposta>`, 'yellow', color);
+    }
+    const patterns = pending.patterns?.length ? ` [${pending.patterns.map(monitorText).join(', ')}]` : '';
+    return paint(`    ⏸ permissão ${monitorText(pending.id)}: ${monitorText(pending.what)}${patterns} → /opc:permissions reply ${monitorText(pending.id)} once|reject`, 'yellow', color);
+  });
+}
+
+function monitorJobLine(job, now, color, indent) {
+  const style = STATUS_STYLE[job.status] ?? { icon: '?', color: 'reset' };
+  const attempt = `tentativa ${monitorText(job.attempt.current)}/${monitorText(job.attempt.limit)}`;
+  return [
+    `${indent}${paint(monitorText(style.icon), style.color, color)} ${paint(monitorText(job.id), 'bold', color)}`,
+    monitorText(job.status),
+    monitorText(job.phase ?? '—'),
+    monitorText(job.model ?? '—'),
+    attempt,
+    elapsedOf(job, now),
+  ].join('  ');
+}
+
+export function renderMonitor(snapshot, { color = false } = {}) {
+  const { now, jobs, focus } = snapshot;
+  const active = jobs.filter((job) => MONITOR_ACTIVE.includes(job.status)).length;
+  const header = `${paint('opc monitor', 'bold', color)} — ${monitorClock(now)} — ${active} ativo(s), ${jobs.length - active} recente(s) — Ctrl+C para sair`;
+  if (jobs.length === 0) return redactText(`${header}\n\nNenhum job neste workspace.\n${(snapshot.warnings ?? []).map((warning) => `${warning}\n`).join('')}`);
+  const out = [header, ''];
+  for (const job of jobs) {
+    const indent = job.groupId && jobs.some((item) => item.id === job.groupId) ? '  ' : '';
+    out.push(monitorJobLine(job, now, color, indent));
+    if (job.title) out.push(paint(`${indent}    ${monitorText(job.title)}`, 'dim', color));
+    out.push(...pendingMonitorLines(job, color));
+    if (job.status === 'failed' && job.errorMessage) {
+      out.push(paint(`${indent}    erro: ${job.errorType ? `${monitorText(job.errorType)}: ` : ''}${monitorText(job.errorMessage)}`, 'red', color));
+    }
+    if (focus === job.id && Array.isArray(job.attempts) && job.attempts.length > 0) {
+      out.push(`${indent}    tentativas:`);
+      job.attempts.forEach((attempt, index) => {
+        const cls = attempt.errorClass ? ` (${monitorText(attempt.errorClass)}${attempt.errorType ? ` ${monitorText(attempt.errorType)}` : ''})` : '';
+        out.push(`${indent}      ${index + 1}. ${monitorText(attempt.model)} — ${monitorText(attempt.status)}${cls}`);
+      });
+    }
+    for (const line of job.log ?? []) out.push(paint(`${indent}    │ ${monitorText(line)}`, 'gray', color));
+  }
+  for (const warning of snapshot.warnings ?? []) out.push(warning);
+  return redactText(`${out.join('\n')}\n`);
 }

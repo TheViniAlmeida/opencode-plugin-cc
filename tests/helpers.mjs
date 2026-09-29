@@ -505,3 +505,27 @@ export async function eventually(fn, { timeoutMs = 15000, intervalMs = 200 } = {
   }
 }
 // ---- end F3 ----
+
+// ---- F4a helpers (appended; reuses writeGlobalConfig/writeWorkspaceConfig F1, stateDirFor/jobsIn/requestsTo F2a,
+// waitFor F0 — never redefined) ----
+export const FIXTURE_MODELS = Object.freeze({
+  fast: 'omniroute-personal/opencode-go/deepseek-v4.1-flash',
+  strong: 'omniroute-personal/opencode-go/qwen3.8-max',
+  k3: 'omniroute-personal/opencode-go/kimi-k3',
+});
+
+export function promptModels(env) {
+  return requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/)
+    .map((r) => `${r.body?.model?.providerID}/${r.body?.model?.modelID}`);
+}
+
+export function parseFrontmatter(text) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(text);
+  if (!match) throw new Error('missing frontmatter');
+  const data = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (kv) data[kv[1]] = kv[2].trim();
+  }
+  return { data, body: match[2] };
+}

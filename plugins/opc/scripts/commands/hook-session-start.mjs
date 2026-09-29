@@ -4,17 +4,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseHookInput, readStdin } from '../lib/args.mjs';
 import { contextForCwd } from '../lib/context.mjs';
+import { loadConfig, delegationAutoEnabled } from '../lib/config.mjs';
+import { delegationReminder } from '../lib/render.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { registerClaudeSession } from '../lib/state.mjs';
 
-export const DELEGATION_REMINDER = [
-  'A delegação automática do opc está ativa nesta sessão: o OpenCode está disponível como um segundo mecanismo pelo plugin opc.',
-  '- Delegue análises somente leitura, dúvidas sobre o código, revisões e planejamento com /opc:ask, /opc:plan ou /opc:review.',
-  '- Não delegue perguntas triviais nem pequenas edições que você possa concluir diretamente.',
-  '- Valide o retorno do OpenCode antes de apresentá-lo e mantenha exatas as referências arquivo:linha.',
-  '- Siga a skill opc-result-handling para pedidos de permissão; nunca responda por conta própria quando a aprovação cabe ao usuário.',
-  '- Nunca encadeie delegações: uma tarefa opc não deve iniciar outra sem pedido explícito do usuário.',
-].join('\n');
+// O texto final vive em render.mjs; mantém o nome exportado da F2b.
+export const DELEGATION_REMINDER = delegationReminder();
+
+export function contextOptions() { return { allowInvalidConfig: true }; }
+
+export function sessionStartContext({ dataDir, workspaceRoot }, err = () => {}) {
+  try {
+    const { global, workspace } = loadConfig({ dataDir, workspaceRoot });
+    return delegationAutoEnabled({ global, workspace }) ? delegationReminder() : null;
+  } catch (error) {
+    const code = /^[A-Z_]+$/.test(String(error?.code ?? '')) ? error.code : 'ERRO';
+    err(code === 'CONFIG_INVALID'
+      ? '[opc] config inválida; lembrete de delegação desativado (CONFIG_INVALID).\n'
+      : `[opc] lembrete de delegação desativado (${code}).\n`);
+    return null; // configuração ilegível nunca impede o início da sessão
+  }
+}
 
 function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
 
@@ -35,7 +46,7 @@ export async function run(ctx) {
       CLAUDE_PLUGIN_DATA: ctx.env.CLAUDE_PLUGIN_DATA,
       OPC_DATA_DIR: ctx.dataDir,
     });
-    const hctx = contextForCwd(ctx, input.cwd || ctx.cwd);
+    const hctx = contextForCwd(ctx, input.cwd || ctx.cwd, { allowInvalidConfig: true });
     if (input.session_id) {
       const identity = getProcessIdentity(process.ppid);
       await registerClaudeSession(hctx.stateDir, {
@@ -45,8 +56,9 @@ export async function run(ctx) {
         source: input.source ?? null, startedAt: new Date().toISOString(),
       });
     }
-    if (hctx.config?.delegation?.auto === true) {
-      ctx.out(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: DELEGATION_REMINDER } })}\n`);
+    const additionalContext = sessionStartContext({ dataDir: ctx.dataDir, workspaceRoot: hctx.workspaceRoot }, (message) => ctx.err(message));
+    if (additionalContext) {
+      ctx.out(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } })}\n`);
     }
   } catch {
     ctx.err('[opc] não foi possível processar o início da sessão.\n');
