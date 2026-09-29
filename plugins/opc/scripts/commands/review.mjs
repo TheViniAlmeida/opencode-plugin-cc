@@ -69,11 +69,10 @@ function emitReviewResult(ctx, job, { json }) {
     else ctx.out(`# OPC Revisão\n\nJob ${job.id} aguarda resposta de permissão. Execute /opc:permissions list.\n`);
     return ExitCode.WAITING;
   }
-  const rendered = `${renderReviewJob(job)}${renderAttempts(job.attempts)}`;
   if (json) {
     const structured = job.result?.structured ?? null;
-    ctx.json({ jobId: job.id, status: job.status, review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered });
-  } else ctx.out(rendered);
+    ctx.json({ jobId: job.id, status: job.status, review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered: renderReviewJob(job) });
+  } else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
   return exitCodeForJob(job);
 }
 
