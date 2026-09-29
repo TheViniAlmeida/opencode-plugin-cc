@@ -5,6 +5,7 @@ export default {
   onPromptAsync(fake, sessionID, body) {
     if (isFailingModel(body)) {
       fake.emitTurn(sessionID, {
+        text: '',
         error: { name: 'APIError', data: { message: 'Limite de requisições excedido (429 falso)', statusCode: 429, isRetryable: true } },
         delayMs: 20,
       });

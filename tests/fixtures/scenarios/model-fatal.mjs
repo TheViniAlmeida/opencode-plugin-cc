@@ -5,6 +5,7 @@ export default {
   onPromptAsync(fake, sessionID, body) {
     if (isFailingModel(body)) {
       fake.emitTurn(sessionID, {
+        text: '',
         error: { name: 'ProviderAuthError', data: { providerID: body.model.providerID, message: 'Chave de API inválida (falsa)' } },
         delayMs: 20,
       });

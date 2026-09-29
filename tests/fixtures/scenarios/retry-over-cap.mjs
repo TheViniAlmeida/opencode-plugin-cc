@@ -11,20 +11,17 @@ export default {
       fake.emitTurn(sessionID, successTurn(body));
       return;
     }
-    fake.emit({ type: 'session.status', properties: { sessionID, status: { type: 'busy' } } });
+    fake.setStatus(sessionID, { type: 'busy' });
     let attempt = 0;
     const timer = setInterval(() => {
       const aborted = fake.state.requests.some((r) => r.method === 'POST' && r.path === `/session/${sessionID}/abort`);
       if (aborted || attempt >= MAX_TICKS) {
         clearInterval(timer);
-        fake.emitTurn(sessionID, { error: { name: 'MessageAbortedError', data: { message: 'A operação foi cancelada.' } } });
+        fake.emitTurn(sessionID, { text: '', error: { name: 'MessageAbortedError', data: { message: 'A operação foi cancelada.' } } });
         return;
       }
       attempt += 1;
-      fake.emit({
-        type: 'session.status',
-        properties: { sessionID, status: { type: 'retry', attempt, message: 'Limite de requisições (falso)', next: Date.now() + 1000 * attempt } },
-      });
+      fake.setStatus(sessionID, { type: 'retry', attempt, message: 'Limite de requisições (falso)', next: Date.now() + 1000 * attempt });
     }, TICK_MS);
   },
 };
