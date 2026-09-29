@@ -57,3 +57,17 @@ Resultado ao vivo do portão: primeiro setup em aproximadamente 42 s, porta 4040
 - Chaves de provider e senha não aparecem em saída, log ou documentação.
 - O plugin não escreve na configuração nem na autenticação do OpenCode.
 - Nenhum sinal é enviado a processo cuja identidade não confira.
+
+## Grupos de jobs e subagentes (F3)
+
+Um grupo é um job com `role: "group"` e `memberIds`; cada membro tem `groupId` e `role: "member:<n>"`. Apenas o grupo conta em `jobs.maxActive` e na poda. Membros herdam a identidade do processo do coordenador, mas o matcher de worker não confunde o membro com esse processo; cancelar um membro aborta somente sua sessão.
+
+`opc task-worker --job-id <grupo>` escolhe o worker por `kind`: `sub` delega para `subagent.mjs` e `cmd` para `command.mjs`. Para subagentes, o coordenador abre um único `EventHub`, cria a sessão pai e executa os membros com `runWithConcurrency(memberIds, jobs.maxParallel, …)`. Cada membro chama `dispatchSubagent`: normalmente cria uma sessão filha com o agente; se o servidor a recusar, usa uma sessão portadora e uma parte `subtask`.
+
+Cada membro cria sua própria ponte de pedidos da F2a. A atualização do membro também recalcula o grupo: pedidos pendentes ficam identificados por `memberId`; ao resolver um pedido, o turno correspondente retoma. Um membro isolado não vira `worker_lost`; quando a reconciliação perde o grupo, os membros ativos também são perdidos.
+
+## Attach e ciclo de vida do segredo (F3)
+
+No boot gerenciado, `server.json` é publicado antes de `attach.secret`; o segredo tem modo 600 e é escrito sob `server.lock` somente se a identidade do registro ainda confere. Falha de publicação faz rollback do processo e dos arquivos. `stopServerUnlocked`, usado pelo encerramento normal, remove `attach.secret` inclusive quando encontra o registro órfão ou ausente.
+
+`/opc:attach --pane` cria `<stateDir>/attach-pane.sh` com modo 700. O tmux recebe só o caminho desse script, do arquivo de segredo, do binário e dos argumentos de attach. Dentro do pane, o script lê o arquivo, exporta `OPENCODE_SERVER_PASSWORD` e executa o OpenCode; a senha não vai para argv. Em modo externo, `OPC_SERVER_URL` usa `OPC_SERVER_PASSWORD` do ambiente e não há arquivo local nem suporte a `--pane`.

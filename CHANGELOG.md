@@ -6,6 +6,19 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado (F3 — sessões, subagentes, commands, attach)
+
+- `/opc:sessions` e `/opc:session`: criação, consulta, fork, revert/unrevert com confirmação, resumo, filhas, diff e tarefas.
+- `/opc:subagent`: grupo de jobs com membros concorrentes, sessão filha por membro e fallback para `subtask`; `status`, `result` e `cancel` agregados.
+- `/opc:command`: executa commands do OpenCode em job próprio com política aplicada ao modelo e agente.
+- `/opc:attach` e `--pane` no tmux, com segredo lido de `<stateDir>/attach.secret` somente dentro do pane.
+
+### Alterado
+
+- `jobs.maxActive` e a poda contam o grupo como um job; membros não são barrados por esse limite e `cancel` sem id os ignora.
+- Membros isolados não viram `worker_lost`; um grupo perdido encerra seus membros ativos.
+- O servidor gerenciado publica e remove `attach.secret` durante o próprio ciclo de vida.
+
 ### Adicionado (F2b — paridade Codex)
 
 - `/opc:review` e `/opc:adversarial-review`: estimativa, pergunta aguardar/background, schema `review-output`, modo em partes acima de 400 KB e render por severidade.
