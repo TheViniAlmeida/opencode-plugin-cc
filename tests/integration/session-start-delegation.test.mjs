@@ -11,11 +11,11 @@ import { loadState } from '../../plugins/opc/scripts/lib/state.mjs';
 async function sessionStart(t, { globalCfg = null, workspaceCfg = null, invalidScope = null } = {}) {
   const env = testEnv(t);
   const ws = makeWorkspace(t);
+  fs.mkdirSync(env.OPC_DATA_DIR, { recursive: true, mode: 0o700 });
   if (globalCfg) writeGlobalConfig(env, globalCfg);
   if (workspaceCfg) writeWorkspaceConfig(ws, workspaceCfg);
-  if (invalidScope === 'global') fs.writeFileSync(path.join(env.OPC_DATA_DIR, 'config.json'), '{invalid json');
+  if (invalidScope === 'global') fs.writeFileSync(path.join(env.OPC_DATA_DIR, 'config.json'), '{invalid json', { mode: 0o600 });
   if (invalidScope === 'workspace') fs.writeFileSync(path.join(ws, '.opc.json'), '{invalid json');
-  fs.mkdirSync(env.OPC_DATA_DIR, { recursive: true });
   const envFile = path.join(env.OPC_DATA_DIR, 'claude-env.sh');
   fs.writeFileSync(envFile, '');
   const r = await runCli(['hook-session-start'], {
