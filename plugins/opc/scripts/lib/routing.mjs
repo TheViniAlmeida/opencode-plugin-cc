@@ -281,6 +281,8 @@ export async function runWithFallback({
       startedAt,
       endedAt: now(),
     };
+    // a safety failure whose aborts were not confirmed may leave the session (or children) running
+    if (result.abortConfirmed === false) record.abortConfirmed = false;
     attempts.push(record);
     await onAttemptEnd(record, result, index);
 

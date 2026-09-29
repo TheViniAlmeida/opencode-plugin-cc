@@ -309,6 +309,28 @@ for (const status of ['completed', 'failed']) {
   });
 }
 
+for (const errorType of ['CallbackFailed', 'ChildPermissionFailed']) {
+  test(`F4a C2: a ${errorType} attempt with unconfirmed aborts is still aborted on cancel`, async (t) => {
+    const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+    const stateDir = tempStateDir(t);
+    const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a', childSessionIDs: ['ses_child'] });
+    await recordAttempt(stateDir, job.id, { model: 'p/a', sessionID: 'ses_a', status: 'failed', errorClass: 'fatal', errorType, abortConfirmed: false });
+    const aborted = [];
+    const outcome = await cancelJob({ stateDir }, job.id, { api: { abort: async (id) => { aborted.push(id); return false; } } });
+    assert.deepEqual(aborted, ['ses_a'], 'abort is attempted again instead of skipped');
+    assert.equal(outcome.ok, false);
+  });
+}
+
+test('F4a C2: runWithFallback records abortConfirmed=false on the attempt', async (t) => {
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', request: { candidates: [A, B], fallbackEligible: true } });
+  await runJobTurn({ stateDir, job, config: CONFIG, baseTurnRequest: BASE, backoffMs: [0], sleep: async () => true,
+    runTurnImpl: async (o) => ({ ...failTurn(o.request), errorClass: 'fatal', errorType: 'CallbackFailed', abortConfirmed: false }),
+  });
+  assert.equal(readJob(stateDir, job.id).attempts[0].abortConfirmed, false);
+});
+
 test('F4a I1: a pending attempt keeps cancellation intent if publication exceeds the bounded wait', async (t) => {
   const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
   const stateDir = tempStateDir(t);

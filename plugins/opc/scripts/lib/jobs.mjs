@@ -653,9 +653,11 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   // attemptInFlight=false + an attempt recorded for the current session means that turn already ended
   // (completed or failed, e.g. during the fallback backoff): there is no live session to abort, and a
   // refused abort must not withdraw the cancellation (progress updates may overwrite phase meanwhile).
-  // AbortUnconfirmed is the exception: that session may still be running.
+  // Exception: an attempt whose abort was not confirmed (AbortUnconfirmed, or a safety failure with
+  // abortConfirmed=false) may still have the session or its children running.
   const previousFinished = job.attemptInFlight === false && Boolean(lastAttempt)
-    && lastAttempt.sessionID === job.sessionID && lastAttempt.errorType !== 'AbortUnconfirmed';
+    && lastAttempt.sessionID === job.sessionID
+    && lastAttempt.errorType !== 'AbortUnconfirmed' && lastAttempt.abortConfirmed !== false;
   if (client && job.sessionID && job.phase !== 'fallback' && !previousFinished) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
