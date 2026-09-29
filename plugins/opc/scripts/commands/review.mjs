@@ -5,7 +5,7 @@ import { connectApi } from '../lib/context.mjs';
 import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { assertNotInsideServer, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, loadSchema, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
-import { renderReviewEstimate, renderReviewJob, validateReviewOutput } from '../lib/render.mjs';
+import { renderAttempts, renderReviewEstimate, renderReviewJob, validateReviewOutput } from '../lib/render.mjs';
 import { redactText, safeOutputText } from '../lib/redact.mjs';
 import { exitCodeForJob } from './task.mjs';
 
@@ -69,7 +69,7 @@ function emitReviewResult(ctx, job, { json }) {
     else ctx.out(`# OPC Revisão\n\nJob ${job.id} aguarda resposta de permissão. Execute /opc:permissions list.\n`);
     return ExitCode.WAITING;
   }
-  const rendered = renderReviewJob(job);
+  const rendered = `${renderReviewJob(job)}${renderAttempts(job.attempts)}`;
   if (json) {
     const structured = job.result?.structured ?? null;
     ctx.json({ jobId: job.id, status: job.status, review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered });

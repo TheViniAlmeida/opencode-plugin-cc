@@ -384,7 +384,20 @@ export function renderTurnResult(job) {
   if (r.touchedFiles?.length) lines.push(`Arquivos alterados: ${r.touchedFiles.join(', ')}`);
   const hint = resumeHint(job);
   if (hint) lines.push(`Continuar: ${hint}`);
-  return redactText(`${lines.join('\n').trimEnd()}\n`);
+  return redactText(`${lines.join('\n').trimEnd()}\n${renderAttempts(job.attempts)}`);
+}
+
+// ---- F4a: tentativas ---------------------------------------------------------------
+
+export function renderAttempts(attempts) {
+  if (!Array.isArray(attempts) || attempts.length < 2) return '';
+  const lines = attempts.map((a, i) => {
+    const outcome = a.status === 'completed'
+      ? 'concluída'
+      : `${a.status}${a.errorClass ? ` (${a.errorClass}${a.errorType ? ` ${a.errorType}` : ''})` : ''}`;
+    return `${i + 1}. \`${a.model}\` — ${outcome}${a.sessionID ? ` — sessão \`${a.sessionID}\`` : ''}`;
+  });
+  return redactText(`\n## Tentativas (${attempts.length})\n\n${lines.join('\n')}\n`);
 }
 
 export function renderCancel(job, report) {
