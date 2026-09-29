@@ -6,7 +6,7 @@ import { assertId } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderTodos, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages } from '../lib/session-messages.mjs';
-import { maskDeep } from '../lib/redact.mjs';
+import { maskDeep, safeOutputText } from '../lib/redact.mjs';
 
 const SPEC = {
   flags: {
@@ -104,7 +104,7 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
   if (!release) throw new UsageError('SESSION_IN_USE', `a sessão ${sessionID} está em uso por um job ativo; aguarde (/opc:status) ou cancele (/opc:cancel)`);
   try {
     const status = (await api.sessionStatus())?.[sessionID];
-    if (status && status.type !== 'idle') throw new UsageError('SESSION_BUSY', `a sessão ${sessionID} está ocupada (${status.type}); tente de novo quando ficar ociosa`);
+    if (status && status.type !== 'idle') throw new UsageError('SESSION_BUSY', `a sessão ${sessionID} está ocupada (${safeOutputText(status.type)}); tente de novo quando ficar ociosa`);
     return await fn();
   } finally {
     release();
@@ -113,7 +113,8 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
 
 export async function collectAffectedDiff(api, sessionID, messageID) {
   const messages = (await readSessionMessages(api, sessionID)) ?? [];
-  if (messages.messagesUnavailable) {
+  const index = messages.findIndex((m) => m.info?.id === messageID);
+  if (messages.messagesUnavailable || index < 0) {
     let target;
     try { target = await api.message(sessionID, messageID); }
     catch (err) {
@@ -121,12 +122,12 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
       throw err;
     }
     if (!target) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
-    const diffs = (await api.diff(sessionID, { messageID })) ?? [];
-    diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
+    const diffMessageID = target.info?.role === 'assistant' ? target.info.parentID ?? messageID : messageID;
+    const diffs = (await api.diff(sessionID, { messageID: diffMessageID })) ?? [];
+    if (messages.messagesUnavailable) diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
+    else diffs.previewTruncated = true;
     return diffs;
   }
-  const index = messages.findIndex((m) => m.info?.id === messageID);
-  if (index < 0) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
   const target = messages[index].info;
   const ids = [];
   if (target.role === 'assistant' && target.parentID) ids.push(target.parentID);
@@ -205,7 +206,7 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
       timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000,
     });
     if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true }));
-    else ctx.out(`# Sessão ${sessionID} resumida\n\nModelo: ${model.full}\nVeja o resultado: opc session show ${sessionID}\n`);
+    else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\nVeja o resultado: opc session show ${safeOutputText(sessionID)}\n`);
     return ExitCode.OK;
   });
 }

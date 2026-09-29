@@ -92,11 +92,11 @@ export function redactOutput(value) {
   return visit(safe);
 }
 
-// A turn also contains opc status/error messages; mask only its model/repository fields.
+// Provider errors, like model/repository content, can include unregistered credentials.
 export function redactTurnOutput(value) {
   const safe = redact(value);
   if (!safe || typeof safe !== 'object') return safe;
-  for (const field of ['finalText', 'structured', 'touchedFiles']) {
+  for (const field of ['finalText', 'structured', 'touchedFiles', 'error', 'errorMessage', 'errorType']) {
     if (Object.hasOwn(safe, field)) safe[field] = redactOutput(safe[field]);
   }
   return safe;

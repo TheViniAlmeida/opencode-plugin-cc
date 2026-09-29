@@ -182,12 +182,15 @@ test('SessionEnd bounds both workspace resolutions and preserves time to spawn r
 test('job persistence and logs preserve opc messages while masking model fields', async (t) => {
   const stateDir = temp(t);
   const message = `Exemplo de configuração: ${token()}`;
+  // F3 gate (C2): error fields can carry provider text, so token-like values are masked there;
+  // opc's own wording without token-like values stays verbatim (F2b ruling on over-broad masking).
+  const opcMessage = 'LOCKED_KEY: --tty-confirm exige um terminal; UNKNOWN_KEY: chave desconhecida';
   const job = await createJob(stateDir, { kind: 'review' });
-  await updateJob(stateDir, job.id, { status: 'failed', errorMessage: message,
+  await updateJob(stateDir, job.id, { status: 'failed', errorMessage: opcMessage,
     result: { errorMessage: message, finalText: token(), structured: { ...valid, summary: token() } } });
   const record = readJob(stateDir, job.id);
-  assert.equal(record.errorMessage, message);
-  assert.equal(record.result.errorMessage, message);
+  assert.equal(record.errorMessage, opcMessage);
+  assert.equal(record.result.errorMessage, 'Exemplo de configuração: ***');
   assert.equal(record.result.finalText, '***');
   assert.equal(record.result.structured.summary, '***');
   appendJobLog(stateDir, job.id, message);

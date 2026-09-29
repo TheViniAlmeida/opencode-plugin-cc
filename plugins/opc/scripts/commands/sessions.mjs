@@ -3,6 +3,7 @@ import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
 import { listJobs, ACTIVE_STATUSES, topLevelJobs, withServerLock } from '../lib/jobs.mjs';
 import { renderSessions } from '../lib/render.mjs';
+import { maskDeep } from '../lib/redact.mjs';
 
 const SPEC = {
   flags: {
@@ -44,7 +45,7 @@ export async function run(ctx, argv) {
       .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
     const shown = list.slice(0, Math.max(1, flags.limit));
     if (flags.json) {
-      ctx.json({ sessions: shown, total: list.length, filtered: !flags.all });
+      ctx.json(maskDeep({ sessions: shown, total: list.length, filtered: !flags.all }));
     } else {
       ctx.out(renderSessions(shown, {
         statusMap: statusMap ?? {},

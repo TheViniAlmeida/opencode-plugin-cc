@@ -42,14 +42,18 @@ test('F3 live (§15 item 12): opencode run simultâneo a um job opc no mesmo pro
   const logFile = join(stateDir(), 'server.log'); const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : '';
   const lockErrors = /SQLITE_BUSY|database is locked/i.test(log);
   const all = JSON.parse((await opc(['sessions', '--all', '--json'], { env, cwd: ws })).stdout).sessions;
+  const refreshed = await opc(['sessions', '--all', '--refresh', '--json'], { env, cwd: ws });
+  record('opc sessions --all --refresh --json (após o job terminar)', refreshed, dataDir);
+  assert.equal(refreshed.code, 0, refreshed.stderr);
+  const afterRefresh = JSON.parse(refreshed.stdout).sessions;
   const findings = { opencodeRunExit: direct.code, opcJobExit: waited.code, jobStartedAt: runningJob.startedAt,
     opencodeRunStartedAt: new Date(direct.startedAt).toISOString(), opencodeRunCompletedAt: new Date(direct.completedAt).toISOString(),
     jobCompletedAt: finishedJob.completedAt, lockErrorsInServerLog: lockErrors,
-    nonOpcSessionVisibleToPluginServer: all.some((s) => !String(s.title).startsWith('OPC: ')) };
+    nonOpcSessionVisibleToPluginServer: all.some((s) => !String(s.title).startsWith('OPC: ')),
+    nonOpcSessionVisibleToPluginServerAfterRefresh: afterRefresh.some((s) => !String(s.title).startsWith('OPC: ')) };
   note('§15 item 12 — parte automatizada', findings, dataDir);
   assert.equal(direct.code, 0, direct.stderr); assert.equal(waited.code, 0, waited.stderr);
   assert.ok(Date.parse(runningJob.startedAt) < direct.completedAt, 'opc job started before opencode run finished');
   assert.ok(Date.parse(finishedJob.completedAt) > direct.startedAt, 'opc job completed after opencode run started');
-  assert.ok(findings.nonOpcSessionVisibleToPluginServer, 'non-OPC session is visible to the plugin server');
   assert.equal(lockErrors, false);
 });

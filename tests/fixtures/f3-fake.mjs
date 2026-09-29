@@ -46,16 +46,17 @@ export function createSessionRecord(fake, body = {}, directory = null) {
 }
 export function seedSession(fake) {
   initF3State(fake); const t0 = Date.now() - 60000; const s = SEED.session;
-  fake.state.sessions[s] = { id: s, slug: 'seed', projectID: 'prj_fake', directory: null, title: 'OPC: task: seeded session', version: '1.18.32', time: { created: t0, updated: t0 + 4000 } };
-  fake.state.sessions[SEED.userSession] = { id: SEED.userSession, slug: 'user', projectID: 'prj_fake', directory: null, title: 'User session from the TUI', version: '1.18.32', time: { created: t0, updated: t0 + 1000 } };
+  fake.state.sessions[s] = { id: s, slug: 'seed', projectID: 'prj_fake', directory: process.cwd(), title: 'OPC: task: seeded session', version: '1.18.32', time: { created: t0, updated: t0 + 4000 } };
+  fake.state.sessions[SEED.userSession] = { id: SEED.userSession, slug: 'user', projectID: 'prj_fake', directory: process.cwd(), title: 'User session from the TUI', version: '1.18.32', time: { created: t0, updated: t0 + 1000 } };
   const injected = process.env.FAKE_SESSION_CONTENT ?? '';
+  if (injected) fake.state.sessions[s].title = `OPC: task: ${injected}`;
   fake.state.messages[s] = [userMessage(s, SEED.m1, injected || 'first question', t0 + 1000), assistantMessage(s, SEED.m2, SEED.m1, 'first answer', { created: t0 + 2000 }), userMessage(s, SEED.m3, 'second question', t0 + 3000), assistantMessage(s, SEED.m4, SEED.m3, 'second answer', { created: t0 + 4000 })]; fake.state.messages[SEED.userSession] = [];
   const alpha = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1,2 @@\n original\n+ALPHA\n' };
   const beta = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1,2 +1,3 @@\n original\n ALPHA\n+BETA\n' };
   const extra = { file: 'extra.txt', status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+new file\n' };
   if (injected) alpha.patch += `+${injected}\n`;
   fake.state.f3.diffs[s] = [{ file: 'notes.txt', status: 'modified', additions: 2, deletions: 0, patch: `@@ -1 +1,3 @@\n original\n+ALPHA\n+BETA\n${injected ? `+${injected}\n` : ''}` }]; fake.state.f3.messageDiffs[s] = { [SEED.m1]: [alpha], [SEED.m3]: [beta, extra] };
-  fake.state.f3.todos[s] = [{ content: 'check alpha', status: 'completed', priority: 'high' }, { content: 'check beta', status: 'pending', priority: 'low' }]; persist(fake);
+  fake.state.f3.todos[s] = [{ content: injected || 'check alpha', status: 'completed', priority: 'high' }, { content: 'check beta', status: 'pending', priority: 'low' }]; persist(fake);
 }
 function hugeDiff() { return { file: 'huge.txt', status: 'added', additions: 250000, deletions: 0, patch: '+x\n'.repeat(250000) }; }
 export const F3_DATA = { 'provider.json': F3_PROVIDERS, 'agent.json': F3_AGENTS, 'command.json': F3_COMMANDS, 'config.json': F3_OPENCODE_CONFIG };

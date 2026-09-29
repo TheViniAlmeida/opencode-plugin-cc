@@ -17,6 +17,9 @@ test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, childr
     assert.equal(res.code, 0, `turn ${word} falhou: ${res.stdout}${res.stderr}`);
   }
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
+  res = await run('session diff (após as duas edições, antes do revert)', ['session', 'diff', sid, '--json']);
+  assert.equal(res.code, 0, res.stderr);
+  assert.ok(JSON.parse(res.stdout).diffs.some((d) => String(d.file).endsWith('notes.txt')));
   res = await run('session show', ['session', 'show', sid, '--limit', '100', '--json']);
   const users = JSON.parse(res.stdout).messages.filter((m) => m.info.role === 'user');
   const m2 = users.find((m) => userText(m).includes('BETA'))?.info.id;
@@ -42,8 +45,7 @@ test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, childr
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
   assert.equal(JSON.parse((await opc(['session', 'show', sid, '--json'], { env, cwd: ws })).stdout).session.revert, undefined);
-  res = await run('session diff', ['session', 'diff', sid, '--json']);
-  assert.ok(JSON.parse(res.stdout).diffs.some((d) => String(d.file).endsWith('notes.txt')));
+  res = await run('session diff (após unrevert; observação)', ['session', 'diff', sid, '--json']);
   res = await run('task todowrite', ['task', '--resume', sid, '--write', '--model', MODELS.deepseek, 'Use the todowrite tool to create a todo list with exactly two items: "check alpha" and "check beta". Then reply DONE.']);
   assert.equal(res.code, 0, res.stderr);
   res = await run('session todo', ['session', 'todo', sid, '--json']);

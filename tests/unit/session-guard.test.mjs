@@ -1,15 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { join } from 'node:path';
 import { withSessionGuard, collectAffectedDiff, PREVIEW_TRUNCATION_NOTICE } from '../../plugins/opc/scripts/commands/session.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 
 function tmpState(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'opc-guard-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
+  return trackTempDir(t, makeTempDir('opc-guard-'));
 }
 
 test('withSessionGuard refuses a busy session and releases the lock', async (t) => {
@@ -38,6 +35,7 @@ test('withSessionGuard runs fn for an idle session', async (t) => {
 test('collectAffectedDiff merges per-file diffs from the target message onward', async () => {
   const calls = [];
   const api = {
+    message: async () => null,
     messages: async () => [
       { info: { id: 'msg_1', role: 'user' } }, { info: { id: 'msg_2', role: 'assistant', parentID: 'msg_1' } },
       { info: { id: 'msg_3', role: 'user' } }, { info: { id: 'msg_4', role: 'assistant', parentID: 'msg_3' } },

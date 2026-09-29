@@ -1,7 +1,7 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
 import { shellQuote } from './args.mjs';
-import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns, safeOutputText } from './redact.mjs';
+import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns, safeOutputText, maskDeep } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
 
 function cell(value) {
@@ -647,7 +647,7 @@ function f3Finish(lines) {
 }
 
 function f3DerivedText(value) {
-  return redactText(maskSecretPatterns(String(value ?? '')));
+  return safeOutputText(value);
 }
 
 function fmtTime(ms) {
@@ -711,6 +711,9 @@ function diffBody(diffs, maxInlineBytes) {
 }
 
 export function renderSessions(sessions, { statusMap = {}, title = 'Sessões OPC', hiddenCount = 0 } = {}) {
+  sessions = maskDeep(sessions);
+  statusMap = maskDeep(statusMap);
+  title = safeOutputText(title);
   if (!sessions.length) return f3Finish([`# ${title}`, '', 'Nenhuma sessão encontrada.']);
   const rows = sessions.map((s) => [s.id, s.title ?? '', statusMap[s.id]?.type ?? 'idle', fmtTime(s.time?.updated), s.parentID ?? '-']);
   const lines = [`# ${title}`, '', f3Table(['ID', 'Título', 'Status', 'Atualizada (UTC)', 'Pai'], rows)];
@@ -719,6 +722,10 @@ export function renderSessions(sessions, { statusMap = {}, title = 'Sessões OPC
 }
 
 export function renderSession(session, { status = null, messages = [], note = null } = {}) {
+  session = maskDeep(session);
+  messages = maskDeep(messages);
+  status = status === null ? null : safeOutputText(status);
+  note = note === null ? null : safeOutputText(note);
   const lines = [`# Sessão ${session.id}`, ''];
   lines.push(`- Título: ${session.title ?? '-'}`);
   lines.push(`- Status: ${status ?? '-'}`);
@@ -745,17 +752,24 @@ export function renderSession(session, { status = null, messages = [], note = nu
 }
 
 export function renderSessionDiff(diffs, { maxInlineBytes = F3_MAX_INLINE_DIFF, title = 'Diff da sessão' } = {}) {
+  diffs = maskDeep(diffs);
+  title = safeOutputText(title);
   if (!diffs.length) return f3Finish([`# ${title}`, '', 'Nenhuma alteração registrada.']);
   return f3Finish([`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)]);
 }
 
 export function renderTodos(todos, { sessionID = null } = {}) {
-  const heading = `# Todos${sessionID ? ` da sessão ${sessionID}` : ''}`;
+  todos = maskDeep(todos);
+  const heading = `# Tarefas${sessionID ? ` da sessão ${safeOutputText(sessionID)}` : ''}`;
   if (!todos.length) return f3Finish([heading, '', 'Nenhum todo.']);
   return f3Finish([heading, '', f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))]);
 }
 
 export function renderRevertPreview({ action, sessionID, messageID = null, affected = [], rawDiff = null, command }) {
+  affected = maskDeep(affected);
+  sessionID = safeOutputText(sessionID);
+  messageID = messageID === null ? null : safeOutputText(messageID);
+  command = safeOutputText(command);
   const lines = [`# opc: confirmação necessária (${action})`, ''];
   if (action === 'revert') {
     lines.push(`Sessão ${sessionID} · a partir da mensagem ${messageID}.`);

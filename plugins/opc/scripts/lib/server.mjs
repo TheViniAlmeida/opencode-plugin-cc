@@ -367,8 +367,17 @@ async function bootServer(ctx, settings) {
       cmdline: identity.cmdline,
       world: checked.world,
     };
-    writeAttachSecret(stateDir, password);
-    writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+    let recorded = false;
+    try {
+      writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+      recorded = true;
+      writeAttachSecret(stateDir, password);
+    } catch (err) {
+      try { removeAttachSecret(stateDir); }
+      finally { await terminateProcessGroup(expected, matcher, { graceMs: 3000 }); }
+      if (recorded) removeServerRecord(stateDir);
+      throw err;
+    }
     return { url: res.url, password, version: health.version, pid: res.pid, port: res.port, attached: false, reused: false, world: checked.world, warnings };
   }
   throw new ConnectionError('BOOT_FAILED', `opencode serve não subiu após ${MAX_BOOT_ATTEMPTS} tentativas: ${failures.join('; ')}`, {
@@ -441,7 +450,10 @@ async function stopServerUnlocked(ctx, { force = false, confirmedByUser = false 
   if (env.OPC_SERVER_URL) return { stopped: false, reason: 'attached' };
   const record = readServerRecordData(stateDir);
   if (record?.password) registerSecret(record.password);
-  if (!record) return { stopped: false, reason: 'not-running' };
+  if (!record) {
+    removeAttachSecret(stateDir);
+    return { stopped: false, reason: 'not-running' };
+  }
   if (hasActiveJobs() && !force) return { stopped: false, reason: 'active-jobs' };
   const identity = getProcessIdentity(record.pid);
   if (!identity) {
