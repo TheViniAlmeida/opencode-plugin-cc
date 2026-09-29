@@ -1,7 +1,7 @@
 // Runs one OpenCode turn (prompt_async + SSE) until it ends (spec §7). Knows nothing about
 // commands, jobs or rendering: the caller wires progress, permissions and questions.
 import { randomBytes } from 'node:crypto';
-import { classifyError, retryExceedsCap } from './errors.mjs';
+import { classifyError, retryCapError, retryExceedsCap } from './errors.mjs';
 import { ConnectionError, OpcError, UsageError } from './opc-error.mjs';
 import { endsWithRules } from './policy.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
@@ -449,7 +449,7 @@ export async function runTurn({
     lastPhase = 'retrying';
     progress({ phase: 'retrying', message: `Nova tentativa (${displayValue(status.attempt)}): ${displayValue(status.message ?? '')}`.trim() });
     if (!forcedError && retryExceedsCap(status, request.fallbackCfg ?? {})) {
-      forcedError = { name: 'RetryCapExceeded', data: { message: 'Limite de tentativas do provedor excedido' } };
+      forcedError = retryCapError(status);
       progress({ message: 'Interrompendo sessão: limite de tentativas excedido' });
       await api.abort(sessionID);
       finish('forced-error');
