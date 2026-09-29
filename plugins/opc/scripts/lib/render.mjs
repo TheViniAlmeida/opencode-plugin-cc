@@ -1,7 +1,7 @@
 // Markdown rendering (no network I/O). Every output passes through redaction.
 import { OpcError } from './opc-error.mjs';
 import { shellQuote } from './args.mjs';
-import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns } from './redact.mjs';
+import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns, safeOutputText } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
 
 function cell(value) {
@@ -829,7 +829,10 @@ export function renderGroupResult(group, members) {
 
 export function renderCommandResult(result) {
   const lines = [`# opc command /${result.command}`, ''];
-  lines.push(`Argumentos: ${result.arguments ? `\`${result.arguments}\`` : '(nenhum)'}`);
+  if (result.status) lines.push(`Status: ${result.status}`);
+  const safeArgs = safeOutputText(result.argumentsPreview ?? result.arguments ?? '');
+  const args = safeArgs.length > 200 ? `${safeArgs.slice(0, 199)}…` : safeArgs;
+  lines.push(`Argumentos: ${args ? `\`${f3DerivedText(args)}\`` : '(nenhum)'}`);
   lines.push(`Sessão: ${result.sessionID ?? '-'} · modelo ${result.model ?? '-'} · agente ${result.agent ?? '(padrão)'}`, '');
   if (result.error) lines.push(`Erro: ${result.error.name ?? 'Error'}: ${f3DerivedText(result.error.data?.message ?? result.error.message ?? '')}`);
   else lines.push(f3DerivedText(result.finalText).trim() || '(sem texto final)');

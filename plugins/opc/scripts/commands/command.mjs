@@ -12,6 +12,7 @@ import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderCommandResult, renderPermissionRequest } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
+import { safeOutputText } from '../lib/redact.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
 const SPEC = {
@@ -28,6 +29,11 @@ export function textFromParts(parts) {
     .map((part) => part.text ?? '').join('\n').trim();
 }
 
+export function safeFailureMessage(value, rawArguments = '') {
+  const safe = safeOutputText(value);
+  return rawArguments ? safe.split(rawArguments).join('***') : safe;
+}
+
 function positiveSeconds(value, flag) {
   if (value === undefined) return null;
   if (!Number.isFinite(value) || value <= 0) throw new UsageError('USAGE', `${flag} exige um número positivo de segundos`);
@@ -41,9 +47,13 @@ export async function run(ctx, argv) {
   let rawName;
   let args;
   if (raw.text !== null) {
-    const match = raw.text.trim().match(/^(\S+)\s*([\s\S]*)$/);
+    let text = raw.text;
+    if (text.endsWith('\n')) text = text.slice(0, -1);
+    text = text.replace(/^\s+/, '');
+    const match = text.match(/^(\S+)([\s\S]*)$/);
     rawName = match?.[1];
     args = match?.[2] ?? '';
+    if (args.startsWith(' ') || args.startsWith('\t')) args = args.slice(1);
   } else {
     rawName = positionals[0];
     args = positionals.slice(1).join(' ');
@@ -75,12 +85,14 @@ export async function run(ctx, argv) {
     ? resolveModel(ctx, discovery, 'task', flags.model, { variant: flags.variant }).full
     : (cmd.model ?? resolveModel(ctx, discovery, 'task', null, { variant: flags.variant }).full);
   const profile = flags.write ? 'write' : 'read-only';
-  const title = `OPC: command: /${name}${args ? ` ${args}` : ''}`.replace(/\s+/g, ' ').slice(0, 100);
+  const argumentsPreview = previewArguments(args);
+  const argumentsBytes = Buffer.byteLength(args);
+  const title = `OPC: command: /${name}`;
   const job = await withServerLock(ctx, () => createJob(ctx.stateDir, {
-    kind: 'cmd', title, summary: `/${name} ${args}`.trim().slice(0, 80), workspaceRoot: ctx.workspaceRoot,
+    kind: 'cmd', title, summary: `/${name}`, workspaceRoot: ctx.workspaceRoot,
     claudeSessionId: ctx.claudeSessionId, status: 'queued', agent, model, variant: flags.variant ?? null,
     permissionProfile: profile,
-    request: { command: name, arguments: args, agent, model, variant: flags.variant ?? null,
+    request: { command: name, arguments: args, argumentsPreview, argumentsBytes, agent, model, variant: flags.variant ?? null,
       timeoutMs: timeoutSec * 1000, profile, rules: profileRules(ctx, profile), subtask: Boolean(cmd.subtask) },
   }, { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:cmd' });
   await spawnWorker(ctx, job.id);
@@ -95,7 +107,7 @@ export async function run(ctx, argv) {
   });
   if (flags.json) ctx.json({ job: final });
   else if (final.status === 'waiting_permission') ctx.out(renderPermissionRequest(final));
-  else ctx.out(final.rendered ?? renderCommandResult(final.result ?? { command: name, arguments: args }));
+  else ctx.out(final.rendered ?? renderCommandResult(final.result ?? { command: name, argumentsPreview, argumentsBytes }));
   return exitCodeForJob(final);
 }
 
@@ -103,6 +115,8 @@ export async function runWorker(ctx, job, request = job.request) {
   const { stateDir } = ctx;
   const now = () => new Date().toISOString();
   const policy = ctx.config.policy ?? {};
+  const rawArguments = request.arguments ?? '';
+  const safeMessage = (value) => safeFailureMessage(value, rawArguments);
   let conn;
   let release;
   try {
@@ -115,7 +129,7 @@ export async function runWorker(ctx, job, request = job.request) {
     const bridge = createRequestBridge({ update: (patch) => updater.update(patch), jobId: job.id, stateDir, api,
       profileKind: request.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
       log: (line) => appendJobLog(stateDir, job.id, line) });
-    const bridgeError = (kind) => (err) => appendJobLog(stateDir, job.id, `[opc] falha na ponte de ${kind}: ${err.message}`);
+    const bridgeError = (kind) => (err) => appendJobLog(stateDir, job.id, `[opc] falha na ponte de ${kind}: ${safeMessage(err.message)}`);
     const untrack = hub.track(session.id, (event) => {
       const props = event?.properties ?? {};
       if (event?.type === 'permission.asked') bridge.onPermission(props).catch(bridgeError('permissões'));
@@ -137,22 +151,39 @@ export async function runWorker(ctx, job, request = job.request) {
     const error = response?.info?.error ?? null;
     let patch;
     if (latest?.status === 'cancelled') patch = { status: 'cancelled' };
-    else if (failure) patch = { status: 'failed', errorCode: failure.code === 'TIMEOUT' ? 'timeout' : (failure.code ?? 'error'), errorType: failure.code ?? failure.name, errorMessage: failure.message };
+    else if (failure) patch = { status: 'failed', errorCode: failure.code === 'TIMEOUT' ? 'timeout' : (failure.code ?? 'error'), errorType: failure.code ?? failure.name, errorMessage: safeMessage(failure.message) };
     else if (error) {
       const classified = classifyError(error, { toolsRan: false });
-      patch = { status: 'failed', errorClass: classified.errorClass, errorType: classified.errorType, errorMessage: classified.message };
+      patch = { status: 'failed', errorClass: classified.errorClass, errorType: classified.errorType, errorMessage: safeMessage(classified.message) };
     } else patch = { status: 'completed' };
-    const result = { command: request.command, arguments: request.arguments ?? '', sessionID: session.id, model: request.model,
-      agent: request.agent ?? null, finalText: textFromParts(response?.parts), error: error ?? (failure ? { name: failure.code ?? 'Error', message: failure.message } : null) };
+    const resultError = error
+      ? { name: safeMessage(error.name ?? 'Error'), message: safeMessage(error.data?.message ?? error.message ?? '') }
+      : (failure ? { name: safeMessage(failure.code ?? 'Error'), message: safeMessage(failure.message) } : null);
+    const result = { status: patch.status, command: request.command, argumentsPreview: request.argumentsPreview ?? previewArguments(rawArguments),
+      argumentsBytes: request.argumentsBytes ?? Buffer.byteLength(rawArguments), sessionID: session.id, model: request.model,
+      agent: request.agent ?? null, finalText: safeOutputText(textFromParts(response?.parts)), error: resultError };
     await updateJob(stateDir, job.id, { ...patch, phase: patch.status, completedAt: now(), pendingRequest: null,
       result, rendered: renderCommandResult(result) });
     return exitCodeForJob(patch);
   } catch (err) {
-    appendJobLog(stateDir, job.id, `[opc] falha no worker command: ${err.message}`);
+    const message = safeFailureMessage(err.message ?? String(err), rawArguments);
+    const errorName = safeFailureMessage(err.code ?? err.name ?? 'Error', rawArguments);
+    appendJobLog(stateDir, job.id, `[opc] falha no worker command: ${message}`);
     const latest = readJob(stateDir, job.id);
     if (latest && latest.status !== 'cancelled') await updateJob(stateDir, job.id, {
-      status: 'failed', errorCode: err.code ?? 'error', errorMessage: err.message, completedAt: now(),
+      status: 'failed', errorCode: err.code ?? 'error', errorMessage: message, completedAt: now(),
+      result: { status: 'failed', command: request.command, argumentsPreview: request.argumentsPreview ?? previewArguments(rawArguments),
+        argumentsBytes: request.argumentsBytes ?? Buffer.byteLength(rawArguments), sessionID: latest.sessionID ?? null,
+        model: request.model ?? null, agent: request.agent ?? null, finalText: '', error: { name: errorName, message } },
+      rendered: renderCommandResult({ status: 'failed', command: request.command, argumentsPreview: request.argumentsPreview ?? previewArguments(rawArguments),
+        argumentsBytes: request.argumentsBytes ?? Buffer.byteLength(rawArguments), sessionID: latest.sessionID ?? null,
+        model: request.model ?? null, agent: request.agent ?? null, error: { name: errorName, message } }),
     });
     return ExitCode.JOB_FAILED;
   } finally { release?.(); conn?.close(); }
+}
+
+function previewArguments(args) {
+  const safe = safeOutputText(args);
+  return safe.length > 200 ? `${safe.slice(0, 199)}…` : safe;
 }

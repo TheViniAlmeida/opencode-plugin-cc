@@ -147,6 +147,20 @@ test('renderGroupResult: one section per member with text or error', () => {
 test('renderCommandResult: text or error', () => {
   assert.match(renderCommandResult({ command: 'echo', arguments: '', sessionID: 'ses_a', model: 'p/m', agent: null, finalText: 'OK' }), /Argumentos: \(nenhum\)[\s\S]*OK/);
   assert.match(renderCommandResult({ command: 'echo', arguments: 'x', sessionID: 'ses_a', model: 'p/m', error: { name: 'ProviderAuthError', data: { message: 'bad' } } }), /Erro: ProviderAuthError: bad/);
+  assert.match(renderCommandResult({ status: 'failed', command: 'echo', argumentsPreview: 'safe', error: { name: 'NetworkError', message: 'offline' } }), /Status: failed[\s\S]*Argumentos: `safe`[\s\S]*Erro: NetworkError: offline/);
+  const failedBeforeReply = renderCommandResult({ status: 'failed', command: 'echo', argumentsPreview: 'safe', error: { name: 'ConnectionError', message: 'offline' } });
+  assert.match(failedBeforeReply, /Status: failed[\s\S]*Erro: ConnectionError: offline/);
+  assert.doesNotMatch(failedBeforeReply, /sem texto final/);
+});
+
+test('renderCommandResult masks and bounds a legacy arguments field', () => {
+  const registered = 'fake-command-argument-secret';
+  registerSecret(registered);
+  const token = ['sk', 'proj', 'runtimefakevalue123456'].join('-');
+  const rendered = renderCommandResult({ command: 'echo', arguments: `${registered} ${token} ${'x'.repeat(205)}`, finalText: 'OK' });
+  assert.ok(!rendered.includes(registered));
+  assert.ok(!rendered.includes(token));
+  assert.match(rendered, /Argumentos: `\*\*\* \*\*\* x{[^`]{0,200}…`/);
 });
 
 test('renderAttach: command reads the password from file or env, never inline', () => {

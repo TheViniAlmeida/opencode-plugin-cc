@@ -129,7 +129,7 @@ function safeJob(job) {
   const safe = { ...job };
   if (job.request) {
     const request = job.request;
-    safe.request = Object.fromEntries(['kind', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID']
+    safe.request = Object.fromEntries(['kind', 'command', 'model', 'modelFull', 'profile', 'profileKind', 'title', 'agent', 'variant', 'sessionID', 'argumentsPreview', 'argumentsBytes']
       .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
     if (request.format) safe.request.format = { type: request.format.type };
     safe.request.bytes = request.bytes ?? Buffer.byteLength(JSON.stringify(request));
@@ -142,7 +142,19 @@ function safeJob(job) {
     if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
   }
   if (masked.request) masked.request = redactOutput(masked.request);
-  if (masked.result) masked.result = redactTurnOutput(masked.result);
+  if (masked.request && Object.hasOwn(masked.request, 'argumentsPreview')) {
+    const preview = safeOutputText(masked.request.argumentsPreview);
+    masked.request.argumentsPreview = preview.length > 200 ? `${preview.slice(0, 199)}…` : preview;
+  }
+  if (masked.result) {
+    masked.result = redactTurnOutput(masked.result);
+    for (const field of ['argumentsPreview', 'arguments']) {
+      if (Object.hasOwn(masked.result, field)) {
+        const safeText = safeOutputText(masked.result[field]);
+        masked.result[field] = safeText.length > 200 ? `${safeText.slice(0, 199)}…` : safeText;
+      }
+    }
+  }
   if (typeof masked.summary === 'string') masked.summary = masked.summary.slice(0, 200);
   return masked;
 }

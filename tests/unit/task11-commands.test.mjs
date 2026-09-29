@@ -4,6 +4,7 @@ import { createJob, updateJob, readJob } from '../../plugins/opc/scripts/lib/job
 import { run as runStatus } from '../../plugins/opc/scripts/commands/status.mjs';
 import { run as runResult } from '../../plugins/opc/scripts/commands/result.mjs';
 import { run as runCancel } from '../../plugins/opc/scripts/commands/cancel.mjs';
+import { safeFailureMessage } from '../../plugins/opc/scripts/commands/command.mjs';
 import { deadPid, makeTempDir, trackTempDir } from '../helpers.mjs';
 
 function context(t) {
@@ -12,6 +13,11 @@ function context(t) {
   return { stateDir, claudeSessionId: 'claude-test', env: {}, output,
     out: (text) => { output.out += text; }, err: (text) => { output.err += text; }, json: (value) => { output.json = value; } };
 }
+
+test('command worker failures preserve messages when arguments are empty and mask raw arguments', () => {
+  assert.equal(safeFailureMessage('connection unavailable'), 'connection unavailable');
+  assert.equal(safeFailureMessage('request included private-value', 'private-value'), 'request included ***');
+});
 
 for (const [name, run] of [['status', runStatus], ['result', runResult], ['cancel', runCancel]]) {
   test(`${name} rejects extra positional arguments with a truncated preview`, async (t) => {

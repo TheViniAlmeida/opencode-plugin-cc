@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, eventually } from '../helpers.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, eventually, stateDirFor } from '../helpers.mjs';
 import { F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
+import { profileRules } from '../../plugins/opc/scripts/lib/context.mjs';
 
 async function setup(t, { config = F3_TEST_CONFIG, extra = {} } = {}) {
   const cwd = makeWorkspace(t);
@@ -92,7 +95,10 @@ test('erro do assistente na resposta do command falha o job (exit 7)', async (t)
 test('--write cria sessão com regras de escrita', async (t) => {
   const { cwd, env } = await setup(t);
   assert.equal((await runCli(['command', 'echo', '--write'], { env, cwd })).code, 0);
-  assert.notDeepEqual(sessionPosts(env).at(-1).body.permission[0], { permission: '*', pattern: '*', action: 'deny' });
+  const rules = sessionPosts(env).at(-1).body.permission;
+  assert.deepEqual(rules, profileRules({ config: F3_TEST_CONFIG }, 'write'));
+  assert.ok(rules.some((rule) => rule.permission === 'bash' && rule.pattern === 'git reset --hard*' && rule.action === 'ask'));
+  assert.ok(!rules.some((rule) => rule.permission === '*' && rule.pattern === '*' && rule.action === 'deny'));
 });
 
 test('--raw-args-stdin preserva nome e argumentos e extrai flags', async (t) => {
@@ -101,6 +107,43 @@ test('--raw-args-stdin preserva nome e argumentos e extrai flags', async (t) => 
   assert.equal(res.code, 0, res.stdout + res.stderr);
   const [post] = commandPosts(env);
   assert.deepEqual({ c: post.body.command, a: post.body.arguments, m: post.body.model }, { c: 'echo', a: `it's "$(x)"`, m: F3_MODELS.qwen });
+});
+
+test('--raw-args-stdin preserva espaços dos argumentos byte por byte', async (t) => {
+  const { cwd, env } = await setup(t);
+  const args = '  leading  internal   trailing  ';
+  const res = await runCli(['command', '--raw-args-stdin'], { env, cwd, stdin: `\n  echo ${args}\n` });
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.equal(commandPosts(env)[0].body.arguments, args);
+});
+
+test('argumentos secretos aparecem mascarados em disco e saída, mas chegam crus ao fake', async (t) => {
+  const { cwd, env } = await setup(t);
+  assert.equal((await runCli(['command', 'echo'], { env, cwd })).code, 0);
+  const secret = JSON.parse(readFileSync(join(stateDirFor(env, cwd), 'server.json'), 'utf8')).password;
+  const token = ['sk', 'proj', Math.random().toString(36).slice(2).padEnd(12, 'x')].join('-');
+  const args = `${secret} ${token}`;
+  const bg = await runCli(['command', '--raw-args-stdin', '--background', '--json'], { env, cwd, stdin: `echo ${args}\n` });
+  assert.equal(bg.code, 0, bg.stdout + bg.stderr);
+  const { job } = JSON.parse(bg.stdout);
+  const result = await eventually(async () => {
+    const result = await runCli(['result', job.id], { env, cwd });
+    return result.code === 0 ? result : null;
+  });
+  const text = readFileSync(join(stateDirFor(env, cwd), 'jobs', `${job.id}.json`), 'utf8');
+  const log = readFileSync(join(stateDirFor(env, cwd), 'jobs', `${job.id}.log`), 'utf8');
+  const persistedJob = JSON.parse(text);
+  assert.equal(Object.hasOwn(persistedJob.request, 'arguments'), false);
+  assert.equal(Object.hasOwn(persistedJob.result, 'arguments'), false);
+  assert.ok(persistedJob.request.argumentsPreview.length <= 200);
+  assert.equal(persistedJob.request.argumentsBytes, Buffer.byteLength(args));
+  for (const output of [text, bg.stdout, result.stdout, log]) {
+    assert.ok(!output.includes(secret));
+    assert.ok(!output.includes(token));
+  }
+  assert.match(bg.stdout, /argumentsPreview/);
+  assert.match(bg.stdout, /argumentsBytes/);
+  assert.deepEqual(commandPosts(env).at(-1).body.arguments, args);
 });
 
 test('recusa iniciar de dentro do servidor OpenCode (exit 4, nada enviado)', async (t) => {
