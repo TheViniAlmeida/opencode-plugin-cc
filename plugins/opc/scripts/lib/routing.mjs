@@ -3,6 +3,7 @@
 import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
 import { assertAgentUsable, evaluate } from './policy.mjs';
+import { safeOutputText } from './redact.mjs';
 
 const LIST_SOURCES = new Set(['tier', 'route']);
 const echo = (value) => {
@@ -205,4 +206,114 @@ export async function resolveTurnModel({ api, kind, flags = {}, config }) {
     catalog,
     opencodeConfig,
   };
+}
+
+// ---- F4a: laço de fallback -----------------------------------------------------------
+
+function isServerLost(result) {
+  return result.errorCode === 'server_lost' || result.errorType === 'server_lost';
+}
+
+function largerContextCandidates(queue, current, contextLimitOf) {
+  const base = contextLimitOf(current);
+  if (typeof base !== 'number') return [];
+  return queue.filter((candidate) => {
+    const limit = contextLimitOf(candidate);
+    return typeof limit === 'number' && limit > base;
+  });
+}
+
+export async function runWithFallback({
+  candidates,
+  fallbackEligible,
+  fallbackCfg = {},
+  write = false,
+  runAttempt,
+  sleep = abortableSleep,
+  backoffMs = DEFAULT_BACKOFF_MS,
+  contextLimitOf = () => null,
+  signal,
+  cancelRequestedAt = null,
+  now = () => new Date().toISOString(),
+  onAttemptStart = async () => {},
+  onAttemptEnd = async () => {},
+  onBackoff = async () => {},
+}) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new UsageError('NO_CANDIDATES', 'runWithFallback: a lista de candidatos está vazia');
+  }
+  if (typeof runAttempt !== 'function') throw new TypeError('runWithFallback: runAttempt é obrigatório');
+  const cancelPending = () => Boolean(typeof cancelRequestedAt === 'function' ? cancelRequestedAt() : cancelRequestedAt);
+  const enabled = fallbackEligible === true && fallbackCfg.enabled !== false;
+  const configuredMax = Number(fallbackCfg.maxAttempts ?? 3);
+  const maxAttempts = enabled ? (Number.isFinite(configuredMax) ? Math.max(1, Math.floor(configuredMax)) : 3) : 1;
+  let queue = candidates.slice(1);
+  let current = candidates[0];
+  const attempts = [];
+  let result = null;
+  let stopReason = null;
+
+  while (current) {
+    if (attempts.length > 0 && (signal?.aborted || cancelPending())) { stopReason = 'cancelled'; break; }
+    const index = attempts.length;
+    const startedAt = now();
+    await onAttemptStart(current, index);
+    result = await runAttempt(current, index);
+    const record = {
+      model: current.full,
+      sessionID: result.sessionID ?? null,
+      status: result.status,
+      errorClass: result.errorClass ?? null,
+      errorType: result.errorType ?? null,
+      startedAt,
+      endedAt: now(),
+    };
+    attempts.push(record);
+    await onAttemptEnd(record, result, index);
+
+    if (result.status === 'completed') { stopReason = 'completed'; break; }
+    if (result.status === 'cancelled' || signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    if (isServerLost(result)) { stopReason = 'server-lost'; break; }
+    if (!enabled) { stopReason = 'not-eligible'; break; }
+
+    let recoverable = result.errorClass === 'recoverable';
+    if (result.errorType === 'ContextOverflowError') {
+      const larger = largerContextCandidates(queue, current, contextLimitOf);
+      recoverable = larger.length > 0;
+      if (recoverable) queue = larger;
+    }
+    if (!recoverable) { stopReason = 'fatal'; break; }
+    if (write && result.toolsRan) { stopReason = 'write-tools-ran'; break; }
+    if (attempts.length >= maxAttempts) { stopReason = 'max-attempts'; break; }
+    if (queue.length === 0) { stopReason = 'exhausted'; break; }
+
+    const next = queue.shift();
+    const delay = backoffDelay(backoffMs, index);
+    await onBackoff(delay, next, record);
+    if (signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    const slept = await sleep(delay, signal);
+    if (!slept || signal?.aborted || cancelPending()) { stopReason = 'cancelled'; break; }
+    current = next;
+  }
+
+  return { result, attempts, stopReason, fallbackUsed: attempts.length > 1 };
+}
+
+export function describeStop({ stopReason, result, attempts }) {
+  if (stopReason === 'write-tools-ran') {
+    const files = result.touchedFiles?.length ? result.touchedFiles.map(safeOutputText).join(', ') : '(nenhum registrado)';
+    const tools = result.toolNames?.length ? result.toolNames.map(safeOutputText).join(', ') : '(desconhecidas)';
+    return {
+      errorCode: 'WRITE_NO_FALLBACK',
+      errorMessage: `${safeOutputText(result.errorType ?? 'Erro')}: ${safeOutputText(result.errorMessage ?? 'o turno falhou')}. Sem fallback: este turno --write já executou ferramentas (risco de efeito duplicado). Arquivos tocados: ${files}. Ferramentas executadas: ${tools}.`,
+    };
+  }
+  if ((stopReason === 'max-attempts' || stopReason === 'exhausted') && attempts.length > 1) {
+    const trail = attempts.map((attempt, index) => `${index + 1}) ${echo(attempt.model)}: ${safeOutputText(attempt.errorType ?? attempt.status)}`).join('; ');
+    return {
+      errorCode: 'FALLBACK_EXHAUSTED',
+      errorMessage: `Todas as ${attempts.length} tentativas falharam (${trail}). Último erro: ${safeOutputText(result.errorMessage ?? result.errorType ?? 'desconhecido')}`,
+    };
+  }
+  return null;
 }
