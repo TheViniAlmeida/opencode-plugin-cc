@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
-  PLUGIN_ROOT, testEnv, makeWorkspace, runCli, FIXTURE_MODELS as M, writeGlobalConfig,
+  PLUGIN_ROOT, testEnv, makeWorkspace, runCli, stopAllServers, FIXTURE_MODELS as M, writeGlobalConfig,
   requestsTo, parseFrontmatter, jobsIn,
 } from '../helpers.mjs';
 
@@ -77,9 +77,20 @@ test('worker-prescribed review command runs', async (t) => {
 test('a pending permission makes the prescribed command exit 3 with the relay block', async (t) => {
   const { env, ws } = setup(t, 'permission-ask');
   const r = await bash(fill(PROMPT_TEMPLATE, { sub: 'task', flags: `--write --model ${M.fast}`, prompt: 'Delete the build directory' }), { env, cwd: ws });
-  assert.equal(r.code, 3, `${r.stdout}\n${r.stderr}`);
-  assert.match(`${r.stdout}\n${r.stderr}`, /\/opc:permissions reply \S+ once\|reject/);
   const [job] = jobsIn(env, ws);
-  const c = await runCli(['cancel', job.id], { env, cwd: ws });
-  assert.equal(c.code, 0, c.stderr);
+  t.after(async () => {
+    const cancelled = await runCli(['cancel', job.id], { env, cwd: ws });
+    if (cancelled.code !== 0 && !/not found|already cancelled/i.test(cancelled.stderr + cancelled.stdout)) {
+      throw new Error(`pending-job cleanup failed (code ${cancelled.code})\n${cancelled.stdout}\n${cancelled.stderr}`);
+    }
+    await stopAllServers(env, ws);
+  });
+  assert.equal(r.code, 3, `${r.stdout}\n${r.stderr}`);
+  const output = `${r.stdout}\n${r.stderr}`;
+  const [requestId] = output.match(/## Solicitação (per_[0-9A-Za-z]+)/) ?? [];
+  assert.ok(requestId, output);
+  const id = requestId.replace('## Solicitação ', '');
+  assert.ok(output.includes(`/opc:permissions reply ${id} once`), output);
+  assert.ok(output.includes(`/opc:permissions reply ${id} reject "<reason>"`), output);
+  assert.ok(output.includes(`/opc:status `), output);
 });

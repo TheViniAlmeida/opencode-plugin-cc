@@ -47,6 +47,20 @@ test('team tools are used when present and the agent degrades to a plain subagen
   }
 });
 
+test('Bash executes opc while Agent Teams tools are reserved for coordination', () => {
+  const { data, body } = load();
+  assert.equal(data.tools, 'Bash');
+  assert.match(body, /Bash is the only tool for executing work/);
+  assert.match(body, /Agent Teams tools .* only for coordination and reporting/);
+});
+
+test('permission relay preserves the renderer output as separate exact lines', () => {
+  const { body } = load();
+  assert.match(body, /Relay the permission request lines exactly as printed/);
+  assert.match(body, /`\/opc:permissions reply <request-id> once`/);
+  assert.match(body, /`\/opc:permissions reply <request-id> reject "<reason>"`/);
+});
+
 test('exit codes map to the protocol', () => {
   const { body } = load();
   assert.match(body, /`0` → `✓ opc done`/);
