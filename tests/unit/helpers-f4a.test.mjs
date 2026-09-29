@@ -35,6 +35,7 @@ test('writeWorkspaceConfig writes .opc.json at the workspace root', (t) => {
 test('promptModels and requestsTo read the fake state', (t) => {
   const env = testEnv(t);
   fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({
+    boots: [],
     requests: [
       { method: 'POST', path: '/session', body: {} },
       { method: 'POST', path: '/session/ses_1/prompt_async', body: { model: { providerID: 'p', modelID: 'a/b' } } },
