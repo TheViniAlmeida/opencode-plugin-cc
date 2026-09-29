@@ -638,7 +638,8 @@ export async function dispatchSubagent({
       },
     });
     let finalText = result.finalText;
-    if (!finalText && result.status === 'completed') finalText = extractTaskOutput(await api.messages(carrier.id));
+    // task tool output is model-derived raw text: read through the list-bug-aware reader and mask it like runTurn's finalText
+    if (!finalText && result.status === 'completed') finalText = safeOutputText(extractTaskOutput(await readSessionMessages(api, carrier.id)));
     return { ...result, finalText, mechanism: 'subtask', fellBack, carrierSessionID: carrier.id };
   };
 

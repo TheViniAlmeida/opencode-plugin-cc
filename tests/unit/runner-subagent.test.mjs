@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { dispatchSubagent, isAgentModeRefusal, extractTaskOutput, SUBAGENT_MECHANISMS } from '../../plugins/opc/scripts/lib/runner.mjs';
 
 const RULES = [{ permission: '*', pattern: '*', action: 'deny' }];
@@ -99,6 +100,34 @@ test('subtask with empty final text reads the task tool output', async () => {
   assert.equal(res.finalText, 'TASK OUT');
   assert.equal(res.fellBack, false);
   assert.equal(api.created.length, 1);
+});
+
+test('subtask fallback masks the task tool output (registered secrets and token patterns)', async () => {
+  const secret = ['reg', 'secret', 'value', '4f9a2c7e'].join('-');
+  registerSecret(secret);
+  const token = ['sk', 'proj', 'A1b2C3d4E5f6G7h8'].join('-');
+  const api = fakeApi({ messages: [{ info: {}, parts: [{ type: 'tool', tool: 'task', state: { status: 'completed', output: `key ${secret} and ${token}` } }] }] });
+  const res = await dispatchSubagent({ api, hub: {}, parentSessionID: 'ses_parent', member: MEMBER, prompt: 'p', rules: RULES, mechanism: 'subtask', runTurnImpl: okTurn('') });
+  assert.ok(!res.finalText.includes(secret), res.finalText);
+  assert.ok(!res.finalText.includes(token), res.finalText);
+  assert.match(res.finalText, /^key /);
+});
+
+test('subtask fallback reads messages through the list-bug-aware reader (per-message reads after a 400)', async () => {
+  const listErr = Object.assign(new Error('Bad Request'), { code: 'BAD_REQUEST', details: { body: { message: 'Expected OutputFormatJsonSchema' } } });
+  const api = {
+    created: [],
+    async createSession(body) { this.created.push(body); return { id: `ses_${this.created.length}` }; },
+    async messages() { throw listErr; },
+    async message(sessionID, messageID) {
+      assert.equal(messageID, 'msg_a');
+      return { info: { id: 'msg_a' }, parts: [{ type: 'tool', tool: 'task', state: { status: 'completed', output: 'VIA PER-MESSAGE' } }] };
+    },
+  };
+  const { rememberMessage } = await import('../../plugins/opc/scripts/lib/session-messages.mjs');
+  rememberMessage(api, 'ses_1', 'msg_a'); // the turn remembers the ids it produced
+  const res = await dispatchSubagent({ api, hub: {}, parentSessionID: 'ses_parent', member: MEMBER, prompt: 'p', rules: RULES, mechanism: 'subtask', runTurnImpl: okTurn('') });
+  assert.equal(res.finalText, 'VIA PER-MESSAGE');
 });
 
 test('non-refusal errors propagate; allowFallback=false never falls back; bad mechanism is a usage error', async () => {
