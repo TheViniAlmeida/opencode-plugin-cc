@@ -1,7 +1,7 @@
 import { isFailingModel, successTurn } from './_model-select.mjs';
 
 const TICK_MS = Number(process.env.FAKE_RETRY_TICK_MS ?? 40);
-const MAX_TICKS = 50;
+const MAX_TICKS = Number(process.env.FAKE_RETRY_MAX_TICKS ?? 50);
 
 // O modelo escolhido entra em retry do OpenCode: session.status{type:'retry'} com attempt crescente e
 // next (epoch ms) cada vez mais distante, até o cliente abortar a sessão (ou MAX_TICKS).

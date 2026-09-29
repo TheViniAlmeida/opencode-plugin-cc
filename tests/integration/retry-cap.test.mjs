@@ -17,8 +17,8 @@ function config(fallback) {
   };
 }
 
-function setup(t, fallback) {
-  const env = testEnv(t, { scenario: 'retry-over-cap', extra: { FAKE_FAIL_MODELS: M.fast, OPC_FALLBACK_BACKOFF_MS: '50' } });
+function setup(t, fallback, extra = {}) {
+  const env = testEnv(t, { scenario: 'retry-over-cap', extra: { FAKE_FAIL_MODELS: M.fast, OPC_FALLBACK_BACKOFF_MS: '50', ...extra } });
   const ws = makeWorkspace(t);
   writeGlobalConfig(env, config(fallback));
   return { env, ws };
@@ -42,7 +42,7 @@ test('retry attempts above maxProviderRetries abort the session as RetryCapExcee
 });
 
 test('a scheduled retry further away than maxRetryWaitSec aborts the session', async (t) => {
-  const { env, ws } = setup(t, { maxProviderRetries: 99, maxRetryWaitSec: 1 });
+  const { env, ws } = setup(t, { maxProviderRetries: 20, maxRetryWaitSec: 1 });
   const r = await runCli(['ask', '--model', M.fast, 'Summarise the repository'], { env, cwd: ws });
   assert.equal(r.code, 7, `${r.stdout}\n${r.stderr}`);
   const [job] = jobsIn(env, ws);
@@ -53,7 +53,7 @@ test('a scheduled retry further away than maxRetryWaitSec aborts the session', a
 });
 
 test('retries below the cap are left to OpenCode (no client abort)', async (t) => {
-  const { env, ws } = setup(t, { maxProviderRetries: 1000, maxRetryWaitSec: 3600 });
+  const { env, ws } = setup(t, { maxProviderRetries: 20, maxRetryWaitSec: 3600 }, { FAKE_RETRY_MAX_TICKS: '5' });
   const r = await runCli(['ask', '--model', M.fast, 'Summarise the repository'], { env, cwd: ws });
   assert.equal(r.code, 7, `${r.stdout}\n${r.stderr}`);
   assert.equal(requestsTo(env, 'POST', /\/abort$/).length, 0);
