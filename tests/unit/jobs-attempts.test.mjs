@@ -1,16 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
   createJob, readJob, recordAttempt, runJobTurn,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 function tempStateDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-f4a-jobs-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dir = trackTempDir(t, makeTempDir('opc-f4a-jobs-'));
   const stateDir = path.join(dir, 'state');
   ensurePrivateDir(stateDir);
   return stateDir;
@@ -43,7 +42,35 @@ test('recordAttempt appends to attempts[] in order', async (t) => {
 
 test('recordAttempt on an unknown job fails with NOT_FOUND', async (t) => {
   const stateDir = tempStateDir(t);
-  await assert.rejects(recordAttempt(stateDir, 'ask-nope', {}), (err) => err.code === 'NOT_FOUND');
+  const missingId = 'ask-1234567890abcdef-abcdef';
+  await assert.rejects(recordAttempt(stateDir, missingId, {}), (err) => err.code === 'NOT_FOUND' && err.message.endsWith(missingId));
+});
+
+test('recordAttempt preserves INVALID_JSON when the job file cannot be parsed', async (t) => {
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', title: 'OPC: ask: x' });
+  fs.writeFileSync(path.join(stateDir, 'jobs', `${job.id}.json`), '{ invalid');
+  await assert.rejects(recordAttempt(stateDir, job.id, { model: 'p/a' }), (err) => err.code === 'INVALID_JSON');
+});
+
+test('recordAttempt masks provider text in persisted attempts and fallback log', async (t) => {
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', title: 'OPC: ask: x', request: { candidates: [A, B], fallbackEligible: true } });
+  const secretLike = ['sk', 'proj', Math.random().toString(36).slice(2, 14)].join('-');
+  await runJobTurn({
+    stateDir, job, config: CONFIG, baseTurnRequest: BASE, backoffMs: [0], sleep: async () => true,
+    runTurnImpl: async (opts) => failTurn(opts.request, {
+      errorType: `ProviderError ${secretLike}`,
+      errorMessage: `provider failed: ${secretLike}`,
+      error: `raw error: ${secretLike}`,
+    }),
+  });
+  const persisted = fs.readFileSync(path.join(stateDir, 'jobs', `${job.id}.json`), 'utf8');
+  const log = logOf(stateDir, job.id);
+  assert.ok(!persisted.includes(secretLike));
+  assert.ok(!log.includes(secretLike));
+  assert.match(persisted, /\*\*\*/);
+  assert.match(log, /\*\*\*/);
 });
 
 test('runJobTurn falls back, records attempts, model, attemptLimit and log lines', async (t) => {

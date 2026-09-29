@@ -141,6 +141,18 @@ function safeJob(job) {
   for (const field of ['title', 'summary', 'pendingRequest', 'error', 'errorMessage', 'errorType']) {
     if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
   }
+  if (Array.isArray(masked.attempts)) {
+    const verbatim = new Set(['id', 'jobId', 'attemptId', 'model', 'modelFull', 'providerID', 'modelID', 'status']);
+    masked.attempts = masked.attempts.map((attempt) => {
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) return attempt;
+      return Object.fromEntries(Object.entries(attempt).map(([key, value]) => [
+        key,
+        typeof value === 'string' && !verbatim.has(key) && !/(?:At|AtMs|Timestamp|timestamp)$/.test(key)
+          ? safeOutputText(value)
+          : value,
+      ]));
+    });
+  }
   if (masked.request) masked.request = redactOutput(masked.request);
   if (masked.request && Object.hasOwn(masked.request, 'argumentsPreview')) {
     const preview = safeOutputText(masked.request.argumentsPreview);
@@ -852,13 +864,8 @@ export async function runWithConcurrency(items, limit, fn) {
 }
 
 export async function recordAttempt(stateDir, id, attempt) {
-  let job = null;
-  try {
-    job = readJob(stateDir, id);
-  } catch {
-    job = null;
-  }
-  if (!job) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${short(id)}`);
+  const job = readJob(stateDir, id);
+  if (!job) throw new NotFoundError('NOT_FOUND', `tarefa não encontrada: ${id}`);
   const attempts = Array.isArray(job.attempts) ? job.attempts : [];
   return updateJob(stateDir, id, { attempts: [...attempts, attempt] });
 }
@@ -914,7 +921,7 @@ export async function runJobTurn({
     },
     onBackoff: async (delayMs, next, record) => {
       await updateJob(stateDir, job.id, { phase: 'fallback' });
-      appendJobLog(stateDir, job.id, `fallback: ${record.errorType ?? record.status} em ${record.model}; próximo ${next.full} em ${delayMs / 1000}s`);
+      appendJobLog(stateDir, job.id, `fallback: ${record.errorType ?? record.errorMessage ?? record.status} em ${record.model}; próximo ${next.full} em ${delayMs / 1000}s`, { modelDerived: true });
     },
   });
   const result = outcome.stopReason === 'cancelled' && outcome.result?.status !== 'cancelled'
