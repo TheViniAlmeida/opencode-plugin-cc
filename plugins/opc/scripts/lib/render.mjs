@@ -906,6 +906,18 @@ function paint(text, color, enabled) {
   return enabled && ANSI[color] ? `${ANSI[color]}${text}${ANSI.reset}` : text;
 }
 
+// Snapshot data is untrusted display text. Strip terminal controls before it can
+// be wrapped in renderer-owned ANSI styling, then apply both redaction layers.
+function monitorText(value) {
+  const text = String(value ?? '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+    .replace(/\t/g, ' ');
+  return safeOutputText(text);
+}
+
 export function formatElapsed(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
@@ -930,10 +942,10 @@ function pendingMonitorLines(job, color) {
   if (!Array.isArray(job.pending) || job.pending.length === 0) return [];
   return job.pending.map((pending) => {
     if (pending.kind === 'question') {
-      return paint(`    ⏸ pergunta ${pending.id}: ${pending.what} → /opc:permissions answer ${pending.id} <resposta>`, 'yellow', color);
+      return paint(`    ⏸ pergunta ${monitorText(pending.id)}: ${monitorText(pending.what)} → /opc:permissions answer ${monitorText(pending.id)} <resposta>`, 'yellow', color);
     }
-    const patterns = pending.patterns?.length ? ` [${pending.patterns.join(', ')}]` : '';
-    return paint(`    ⏸ permissão ${pending.id}: ${pending.what}${patterns} → /opc:permissions reply ${pending.id} once|reject`, 'yellow', color);
+    const patterns = pending.patterns?.length ? ` [${pending.patterns.map(monitorText).join(', ')}]` : '';
+    return paint(`    ⏸ permissão ${monitorText(pending.id)}: ${monitorText(pending.what)}${patterns} → /opc:permissions reply ${monitorText(pending.id)} once|reject`, 'yellow', color);
   });
 }
 
@@ -941,10 +953,10 @@ function monitorJobLine(job, now, color, indent) {
   const style = STATUS_STYLE[job.status] ?? { icon: '?', color: 'reset' };
   const attempt = `tentativa ${job.attempt.current}/${job.attempt.limit}`;
   return [
-    `${indent}${paint(style.icon, style.color, color)} ${paint(job.id, 'bold', color)}`,
-    job.status,
-    job.phase ?? '—',
-    job.model ?? '—',
+    `${indent}${paint(monitorText(style.icon), style.color, color)} ${paint(monitorText(job.id), 'bold', color)}`,
+    monitorText(job.status),
+    monitorText(job.phase ?? '—'),
+    monitorText(job.model ?? '—'),
     attempt,
     elapsedOf(job, now),
   ].join('  ');
@@ -959,19 +971,19 @@ export function renderMonitor(snapshot, { color = false } = {}) {
   for (const job of jobs) {
     const indent = job.groupId && jobs.some((item) => item.id === job.groupId) ? '  ' : '';
     out.push(monitorJobLine(job, now, color, indent));
-    if (job.title) out.push(paint(`${indent}    ${job.title}`, 'dim', color));
+    if (job.title) out.push(paint(`${indent}    ${monitorText(job.title)}`, 'dim', color));
     out.push(...pendingMonitorLines(job, color));
     if (job.status === 'failed' && job.errorMessage) {
-      out.push(paint(`${indent}    erro: ${job.errorType ? `${job.errorType}: ` : ''}${job.errorMessage}`, 'red', color));
+      out.push(paint(`${indent}    erro: ${job.errorType ? `${monitorText(job.errorType)}: ` : ''}${monitorText(job.errorMessage)}`, 'red', color));
     }
     if (focus === job.id && Array.isArray(job.attempts) && job.attempts.length > 0) {
       out.push(`${indent}    tentativas:`);
       job.attempts.forEach((attempt, index) => {
-        const cls = attempt.errorClass ? ` (${attempt.errorClass}${attempt.errorType ? ` ${attempt.errorType}` : ''})` : '';
-        out.push(`${indent}      ${index + 1}. ${attempt.model} — ${attempt.status}${cls}`);
+        const cls = attempt.errorClass ? ` (${monitorText(attempt.errorClass)}${attempt.errorType ? ` ${monitorText(attempt.errorType)}` : ''})` : '';
+        out.push(`${indent}      ${index + 1}. ${monitorText(attempt.model)} — ${monitorText(attempt.status)}${cls}`);
       });
     }
-    for (const line of job.log ?? []) out.push(paint(`${indent}    │ ${line}`, 'gray', color));
+    for (const line of job.log ?? []) out.push(paint(`${indent}    │ ${monitorText(line)}`, 'gray', color));
   }
   return redactText(`${out.join('\n')}\n`);
 }

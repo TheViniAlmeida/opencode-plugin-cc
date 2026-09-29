@@ -75,3 +75,32 @@ test('unknown timestamps render as --:-- and group members are indented', () => 
   assert.match(text, /● sub-g .* --:--/);
   assert.match(text, /\n {2}● sub-m1/);
 });
+
+test('masks unregistered secret-like values in model-derived monitor text', () => {
+  const secret = `sk-proj-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  const text = renderMonitor({ now: NOW, focus: null, jobs: [
+    entry({ title: `title ${secret}`, errorMessage: `attempt failed ${secret}`, log: [`provider response ${secret}`], status: 'failed' }),
+  ] });
+
+  assert.doesNotMatch(text, new RegExp(secret));
+  assert.equal((text.match(/\*\*\*/g) ?? []).length, 3);
+});
+
+test('strips snapshot control sequences before optional renderer styling', () => {
+  const job = entry({
+    title: 'title \x1b[31mred\x1b]0;x\x07\rnext',
+    log: ['log \x1b[31mred\x1b]0;x\x07\rnext'],
+    status: 'failed',
+    errorMessage: 'error \x1b[31mred\x1b]0;x\x07\rnext',
+  });
+  const plain = renderMonitor({ now: NOW, focus: null, jobs: [job] });
+  assert.doesNotMatch(plain, /[\x1b\x07\r]/);
+
+  const colored = renderMonitor({ now: NOW, focus: null, jobs: [job] }, { color: true });
+  const stripped = colored.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  assert.doesNotMatch(stripped, /\x1b/);
+  assert.doesNotMatch(colored, /[\x07\r]/);
+  const sequences = colored.match(/\x1b\[[0-?]*[ -/]*[@-~]/g) ?? [];
+  assert.ok(sequences.length > 0);
+  assert.ok(sequences.every((sequence) => ['\x1b[0m', '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[32m', '\x1b[33m', '\x1b[36m', '\x1b[90m'].includes(sequence)));
+});
