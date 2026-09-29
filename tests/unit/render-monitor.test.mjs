@@ -104,3 +104,16 @@ test('strips snapshot control sequences before optional renderer styling', () =>
   assert.ok(sequences.length > 0);
   assert.ok(sequences.every((sequence) => ['\x1b[0m', '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[32m', '\x1b[33m', '\x1b[36m', '\x1b[90m'].includes(sequence)));
 });
+
+test('attempt counters and multi-line fields cannot inject controls or extra lines', () => {
+  const job = entry({
+    attempt: { current: '1\x1b[31m', limit: '3\x1b]0;x\x07' },
+    title: 'first\nsecond',
+    log: ['one\r\ntwo'],
+  });
+  const plain = renderMonitor({ now: NOW, focus: null, jobs: [job] });
+  assert.doesNotMatch(plain, /[\x1b\x07\r]/);
+  assert.match(plain, /tentativa 1\/3/);
+  assert.match(plain, /first second/);
+  assert.match(plain, /│ one two/);
+});

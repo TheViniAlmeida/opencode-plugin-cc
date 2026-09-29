@@ -913,8 +913,9 @@ function monitorText(value) {
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-    .replace(/\t/g, ' ');
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    // every monitor field renders on a single line
+    .replace(/\r\n|[\t\n\r]/g, ' ');
   return safeOutputText(text);
 }
 
@@ -951,7 +952,7 @@ function pendingMonitorLines(job, color) {
 
 function monitorJobLine(job, now, color, indent) {
   const style = STATUS_STYLE[job.status] ?? { icon: '?', color: 'reset' };
-  const attempt = `tentativa ${job.attempt.current}/${job.attempt.limit}`;
+  const attempt = `tentativa ${monitorText(job.attempt.current)}/${monitorText(job.attempt.limit)}`;
   return [
     `${indent}${paint(monitorText(style.icon), style.color, color)} ${paint(monitorText(job.id), 'bold', color)}`,
     monitorText(job.status),
