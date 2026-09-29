@@ -16,6 +16,23 @@ export function renderTable(headers, rows) {
   return redactText(`${[head, sep, ...body].join('\n')}\n`);
 }
 
+// ---- F4a: lembrete de delegação (SessionStart) ------------------------------
+
+export const DELEGATION_COMMANDS = [
+  { cli: 'opc ask', slash: '/opc:ask', use: 'dúvidas sobre o código, investigação e análise de causa raiz' },
+  { cli: 'opc plan', slash: '/opc:plan', use: 'planos de implementação: arquivos, ordem, escolhas, riscos e testes' },
+  { cli: 'opc review --wait', slash: '/opc:review', use: 'revisão das alterações atuais' },
+];
+
+export function delegationReminder(commands = DELEGATION_COMMANDS) {
+  const lines = commands.map((c) => `- ${c.use}: \`${c.cli}\` (${c.slash})`);
+  return [
+    'A delegação opc está ativa nesta sessão (delegation.auto). Para análises relevantes, encaminhe o trabalho ao OpenCode:',
+    ...lines,
+    'Siga a skill opc-delegation: evite perguntas triviais e pequenas edições, valide cada resultado antes de apresentá-lo e respeite a política do opc e a pessoa aprovadora. Siga também a opc-result-handling para pedidos de permissão; nunca responda sem o usuário. Nunca encadeie delegações.',
+  ].join('\n');
+}
+
 export function renderError(err) {
   const code = err instanceof OpcError ? err.code : 'INTERNAL';
   const message = err?.message ?? String(err);

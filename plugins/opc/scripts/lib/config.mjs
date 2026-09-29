@@ -392,6 +392,12 @@ export function loadConfig({ dataDir, workspaceRoot }) {
   return { config: merged.config, global, workspace, hasGlobal: global !== null, warnings };
 }
 
+// F4a: somente a configuração global liga o lembrete; o workspace pode desligá-lo.
+export function delegationAutoEnabled({ global = null, workspace = null } = {}) {
+  if (global?.delegation?.auto !== true) return false;
+  return workspace?.delegation?.auto !== false;
+}
+
 export function saveGlobalConfig(dataDir, cfg) {
   writeFileAtomic(globalConfigPath(dataDir), cfg, { mode: 0o600 });
 }

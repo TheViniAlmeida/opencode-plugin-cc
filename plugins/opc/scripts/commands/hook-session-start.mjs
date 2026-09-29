@@ -4,17 +4,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseHookInput, readStdin } from '../lib/args.mjs';
 import { contextForCwd } from '../lib/context.mjs';
+import { loadConfig, delegationAutoEnabled } from '../lib/config.mjs';
+import { delegationReminder } from '../lib/render.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { registerClaudeSession } from '../lib/state.mjs';
 
-export const DELEGATION_REMINDER = [
-  'A delegação automática do opc está ativa nesta sessão: o OpenCode está disponível como um segundo mecanismo pelo plugin opc.',
-  '- Delegue análises somente leitura, dúvidas sobre o código, revisões e planejamento com /opc:ask, /opc:plan ou /opc:review.',
-  '- Não delegue perguntas triviais nem pequenas edições que você possa concluir diretamente.',
-  '- Valide o retorno do OpenCode antes de apresentá-lo e mantenha exatas as referências arquivo:linha.',
-  '- Siga a skill opc-result-handling para pedidos de permissão; nunca responda por conta própria quando a aprovação cabe ao usuário.',
-  '- Nunca encadeie delegações: uma tarefa opc não deve iniciar outra sem pedido explícito do usuário.',
-].join('\n');
+// O texto final vive em render.mjs; mantém o nome exportado da F2b.
+export const DELEGATION_REMINDER = delegationReminder();
+
+export function sessionStartContext({ dataDir, workspaceRoot }) {
+  try {
+    const { global, workspace } = loadConfig({ dataDir, workspaceRoot });
+    return delegationAutoEnabled({ global, workspace }) ? delegationReminder() : null;
+  } catch {
+    return null; // configuração ilegível nunca impede o início da sessão
+  }
+}
 
 function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
 
@@ -45,8 +50,9 @@ export async function run(ctx) {
         source: input.source ?? null, startedAt: new Date().toISOString(),
       });
     }
-    if (hctx.config?.delegation?.auto === true) {
-      ctx.out(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: DELEGATION_REMINDER } })}\n`);
+    const additionalContext = sessionStartContext({ dataDir: ctx.dataDir, workspaceRoot: hctx.workspaceRoot });
+    if (additionalContext) {
+      ctx.out(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } })}\n`);
     }
   } catch {
     ctx.err('[opc] não foi possível processar o início da sessão.\n');
