@@ -12,6 +12,10 @@ import { getProcessIdentity } from '../lib/process.mjs';
 import { redact, redactTurnOutput } from '../lib/redact.mjs';
 import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, serverContext, updateJob } from '../lib/jobs.mjs';
 
+// F3: group and command workers live in their own command modules.
+// Later phases extend this single dispatch table.
+export const WORKER_DELEGATES = Object.freeze({ sub: './subagent.mjs', cmd: './command.mjs' });
+
 const FINAL_LOG_LIMIT = 64 * 1024;
 const METADATA_LIMIT = 4000;
 const nowIso = () => new Date().toISOString();
@@ -140,6 +144,16 @@ export async function run(ctx, argv, {
   if (!jobId) throw new UsageError('USAGE', 'task-worker exige --job-id');
   const stored = readJob(ctx.stateDir, jobId);
   if (!stored?.request) throw new NotFoundError('NOT_FOUND', `a tarefa ${jobId} não tem uma solicitação salva`);
+  if (stored.groupId) {
+    throw new UsageError('GROUP_MEMBER_WORKER', `o job ${stored.id} é membro do grupo ${stored.groupId} e roda dentro do coordenador`);
+  }
+  const delegate = WORKER_DELEGATES[stored.kind];
+  if (delegate) {
+    const mod = await import(delegate);
+    const code = await mod.runWorker(ctx, stored);
+    setTimeout(() => process.exit(code), 2000).unref();
+    return code;
+  }
   const log = (line) => appendJobLog(ctx.stateDir, jobId, line);
   const jobUpdates = createSerialUpdater(ctx.stateDir, jobId);
   const identity = getProcessIdentity(process.pid);
