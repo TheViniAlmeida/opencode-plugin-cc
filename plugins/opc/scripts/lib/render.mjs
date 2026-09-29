@@ -840,10 +840,10 @@ export function renderCommandResult(result) {
 }
 
 export function renderAttach(info) {
-  const args = ['opencode', 'attach', info.url, ...(info.sessionID ? ['-s', info.sessionID] : []), '--dir', info.directory].map(shellQuote).join(' ');
-  const secret = info.credential?.type === 'file'
-    ? `OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(info.credential.path)})"`
-    : `OPENCODE_SERVER_PASSWORD="$${info.credential?.name ?? 'OPC_SERVER_PASSWORD'}"`;
+  const args = info.argv.map(shellQuote).join(' ');
+  const secret = info.authSource?.type === 'file'
+    ? `OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(info.authSource.path)})"`
+    : `OPENCODE_SERVER_PASSWORD="$${info.authSource?.name ?? 'OPC_SERVER_PASSWORD'}"`;
   const lines = ['# opc attach', ''];
   lines.push(`Servidor: ${info.url} (${info.attached ? 'externo, via OPC_SERVER_URL' : 'gerenciado pelo opc'})`);
   lines.push(`Sessão: ${info.sessionID ?? '(nenhuma: a TUI abre o seletor)'}`);
@@ -852,7 +852,7 @@ export function renderAttach(info) {
     lines.push(`Pane aberto: ${info.pane.id}. A senha foi lida do arquivo 0600 dentro do pane (não passa por argv).`);
     return f3Finish(lines);
   }
-  lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.credential?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
+  lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.authSource?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
   lines.push(`    ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
   return f3Finish(lines);

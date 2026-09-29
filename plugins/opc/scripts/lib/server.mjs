@@ -82,6 +82,7 @@ function removeServerRecord(stateDir) {
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
   }
+  removeAttachSecret(stateDir);
 }
 
 function serverSettings(config) {
@@ -109,7 +110,6 @@ async function shutdownRecorded(stateDir, record) {
     graceMs: 3000,
   });
   removeServerRecord(stateDir);
-  if (result === 'terminated' || result === 'killed') removeAttachSecret(stateDir);
   return result;
 }
 

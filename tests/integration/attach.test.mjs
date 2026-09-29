@@ -52,7 +52,7 @@ test('attach prints the command without the password; workspace with spaces is q
   assert.ok(res.stdout.includes(`opencode attach ${url} -s ${SEED.session} --dir ${shellQuote(root)}`));
   const json = JSON.parse((await runCli(['attach', SEED.session, '--json'], { env, cwd })).stdout);
   assert.deepEqual(json.argv, ['opencode', 'attach', url, '-s', SEED.session, '--dir', root]);
-  assert.deepEqual(json.credential, { type: 'file', path: join(stateDir, 'attach.secret') });
+  assert.deepEqual(json.authSource, { type: 'file', path: join(stateDir, 'attach.secret') });
   assert.equal(json.attached, false);
   assert.ok(!JSON.stringify(json).includes(password));
 });
@@ -66,6 +66,14 @@ test('attach without id uses the session of the last job; unknown session → ex
   assert.equal(json.sessionID, SEED.session);
   assert.equal((await runCli(['attach', 'ses_missing'], { env, cwd })).code, 2);
   assert.equal((await runCli(['attach', 'not-a-session'], { env, cwd })).code, 2);
+});
+
+test('attach rejects extra positionals before connecting', async (t) => {
+  const { cwd, env } = await setup(t);
+  const res = await runCli(['attach', SEED.session, 'unexpected-value-long'], { env, cwd });
+  assert.equal(res.code, 2);
+  assert.match(res.stdout + res.stderr, /Argumento inesperado: unexpected-v…/);
+  assert.ok(!res.stdout.includes('unexpected-value-long'));
 });
 
 test('--pane outside tmux is refused and tmux is never called', async (t) => {
@@ -136,7 +144,7 @@ test('attach mode (OPC_SERVER_URL) end to end: sessions, subagent and attach on 
   const info = JSON.parse(att.stdout);
   assert.equal(info.url, ext.url);
   assert.equal(info.attached, true);
-  assert.deepEqual(info.credential, { type: 'env', name: 'OPC_SERVER_PASSWORD' });
+  assert.deepEqual(info.authSource, { type: 'env', name: 'OPC_SERVER_PASSWORD' });
   const text = await runCli(['attach', sid], { env, cwd });
   assert.ok(!text.stdout.includes(ext.password));
   assert.match(text.stdout, /OPENCODE_SERVER_PASSWORD="\$OPC_SERVER_PASSWORD"/);

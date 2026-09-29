@@ -5,7 +5,7 @@ import { parseArgs, shellQuote } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
 import { assertId } from '../lib/api.mjs';
-import { attachSecretPath, writeAttachSecret } from '../lib/server.mjs';
+import { attachSecretPath, readServerRecord, writeAttachSecret } from '../lib/server.mjs';
 import { listJobs } from '../lib/jobs.mjs';
 import { renderAttach } from '../lib/render.mjs';
 
@@ -37,6 +37,23 @@ export function buildAttachArgs({ url, sessionID, directory }) {
   return ['attach', url, ...(sessionID ? ['-s', sessionID] : []), '--dir', directory];
 }
 
+export async function persistManagedAttachSecret(ctx, server) {
+  const { withServerLock } = await import('../lib/jobs.mjs');
+  return withServerLock(ctx, () => {
+    const current = readServerRecord(ctx.stateDir);
+    const sameIdentity = current
+      && current.url === server.url
+      && current.pid === server.pid
+      && String(current.startTime) === String(server.startTime)
+      && current.port === server.port
+      && current.password === server.password;
+    if (!sameIdentity) {
+      throw new UsageError('SERVER_CHANGED', 'O registro do servidor gerenciado não existe ou mudou durante o attach; tente novamente.');
+    }
+    writeAttachSecret(ctx.stateDir, current.password);
+  }, { purpose: 'attach-secret' });
+}
+
 function lastJobSession(ctx) {
   const jobs = listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId, all: !ctx.claudeSessionId })
     .filter((job) => job.sessionID && !job.groupId)
@@ -53,6 +70,7 @@ function envWithoutSecrets(env) {
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
+  if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
   const explicit = positionals[0] ? assertId('ses', positionals[0], 'sessão') : null;
   if (flags.pane && !ctx.env.TMUX) {
     throw new UsageError('NOT_IN_TMUX', '--pane só funciona dentro do tmux ($TMUX vazio). Rode /opc:attach sem --pane e use a linha exibida num terminal.');
@@ -67,19 +85,19 @@ export async function run(ctx, argv) {
       throw new UsageError('PANE_ATTACHED_MODE', '--pane não funciona com OPC_SERVER_URL porque o opc não guarda a senha do servidor externo. Use a linha exibida sem --pane.');
     }
     const directory = ctx.workspaceRoot;
-    const credential = attached
+    const authSource = attached
       ? { type: 'env', name: 'OPC_SERVER_PASSWORD' }
       : { type: 'file', path: attachSecretPath(ctx.stateDir) };
-    if (!attached) writeAttachSecret(ctx.stateDir, server.password);
     const attachArgs = buildAttachArgs({ url: server.url, sessionID, directory });
-    const info = { url: server.url, sessionID, directory, attached, credential, argv: ['opencode', ...attachArgs] };
+    const info = { url: server.url, sessionID, directory, attached, authSource, argv: ['opencode', ...attachArgs] };
+    if (!attached) await persistManagedAttachSecret(ctx, server);
 
     if (flags.pane) {
       const scriptPath = join(ctx.stateDir, PANE_SCRIPT_NAME);
       writeFileSync(scriptPath, PANE_SCRIPT, { mode: 0o700 });
       chmodSync(scriptPath, 0o700);
       const opencodeBin = resolveExecutable(ctx.env.OPC_ATTACH_OPENCODE_BIN ?? 'opencode', ctx.env.PATH);
-      const paneCommand = ['/bin/sh', scriptPath, credential.path, opencodeBin, ...attachArgs].map(shellQuote).join(' ');
+      const paneCommand = ['/bin/sh', scriptPath, authSource.path, opencodeBin, ...info.argv.slice(1)].map(shellQuote).join(' ');
       const res = spawnSync('tmux', ['split-window', '-h', '-P', '-F', '#{pane_id}', '-c', directory, paneCommand], {
         env: envWithoutSecrets(ctx.env), encoding: 'utf8', shell: false,
       });
@@ -96,3 +114,5 @@ export async function run(ctx, argv) {
     conn.close();
   }
 }
+
+function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }
