@@ -19,3 +19,13 @@ test('opc-result-handling quotes the exact requires-user label the renderer prin
   assert.ok(label, rendered);
   assert.ok(fs.readFileSync(SKILL, 'utf8').includes(`"${label}"`), 'SKILL.md must quote the renderer label verbatim');
 });
+
+test('revert confirmation goes through the heredoc, never as ids on the opc command line', () => {
+  const skill = fs.readFileSync(SKILL, 'utf8');
+  const sessionMd = fs.readFileSync(path.join(path.dirname(SKILL), '..', '..', 'commands', 'session.md'), 'utf8');
+  for (const text of [skill, sessionMd]) {
+    assert.match(text, /sem(\*\*)? o prefixo `opc session`/);
+    assert.doesNotMatch(text, /rode (\*\*exatamente\*\* )?o comando impresso/);
+  }
+  assert.match(sessionMd, /"Desfazer o revert" \/ "Cancelar"/);
+});

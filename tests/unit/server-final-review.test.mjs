@@ -73,3 +73,31 @@ for (const password of [undefined, '', 'fake-dispose-password']) {
     assert.equal(fs.existsSync(path.join(dir, 'server.json')), false);
   });
 }
+
+test('stopServer removes attach.secret when the recorded process has already exited', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-stop-exited-'));
+  fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify({ schemaVersion: 1,
+    pid: 2147483000, startTime: 'already-exited', port: 43210, url: 'http://127.0.0.1:43210', password: 'fixture-only' }));
+  fs.writeFileSync(path.join(dir, 'attach.secret'), 'fixture-only', { mode: 0o600 });
+
+  assert.deepEqual(await stopServer({ stateDir: dir, config: {}, env: {} }), { stopped: false, reason: 'not-running' });
+  assert.equal(fs.existsSync(path.join(dir, 'server.json')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'attach.secret')), false);
+});
+
+test('stopServer removes attach.secret when the recorded process identity mismatches', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-stop-mismatch-'));
+  const script = path.join(dir, 'opencode');
+  fs.writeFileSync(script, 'setInterval(() => {}, 1000);');
+  const proc = await spawnDetached(process.execPath, [script, 'serve', '--port', '43210'], {
+    cwd: dir, env: process.env, logFile: path.join(dir, 'child.log'),
+  });
+  registerStopper(t, async () => terminateProcessGroup(proc, (argv) => argv.includes(script), { graceMs: 500 }));
+  fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify({ schemaVersion: 1,
+    ...proc, startTime: `${proc.startTime}-mismatch`, port: 43210, url: 'http://127.0.0.1:43210', password: 'fixture-only' }));
+  fs.writeFileSync(path.join(dir, 'attach.secret'), 'fixture-only', { mode: 0o600 });
+
+  assert.deepEqual(await stopServer({ stateDir: dir, config: {}, env: {} }), { stopped: false, reason: 'identity-mismatch' });
+  assert.equal(fs.existsSync(path.join(dir, 'server.json')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'attach.secret')), false);
+});

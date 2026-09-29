@@ -80,3 +80,27 @@ Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/mes
 ## Erros do provider
 
 Erro 402, como `This model requires an opencode API key`, vem do provider/credencial, não do opc. Verifique o provider conectado e a política de modelo; não grave nem exponha a credencial. No gate, o erro permite com aviso; em review/rescue, o comando informa a falha.
+
+## TUI do OpenCode e o servidor do opc no mesmo projeto (storage concorrente)
+
+O OpenCode guarda sessões em storage compartilhado. A TUI (`opencode`) e o servidor gerenciado (`opencode serve`) podem usá-lo no mesmo projeto.
+
+- Sintoma: uma sessão não aparece. Rode `opc sessions --all`; se necessário, `opc sessions --all --refresh` quando não houver jobs ativos. `--refresh` é recusado com `OPC_SERVER_URL`.
+- Sintoma: `SQLITE_BUSY` ou `database is locked` no `server.log`. Evite escrever simultaneamente na mesma sessão pela TUI e pelo opc. Para inspecionar uma sessão do opc, prefira `/opc:attach`, pois usa o mesmo servidor.
+
+Resultado automatizado do §15 item 12: um `opencode run` concorrente e um job do opc terminaram com exit 0; o log do servidor não continha `SQLITE_BUSY` nem `database is locked`. A observação de visibilidade da sessão não-OPC no servidor do plugin foi `false` antes e depois de `opc sessions --all --refresh --json`. Isso é uma observação, não prova de sincronização da TUI. A checagem manual TUI × opc é `NÃO VALIDADO`.
+
+## Diff de sessão vazio no OpenCode 1.18.32
+
+Em 1.18.32, `GET /session/:id/diff` pode devolver uma lista vazia porque o resumo de diff da sessão não foi calculado. O opc usa como fallback `GET /session/:id/diff?messageID=…` para cada mensagem de usuário e indica `source: "per-message"`. Se a listagem de mensagens também estiver indisponível, use `opc session diff <sessionID> --message <messageID>`.
+
+## Listagem de mensagens indisponível
+
+Em algumas respostas estruturadas do OpenCode 1.18.32, `GET /session/:id/message` falha na listagem. `opc session show` informa `messagesUnavailable: true` e mantém diff e filhas disponíveis. Para a prévia de revert, o opc busca a mensagem alvo diretamente; como não consegue enumerar os turnos posteriores, avisa que a prévia cobre apenas aquela mensagem. Se o alvo não existir, retorna `UNKNOWN_MESSAGE`.
+
+## `/opc:attach --pane` não abre
+
+- `$TMUX` vazio: `--pane` retorna exit 2. Use a linha impressa por `/opc:attach` em um terminal ou execute dentro do tmux.
+- `tmux split-window` falhou: confira `tmux -V` e se há servidor tmux acessível.
+- O attach pede senha: gere novamente a linha com `/opc:attach`; no servidor gerenciado ela lê `<stateDir>/attach.secret`, que é regravado para a identidade atual. Não copie a senha para o shell ou logs.
+- Com `OPC_SERVER_URL`, `--pane` é recusado por desenho: o opc não possui nem grava o segredo do servidor externo.

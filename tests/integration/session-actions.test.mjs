@@ -77,10 +77,14 @@ test('session show reports unavailable messages after the OpenCode list bug', as
   assert.match(text.stdout, /As mensagens desta sessão não podem ser listadas por um defeito do OpenCode 1\.18\.32 com saída estruturada; o diff e os filhos continuam disponíveis\./);
 });
 
-test('session show and diff mask runtime pattern tokens in text and JSON', async (t) => {
+test('sessions, new, show, fork, diff and todo mask runtime pattern tokens in text and JSON', async (t) => {
   const token = `ghp_${'Ab12'.repeat(10)}`;
   const { cwd, env } = await setup(t, { extra: { FAKE_SESSION_CONTENT: token } });
   for (const args of [
+    ['sessions'], ['sessions', '--json'],
+    ['session', 'new', '--title', token], ['session', 'new', '--title', token, '--json'],
+    ['session', 'fork', SEED.session], ['session', 'fork', SEED.session, '--json'],
+    ['session', 'todo', SEED.session], ['session', 'todo', SEED.session, '--json'],
     ['session', 'show', SEED.session, '--json'], ['session', 'show', SEED.session],
     ['session', 'diff', SEED.session, '--json'], ['session', 'diff', SEED.session],
   ]) {
@@ -134,6 +138,17 @@ test('session diff: whole session, per message, and huge diffs truncated inline'
   assert.equal(text.code, 0);
   assert.match(text.stdout, /fora do diff inline/);
   assert.ok(Buffer.byteLength(text.stdout) < 450 * 1024);
+});
+
+test('session diff: empty aggregate (OpenCode 1.18.32) falls back to per-message diffs with a notice', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_EMPTY_SESSION_DIFF: '1' } });
+  const out = JSON.parse((await runCli(['session', 'diff', SEED.session, '--json'], { env, cwd })).stdout);
+  assert.equal(out.source, 'per-message');
+  assert.deepEqual(out.diffs.map((d) => [d.messageID, d.file]), [[SEED.m1, 'notes.txt'], [SEED.m3, 'notes.txt'], [SEED.m3, 'extra.txt']]);
+  assert.match(out.notices[0], /diff agregado da sessão/);
+  const text = await runCli(['session', 'diff', SEED.session], { env, cwd });
+  assert.equal(text.code, 0);
+  assert.match(text.stdout, /# Diff da sessão ses_seed\n\nO OpenCode não calculou o diff agregado/);
 });
 
 test('session todo lists todos', async (t) => {

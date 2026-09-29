@@ -279,3 +279,170 @@ Gate de parada: ativado (atualizado)
 | `SessionStart` | Exporta `OPC_COMPANION_SESSION_ID`, `OPC_COMPANION_TRANSCRIPT_PATH`, `CLAUDE_PLUGIN_DATA` e `OPC_DATA_DIR`; registra a sessão e, com `delegation.auto`, injeta lembrete de delegação. |
 | `SessionEnd` | Registra o fim e dispara `opc reap` destacado, saindo em menos de 1 s. |
 | `Stop` | Avisa em stderr sobre jobs ativos; com o gate ligado, executa o stop review gate. |
+
+## Sessões, subagentes, commands e attach (F3)
+
+### `/opc:sessions`
+
+```text
+/opc:sessions [--all] [--limit N] [--refresh] [--json]
+```
+
+Por padrão lista somente sessões raiz deste workspace cujo título começa com `OPC: `, da mais recente para a mais antiga. `--all` inclui filhas e sessões que o servidor conhece; `--limit` vale 30 por padrão e nunca mostra menos de uma linha. A resposta JSON é `{ sessions, total, filtered }`.
+
+`--refresh` chama o descarte da instância para que o servidor releia o storage. É recusado com jobs de topo ativos e em modo de servidor externo (`OPC_SERVER_URL`). Uma TUI anexada ao servidor gerenciado é desconectada e precisará reconectar.
+
+```bash
+opc sessions
+opc sessions --all --limit 10 --json
+```
+
+### `/opc:session`
+
+| Ação | Uso | Resultado |
+| --- | --- | --- |
+| `new` | `new [--title t] [--agent a] [--model m] [--write]` | Cria sessão `OPC: session: <t>` com perfil `read-only` ou `write`. |
+| `show` | `show <sessionID> [--limit N]` | Mostra sessão, estado e mensagens; os IDs de mensagem servem para `fork` e `revert`. |
+| `fork` | `fork <sessionID> [messageID]` | Cria fork com o histórico anterior à mensagem indicada. |
+| `revert` | `revert <sessionID> <messageID> [--part partID] [--confirmed-by-user]` | Exige confirmação e então aplica o revert. |
+| `unrevert` | `unrevert <sessionID> [--confirmed-by-user]` | Exige confirmação e restaura o revert ativo. |
+| `summarize` | `summarize <sessionID> [--model m] [--timeout s]` | Resume sincronamente; o timeout padrão é 600 s. |
+| `children` | `children <sessionID>` | Lista sessões filhas. |
+| `diff` | `diff <sessionID> [--message messageID]` | Mostra diff da sessão ou de uma mensagem. |
+| `todo` | `todo <sessionID>` | Lista tarefas da sessão. |
+
+IDs de sessão, mensagem e parte são validados antes de conectar. `revert`, `unrevert` e `summarize` recusam a sessão ocupada por job ou ativa no servidor. A resolução de modelo de `new` e `summarize` segue a política; uma recusa de política retorna exit 4.
+
+Sem `--confirmed-by-user`, `revert` e `unrevert` retornam exit 2, exibem a prévia do diff e não mudam nada. No slash command, depois da confirmação explícita do usuário, repasse a linha de confirmação pelo heredoc, sem pôr IDs na linha de comando:
+
+```bash
+opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+revert ses_<id> msg_<id> --confirmed-by-user
+OPC_ARGS_5f1d0c7a_EOF
+```
+
+Para `unrevert`, o corpo é `unrevert ses_<id> --confirmed-by-user`. Nunca acrescente a flag sem a confirmação daquela ação e daquele alvo.
+
+Em OpenCode 1.18.32, o endpoint de diff da sessão pode devolver uma lista vazia. Sem `--message`, o opc então tenta o diff de cada mensagem de usuário e informa `source: "per-message"`; se as mensagens não puderem ser listadas, use `--message <id>`.
+
+```bash
+opc session new --title "investigar login" --model fast
+opc session show ses_<id>
+opc session fork ses_<id> msg_<id>
+opc session diff ses_<id>
+opc session todo ses_<id>
+```
+
+Saída real (portão F3, 29/09/2026):
+
+```text
+$ opc session diff ses_<id>
+{"sessionID":"ses_<id>","messageID":null,"source":"per-message","notices":["O OpenCode não calculou o diff agregado da sessão; mostrando o diff de cada mensagem do usuário (da mais antiga para a mais recente)."],"diffs":[{"file":"notes.txt","status":"modified","messageID":"msg_<id>"}]}
+
+$ opc session summarize ses_<id> --model omniroute-personal/cmd/Qwen/Qwen3.7-Flash --json
+{"sessionID":"ses_<id>","model":"omniroute-personal/cmd/Qwen/Qwen3.7-Flash","summarized":true}
+```
+
+### `/opc:subagent`
+
+```text
+/opc:subagent --agent a[,b,c] [--model m[,m2,m3]] [--variant v|--effort v] [--write] [--background]
+[--mechanism child-session|subtask] [--prompt-file f] [--timeout s] [--wait-timeout s] <prompt>
+```
+
+Cria um grupo `sub-…` e um membro por par agente/modelo. Uma lista de um lado expande sobre a outra; listas com o mesmo tamanho pareiam por posição; o máximo é oito membros. Os agentes aceitos têm modo `subagent` ou `all`, e agentes/modelos passam pela política antes de qualquer sessão.
+
+O mecanismo padrão é `child-session`: cria uma sessão pai e uma filha por membro. Se o servidor recusar o agente de subagente na sessão filha, o membro usa `subtask` numa sessão portadora; o resultado registra `mechanism` e `fellBack`. O worker coordenador executa até `jobs.maxParallel` (4 por padrão); `--write` serializa os membros. O grupo conta como um job para `jobs.maxActive`.
+
+```bash
+opc subagent --agent general --model fast,strong,k3 "Liste os riscos deste módulo em 3 itens"
+opc subagent --agent explore,general "Onde a configuração é carregada?" --background
+```
+
+Saída real (portão F3, 29/09/2026):
+
+```text
+Status: completed · 3 membro(s): 3 completed
+#1 general · omniroute-personal/cmd/deepseek/deepseek-v4-flash — child-session
+#2 general · omniroute-personal/cmd/Qwen/Qwen3.7-Flash — child-session
+#3 general · omniroute-personal/cmd/moonshotai/Kimi-K2.6 — child-session
+```
+
+### `/opc:status`, `/opc:result` e `/opc:cancel` para grupos
+
+```text
+/opc:status [job-id] [--wait] [--timeout-ms N] [--poll-interval-ms N] [--all] [--json]
+/opc:result [job-id] [--json]
+/opc:cancel [job-id] [--json]
+```
+
+Para um grupo, `status` e `result` retornam ou renderizam `{ group, members }`. O estado agregado é `waiting_permission` se algum membro aguarda decisão, `running` se algum está ativo, `completed` se algum concluiu e os demais não impedem a conclusão, ou `failed`/`cancelled` conforme os membros. `status <grupo> --wait` acompanha o coordenador.
+
+`cancel <grupo>` solicita cancelamento de todos os membros ativos e informa `cancelledMembers` e `failedMembers`; falha de cancelamento retorna exit 5 com `CANCEL_FAILED`. `cancel <membro>` aborta somente a sessão daquele membro. Sem id, a resolução ignora membros de grupo.
+
+```bash
+opc status sub_<id> --wait
+opc result sub_<id>
+opc cancel sub_<id>
+opc cancel sub_<member-id>
+```
+
+Saída real (portão F3, 29/09/2026):
+
+```text
+# Resultado do grupo sub_<id>
+
+Status: completed · 2 membro(s): 2 completed
+
+## #1 general · omniroute-personal/cmd/deepseek/deepseek-v4-flash — completed
+## #2 general · omniroute-personal/cmd/moonshotai/Kimi-K2.6 — completed
+```
+
+### `/opc:command`
+
+```text
+/opc:command <cmd> [args...] [--agent a] [--model m] [--variant v] [--write] [--background]
+[--timeout s] [--wait-timeout s] [--json]
+```
+
+Consulta `GET /command`; comando desconhecido retorna exit 2 com até 20 nomes disponíveis. Cria um job `cmd-…` e uma sessão `OPC: command: /<cmd>`, com perfil `read-only` por padrão. `--write` escolhe o perfil `write`. Os argumentos vazios seguem como string vazia e a chamada usa o timeout do job, de 30 minutos por padrão.
+
+O modelo é `--model`, depois o fixado pelo command e por fim a rota `task`; o agente é `--agent`, depois o fixado, `defaultAgent` e o padrão do OpenCode. A política é aplicada ao command e às escolhas fixadas; negação retorna exit 4. Permissões e perguntas usam a mesma ponte de jobs (exit 3).
+
+```bash
+opc catalog commands
+opc command check-updates --model omniroute-personal/cmd/moonshotai/Kimi-K2.6
+```
+
+Saída real (portão F3, 29/09/2026):
+
+```text
+# opc command /check-updates
+
+Status: completed
+Argumentos: (nenhum)
+Sessão: ses_<id> · modelo omniroute-personal/cmd/moonshotai/Kimi-K2.6 · agente (padrão)
+```
+
+### `/opc:attach` (somente usuário)
+
+```text
+/opc:attach [sessionID] [--pane] [--json]
+```
+
+Sem `sessionID`, usa a sessão do job mais recente da sessão atual do Claude; sem job, abre o seletor da TUI. A linha normal lê a senha do arquivo privado e a entrega somente por variável de ambiente:
+
+```bash
+OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode attach http://127.0.0.1:<porta> -s ses_<id> --dir '<workspace>'
+```
+
+No servidor gerenciado, `attach.secret` é modo 600 e contém apenas a senha vigente. `--pane` requer tmux, cria `attach-pane.sh` modo 700 e lê o segredo dentro do pane; senha nenhuma é posta em argv. Fora do tmux, retorna exit 2. Em servidor externo (`OPC_SERVER_URL`), a linha usa `OPC_SERVER_PASSWORD` e `--pane` é recusado porque o opc não grava o segredo externo.
+
+Com `--json`, `authSource` substitui qualquer campo de credencial: no servidor gerenciado é `{ "type": "file", "path": "<stateDir>/attach.secret" }`; no externo é `{ "type": "env", "name": "OPC_SERVER_PASSWORD" }`. A resposta também traz `url`, `sessionID`, `directory`, `attached` e `argv`, nunca a senha.
+
+```bash
+opc attach ses_<id>
+opc attach --pane ses_<id>
+```
+
+Saída real: `NÃO VALIDADO` — a validação manual de attach e `--pane` não foi executada no portão F3.

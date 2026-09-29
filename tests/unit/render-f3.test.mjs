@@ -163,12 +163,13 @@ test('renderCommandResult masks and bounds a legacy arguments field', () => {
   assert.match(rendered, /Argumentos: `\*\*\* \*\*\* x[^`]{0,200}…`/);
 });
 
-test('renderAttach: command reads the password from file or env, never inline', () => {
-  const file = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: 'ses_a', directory: '/tmp/a b', attached: false, credential: { type: 'file', path: '/data/state/x/attach.secret' } });
+test('renderAttach: command reads the password from file or env, uses supplied argv, never inline', () => {
+  const file = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: 'ses_a', directory: '/tmp/a b', attached: false, authSource: { type: 'file', path: '/data/state/x/attach.secret' }, argv: ['opencode', 'attach', 'http://127.0.0.1:4100', '-s', 'ses_a', '--dir', '/tmp/a b'] });
   assert.match(file, /OPENCODE_SERVER_PASSWORD="\$\(cat \/data\/state\/x\/attach\.secret\)" opencode attach http:\/\/127\.0\.0\.1:4100 -s ses_a --dir '\/tmp\/a b'/);
   assert.match(file, /\/opc:attach --pane ses_a/);
-  const env = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: null, directory: '/ws', attached: true, credential: { type: 'env', name: 'OPC_SERVER_PASSWORD' } });
+  const env = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: null, directory: '/ws', attached: true, authSource: { type: 'env', name: 'OPC_SERVER_PASSWORD' }, argv: ['opencode', 'attach', 'http://127.0.0.1:4100', '--dir', '/ws'] });
   assert.match(env, /OPENCODE_SERVER_PASSWORD="\$OPC_SERVER_PASSWORD" opencode attach http:\/\/127\.0\.0\.1:4100 --dir \/ws/);
   assert.match(env, /externo/);
-  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, credential: { type: 'file', path: '/p' }, pane: { id: '%42' } }), /Pane aberto: %42/);
+  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', 'attach', 'u'], pane: { id: '%42' } }), /Pane aberto: %42/);
+  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', 'attach', 'custom', '--dir', '/other'] }), /opencode attach custom --dir \/other/);
 });

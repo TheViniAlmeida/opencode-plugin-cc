@@ -138,7 +138,7 @@ function safeJob(job) {
       .filter((key) => request.review[key] !== undefined).map((key) => [key, request.review[key]]));
   }
   const masked = redact(safe);
-  for (const field of ['title', 'summary', 'pendingRequest']) {
+  for (const field of ['title', 'summary', 'pendingRequest', 'error', 'errorMessage', 'errorType']) {
     if (Object.hasOwn(masked, field)) masked[field] = redactOutput(masked[field]);
   }
   if (masked.request) masked.request = redactOutput(masked.request);
@@ -646,7 +646,8 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     } catch (err) {
       const message = short(redactText(err?.message ?? String(err)));
       appendJobLog(ctx.stateDir, id, `falha ao solicitar cancelamento: ${message}`);
-      const latest = readJob(ctx.stateDir, id);
+      const latest = await updateJob(ctx.stateDir, id, { cancelRequestedAt: null });
+      appendJobLog(ctx.stateDir, id, 'Intenção de cancelamento retirada após falha; aguardando o resultado real da tarefa.');
       return { ok: false, code: 'CANCEL_FAILED', reason: message, job: latest, report };
     }
   }

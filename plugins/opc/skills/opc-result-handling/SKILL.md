@@ -69,3 +69,31 @@ Siga o [procedimento único de permissões e perguntas](#procedimento-único-de-
 - Exit code `5` (servidor ou conexão) ou mensagem de OpenCode ausente: encaminhe o usuário para `/opc:setup`. Não improvise instalação ou autenticação; login do provedor continua com `!opencode auth login`.
 - Exit code `4` (política): informe a regra que negou o modelo, agente, provedor ou ferramenta. Não tente outro modelo sem pedido.
 - Exit code `2` (uso): mostre a mensagem; corrija a chamada somente quando a intenção for inequívoca.
+
+## Sessões: revert e unrevert
+
+- `opc session revert|unrevert` sem `--confirmed-by-user` sai com código 2 e imprime o diff
+  afetado e o comando de confirmação. Isso é um pedido de confirmação, não uma falha.
+- Mostre ao usuário os arquivos e os trechos do diff e pergunte com AskUserQuestion:
+  "Reverter a sessão <id> a partir de <mensagem>?" (opções "Reverter" e "Cancelar"; para
+  unrevert, "Desfazer o revert" e "Cancelar").
+- Só com a resposta afirmativa, confirme pelo heredoc de `/opc:session`
+  (`opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`, terminador sozinho na linha): o corpo
+  é a linha impressa sem o prefixo `opc session`, inalterada (subcomando, IDs, `--part` se
+  houver e `--confirmed-by-user`). Nenhum ID vai na linha de comando do `opc`. A confirmação
+  vale para aquela sessão e aquela mensagem, e só.
+- "Cancelar" ou silêncio: não rode nada e diga que nada foi alterado.
+
+## Grupos de subagentes
+
+- O resultado de `/opc:subagent` e o `/opc:result` de um grupo têm uma seção por membro.
+  Apresente cada membro com agente, modelo e sessão; marque falhas e cancelados.
+- Grupo `completed` com avisos = alguns membros falharam; diga quais.
+- Pedido de permissão ou pergunta de um membro: mesmo fluxo de `/opc:permissions` (aprovador,
+  destrutivos sempre com o usuário). Cancelar um membro (`/opc:cancel <membro>`) aborta só a
+  sessão dele; `/opc:cancel <grupo>` cancela todos.
+
+## /opc:attach
+
+- É só do usuário (`disable-model-invocation`). Não sugira `--pane` fora do tmux e nunca
+  exponha a senha do servidor.

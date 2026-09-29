@@ -6,7 +6,7 @@ import { assertId } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderTodos, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages } from '../lib/session-messages.mjs';
-import { maskDeep } from '../lib/redact.mjs';
+import { maskDeep, safeOutputText } from '../lib/redact.mjs';
 
 const SPEC = {
   flags: {
@@ -80,12 +80,41 @@ async function actionChildren(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
+// OpenCode 1.18.32 returns an empty session-level diff (summary not computed); per-message diffs work.
+// Without --message and with an empty aggregate, collect the diff of each user message (oldest first).
+async function perMessageDiffs(api, sessionID) {
+  const messages = (await readSessionMessages(api, sessionID)) ?? [];
+  const userIds = messages.filter((m) => (m.info?.role ?? m.role) === 'user').map((m) => m.info?.id ?? m.id).filter(Boolean);
+  const ids = userIds.slice(-MAX_DIFF_MESSAGES);
+  const diffs = [];
+  for (const id of ids) {
+    for (const entry of (await api.diff(sessionID, { messageID: id })) ?? []) diffs.push({ ...entry, messageID: id });
+  }
+  return { diffs, truncated: userIds.length > ids.length, unavailable: Boolean(messages.messagesUnavailable) };
+}
+
 async function actionDiff(ctx, api, { flags, sessionID }) {
   const messageID = flags.message !== undefined ? assertId('msg', flags.message, 'mensagem') : undefined;
-  const diffs = (await api.diff(sessionID, { messageID })) ?? [];
+  let diffs = (await api.diff(sessionID, { messageID })) ?? [];
+  let source = messageID ? 'message' : 'session';
+  const notices = [];
+  if (!messageID && diffs.length === 0) {
+    const collected = await perMessageDiffs(api, sessionID);
+    if (collected.diffs.length) {
+      diffs = collected.diffs;
+      source = 'per-message';
+      notices.push('O OpenCode não calculou o diff agregado da sessão; mostrando o diff de cada mensagem do usuário (da mais antiga para a mais recente).');
+      if (collected.truncated) notices.push(`Limitado às ${MAX_DIFF_MESSAGES} mensagens do usuário mais recentes.`);
+    } else if (collected.unavailable) {
+      notices.push('As mensagens desta sessão não puderam ser listadas; use --message <id> para ver o diff de uma mensagem.');
+    }
+  }
   const safeDiffs = maskDeep(diffs);
-  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, diffs: safeDiffs }));
-  else ctx.out(renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` }));
+  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, source, notices, diffs: safeDiffs }));
+  else {
+    const rendered = renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` });
+    ctx.out(notices.length ? rendered.replace(/\n\n/, `\n\n${notices.join('\n')}\n\n`) : rendered);
+  }
   return ExitCode.OK;
 }
 
@@ -104,7 +133,7 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
   if (!release) throw new UsageError('SESSION_IN_USE', `a sessão ${sessionID} está em uso por um job ativo; aguarde (/opc:status) ou cancele (/opc:cancel)`);
   try {
     const status = (await api.sessionStatus())?.[sessionID];
-    if (status && status.type !== 'idle') throw new UsageError('SESSION_BUSY', `a sessão ${sessionID} está ocupada (${status.type}); tente de novo quando ficar ociosa`);
+    if (status && status.type !== 'idle') throw new UsageError('SESSION_BUSY', `a sessão ${sessionID} está ocupada (${safeOutputText(status.type)}); tente de novo quando ficar ociosa`);
     return await fn();
   } finally {
     release();
@@ -113,7 +142,8 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
 
 export async function collectAffectedDiff(api, sessionID, messageID) {
   const messages = (await readSessionMessages(api, sessionID)) ?? [];
-  if (messages.messagesUnavailable) {
+  const index = messages.findIndex((m) => m.info?.id === messageID);
+  if (messages.messagesUnavailable || index < 0) {
     let target;
     try { target = await api.message(sessionID, messageID); }
     catch (err) {
@@ -121,12 +151,12 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
       throw err;
     }
     if (!target) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
-    const diffs = (await api.diff(sessionID, { messageID })) ?? [];
-    diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
+    const diffMessageID = target.info?.role === 'assistant' ? target.info.parentID ?? messageID : messageID;
+    const diffs = (await api.diff(sessionID, { messageID: diffMessageID })) ?? [];
+    if (messages.messagesUnavailable) diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
+    else diffs.previewTruncated = true;
     return diffs;
   }
-  const index = messages.findIndex((m) => m.info?.id === messageID);
-  if (index < 0) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
   const target = messages[index].info;
   const ids = [];
   if (target.role === 'assistant' && target.parentID) ids.push(target.parentID);
@@ -205,7 +235,7 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
       timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000,
     });
     if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true }));
-    else ctx.out(`# Sessão ${sessionID} resumida\n\nModelo: ${model.full}\nVeja o resultado: opc session show ${sessionID}\n`);
+    else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\nVeja o resultado: opc session show ${safeOutputText(sessionID)}\n`);
     return ExitCode.OK;
   });
 }

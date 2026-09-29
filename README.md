@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F2b — review, gate, rescue e hooks**. Descoberta, onboarding, turnos, reviews e
-> ciclo de sessão já estão disponíveis.
+> Estado: **F3 — sessões, subagentes, commands e attach entregue**. Descoberta, onboarding,
+> turnos, reviews, sessões e delegação em grupos estão disponíveis.
 
 ## Requisitos
 
@@ -50,7 +50,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:config`, `/opc:providers`, `/opc:models`, `/opc:agents`, `/opc:catalog` | F1 | disponível |
 | `/opc:task`, `/opc:ask`, `/opc:plan`, `/opc:status`, `/opc:result`, `/opc:cancel`, `/opc:permissions` | F2a | disponível |
 | `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | disponível |
-| `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | planejado |
+| `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | disponível |
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | planejado |
 | `/opc:orchestrate` | F4b | planejado |
 | `/opc:conclave` | F4c | planejado |
@@ -66,6 +66,10 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:rescue` | Delega investigação ou correção ao OpenCode, continuando ou iniciando sessão |
 | `/opc:task`, `/opc:ask`, `/opc:plan` | Turnos avulsos de escrita, pergunta e plano |
 | `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
+| `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo, diff e tarefas |
+| `/opc:subagent` | Executa agentes/modelos em paralelo como grupo de jobs |
+| `/opc:command` | Roda um slash command do OpenCode em job próprio |
+| `/opc:attach` | Abre a sessão na TUI; `--pane` abre split no tmux e só o usuário invoca |
 | `/opc:permissions` | Responde pedidos de permissão e perguntas do OpenCode |
 | Hooks | `SessionStart`/`SessionEnd` no ciclo do servidor e `Stop` no gate opcional |
 
@@ -80,6 +84,7 @@ Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 - [Configuração](docs/configuration.md)
 - [Comandos F1](docs/commands.md)
 - [Relatório da F1](docs/phases/F1-report.md)
+- [Relatório da F3](docs/phases/F3-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos
