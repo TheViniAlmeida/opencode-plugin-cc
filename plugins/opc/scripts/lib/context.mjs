@@ -110,20 +110,29 @@ import {
 } from './state.mjs';
 import { loadConfig as f2bLoadConfig } from './config.mjs';
 
-export function contextForCwd(ctx, cwd) {
+export function contextForCwd(ctx, cwd, { allowInvalidConfig = false } = {}) {
   if (!cwd) return ctx;
   if (path.resolve(cwd) === path.resolve(ctx.cwd) && ctx.workspaceTimeoutMs) return ctx;
   const workspaceRoot = f2bResolveWorkspaceRoot(cwd, { env: ctx.env, timeoutMs: ctx.workspaceTimeoutMs, fallbackOnFailure: ctx.workspaceFallback });
   if (workspaceRoot === ctx.workspaceRoot) return ctx;
   const stateDir = f2bWorkspaceStateDir(ctx.dataDir, workspaceRoot);
   f2bEnsurePrivateDir(stateDir);
-  const loaded = f2bLoadConfig({ dataDir: ctx.dataDir, workspaceRoot });
+  let loaded;
+  let configError = null;
+  try {
+    loaded = f2bLoadConfig({ dataDir: ctx.dataDir, workspaceRoot });
+  } catch (err) {
+    if (err.code !== 'CONFIG_INVALID' || !allowInvalidConfig) throw err;
+    configError = err;
+    loaded = { config: DEFAULT_CONFIG, warnings: ['Configuração inválida; usando os defaults.'], hasGlobal: false, workspace: null };
+  }
   return {
     ...ctx,
     cwd,
     workspaceRoot,
     stateDir,
     config: loaded.config,
+    configError,
     configWarnings: loaded.warnings,
     configMeta: { hasGlobal: loaded.hasGlobal, workspaceFound: loaded.workspace !== null },
   };
