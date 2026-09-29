@@ -78,19 +78,20 @@ test('a pending permission makes the prescribed command exit 3 with the relay bl
   const { env, ws } = setup(t, 'permission-ask');
   const r = await bash(fill(PROMPT_TEMPLATE, { sub: 'task', flags: `--write --model ${M.fast}`, prompt: 'Delete the build directory' }), { env, cwd: ws });
   const [job] = jobsIn(env, ws);
-  t.after(async () => {
+  // cleanup inside the test: a t.after hook would run after makeWorkspace removed the cwd
+  try {
+    assert.equal(r.code, 3, `${r.stdout}\n${r.stderr}`);
+    const output = `${r.stdout}\n${r.stderr}`;
+    const id = output.match(/## Solicitação (per_[0-9A-Za-z]+)/)?.[1];
+    assert.ok(id, output);
+    const lines = output.split('\n').map((line) => line.trim());
+    assert.ok(lines.includes(`- \`/opc:permissions reply ${id} once\``), output);
+    assert.ok(lines.includes(`- \`/opc:permissions reply ${id} reject "<reason>"\``), output);
+    assert.ok(lines.includes(`Depois: \`/opc:status ${job.id} --wait\``), output);
+  } finally {
     const cancelled = await runCli(['cancel', job.id], { env, cwd: ws });
-    if (cancelled.code !== 0 && !/not found|already cancelled/i.test(cancelled.stderr + cancelled.stdout)) {
-      throw new Error(`pending-job cleanup failed (code ${cancelled.code})\n${cancelled.stdout}\n${cancelled.stderr}`);
-    }
     await stopAllServers(env, ws);
-  });
-  assert.equal(r.code, 3, `${r.stdout}\n${r.stderr}`);
-  const output = `${r.stdout}\n${r.stderr}`;
-  const [requestId] = output.match(/## Solicitação (per_[0-9A-Za-z]+)/) ?? [];
-  assert.ok(requestId, output);
-  const id = requestId.replace('## Solicitação ', '');
-  assert.ok(output.includes(`/opc:permissions reply ${id} once`), output);
-  assert.ok(output.includes(`/opc:permissions reply ${id} reject "<reason>"`), output);
-  assert.ok(output.includes(`/opc:status `), output);
+    assert.ok(cancelled.code === 0 || /not found|already cancelled|não encontrado|já/i.test(cancelled.stderr + cancelled.stdout),
+      `pending-job cleanup failed (code ${cancelled.code})\n${cancelled.stdout}\n${cancelled.stderr}`);
+  }
 });
