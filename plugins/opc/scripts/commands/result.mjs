@@ -2,8 +2,8 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
-import { isActive, isTerminal, listJobs, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
-import { renderReviewJob, renderTurnResult } from '../lib/render.mjs';
+import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef } from '../lib/jobs.mjs';
+import { renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 
 const stillRunning = (job) => {
@@ -30,6 +30,8 @@ export async function run(ctx, argv) {
       throw new NotFoundError('NO_FINISHED_JOB', 'ainda não há tarefa concluída nesta sessão do Claude');
     }
   }
+  const special = resultForGroupOrCommand(ctx, job, flags);
+  if (special !== null) return special;
   if (isActive(job)) throw stillRunning(job);
   if (job.kind === 'review') {
     const rendered = renderReviewJob(job);
@@ -39,6 +41,24 @@ export async function run(ctx, argv) {
   }
   if (flags.json) ctx.json({ job });
   else ctx.out(renderTurnResult(job));
+  return exitCodeForJob(job);
+}
+
+export function resultForGroupOrCommand(ctx, job, flags) {
+  const isGroup = job?.role === GROUP_ROLE;
+  if (!isGroup && job?.kind !== 'cmd') return null;
+  if (ACTIVE_STATUSES.includes(job.status)) {
+    throw new UsageError('JOB_ACTIVE', `o ${isGroup ? 'grupo' : 'job'} ${job.id} ainda está em execução (${job.phase ?? job.status}); use /opc:status ${job.id} --wait`);
+  }
+  if (isGroup) {
+    const members = listGroupMembers(ctx.stateDir, job.id);
+    if (flags.json) ctx.json({ group: job, members });
+    else ctx.out(job.rendered ?? renderGroupResult(job, members));
+  } else if (flags.json) {
+    ctx.json({ job });
+  } else {
+    ctx.out(job.rendered ?? renderCommandResult(job.result ?? { command: job.request?.command ?? '?', arguments: job.request?.arguments ?? '' }));
+  }
   return exitCodeForJob(job);
 }
 
