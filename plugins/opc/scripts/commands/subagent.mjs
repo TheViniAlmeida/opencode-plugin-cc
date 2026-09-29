@@ -11,6 +11,7 @@ import { renderGroupStatus, renderGroupResult } from '../lib/render.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
+import { safeOutputText } from '../lib/redact.mjs';
 
 export const MAX_SUBAGENTS = 8;
 const DEFAULT_TURN_TIMEOUT_SEC = 1800;
@@ -25,6 +26,19 @@ const SPEC = {
 };
 const splitList = (value) => (Array.isArray(value) ? value : value == null ? [] : [value])
   .flatMap((v) => String(v).split(',')).map((s) => s.trim()).filter(Boolean);
+
+export function waitTimeoutMsFromFlags(flags) {
+  const value = flags['wait-timeout'];
+  if (value === undefined) return undefined;
+  const ms = value * 1000;
+  if (!Number.isFinite(ms) || ms <= 0) throw new UsageError('USAGE', 'os tempos limite devem ser números positivos de segundos');
+  return ms;
+}
+
+export function buildMemberFields(specs, summary, profile) {
+  return specs.map((spec, i) => ({ title: spec.title, summary, agent: spec.agent, model: spec.full, variant: spec.variant ?? null,
+    permissionProfile: profile, role: `member:${i + 1}`, memberIndex: i }));
+}
 
 export function pairAgentsAndModels(agents, models) {
   if (!agents.length) throw new UsageError('NO_AGENT', 'informe --agent a[,b,c] (veja /opc:agents --mode subagent)');
@@ -60,8 +74,8 @@ export async function run(ctx, argv) {
   const pairs = pairAgentsAndModels(splitList(flags.agent), splitList(flags.model));
   const variant = flags.variant ?? flags.effort ?? null;
   const timeoutSec = flags.timeout ?? DEFAULT_TURN_TIMEOUT_SEC;
-  const waitTimeoutMs = flags['wait-timeout'] ? flags['wait-timeout'] * 1000 : undefined;
-  if (!Number.isFinite(timeoutSec) || timeoutSec <= 0 || (waitTimeoutMs !== undefined && (!Number.isFinite(waitTimeoutMs) || waitTimeoutMs <= 0))) {
+  const waitTimeoutMs = waitTimeoutMsFromFlags(flags);
+  if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
     throw new UsageError('USAGE', 'os tempos limite devem ser números positivos de segundos');
   }
   assertNotInsideServer(ctx.env);
@@ -83,8 +97,7 @@ export async function run(ctx, argv) {
   const { group, members } = await withServerLock(ctx, () => createGroup(ctx.stateDir, {
     kind: 'sub', title: `OPC: subagents: ${summary}`, summary, workspaceRoot: ctx.workspaceRoot,
     claudeSessionId: ctx.claudeSessionId, permissionProfile: profile, request,
-  }, specs.map((spec, i) => ({ title: spec.title, summary, agent: spec.agent, model: spec.full, variant: spec.variant ?? null,
-    permissionProfile: profile, role: `member:${i + 1}`, request: { memberIndex: i } })),
+  }, buildMemberFields(specs, summary, profile),
   { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:sub' });
   await spawnWorker(ctx, group.id);
   if (flags.background) {
@@ -108,67 +121,93 @@ function memberResult(res, spec, fallbackMechanism) {
     childSessionIDs: res.childSessionIDs ?? [], usage: res.usage ?? null, model: spec.full, agent: spec.agent };
 }
 
-export async function runWorker(ctx, groupJob) {
+export async function runWorker(ctx, groupJob, request, {
+  openApi: makeConnection = openApi, dispatch: dispatch = dispatchSubagent, createBridge = createRequestBridge,
+} = {}) {
   const { stateDir } = ctx;
-  const req = groupJob.request;
+  const req = request;
   const memberIds = groupJob.memberIds ?? [];
   const now = () => new Date().toISOString();
   let chain = Promise.resolve();
   const refresh = () => {
-    chain = chain.then(() => refreshGroup(stateDir, groupJob.id)).catch((err) => appendJobLog(stateDir, groupJob.id, `[opc] falha ao atualizar grupo: ${err.message}`));
+    chain = chain.then(() => refreshGroup(stateDir, groupJob.id)).catch((err) => appendJobLog(stateDir, groupJob.id, `[opc] falha ao atualizar grupo: ${safeOutputText(err.message)}`));
     return chain;
   };
   let conn;
   try {
-    conn = await openApi(ctx, { withHub: true, respawn: false });
+    conn = await makeConnection(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
     const parent = await api.createSession({ title: groupJob.title, permission: req.rules });
     const coordinator = { pid: process.pid, pidStartTime: getProcessIdentity(process.pid)?.startTime ?? null };
     await updateJob(stateDir, groupJob.id, { status: 'running', startedAt: now(), sessionID: parent.id });
     for (const id of memberIds) await updateJob(stateDir, id, { parentSessionID: parent.id, pid: coordinator.pid, pidStartTime: coordinator.pidStartTime });
     const policy = ctx.config.policy ?? {};
-    await runWithConcurrency(memberIds, req.maxParallel ?? 4, async (memberId, index) => {
-      if (readJob(stateDir, groupJob.id)?.status === 'cancelled' || readJob(stateDir, memberId)?.status !== 'queued') return;
+    const outcomes = await runWithConcurrency(memberIds, req.maxParallel ?? 4, async (memberId, index) => {
       const spec = req.members[index];
       const tag = `[#${index + 1} ${spec.agent}]`;
-      await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now() });
-      appendJobLog(stateDir, groupJob.id, `${tag} iniciando (${spec.full})`);
-      await refresh();
-      const updater = createSerialUpdater(stateDir, memberId);
-      const bridge = createRequestBridge({ update: async (patch) => { const job = await updater.update(patch); await refresh(); return job; },
-        api, profileKind: req.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
-        log: (line) => appendJobLog(stateDir, groupJob.id, `${tag} ${line}`) });
-      let res;
+      let bridge;
+      let updater;
       try {
-        res = await dispatchSubagent({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
-          mechanism: req.mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
-          onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.abort(sessionID).catch(() => {}); },
-          onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
-          onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
-          onRequestResolved: (event) => bridge.onResolved(event) });
+        if (readJob(stateDir, groupJob.id)?.status === 'cancelled' || readJob(stateDir, memberId)?.status !== 'queued') return;
+        await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now() });
+        appendJobLog(stateDir, groupJob.id, `${tag} iniciando (${spec.full})`);
+        await refresh();
+        updater = createSerialUpdater(stateDir, memberId);
+        bridge = createBridge({ update: async (patch) => { const job = await updater.update(patch); await refresh(); return job; },
+          jobId: memberId, stateDir, api, profileKind: req.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
+          log: (line) => appendJobLog(stateDir, groupJob.id, `${tag} ${line}`) });
+        let res;
+        try {
+          res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
+            mechanism: req.mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
+            onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.abort(sessionID).catch(() => {}); },
+            onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
+            onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
+            onRequestResolved: (event) => bridge.onResolved(event) });
+        } catch (err) {
+          res = { status: 'failed', errorType: err.code ?? err.name ?? 'Error', errorMessage: safeOutputText(err.message), finalText: '', sessionID: readJob(stateDir, memberId)?.sessionID ?? null };
+        }
+        await updater.flush();
+        const latest = readJob(stateDir, memberId);
+        const status = latest?.status === 'cancelled' ? 'cancelled' : res.status;
+        await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), sessionID: res.sessionID ?? latest?.sessionID ?? null,
+          errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
+          childSessionIDs: res.childSessionIDs ?? [], pendingRequest: null, result: memberResult(res, spec, req.mechanism) });
+        appendJobLog(stateDir, groupJob.id, `${tag} ${status}`);
       } catch (err) {
-        res = { status: 'failed', errorType: err.code ?? err.name ?? 'Error', errorMessage: err.message, finalText: '', sessionID: readJob(stateDir, memberId)?.sessionID ?? null };
-      } finally { bridge.dispose(); await updater.flush(); }
-      const latest = readJob(stateDir, memberId);
-      const status = latest?.status === 'cancelled' ? 'cancelled' : res.status;
-      await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), sessionID: res.sessionID ?? latest?.sessionID ?? null,
-        errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ?? null,
-        childSessionIDs: res.childSessionIDs ?? [], pendingRequest: null, result: memberResult(res, spec, req.mechanism) });
-      appendJobLog(stateDir, groupJob.id, `${tag} ${status}`);
+        const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
+        const latest = readJob(stateDir, memberId);
+        if (latest && ['queued', 'running', 'waiting_permission'].includes(latest.status)) {
+          await updateJob(stateDir, memberId, { status: 'failed', phase: 'failed', completedAt: now(), errorCode: err.code ?? 'member_setup_failed', errorClass: 'fatal', errorType: err.code ?? err.name ?? 'Error', errorMessage });
+        }
+        appendJobLog(stateDir, groupJob.id, `${tag} falhou: ${errorMessage}`);
+      } finally { bridge?.dispose(); }
       await refresh();
     });
+    for (const [index, outcome] of outcomes.entries()) {
+      if (outcome.status !== 'rejected') continue;
+      const memberId = memberIds[index];
+      const errorMessage = safeOutputText(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
+      const latest = readJob(stateDir, memberId);
+      if (latest && ACTIVE_STATUSES.includes(latest.status)) {
+        await updateJob(stateDir, memberId, { status: 'failed', phase: 'failed', completedAt: now(), errorCode: outcome.reason?.code ?? 'member_lane_failed', errorClass: 'fatal', errorType: outcome.reason?.code ?? outcome.reason?.name ?? 'Error', errorMessage });
+      }
+      appendJobLog(stateDir, groupJob.id, `[#${index + 1}] falha da lane: ${errorMessage}`);
+      await refresh();
+    }
     await chain;
     const finalGroup = await refreshGroup(stateDir, groupJob.id, { final: true });
     await updateJob(stateDir, groupJob.id, { rendered: renderGroupResult(finalGroup, listGroupMembers(stateDir, groupJob.id)) });
     return exitCodeForJob(finalGroup);
   } catch (err) {
-    appendJobLog(stateDir, groupJob.id, `[opc] falha no coordenador: ${err.message}`);
+    const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
+    appendJobLog(stateDir, groupJob.id, `[opc] falha no coordenador: ${errorMessage}`);
     for (const id of memberIds) {
       const m = readJob(stateDir, id);
-      if (m && ACTIVE_STATUSES.includes(m.status)) await updateJob(stateDir, id, { status: 'failed', errorCode: 'coordinator_error', errorMessage: err.message, completedAt: now() });
+      if (m && ACTIVE_STATUSES.includes(m.status)) await updateJob(stateDir, id, { status: 'failed', errorCode: 'coordinator_error', errorMessage, completedAt: now() });
     }
     const g = readJob(stateDir, groupJob.id);
-    if (g && g.status !== 'cancelled') await updateJob(stateDir, groupJob.id, { status: 'failed', errorCode: 'coordinator_error', errorMessage: err.message, completedAt: now() });
+    if (g && g.status !== 'cancelled') await updateJob(stateDir, groupJob.id, { status: 'failed', errorCode: 'coordinator_error', errorMessage, completedAt: now() });
     return ExitCode.JOB_FAILED;
   } finally { conn?.close(); }
 }

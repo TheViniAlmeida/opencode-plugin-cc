@@ -19,12 +19,22 @@ test('três membros: sessão própria, resultado e corpos corretos', async (t) =
   assert.equal(res.code, 0, res.stderr); const { group, members } = JSON.parse(res.stdout);
   assert.equal(group.status, 'completed'); assert.equal(group.role, 'group');
   assert.deepEqual(members.map((m) => m.model), [F3_MODELS.deepseek, F3_MODELS.qwen, F3_MODELS.kimi]);
+  assert.deepEqual(members.map((m) => m.result.finalText), [
+    'RESULT general opencode-go/deepseek-v4.1-flash', 'RESULT general opencode-go/qwen3.8-max', 'RESULT general opencode-go/kimi-k3',
+  ]);
   assert.equal(new Set(members.map((m) => m.sessionID)).size, 3);
   const bodies = created(env); const parent = bodies.find((b) => !b.parentID);
   assert.match(parent.title, /^OPC: subagents:/); const children = bodies.filter((b) => b.parentID);
   assert.equal(children.length, 3); assert.ok(children.every((b) => b.parentID === group.sessionID && b.agent === 'general'));
   assert.ok(children.every((b) => b.permission[0].permission === DENY_ALL.permission));
-  assert.equal(prompts(env).length, 3);
+  const sent = prompts(env);
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every((b) => b.agent === 'general' && b.parts[0].type === 'text' && b.parts[0].text === 'Explique o repositório'));
+  assert.deepEqual(sent.map((b) => [b.model.providerID, b.model.modelID]).sort((a, b) => a[1].localeCompare(b[1])), [
+    ['omniroute-personal', 'opencode-go/deepseek-v4.1-flash'],
+    ['omniroute-personal', 'opencode-go/kimi-k3'],
+    ['omniroute-personal', 'opencode-go/qwen3.8-max'],
+  ]);
   const text = await runCli(['subagent', '--agent', 'general', '--model', 'fast', 'hello'], { env, cwd });
   assert.equal(text.code, 0, text.stderr); assert.match(text.stdout, /# Resultado do grupo/);
 });
@@ -108,6 +118,10 @@ test('pedido de permissão de membro pode ser respondido e grupo conclui', async
   assert.equal(group.status, 'waiting_permission'); assert.equal(group.pendingRequest[0].memberId, members[1].id); assert.equal(members[1].status, 'waiting_permission');
   const reply = await runCli(['permissions', 'reply', 'per_f3_1', 'once'], { env, cwd }); assert.equal(reply.code, 0, reply.stdout + reply.stderr);
   const sd = await stateDirFor(env, cwd); await eventually(() => readJob(sd, group.id)?.status === 'completed');
+  const completed = readJob(sd, group.id);
+  assert.equal(completed.result.members[1].status, 'completed');
+  assert.equal(listGroupMembers(sd, group.id)[1].result.finalText, 'AFTER REPLY');
+  assert.match(completed.rendered, /AFTER REPLY/);
 });
 
 test('pergunta de membro pode ser respondida', async (t) => {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   createJob, readJob, updateJob, resolveJobRef, reconcileJob, jobLogPath,
   GROUP_ROLE, isGroupMember, topLevelJobs, countsTowardLimit, selectJobsToPrune, addGroupMember, createGroup, listGroupMembers,
@@ -40,14 +41,17 @@ test('selectJobsToPrune: a group counts as one and drops its members with it', (
 
 test('createGroup: group + ordered members with groupId, roles and memberIds', async (t) => {
   const stateDir = tmpState(t);
-  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: subagents: x', workspaceRoot: '/ws', claudeSessionId: 'c1' }, [
-    { title: 'a', agent: 'general', model: 'p/a' },
-    { title: 'b', agent: 'general', model: 'p/b' },
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: subagents: x', workspaceRoot: '/ws', claudeSessionId: 'c1', request: { prompt: 'private' } }, [
+    { title: 'a', agent: 'general', model: 'p/a', memberIndex: 0 },
+    { title: 'b', agent: 'general', model: 'p/b', memberIndex: 1 },
   ]);
   assert.equal(group.role, GROUP_ROLE);
   assert.deepEqual(group.memberIds, members.map((m) => m.id));
   assert.deepEqual(members.map((m) => [m.groupId, m.role, m.kind, m.status]), [[group.id, 'member:1', 'sub', 'queued'], [group.id, 'member:2', 'sub', 'queued']]);
   assert.deepEqual(listGroupMembers(stateDir, group.id).map((m) => m.model), ['p/a', 'p/b']);
+  assert.deepEqual(members.map((m) => m.memberIndex), [0, 1]);
+  assert.ok(members.every((m) => m.request == null));
+  assert.deepEqual(readdirSync(join(stateDir, 'jobs')).filter((name) => name.endsWith('.input.json')), [`${group.id}.input.json`]);
 });
 
 test('addGroupMember: on-demand member appended to memberIds; own kind and status honoured', async (t) => {
