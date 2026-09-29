@@ -3,6 +3,7 @@ import { OpcError } from './opc-error.mjs';
 import { shellQuote } from './args.mjs';
 import { redact, redactText, redactOutput, redactTurnOutput, maskSecretPatterns, safeOutputText, maskDeep } from './redact.mjs';
 import { isSecretLikeSetting } from './config.mjs';
+import { ACTIVE_JOB_STATUSES } from './state.mjs';
 
 function cell(value) {
   return redactText(String(value ?? '')).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
@@ -883,4 +884,94 @@ export function renderAttach(info) {
   lines.push(`    ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
   return f3Finish(lines);
+}
+
+// ---- F4a: monitor ----------------------------------------------------------
+
+const ANSI = Object.freeze({ reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m', gray: '\x1b[90m' });
+
+const STATUS_STYLE = Object.freeze({
+  queued: { icon: '○', color: 'gray' },
+  running: { icon: '●', color: 'cyan' },
+  waiting_permission: { icon: '⏸', color: 'yellow' },
+  completed: { icon: '✓', color: 'green' },
+  failed: { icon: '✗', color: 'red' },
+  cancelled: { icon: '⊘', color: 'gray' },
+});
+
+// The monitor uses the canonical active-job list from state.mjs (F0).
+export const MONITOR_ACTIVE = ACTIVE_JOB_STATUSES;
+
+function paint(text, color, enabled) {
+  return enabled && ANSI[color] ? `${ANSI[color]}${text}${ANSI.reset}` : text;
+}
+
+export function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function elapsedOf(job, now) {
+  const start = Date.parse(job.startedAt ?? job.createdAt ?? '');
+  if (!Number.isFinite(start)) return '--:--';
+  const end = job.completedAt ? Date.parse(job.completedAt) : now;
+  return formatElapsed((Number.isFinite(end) ? end : now) - start);
+}
+
+function monitorClock(now) {
+  return new Date(now).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function pendingMonitorLines(job, color) {
+  if (!Array.isArray(job.pending) || job.pending.length === 0) return [];
+  return job.pending.map((pending) => {
+    if (pending.kind === 'question') {
+      return paint(`    ⏸ pergunta ${pending.id}: ${pending.what} → /opc:permissions answer ${pending.id} <resposta>`, 'yellow', color);
+    }
+    const patterns = pending.patterns?.length ? ` [${pending.patterns.join(', ')}]` : '';
+    return paint(`    ⏸ permissão ${pending.id}: ${pending.what}${patterns} → /opc:permissions reply ${pending.id} once|reject`, 'yellow', color);
+  });
+}
+
+function monitorJobLine(job, now, color, indent) {
+  const style = STATUS_STYLE[job.status] ?? { icon: '?', color: 'reset' };
+  const attempt = `tentativa ${job.attempt.current}/${job.attempt.limit}`;
+  return [
+    `${indent}${paint(style.icon, style.color, color)} ${paint(job.id, 'bold', color)}`,
+    job.status,
+    job.phase ?? '—',
+    job.model ?? '—',
+    attempt,
+    elapsedOf(job, now),
+  ].join('  ');
+}
+
+export function renderMonitor(snapshot, { color = false } = {}) {
+  const { now, jobs, focus } = snapshot;
+  const active = jobs.filter((job) => MONITOR_ACTIVE.includes(job.status)).length;
+  const header = `${paint('opc monitor', 'bold', color)} — ${monitorClock(now)} — ${active} ativo(s), ${jobs.length - active} recente(s) — Ctrl+C para sair`;
+  if (jobs.length === 0) return redactText(`${header}\n\nNenhum job neste workspace.\n`);
+  const out = [header, ''];
+  for (const job of jobs) {
+    const indent = job.groupId && jobs.some((item) => item.id === job.groupId) ? '  ' : '';
+    out.push(monitorJobLine(job, now, color, indent));
+    if (job.title) out.push(paint(`${indent}    ${job.title}`, 'dim', color));
+    out.push(...pendingMonitorLines(job, color));
+    if (job.status === 'failed' && job.errorMessage) {
+      out.push(paint(`${indent}    erro: ${job.errorType ? `${job.errorType}: ` : ''}${job.errorMessage}`, 'red', color));
+    }
+    if (focus === job.id && Array.isArray(job.attempts) && job.attempts.length > 0) {
+      out.push(`${indent}    tentativas:`);
+      job.attempts.forEach((attempt, index) => {
+        const cls = attempt.errorClass ? ` (${attempt.errorClass}${attempt.errorType ? ` ${attempt.errorType}` : ''})` : '';
+        out.push(`${indent}      ${index + 1}. ${attempt.model} — ${attempt.status}${cls}`);
+      });
+    }
+    for (const line of job.log ?? []) out.push(paint(`${indent}    │ ${line}`, 'gray', color));
+  }
+  return redactText(`${out.join('\n')}\n`);
 }
