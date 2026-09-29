@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SKIP, MODELS, liveWorkspace, opc, record, note } from './_f3-lib.mjs';
+import { SKIP, MODELS, liveWorkspace, opc, record, note, assertModelRouting, assertIntervalsOverlap } from './_f3-lib.mjs';
 const PROMPT = 'Reply with one short sentence that contains the word PINEAPPLE. Do not use any tool.';
 
 test('F3 live: three parallel subagents, one per model', { skip: SKIP, timeout: 40 * 60_000 }, async (t) => {
@@ -10,15 +10,17 @@ test('F3 live: three parallel subagents, one per model', { skip: SKIP, timeout: 
   assert.equal(res.code, 0, res.stderr);
   const { group, members } = JSON.parse(res.stdout);
   assert.equal(group.status, 'completed'); assert.equal(members.length, 3);
-  assert.deepEqual(members.map((m) => m.model).sort(), [MODELS.deepseek, MODELS.kimi, MODELS.qwen].sort());
+  const routeSummary = assertModelRouting(members, [MODELS.deepseek, MODELS.qwen, MODELS.kimi]);
+  note('modelos configurados para o subagent x3', { routeSummary, configuredModels: [MODELS.deepseek, MODELS.qwen, MODELS.kimi] }, dataDir);
   assert.equal(new Set(members.map((m) => m.sessionID)).size, 3);
+  const maxParallel = assertIntervalsOverlap(members);
   for (const m of members) {
     assert.equal(m.status, 'completed', `${m.model}: ${m.errorMessage}`);
     assert.match(m.result.finalText, /pineapple/i, m.model);
     const shown = JSON.parse((await opc(['session', 'show', m.result.carrierSessionID ?? m.sessionID, '--json'], { env, cwd: ws })).stdout);
     assert.equal(shown.session.parentID, group.sessionID);
   }
-  note('mecanismo por membro (§15 item 7)', members.map((m) => ({ model: m.model, mechanism: m.result.mechanism, fellBack: m.result.fellBack })), dataDir);
+  note('roteamento e concorrência por membro (§15 itens 7 e 11)', { routeSummary, maxParallel, members: members.map((m) => ({ model: m.model, mechanism: m.result.mechanism, fellBack: m.result.fellBack, startedAt: m.startedAt, completedAt: m.completedAt })) }, dataDir);
 });
 
 test('F3 live: grupo em segundo plano, status --wait e resultado', { skip: SKIP, timeout: 40 * 60_000 }, async (t) => {

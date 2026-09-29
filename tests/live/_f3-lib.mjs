@@ -5,7 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runCli, stopAllServers, REPO_ROOT } from '../helpers.mjs';
-import { registerSecret, redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { registerSecret, safeOutputText as redactSafeOutputText } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { workspaceStateDir, resolveWorkspaceRoot } from '../../plugins/opc/scripts/lib/state.mjs';
 
 export const LIVE = process.env.OPC_LIVE === '1';
@@ -55,9 +55,14 @@ export function registerServerSecrets(dataDir) {
   }
 }
 
-function sanitize(text, dataDir) {
+export function safeOutputText(text, dataDir) {
   if (dataDir) registerServerSecrets(dataDir);
-  return redactText(String(text)).split(homedir()).join('~').split(tmpdir()).join('<tmp>');
+  return redactSafeOutputText(String(text)).split(homedir()).join('~').split(tmpdir()).join('<tmp>');
+}
+
+export function appendSafeOutput(file, text, dataDir) {
+  mkdirSync(dirname(file), { recursive: true });
+  appendFileSync(file, safeOutputText(text, dataDir));
 }
 
 export function record(title, res, dataDir) {
@@ -65,11 +70,77 @@ export function record(title, res, dataDir) {
   const stderr = String(res.stderr ?? '').trim();
   const body = [`### ${title}`, '', `exit ${res.code}`, '', '```', String(res.stdout ?? '').trim(), '```',
     ...(stderr ? ['', 'stderr (fim):', '', '```', stderr.slice(-4000), '```'] : []), '', ''].join('\n');
-  appendFileSync(REPORT, sanitize(body, dataDir));
+  appendSafeOutput(REPORT, body, dataDir);
 }
 
 export function note(title, obj, dataDir) {
-  appendFileSync(REPORT, sanitize(`### ${title}\n\n\`\`\`json\n${JSON.stringify(obj, null, 2)}\n\`\`\`\n\n`, dataDir));
+  appendSafeOutput(REPORT, `### ${title}\n\n\`\`\`json\n${JSON.stringify(obj, null, 2)}\n\`\`\`\n\n`, dataDir);
+}
+
+export function assertModelRouting(members, expectedModels) {
+  if (!Array.isArray(members) || members.length !== expectedModels.length) throw new Error(`expected ${expectedModels.length} members`);
+  for (let i = 0; i < expectedModels.length; i += 1) {
+    if (members[i].model !== expectedModels[i]) throw new Error(`member ${i + 1} model ${members[i].model} does not match ${expectedModels[i]}`);
+  }
+  const distinct = new Set(expectedModels).size;
+  if (distinct === 3 && new Set(members.map((member) => member.model)).size !== 3) throw new Error('three distinct configured models did not run distinctly');
+  return distinct === 3
+    ? 'rotas distintas: 3 (três modelos PASSOU)'
+    : `rotas distintas: ${distinct} (três modelos NÃO VALIDADO)`;
+}
+
+export function assertIntervalsOverlap(intervals) {
+  const events = [];
+  for (const interval of intervals) {
+    const start = Date.parse(interval.startedAt);
+    const end = Date.parse(interval.completedAt);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error('invalid interval timestamps');
+    events.push({ at: start, delta: 1 }, { at: end, delta: -1 });
+  }
+  events.sort((a, b) => a.at - b.at || a.delta - b.delta);
+  let active = 0;
+  let maxParallel = 0;
+  for (const event of events) {
+    active += event.delta;
+    maxParallel = Math.max(maxParallel, active);
+  }
+  if (maxParallel < 2) throw new Error(`intervals do not overlap (maxParallel=${maxParallel})`);
+  return maxParallel;
+}
+
+export function compareShapes(real, fake, readPaths) {
+  const divergences = [];
+  const notApplicable = [];
+  const compared = [];
+  for (const [endpoint, paths] of Object.entries(readPaths)) {
+    if (real[endpoint] == null || fake[endpoint] == null) {
+      const reason = endpoint === 'todo' && real[endpoint] == null
+        ? 'real server returned no todos; todos cannot be forced deterministically'
+        : real[endpoint] == null && fake[endpoint] == null ? 'both real and fake endpoint values were absent' : `${real[endpoint] == null ? 'real' : 'fake'} endpoint value was absent`;
+      notApplicable.push({ endpoint, reason });
+      continue;
+    }
+    compared.push(endpoint);
+    for (const path of paths) {
+      const get = (obj, key) => (key === '' ? obj : key.split('.').reduce((value, part) => (value == null ? undefined : value[part]), obj));
+      const r = get(real[endpoint], path);
+      const f = get(fake[endpoint], path);
+      if (r === undefined && f === undefined) continue;
+      if (r === undefined || f === undefined || typeof r !== typeof f || Array.isArray(r) !== Array.isArray(f)) {
+        divergences.push({ endpoint, path: path || '(value)', real: r === undefined ? 'missing' : (Array.isArray(r) ? 'array' : typeof r), fake: f === undefined ? 'missing' : (Array.isArray(f) ? 'array' : typeof f) });
+      }
+    }
+  }
+  return { divergences, compared, notApplicable };
+}
+
+export function assertEndpointCoverage(result, endpoints) {
+  const covered = [...result.compared, ...result.notApplicable.map((entry) => entry.endpoint)];
+  if (new Set(covered).size !== covered.length || covered.length !== endpoints.length || endpoints.some((endpoint) => !covered.includes(endpoint)))
+    throw new Error(`endpoint coverage mismatch: expected ${endpoints.join(', ')}, got ${covered.join(', ')}`);
+  for (const entry of result.notApplicable) {
+    if (typeof entry.reason !== 'string' || !entry.reason.trim()) throw new Error(`endpoint ${entry.endpoint} has no notApplicable reason`);
+  }
 }
 
 export function fileLines(file) {

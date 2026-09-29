@@ -12,8 +12,10 @@ function runOpencode(args, { cwd, timeoutMs }) {
     const child = spawn('opencode', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; }); child.stderr.on('data', (d) => { stderr += d; });
+    const startedAt = Date.now();
+    // Timeout sends SIGTERM through this test's spawned ChildProcess handle only.
     const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr, startedAt, completedAt: Date.now() }); });
   });
 }
 
@@ -24,14 +26,30 @@ test('F3 live (§15 item 12): opencode run simultâneo a um job opc no mesmo pro
   assert.equal(bg.code, 0, bg.stderr);
   const jobId = (bg.stdout.match(/\bask-[a-z0-9]+-[a-z0-9]+\b/) ?? [])[0];
   assert.ok(jobId, 'id do job impresso');
+  const beforeRun = await opc(['status', jobId, '--json'], { env, cwd: ws });
+  record('opc status --json (imediatamente antes do opencode run)', beforeRun, dataDir);
+  assert.equal(beforeRun.code, 0, beforeRun.stderr);
+  const runningJob = JSON.parse(beforeRun.stdout).job;
+  assert.equal(runningJob.status, 'running', 'background job must be running immediately before opencode run');
   const direct = await runOpencode(['run', '-m', MODELS.deepseek, 'Reply with the single word OK.'], { cwd: ws, timeoutMs: 15 * 60_000 });
   record('opencode run (concorrente)', direct, dataDir);
   const waited = await opc(['status', jobId, '--wait', '--timeout-ms', '1800000'], { env, cwd: ws });
   record('opc status --wait', waited, dataDir);
+  const finalStatus = await opc(['status', jobId, '--json'], { env, cwd: ws });
+  record('opc status --json (após ambos terminarem)', finalStatus, dataDir);
+  assert.equal(finalStatus.code, 0, finalStatus.stderr);
+  const finishedJob = JSON.parse(finalStatus.stdout).job;
   const logFile = join(stateDir(), 'server.log'); const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : '';
   const lockErrors = /SQLITE_BUSY|database is locked/i.test(log);
   const all = JSON.parse((await opc(['sessions', '--all', '--json'], { env, cwd: ws })).stdout).sessions;
-  const findings = { opencodeRunExit: direct.code, opcJobExit: waited.code, lockErrorsInServerLog: lockErrors, nonOpcSessionVisibleToPluginServer: all.some((s) => !String(s.title).startsWith('OPC: ')) };
+  const findings = { opencodeRunExit: direct.code, opcJobExit: waited.code, jobStartedAt: runningJob.startedAt,
+    opencodeRunStartedAt: new Date(direct.startedAt).toISOString(), opencodeRunCompletedAt: new Date(direct.completedAt).toISOString(),
+    jobCompletedAt: finishedJob.completedAt, lockErrorsInServerLog: lockErrors,
+    nonOpcSessionVisibleToPluginServer: all.some((s) => !String(s.title).startsWith('OPC: ')) };
   note('§15 item 12 — parte automatizada', findings, dataDir);
-  assert.equal(direct.code, 0, direct.stderr); assert.equal(waited.code, 0, waited.stderr); assert.equal(lockErrors, false);
+  assert.equal(direct.code, 0, direct.stderr); assert.equal(waited.code, 0, waited.stderr);
+  assert.ok(Date.parse(runningJob.startedAt) < direct.completedAt, 'opc job started before opencode run finished');
+  assert.ok(Date.parse(finishedJob.completedAt) > direct.startedAt, 'opc job completed after opencode run started');
+  assert.ok(findings.nonOpcSessionVisibleToPluginServer, 'non-OPC session is visible to the plugin server');
+  assert.equal(lockErrors, false);
 });

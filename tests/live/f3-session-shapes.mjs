@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SKIP, MODELS, LIVE_MODEL, liveWorkspace, opc, record, note } from './_f3-lib.mjs';
+import { SKIP, MODELS, LIVE_MODEL, liveWorkspace, opc, record, note, compareShapes, assertEndpointCoverage } from './_f3-lib.mjs';
 import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
 import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
@@ -15,8 +15,7 @@ const READ_PATHS = {
   unreverted: ['id'], message: ['info.id', 'info.role', 'parts'], diff: ['file', 'status', 'additions', 'deletions', 'patch'],
   todo: ['content', 'status', 'priority'], command: ['name', 'template', 'hints'], summarized: [''],
 };
-const get = (obj, path) => (path === '' ? obj : path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj));
-
+const ENDPOINTS = Object.keys(READ_PATHS);
 async function capture(api, sid, model) {
   const messages = await api.messages(sid); const lastId = messages.at(-1).info.id;
   const fork = await api.fork(sid, { messageID: lastId }); const forkMsgs = await api.messages(fork.id);
@@ -26,20 +25,6 @@ async function capture(api, sid, model) {
   const summarized = await api.summarize(fork.id, { providerID: model.providerID, modelID: model.modelID, timeoutMs: 600000 });
   const [session, diff, todo, commands] = await Promise.all([api.getSession(sid), api.diff(sid), api.todo(sid), api.commands()]);
   return { session, fork, reverted, unreverted, summarized, message: messages[0], diff: diff[0] ?? null, todo: todo[0] ?? null, command: commands[0] ?? null };
-}
-
-function compare(real, fake) {
-  const divergences = []; const notApplicable = [];
-  for (const [key, paths] of Object.entries(READ_PATHS)) {
-    if (real[key] == null || fake[key] == null) { notApplicable.push(key); continue; }
-    for (const path of paths) {
-      const r = get(real[key], path); const f = get(fake[key], path);
-      if (r === undefined && f === undefined) continue;
-      if (r === undefined || f === undefined || typeof r !== typeof f || Array.isArray(r) !== Array.isArray(f))
-        divergences.push({ key, path: path || '(valor)', real: r === undefined ? 'ausente' : (Array.isArray(r) ? 'array' : typeof r), fake: f === undefined ? 'ausente' : (Array.isArray(f) ? 'array' : typeof f) });
-    }
-  }
-  return { divergences, notApplicable };
 }
 
 test('F3 contract: OpenCode real vs fake para fork/revert/unrevert/summarize/diff/todo/command', { skip: SKIP, timeout: 40 * 60_000 }, async (t) => {
@@ -59,7 +44,8 @@ test('F3 contract: OpenCode real vs fake para fork/revert/unrevert/summarize/dif
   const fake = await startFake({ port: await pickFreePort(), password: fakePassword, scenario: 'f3-sessions', stateFile: join(root, 'fake-state.json') });
   t.after(() => fake.close());
   const fakeShapes = await capture(createApi(createClient({ baseUrl: fake.url, password: fakePassword, directory: '/fake' })), 'ses_seed', model);
-  const result = compare(real, fakeShapes);
-  note('F3 contract — divergências e N/A', result, dataDir);
+  const result = compareShapes(real, fakeShapes, READ_PATHS);
+  assertEndpointCoverage(result, ENDPOINTS);
+  note('F3 contract — endpoints comparados e N/A', { ...result, endpoints: ENDPOINTS }, dataDir);
   assert.deepEqual(result.divergences, [], 'registre as divergências e atualize tests/fixtures/f3-fake.mjs');
 });
