@@ -247,6 +247,27 @@ for (const mode of ['intent', 'cancel-false', 'signal']) {
   });
 }
 
+test('F4a C2: cancel during backoff holds even when a late progress update overwrote the phase', async (t) => {
+  const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
+  const stateDir = tempStateDir(t);
+  const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a', request: { candidates: [A, B], fallbackEligible: true } });
+  let calls = 0;
+  let aborts = 0;
+  const running = runJobTurn({ stateDir, job, config: CONFIG, baseTurnRequest: BASE, backoffMs: [1500],
+    runTurnImpl: async (o) => { calls++; return failTurn(o.request); },
+  });
+  while (readJob(stateDir, job.id).phase !== 'fallback') await new Promise((r) => setTimeout(r, 5));
+  // a queued progress update from the finished turn lands after the backoff started
+  await updateJob(stateDir, job.id, { phase: 'running', sessionID: 'ses_a' });
+  const cancelled = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+  assert.notEqual(cancelled.ok, false);
+  assert.equal(cancelled.job.status, 'cancelled');
+  const outcome = await running;
+  assert.equal(outcome.result.status, 'cancelled');
+  assert.equal(calls, 1, 'no new attempt after cancellation');
+  assert.equal(aborts, 0, 'the finished session is not aborted');
+});
+
 test('F4a I1: cancel racing with completion waits for the final attempt to be persisted', async (t) => {
   const { cancelJob } = await import('../../plugins/opc/scripts/lib/jobs.mjs');
   const stateDir = tempStateDir(t);
