@@ -576,7 +576,7 @@ function truncateText(text, max) {
 function byLabel(a, b) { return a.label.localeCompare(b.label); }
 
 function outputContract(mode, schema) {
-  return mode === 'tool' ? '' : `Retorne apenas um objeto JSON em uma única cerca \`\`\`json, sem texto fora dela. Siga este esquema:\n${JSON.stringify(schema, null, 2)}`;
+  return mode === 'tool' ? 'Return your answer only through the structured output.' : `Return only one JSON object inside a single \`\`\`json fence, with no text outside it. Follow this JSON Schema:\n${JSON.stringify(schema, null, 2)}`;
 }
 
 async function safeTurn(deps, spec) {
@@ -623,17 +623,41 @@ function collectRound(run, round, outcomes) {
 function quorumFailure(entry, quorum) { return { code: 'QUORUM_NOT_MET', round: entry.round, valid: entry.responses.length, quorum }; }
 
 async function runDiscussion(run) {
-  const { flags, deps, emit } = run; const states = flags.members.map(member => ({ member, sessionID: null, active: true })); const roundsData = []; let completedRounds = 0;
+  const { flags, deps, emit } = run;
+  const states = flags.members.map((member) => ({ member, sessionID: null, active: true }));
+  const roundsData = [];
+  let completedRounds = 0;
   for (let round = 1; round <= flags.rounds; round += 1) {
-    const active = states.filter(s => s.active); const previous = roundsData.at(-1); emit({ type: 'round-start', round, labels: active.map(s => s.member.label) });
-    const outcomes = await mapLimit(active, run.maxParallel, async state => {
-      const label = state.member.label; const { schema, prompt } = memberSpecPrompt(run, state, round, previous); emit({ type: 'member-start', role: 'member', label, round });
-      const turn = await safeTurn(deps, { role: 'member', label, round, member: state.member, sessionID: state.sessionID, prompt, schema, title: `OPC: conclave: ${label}: ${run.question.slice(0, 48)}` });
+    const active = states.filter((state) => state.active);
+    const previous = roundsData.at(-1);
+    emit({ type: 'round-start', round, labels: active.map((state) => state.member.label) });
+    const outcomes = await mapLimit(active, run.maxParallel, async (state) => {
+      const label = state.member.label;
+      const { schema, prompt } = memberSpecPrompt(run, state, round, previous);
+      emit({ type: 'member-start', role: 'member', label, round });
+      const turn = await safeTurn(deps, {
+        role: 'member', label, round, member: state.member, sessionID: state.sessionID, prompt, schema,
+        title: `OPC: conclave: ${label}: ${run.question.slice(0, 48)}`,
+      });
       if (turn?.sessionID) state.sessionID = turn.sessionID;
-      return { label, sessionID: state.sessionID, turn, check: checkTurn(turn, schema) };
+      const check = checkTurn(turn, schema);
+      if (check.ok && round < flags.rounds && !state.sessionID) {
+        check.ok = false;
+        check.errorType = 'MissingSession';
+        check.message = 'completed turn did not provide a session ID for a later round';
+      }
+      return { label, sessionID: state.sessionID, turn, check };
     });
-    const entry = collectRound(run, round, outcomes); for (const f of entry.failures) { const state = states.find(s => s.member.label === f.label); if (state) state.active = false; }
-    roundsData.push(entry); if (entry.responses.length < flags.quorum) return { ok: false, roundsData, completedRounds, review: null, failure: quorumFailure(entry, flags.quorum) }; completedRounds = round;
+    const entry = collectRound(run, round, outcomes);
+    for (const failure of entry.failures) {
+      const failedState = states.find((state) => state.member.label === failure.label);
+      if (failedState) failedState.active = false;
+    }
+    roundsData.push(entry);
+    if (entry.responses.length < flags.quorum) {
+      return { ok: false, roundsData, completedRounds, review: null, failure: quorumFailure(entry, flags.quorum) };
+    }
+    completedRounds = round;
   }
   return { ok: true, roundsData, completedRounds, review: null, failure: null };
 }
@@ -659,10 +683,53 @@ function synthesisInputOf(run, phase, finalResponses) {
 }
 
 export async function runConclave({ ctx = {}, question = '', flags, deps }) {
-  const now = deps.now ?? Date.now; const startedAt = now();
-  const run = { question: String(question ?? ''), flags, deps, assets: deps.assets ?? loadConclaveAssets(), knownNames: deps.knownNames ?? { exact: [], families: [] }, emit: deps.onEvent ?? (() => {}), maxParallel: flags.maxParallel ?? ctx.config?.jobs?.maxParallel ?? 4, projectContext: projectContextBlock(ctx.config?.project), structuredOutput: ctx.config?.conclave?.structuredOutput ?? 'text', failures: [], warnings: [...(flags.warnings ?? [])] };
-  const phase = await runDiscussion(run); const lastRound = phase.roundsData.at(-1); const finalResponses = lastRound?.responses ?? []; const status = phase.ok ? 'completed' : 'failed';
-  const judge = phase.ok ? await runJudge(run, finalResponses, phase.review) : { type: flags.judge.type, ...(flags.judge.type === 'model' ? { model: flags.judge.full } : {}), status: 'skipped' };
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const derivedKnownNames = buildKnownNames(
+    { connected: [], models: [] },
+    { extraModels: [...flags.members, ...(flags.judge.type === 'model' ? [flags.judge] : [])] },
+  );
+  const run = {
+    question: String(question ?? ''),
+    flags,
+    deps,
+    assets: deps.assets ?? loadConclaveAssets(),
+    knownNames: deps.knownNames ?? derivedKnownNames,
+    emit: deps.onEvent ?? (() => {}),
+    maxParallel: flags.maxParallel ?? ctx.config?.jobs?.maxParallel ?? 4,
+    projectContext: projectContextBlock(ctx.config?.project),
+    structuredOutput: ctx.config?.conclave?.structuredOutput ?? 'text',
+    failures: [],
+    warnings: [...(flags.warnings ?? [])],
+  };
+  const phase = await runDiscussion(run);
+  const lastRound = phase.roundsData.at(-1);
+  const finalResponses = lastRound?.responses ?? [];
+  const status = phase.ok ? 'completed' : 'failed';
+  const judge = phase.ok
+    ? await runJudge(run, finalResponses, phase.review)
+    : { type: flags.judge.type, ...(flags.judge.type === 'model' ? { model: flags.judge.full } : {}), status: 'skipped' };
   const endedAt = now();
-  return { schemaVersion: 1, kind: 'conclave', status, failure: phase.failure, mode: flags.mode, question: run.question, rounds: { requested: flags.rounds, completed: phase.completedRounds }, quorum: flags.quorum, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), durationMs: endedAt - startedAt, warnings: run.warnings, failures: run.failures, roundsData: phase.roundsData, final: { round: lastRound?.round ?? 0, responses: finalResponses }, review: phase.review, judge, synthesisInput: phase.ok ? synthesisInputOf(run, phase, finalResponses) : null, composition: flags.members.map(m => ({ label: m.label, model: m.full })) };
+  const pkg = {
+    schemaVersion: 1,
+    kind: 'conclave',
+    status,
+    failure: phase.failure,
+    mode: flags.mode,
+    question: run.question,
+    rounds: { requested: flags.rounds, completed: phase.completedRounds },
+    quorum: flags.quorum,
+    startedAt: new Date(startedAt).toISOString(),
+    endedAt: new Date(endedAt).toISOString(),
+    durationMs: endedAt - startedAt,
+    warnings: run.warnings,
+    failures: run.failures,
+    roundsData: phase.roundsData,
+    final: { round: lastRound?.round ?? 0, responses: finalResponses },
+    review: phase.review,
+    judge,
+    synthesisInput: phase.ok ? synthesisInputOf(run, phase, finalResponses) : null,
+    composition: flags.members.map((member) => ({ label: member.label, model: member.full })),
+  };
+  return pkg;
 }
