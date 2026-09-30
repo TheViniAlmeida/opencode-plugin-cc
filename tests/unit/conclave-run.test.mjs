@@ -34,14 +34,25 @@ test('package puts composition last and synthesis input anonymized', async () =>
   const h = harness((spec) => ok(answer({ position: `As kimi-k3 I say yes (${spec.label})` }), `ses_${spec.label}`)); const pkg = await h.run();
   assert.equal(Object.keys(pkg).at(-1), 'composition'); assert.deepEqual(pkg.composition, MEMBERS.map((m) => ({ label: m.label, model: m.full }))); assert.deepEqual(pkg.judge, { type: 'claude', status: 'pending' }); assert.doesNotMatch(JSON.stringify(pkg.synthesisInput), FORBIDDEN); assert.equal(pkg.synthesisInput.responses.length, 3); assert.equal(pkg.durationMs, 500); assert.equal(pkg.schemaVersion, 1);
 });
-for (const nameCase of ['absent', 'explicitly empty']) test(`composition names redact member self-identification with knownNames ${nameCase}`, async () => {
- const judge={type:'model',...MEMBERS[0]};
- const options={mode:'debate',rounds:2,judge,...(nameCase==='absent'?{omitKnownNames:true}:{knownNames:{exact:[],families:[]}})};
- const h=harness(s=>s.role==='judge'?ok(synthesis(['A','B','C']),'judge'):s.round===1?ok(answer({position:`I am ${s.member.full}, made by Moonshot`}),`ses_${s.label}`):ok(debateAnswer(peerOf(s)),s.sessionID),options);
- await h.run();
- for(const s of byRound(h.calls,2)) assert.match(s.prompt,/\[redacted\]/);
- assert.match(h.calls.find(s=>s.role==='judge').prompt,/\[redacted\]/);
-});
+for (const nameCase of ['absent', 'explicitly empty']) {
+  test(`composition names redact member self-identification with knownNames ${nameCase}`, async () => {
+    const judge = { type: 'model', ...MEMBERS[0] };
+    const names = nameCase === 'absent' ? { omitKnownNames: true } : { knownNames: { exact: [], families: [] } };
+    const selfId = (s) => ({ position: `I am ${s.member.full}, made by Moonshot` });
+    const h = harness((s) => {
+      if (s.role === 'judge') return ok(synthesis(['A', 'B', 'C']), 'ses_judge');
+      if (s.round === 1) return ok(answer(selfId(s)), `ses_${s.label}`);
+      return ok(debateAnswer(peerOf(s), selfId(s)), s.sessionID);
+    }, { mode: 'debate', rounds: 2, judge, ...names });
+    await h.run();
+    const prompts = [...byRound(h.calls, 2), h.calls.find((s) => s.role === 'judge')].map((s) => s.prompt);
+    assert.equal(prompts.length, 4);
+    for (const prompt of prompts) {
+      assert.ok(prompt.includes(REDACTED_NAME));
+      assert.doesNotMatch(prompt, FORBIDDEN);
+    }
+  });
+}
 test('debate rounds reuse sessions and receive anonymized peers only', async () => {
   const h = harness((s) => s.round === 1 ? ok(answer({ position: `I am ${s.member.modelID} by Moonshot or Alibaba`, key_points: ['DeepSeek style point'] }), `ses_${s.label}`) : ok(debateAnswer(peerOf(s), { changed: s.label === 'A' }), s.sessionID), { mode: 'debate', rounds: 2 });
   const pkg = await h.run(); const r2 = byRound(h.calls, 2); assert.equal(r2.length, 3);
