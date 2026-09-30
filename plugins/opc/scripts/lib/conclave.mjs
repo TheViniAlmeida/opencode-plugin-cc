@@ -433,8 +433,9 @@ const NO_FILE_VALUES = new Set(['', '-', 'n/a', 'na', 'none', '(none)', 'null', 
 
 function normalizeFile(file) {
   if (typeof file !== 'string') return null;
-  const normalized = file.trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  return NO_FILE_VALUES.has(normalized.toLowerCase()) ? null : normalized;
+  const prepared = file.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (NO_FILE_VALUES.has(prepared.toLowerCase())) return null;
+  return path.posix.normalize(prepared);
 }
 
 function toLine(value) {

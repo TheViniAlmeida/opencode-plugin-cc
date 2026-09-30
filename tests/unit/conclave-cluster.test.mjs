@@ -76,16 +76,48 @@ test('malformed line numbers are normalized instead of crashing', () => {
   assert.equal(clusters.find((c) => c.labels.includes('C')).agreement.k, 1);
 });
 
+test('internal dot and repeated slash path segments normalize before clustering', () => {
+  const clusters = clusterFindings({
+    A: [f('src/./calc.js', 4, 4, 'Division by zero in calculation')],
+    B: [f('./src/calc.js', 4, 4, 'Division by zero in calculation')],
+    C: [f('src\\calc.js', 4, 4, 'Division by zero in calculation')],
+    D: [f('src//calc.js', 4, 4, 'Division by zero in calculation')],
+  });
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(clusters[0].labels, ['A', 'B', 'C', 'D']);
+  assert.equal(clusters[0].file, 'src/calc.js');
+});
+
+test('paths escaping the root keep normalized form without throwing', () => {
+  const clusters = clusterFindings({ A: [f('src/../../calc.js', 1, 1, 'Missing validation')] });
+  assert.equal(clusters[0].file, '../calc.js');
+});
+
 test('two findings without lines in the same file cluster when titles match', () => {
   const clusters = clusterFindings({ A: [f('README.md', null, null, 'Outdated install instructions')], B: [f('README.md', undefined, undefined, 'Install instructions are outdated')] });
   assert.equal(clusters.length, 1);
   assert.equal(clusters[0].line_start, null);
 });
 
-test('clusters are sorted by severity, agreement, confidence, then location', () => {
-  const clusters = clusterFindings({ A: [f('z.js', 1, 1, 'Low thing', 'low', 0.9), f('a.js', 1, 1, 'High thing', 'high', 0.2), f('m.js', 1, 1, 'Medium thing', 'medium', 0.9)], B: [f('m.js', 1, 1, 'Medium thing', 'medium', 0.9)] });
-  assert.deepEqual(clusters.map((c) => c.title), ['High thing', 'Medium thing', 'Low thing']);
-  assert.deepEqual(clusters.map((c) => c.id), ['C1', 'C2', 'C3']);
+test('clusters are sorted by each tiebreaker in order', () => {
+  const clusters = clusterFindings({
+    A: [
+      f('same.js', 1, 1, 'Alpha', 'high', 0.8),
+      f('same.js', 1, 1, 'Bravo', 'high', 0.8),
+      f('confidence.js', 1, 1, 'Confidence low', 'high', 0.5),
+      f('z.js', 1, 1, 'Location Z', 'high', 0.8),
+      f('a.js', 1, 1, 'Location A', 'high', 0.8),
+      f('agreement low', 1, 1, 'Agreement low', 'high', 0.8),
+    ],
+    B: [
+      f('confidence.js', 1, 1, 'Confidence low', 'high', 0.8),
+      f('z.js', 1, 1, 'Location Z', 'high', 0.8),
+      f('a.js', 1, 1, 'Location A', 'high', 0.8),
+    ],
+  });
+  assert.deepEqual(clusters.map((c) => c.title), [
+    'Location A', 'Location Z', 'Confidence low', 'Agreement low', 'Alpha', 'Bravo',
+  ]);
 });
 
 test('N comes from validCount when given', () => {
