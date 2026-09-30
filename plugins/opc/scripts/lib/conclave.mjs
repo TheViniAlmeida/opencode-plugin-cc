@@ -115,3 +115,25 @@ export function buildSynthesisSchema(synthesisSchemaFile, labels = []) {
   }
   return schema;
 }
+
+// ---------------------------------------------------------------------------
+// Assets (fillTemplate and projectContextBlock come from lib/prompts.mjs, F2b)
+// ---------------------------------------------------------------------------
+
+export function loadConclaveAssets(pluginRoot = DEFAULT_PLUGIN_ROOT) {
+  const read = (...parts) => fs.readFileSync(path.join(pluginRoot, ...parts), 'utf8');
+  const json = (...parts) => JSON.parse(read(...parts));
+  return {
+    prompts: {
+      member: read('prompts', 'conclave-member.md'),
+      debate: read('prompts', 'conclave-debate.md'),
+      judge: read('prompts', 'conclave-judge.md'),
+      review: loadPrompt('review', { dir: path.join(pluginRoot, 'prompts') }),
+    },
+    schemas: {
+      member: json('schemas', 'conclave-member.schema.json'),
+      synthesis: json('schemas', 'conclave-synthesis.schema.json'),
+      review: json('schemas', 'review-output.schema.json'),
+    },
+  };
+}
