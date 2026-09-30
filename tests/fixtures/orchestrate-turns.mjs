@@ -26,17 +26,17 @@ export function makeOrchestrateScenario({ plan = null, plannerError = null, fail
       const model = body?.model?.modelID ?? null;
       const start = Date.now();
       const delay = turn.role === 'subtask' ? subtaskDelayMs : 20;
-      setTimeout(() => {
-        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), prompt: turn.text })}\n`);
+      setTimeout(async () => {
         if (turn.role === 'planner') {
-          fake.emitTurn(sessionID, plannerError ? { error: plannerError } : { text: '', structured: plan });
+          await fake.emitTurn(sessionID, plannerError ? { error: plannerError } : { text: '', structured: plan });
         } else if (turn.role === 'synthesizer') {
-          fake.emitTurn(sessionID, { text: synthesisText });
+          await fake.emitTurn(sessionID, { text: synthesisText });
         } else if (turn.role === 'subtask' && failSubtasks.includes(turn.subtaskId)) {
-          fake.emitTurn(sessionID, { error: { name: 'UnknownError', data: { message: `boom in ${turn.subtaskId}` } } });
+          await fake.emitTurn(sessionID, { error: { name: 'UnknownError', data: { message: `boom in ${turn.subtaskId}` } } });
         } else {
-          fake.emitTurn(sessionID, { text: `RESULT[${turn.subtaskId ?? turn.role}] by ${model}` });
+          await fake.emitTurn(sessionID, { text: `RESULT[${turn.subtaskId ?? turn.role}] by ${model}` });
         }
+        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), prompt: turn.text })}\n`, { mode: 0o600 });
       }, delay);
     },
   };

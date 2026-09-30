@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { validatePlan } from '../../plugins/opc/scripts/lib/orchestrator.mjs';
 import { classifyTurn, makeOrchestrateScenario, turnLogPath } from '../fixtures/orchestrate-turns.mjs';
+import { makeTempDir, readTurnLog, trackTempDir } from '../helpers.mjs';
 import { PLAN as OK } from '../fixtures/scenarios/decompose-ok.mjs';
 import { PLAN as CYCLE } from '../fixtures/scenarios/decompose-cycle.mjs';
 import { PLAN as WRITES } from '../fixtures/scenarios/decompose-write-without-flag.mjs';
@@ -27,9 +27,13 @@ test('classifyTurn recognises planner, synthesizer and subtask prompts', () => {
   assert.equal(classifyTurn({ parts: [] }).role, 'other');
 });
 
+test('readTurnLog remains appended at the end of the shared helpers file', () => {
+  const helpers = readFileSync(new URL('../helpers.mjs', import.meta.url), 'utf8');
+  assert.match(helpers, /\/\/ ---- F4b: orchestration helpers \(appended\) ----[\s\S]*\/\/ ---- end F4b ----\s*$/);
+});
+
 test('scenario logs each turn with its window and emits the planned result', async (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'opc-f4b-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = trackTempDir(t, makeTempDir('opc-f4b-'));
   const previous = process.env.FAKE_OPENCODE_STATE;
   process.env.FAKE_OPENCODE_STATE = path.join(dir, 'state.json');
   t.after(() => { if (previous === undefined) delete process.env.FAKE_OPENCODE_STATE; else process.env.FAKE_OPENCODE_STATE = previous; });
@@ -47,4 +51,22 @@ test('scenario logs each turn with its window and emits the planned result', asy
   const a = log.find((e) => e.subtaskId === 'a');
   assert.equal(a.model, 'm1');
   assert.ok(a.end - a.start >= 25);
+  assert.equal(statSync(turnLogPath()).mode & 0o777, 0o600);
+});
+
+test('turn window ends after asynchronous emitTurn completes', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-f4b-'));
+  const previous = process.env.FAKE_OPENCODE_STATE;
+  process.env.FAKE_OPENCODE_STATE = path.join(dir, 'state.json');
+  t.after(() => { if (previous === undefined) delete process.env.FAKE_OPENCODE_STATE; else process.env.FAKE_OPENCODE_STATE = previous; });
+  let emittedAt;
+  const fake = { emitTurn: async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    emittedAt = Date.now();
+  } };
+  const scenario = makeOrchestrateScenario({ subtaskDelayMs: 5 });
+  scenario.onPromptAsync(fake, 'ses_a', { model: { modelID: 'm1' }, parts: [{ type: 'text', text: '<subtask id="a">\nx\n</subtask>' }] });
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  const [entry] = readTurnLog({ FAKE_OPENCODE_STATE: process.env.FAKE_OPENCODE_STATE });
+  assert.ok(entry.end >= emittedAt, `logged end ${entry.end} precedes emitTurn completion ${emittedAt}`);
 });

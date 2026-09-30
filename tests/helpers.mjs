@@ -79,15 +79,6 @@ export function registerStopper(t, fn) {
   registry(t).stoppers.push(fn);
 }
 
-// ---- F4b: orchestration helpers (appended) ----
-// Reads the turn log written by the orchestration scenarios (tests/fixtures/orchestrate-turns.mjs).
-export function readTurnLog(env) {
-  const file = `${env.FAKE_OPENCODE_STATE}.turns.jsonl`;
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
-}
-// ---- end F4b ----
-
 export function trackTempDir(t, dir) {
   registry(t).dirs.push(dir);
   return dir;
@@ -538,3 +529,12 @@ export function parseFrontmatter(text) {
   }
   return { data, body: match[2] };
 }
+
+// ---- F4b: orchestration helpers (appended) ----
+// Reads the turn log written by the orchestration scenarios (tests/fixtures/orchestrate-turns.mjs).
+export function readTurnLog(env) {
+  const file = `${env.FAKE_OPENCODE_STATE}.turns.jsonl`;
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+// ---- end F4b ----
