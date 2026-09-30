@@ -113,3 +113,12 @@ test('valida opções antes de subir servidor', () => {
   assert.throws(() => validateConclaveOptions({ mode: 'debate', rounds: 1 }), usageCode('CONCLAVE_DEBATE_ROUNDS'));
   assert.deepEqual(validateConclaveOptions({ mode: 'debate' }), { rounds: 2 });
 });
+
+test('a catalog model behind a disconnected provider is skipped with its full id; unknown input stays cut', () => {
+  const offline = makeCatalog(undefined, [PROVIDER]);
+  const unknown = 'someprovider/an-unknown-model-with-a-long-name';
+  const result = composeMembers({ config: baseConfig, catalog: offline, models: [DS, QW, EQ, unknown], rng: seq(0) });
+  assert.ok(result.warnings.some((w) => w.includes(`"${EQ}"`)), result.warnings.join('\n'));
+  assert.ok(result.skipped.some((s) => s.entry === EQ));
+  assert.ok(result.warnings.every((w) => !w.includes(unknown)), 'unknown input is echoed cut');
+});

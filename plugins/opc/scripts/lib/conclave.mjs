@@ -259,9 +259,11 @@ export function composeMembers({
     try {
       resolved = normalizeModelId(entry, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
     } catch (err) {
-      const reason = err.message.replaceAll(entry, preview(entry));
-      skipped.push({ entry: preview(entry), reason, denied: false });
-      warnings.push(`conclave: ignorando "${preview(entry)}": ${reason}`);
+      // A catalog model (e.g. behind a disconnected provider) is not user noise: show its full id.
+      const shown = catalog.byFull?.has(entry) ? entry : preview(entry);
+      const reason = err.message.replaceAll(entry, shown);
+      skipped.push({ entry: shown, reason, denied: false });
+      warnings.push(`conclave: ignorando "${shown}": ${reason}`);
       continue;
     }
     if (!catalog.connected.has(resolved.providerID)) {

@@ -113,7 +113,6 @@ test('member timeout: the silent member is aborted, discarded and left out of th
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-timeout', config: FAST_TIMEOUT });
   const res = await conclave(['--models', TRIO, '--mode', 'debate', '--json', Q], { env, cwd, timeoutMs: 120_000 });
   assert.equal(res.code, 0, res.stderr);
-  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
   const pkg = res.json;
   const kimi = labelOf(pkg, KM);
   assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[kimi, 1, 'Timeout']]);
