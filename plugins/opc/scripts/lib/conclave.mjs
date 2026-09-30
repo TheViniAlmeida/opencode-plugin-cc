@@ -534,3 +534,18 @@ export function clusterFindings(findingsByMember, { validCount = null } = {}) {
   clusters.forEach((c, i) => { c.id = `C${i + 1}`; });
   return clusters;
 }
+
+export function conclaveVerdict(clusters, memberVerdicts) {
+  const verdicts = Object.values(memberVerdicts ?? {});
+  const reasons = [];
+  for (const c of clusters ?? []) {
+    if (severityRank(c.severity) >= severityRank('high') && c.agreement.k >= 2) {
+      reasons.push({ code: 'SEVERE_FINDING_AGREED', clusterId: c.id, severity: c.severity, agreement: c.agreement.text });
+    }
+  }
+  const needs = verdicts.filter((v) => v === 'needs-attention').length;
+  if (verdicts.length > 0 && needs > verdicts.length / 2) {
+    reasons.push({ code: 'MAJORITY_NEEDS_ATTENTION', count: needs, of: verdicts.length });
+  }
+  return { verdict: reasons.length > 0 ? 'needs-attention' : 'approve', reasons };
+}
