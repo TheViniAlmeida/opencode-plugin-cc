@@ -3,7 +3,7 @@
 import { evaluate } from './policy.mjs';
 import { configModelLabel, normalizeModelId } from './models.mjs';
 import { OpcError, UsageError } from './opc-error.mjs';
-import { safeOutputText } from './redact.mjs';
+import { redactOutput, safeOutputText } from './redact.mjs';
 import { TIERS } from './routing.mjs';
 import { fillTemplate, loadPrompt as loadPromptFile, loadSchema as loadSchemaFile, projectContextBlock, sessionTitle, summarize } from './prompts.mjs';
 import { truncateUtf8 } from './git.mjs';
@@ -422,7 +422,7 @@ function memberPatch(result) {
   return {
     status,
     model: safeOptionalText(result.model),
-    attempts: safePackageValue(result.attempts ?? []),
+    attempts: redactOutput(result.attempts ?? []),
     sessionID: safeOptionalText(result.sessionID),
     errorClass: safeOptionalText(result.errorClass),
     errorType: safeOptionalText(result.errorType),
@@ -442,17 +442,6 @@ async function safeTurn(deps, spec) {
 }
 
 function positiveInt(value, fallback) { return Number.isInteger(value) && value > 0 ? value : fallback; }
-
-// The orchestration package is often serialized and returned to another process. Apply the
-// same free-text masking used by logs to every string, including nested planner/turn payloads.
-function safePackageValue(value) {
-  if (typeof value === 'string') return safeOutputText(value);
-  if (Array.isArray(value)) return value.map(safePackageValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safePackageValue(item)]));
-  }
-  return value;
-}
 
 export async function runOrchestration({ ctx, task, flags = {}, deps }) {
   if (!deps || typeof deps.runTurn !== 'function') throw new TypeError('runOrchestration requires deps.runTurn');
@@ -476,7 +465,7 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
     planner: null, plan: null, rawPlan: null, planErrors: [], subtasks: [], synthesis: null, warnings, durationMs: 0 };
   const finish = (status, outcome, errorCode = null, errorMessage = null) => {
     Object.assign(pkg, { status, outcome, errorCode, errorMessage, durationMs: now() - startedAt });
-    Object.assign(pkg, safePackageValue(pkg));
+    Object.assign(pkg, redactOutput(pkg));
     return pkg;
   };
 

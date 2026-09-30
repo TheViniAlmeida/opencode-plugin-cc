@@ -206,3 +206,28 @@ test('flags.maxSubtasks sobrescreve o limite da configuração', async () => {
   assert.equal(pkg.errorCode, 'invalid_plan');
   assert.match(pkg.errorMessage, /entre 2 e 2 itens \(recebido 3\)/);
 });
+
+test('mascara segredos em nomes de propriedades e valores de plano inválido', async () => {
+  const suffix = `${Date.now()}-${Math.random()}`;
+  const registeredSecret = ['registered', 'secret', suffix].join('_');
+  const secretShapedValue = ['sk-', 'proj-', 'runtime-secret-', suffix.replaceAll('-', '')].join('');
+  registerSecret(registeredSecret);
+  const plan = {
+    rationale: 'invalid plan',
+    subtasks: [sub('a')],
+    [registeredSecret]: secretShapedValue,
+  };
+  const { deps } = makeDeps({ plan });
+  const logs = [];
+  deps.log = (line) => logs.push(line);
+
+  const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', flags: {}, deps });
+  const serialized = JSON.stringify(pkg);
+  const logged = logs.join('\n');
+
+  assert.equal(pkg.errorCode, 'invalid_plan');
+  assert.equal(serialized.includes(registeredSecret), false);
+  assert.equal(serialized.includes(secretShapedValue), false);
+  assert.equal(logged.includes(registeredSecret), false);
+  assert.equal(logged.includes(secretShapedValue), false);
+});
