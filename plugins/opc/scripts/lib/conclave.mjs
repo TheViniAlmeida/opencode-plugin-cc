@@ -318,14 +318,17 @@ const VENDOR_ALIASES = Object.freeze({
   claude: ['anthropic'], deepseek: ['deepseek'], gemini: ['google', 'deepmind'], gemma: ['google', 'deepmind'],
   glm: ['zhipu', 'zhipuai'], gpt: ['openai', 'chatgpt'], grok: ['xai'], kimi: ['moonshot', 'moonshotai'],
   llama: ['meta'], minimax: ['minimax'], mistral: ['mistralai'], codestral: ['mistral', 'mistralai'],
-  phi: ['microsoft'], qwen: ['alibaba', 'tongyi'],
+  mixtral: ['mistral', 'mistralai'], phi: ['microsoft'], qwen: ['alibaba', 'tongyi'],
+  yi: ['01ai'], baichuan: ['baichuan'], ernie: ['baidu'], doubao: ['bytedance'],
+  hunyuan: ['tencent'], command: ['cohere'], nemotron: ['nvidia'],
 });
+const CURATED_NAME_WORDS = new Set(Object.entries(VENDOR_ALIASES).flatMap(([family, vendors]) => [family, ...vendors]));
 
-function familyWordsOf(text) {
+function familyWordsOf(text, participant = false) {
   const words = [];
   for (const token of String(text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     const lead = token.match(/^\p{L}+/u)?.[0];
-    if (lead && lead.length >= 3 && !GENERIC_NAME_WORDS.has(lead)) words.push(lead);
+    if (lead && (CURATED_NAME_WORDS.has(lead) || (participant && lead.length >= 3 && !GENERIC_NAME_WORDS.has(lead)))) words.push(lead);
   }
   return words;
 }
@@ -333,29 +336,37 @@ function familyWordsOf(text) {
 export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   const exact = new Set();
   const families = new Set();
-  const addExact = (value, { modelId = false } = {}) => {
+  const addExact = (value) => {
     const v = String(value ?? '').trim();
-    if (v.length >= 3 || (modelId && /\p{N}/u.test(v))) exact.add(v);
+    if (v) exact.add(v);
   };
-  const providers = new Set(catalog?.connected ?? []);
-  for (const m of [...(catalog?.models ?? []), ...extraModels]) {
-    if (!m?.modelID) continue;
-    if (m.providerID) providers.add(m.providerID);
-    addExact(m.full);
-    addExact(m.modelID, { modelId: true });
+  const addToken = (value, participant = false) => {
+    const v = String(value ?? '').trim();
+    const word = v.toLowerCase();
+    if (/\p{N}/u.test(v) || CURATED_NAME_WORDS.has(word) || (participant && v.length >= 3 && !GENERIC_NAME_WORDS.has(word))) addExact(v);
+  };
+  const addProvider = (provider, participant = false) => {
+    addExact(provider);
+    for (const word of String(provider ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u)) addToken(word, participant);
+    for (const word of familyWordsOf(provider, participant)) families.add(word);
+  };
+  const addModel = (m, participant = false) => {
+    if (!m?.modelID) return;
+    addProvider(m.providerID, participant);
+    addExact(m.full ?? (m.providerID ? `${m.providerID}/${m.modelID}` : null));
     const segments = String(m.modelID).split('/');
-    addExact(segments.at(-1), { modelId: true });
-    for (const namespace of segments.slice(0, -1)) addExact(namespace);
-    addExact(m.name);
-    for (const w of familyWordsOf(segments.at(-1))) families.add(w);
-    for (const w of familyWordsOf(m.name)) families.add(w);
-  }
-  for (const p of providers) {
-    addExact(p);
-    for (const token of String(p).toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-      if (token.length >= 3 && !GENERIC_NAME_WORDS.has(token)) exact.add(token);
+    if (segments.length > 1) addExact(m.modelID);
+    for (const segment of segments) addToken(segment, participant);
+    // Display names are phrases, never a source of individual words or families.
+    if (/\s/u.test(String(m.name ?? '').trim())) addExact(m.name);
+    else addToken(m.name);
+    for (const segment of segments) {
+      for (const word of familyWordsOf(segment, participant && segment === segments.at(-1))) families.add(word);
     }
-  }
+  };
+  for (const provider of catalog?.connected ?? []) addProvider(provider);
+  for (const model of catalog?.models ?? []) addModel(model);
+  for (const model of extraModels) addModel(model, true);
   for (const family of families) for (const vendor of VENDOR_ALIASES[family] ?? []) exact.add(vendor);
   return { exact: [...exact], families: [...families] };
 }
@@ -385,21 +396,18 @@ function compileNames(knownNames) {
   const families = prepare(spec.families);
   const before = '(?<![\\p{L}\\p{N}_])';
   const after = '(?![\\p{L}\\p{N}_])';
-  const compiled = {
-    exact: exact.length ? new RegExp(`${before}(?:${exact.join('|')})${after}`, 'giu') : null,
-    family: families.length ? new RegExp(`${before}(?:${families.join('|')})(?:[\\p{L}\\p{N}_-]|\\.(?=[\\p{L}\\p{N}]))*`, 'giu') : null,
-  };
+  const alternatives = [];
+  if (exact.length) alternatives.push(`${before}(?:${exact.join('|')})${after}`);
+  if (families.length) alternatives.push(`${before}(?:${families.join('|')})(?:(?:[-_][\\p{L}]+)*[-_]?\\p{N}(?:[\\p{L}\\p{N}_-]|\\.(?=[\\p{L}\\p{N}]))*)?${after}`);
+  // One pass over the original text; existing markers are consumed intact as well.
+  const compiled = new RegExp([escapeRegExp(REDACTED_NAME), ...alternatives].join('|'), 'giu');
   if (cacheable) compiledNames.set(knownNames, compiled);
   return compiled;
 }
 
 export function anonymize(text, knownNames) {
   if (typeof text !== 'string' || text === '') return typeof text === 'string' ? text : '';
-  const { exact, family } = compileNames(knownNames);
-  let out = text;
-  if (exact) out = out.replace(exact, REDACTED_NAME);
-  if (family) out = out.replace(family, REDACTED_NAME);
-  return out;
+  return text.replace(compileNames(knownNames), REDACTED_NAME);
 }
 
 export function anonymizeValue(value, knownNames) {
@@ -592,7 +600,7 @@ function truncateText(text, max) {
 function byLabel(a, b) { return a.label.localeCompare(b.label); }
 
 function outputContract(mode, schema) {
-  return mode === 'tool' ? 'Return your answer only through the structured output.' : `Return only one JSON object inside a single \`\`\`json fence, with no text outside it. Follow this JSON Schema:\n${JSON.stringify(schema, null, 2)}`;
+  return mode === 'tool' ? 'Return your answer only through the structured output.' : `Return only one JSON object inside a single \`\`\`json fence, with no text outside it. Return a JSON instance with field values, not the schema. Follow this JSON Schema:\n${JSON.stringify(schema, null, 2)}`;
 }
 
 export class ConclavePersistenceError extends Error {
@@ -611,6 +619,8 @@ async function safeTurn(deps, spec) {
   }
 }
 
+const SCHEMA_ECHO_KEYS = new Set(['$schema', '$id', 'title', 'type', 'description']);
+
 function checkTurn(turn, schema) {
   if (!turn || turn.status !== 'completed') {
     const errorType = turn?.status === 'cancelled' ? 'Cancelled' : (turn?.errorType ?? 'Failed');
@@ -618,8 +628,18 @@ function checkTurn(turn, schema) {
   }
   if (turn.structured === null || turn.structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
   const errors = validateSchema(turn.structured, schema);
+  if (errors.length && typeOf(turn.structured) === 'object') {
+    // Models sometimes echo the schema shape: values under `properties`, or schema keywords beside the values.
+    if (typeOf(turn.structured.properties) === 'object' && validateSchema(turn.structured.properties, schema).length === 0) {
+      return { ok: true, structured: turn.structured.properties };
+    }
+    const stripped = Object.fromEntries(Object.entries(turn.structured).filter(([key]) => !SCHEMA_ECHO_KEYS.has(key) || Object.hasOwn(schema.properties ?? {}, key)));
+    if (Object.keys(stripped).length < Object.keys(turn.structured).length && validateSchema(stripped, schema).length === 0) {
+      return { ok: true, structured: stripped };
+    }
+  }
   if (errors.length) return { ok: false, errorType: 'InvalidStructuredOutput', message: errors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('; ') };
-  return { ok: true };
+  return { ok: true, structured: turn.structured };
 }
 
 function failureRecord({ label, round, role, turn, check }) {
@@ -682,7 +702,7 @@ function memberSpecPrompt(run, state, round, previous) {
 async function collectRound(run, round, outcomes) {
   const entry = { round, responses: [], failures: [] };
   for (const { label, sessionID, turn, check } of outcomes) {
-    if (check.ok) { entry.responses.push({ label, response: turn.structured }); await run.emit({ type: 'member-done', role: 'member', label, round, sessionID: sessionID ?? null }); }
+    if (check.ok) { entry.responses.push({ label, response: check.structured }); await run.emit({ type: 'member-done', role: 'member', label, round, sessionID: sessionID ?? null }); }
     else { const failure = failureRecord({ label, round, role: 'member', turn, check }); entry.failures.push(failure); run.failures.push(failure); await run.emit({ type: 'member-failed', ...failure }); }
   }
   entry.responses.sort(byLabel); entry.failures.sort(byLabel); return entry;
@@ -742,7 +762,7 @@ async function runJudge(run, finalResponses, review) {
   await emit({ type: 'judge-start', model: flags.judge.full });
   const turn = await safeTurn(deps, { role: 'judge', label: 'judge', round: null, member: flags.judge, sessionID: null, prompt, schema, title: 'OPC: conclave: judge' }); const check = checkTurn(turn, schema);
   if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); await emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null } }; }
-  await emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: turn.structured };
+  await emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: check.structured };
 }
 
 function synthesisInputOf(run, phase, finalResponses) {

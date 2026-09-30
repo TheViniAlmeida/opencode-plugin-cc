@@ -73,7 +73,7 @@ test('presenter handles failed refreshed group summaries in text and JSON modes'
   assert.deepEqual(json, { jobId: 'conc-test', status: 'failed', errorCode: 'coordinator_error', errorMessage: 'provider unavailable' });
 });
 
-async function workerFixture(t) {
+async function workerFixture(t, { structuredOutput = 'text', wrapAnswer = false } = {}) {
   const dir = stateDir(t);
   const { group, members } = await createGroup(dir, { kind: 'conclave' }, [
     ...MEMBERS.map((m) => ({ kind: 'conclave-member', role: `member:${m.label}`, model: m.full })),
@@ -84,8 +84,10 @@ async function workerFixture(t) {
   const fake = { state: {}, persist() {}, emit(event) { for (const fn of listeners) fn(structuredClone(event)); },
     scenario: { async onPromptAsync(f, id, body) {
       prompts.push(id);
-      const response = f.state.sessions[id].title === 'OPC: conclave: judge' ? synthesis(['A', 'B', 'C']) : answer();
-      f.emitTurn(id, { text: `\`\`\`json\n${JSON.stringify(response)}\n\`\`\``, delayMs: 1 });
+      const isJudge = f.state.sessions[id].title === 'OPC: conclave: judge';
+      const response = isJudge ? synthesis(['A', 'B', 'C']) : answer();
+      const structured = wrapAnswer ? { title: isJudge ? 'ConclaveSynthesis' : 'ConclaveMember', properties: response } : response;
+      f.emitTurn(id, { text: `\`\`\`json\n${JSON.stringify(structured)}\n\`\`\``, ...(body.format ? { structured } : {}), delayMs: 1 });
     } },
   };
   const routes = installSessionApi(fake);
@@ -97,11 +99,25 @@ async function workerFixture(t) {
   const api = createApi({ get: (route, options) => handle('GET', route, undefined, options), post: (route, body) => handle('POST', route, body), patch: (route, body) => handle('PATCH', route, body) });
   api.providers = async () => fixtureData('provider.json');
   const hub = { track(_id, fn) { listeners.add(fn); return () => listeners.delete(fn); }, onReconnect() { return () => {}; } };
-  const ctx = { stateDir: dir, workspaceRoot: dir, cwd: dir, config: { conclave: { structuredOutput: 'text', memberTimeoutSec: 2 }, jobs: { maxParallel: 2 } } };
+  const ctx = { stateDir: dir, workspaceRoot: dir, cwd: dir, config: { conclave: { structuredOutput, memberTimeoutSec: 2 }, jobs: { maxParallel: 2 } } };
   const request = { question: 'Should we add a log?', mode: 'opinion', rounds: 1, quorum: 2, members: MEMBERS, judge: { type: 'model', ...MEMBERS[2] } };
   let closed = false;
   const options = { openApiImpl: async () => ({ api, hub, close() { closed = true; } }) };
   return { ctx, group, members, request, options, fake, prompts, closed: () => closed };
+}
+
+for (const mode of ['text', 'tool']) {
+  test(`${mode} worker accepts schema-shaped values from the real runner without losing members`, async (t) => {
+    const f = await workerFixture(t, { structuredOutput: mode, wrapAnswer: true });
+    assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 0);
+    const group = readJob(f.ctx.stateDir, f.group.id);
+    assert.equal(group.status, 'completed');
+    assert.deepEqual(group.result.failures, []);
+    assert.deepEqual(group.result.final.responses.map((r) => r.response), MEMBERS.map(() => answer()));
+    assert.deepEqual(group.result.judge.synthesis, synthesis(['A', 'B', 'C']));
+    assert.ok(listGroupMembers(f.ctx.stateDir, f.group.id).every((m) => m.status === 'completed'));
+    assert.equal(f.closed(), true);
+  });
 }
 
 for (const role of ['member:A', 'judge']) {

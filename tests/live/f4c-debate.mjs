@@ -1,15 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateSchema } from '../../plugins/opc/scripts/lib/conclave.mjs';
-import { SKIP, LIVE_TIMEOUT_MS, BASE_POOL, EXTRA, QUESTION, liveSetup, liveConclave, attempts, schemas, transcript } from './_f4c-lib.mjs';
+import { SKIP, LIVE_TIMEOUT_MS, BASE_POOL, EXTRA, QUESTION, liveSetup, liveConclave, attempts, failureDetails, schemas, transcript } from './_f4c-lib.mjs';
 
 test('F4c live: debate with 2 rounds, round-2 answers valid with changed recorded (3 runs, >= 2 pass)', { skip: SKIP, timeout: LIVE_TIMEOUT_MS }, async (t) => {
   const ctx = liveSetup(t);
   const members = EXTRA ? [...BASE_POOL, EXTRA] : BASE_POOL;
   t.diagnostic(`debate members: ${members.length} (extra: ${EXTRA ? 'OPC_LIVE_MODEL_4' : 'none — OPC_LIVE_MODEL_4 not set'})`);
   const { debate } = schemas();
-  const results = await attempts(3, async () => {
+  const results = await attempts(3, async (_run, detail) => {
     const res = await liveConclave(['--models', members.join(','), '--mode', 'debate', '--rounds', '2', '--json', QUESTION], ctx);
+    detail.failures = failureDetails(res.json);
     assert.equal(res.code, 0, res.stderr.slice(-2000));
     const pkg = res.json;
     assert.deepEqual(pkg.rounds, { requested: 2, completed: 2 });
@@ -21,7 +22,7 @@ test('F4c live: debate with 2 rounds, round-2 answers valid with changed recorde
       assert.deepEqual(validateSchema(r.response, debate(peers)), [], `round 2 member ${r.label}`);
       assert.equal(typeof r.response.changed, 'boolean');
     }
-    return { jobId: pkg.jobId, changed: round2.map((r) => [r.label, r.response.changed]), failures: pkg.failures.map((f) => [f.label, f.round, f.errorType]) };
+    return { jobId: pkg.jobId, changed: round2.map((r) => [r.label, r.response.changed]), failures: detail.failures };
   });
   t.diagnostic(`debate: ${JSON.stringify(results)}`);
   transcript(`debate (2 rodadas, ${members.length} membros)`, ctx.dataDir, results);

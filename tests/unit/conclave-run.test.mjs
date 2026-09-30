@@ -2,18 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runConclave, buildKnownNames, loadConclaveAssets, validateSchema, REDACTED_NAME, ConclavePersistenceError } from '../../plugins/opc/scripts/lib/conclave.mjs';
 import { renderConclave } from '../../plugins/opc/scripts/lib/render.mjs';
-import { makeCatalog, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed } from './_conclave-fixtures.mjs';
+import { makeCatalog, member, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed } from './_conclave-fixtures.mjs';
 
 const assets = loadConclaveAssets();
 const knownNames = buildKnownNames(makeCatalog());
 const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot/i;
 
-function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4, structuredOutput = 'text', omitKnownNames = false, knownNames: suppliedKnownNames = knownNames, onEvent = null, collectReview = null } = {}) {
+function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4, structuredOutput = 'text', omitKnownNames = false, knownNames: suppliedKnownNames = knownNames, onEvent = null, collectReview = null, promptAssets = assets } = {}) {
   const calls = [];
   const events = [];
   let clock = 1_000;
   const deps = {
-    assets,
+    assets: promptAssets,
     ...(omitKnownNames ? {} : { knownNames: suppliedKnownNames }),
     now: () => (clock += 500),
     onEvent: onEvent ?? ((e) => events.push(e)),
@@ -217,6 +217,95 @@ for (const mode of ['text', 'tool']) {
       assert.doesNotMatch(prompt, /Reply only through the structured output/);
       assert.equal(prompt.split('Return your answer only through the structured output.').length - 1, mode === 'tool' ? 1 : 0);
       assert.equal(prompt.split('Return only one JSON object inside a single ```json fence').length - 1, mode === 'text' ? 1 : 0);
+      assert.equal(prompt.includes('Return a JSON instance with field values, not the schema.'), mode === 'text');
     }
+  });
+}
+
+test('runConclave adds member and judge identity words to filtered catalog names', async () => {
+  const members = [member('A', 'acme-cloud/zeta-9-pro'), member('B', 'other-provider/sigma-2')];
+  const judge = { type: 'model', ...member('judge', 'arbiter-host/quasar-8') };
+  const prose = 'For a small Node.js CLI with zero runtime dependencies, tools in the ecosystem are free and built-in; users cannot add comments.';
+  const names = buildKnownNames(makeCatalog([
+    ...members, judge,
+    { full: 'free-tools/small', name: 'Free Tools Small' },
+    { full: 'ecosystem-users/zero-shot-1', name: 'For Coding' },
+  ], []));
+  const h = harness((s) => s.role === 'judge'
+    ? ok(synthesis(['A', 'B'], { recommendation: 'Quasar from arbiter agrees.' }), 'ses_judge')
+    : ok(answer({ position: `${prose} Zeta from acme; Sigma from other; Quasar from arbiter.` }), `ses_${s.label}`),
+  { members, judge, knownNames: names });
+  const pkg = await h.run();
+  assert.equal(pkg.final.responses[0].response.position, `${prose} ${REDACTED_NAME} from ${REDACTED_NAME}; ${REDACTED_NAME} from ${REDACTED_NAME}; ${REDACTED_NAME} from ${REDACTED_NAME}.`);
+  assert.equal(pkg.judge.synthesis.recommendation, `${REDACTED_NAME} from ${REDACTED_NAME} agrees.`);
+  const prompt = h.calls.find((s) => s.role === 'judge').prompt;
+  assert.ok(prompt.includes(prose));
+  assert.doesNotMatch(prompt, /zeta|acme|sigma|quasar|arbiter/i);
+});
+
+for (const mode of ['text', 'tool']) {
+  test(`${mode} accepts schema-shaped member, debate and judge values without changing raw turns`, async () => {
+    const turns = [];
+    const expected = [];
+    const h = harness((s) => {
+      const value = s.role === 'judge' ? synthesis(['A', 'B', 'C']) : s.round === 1 ? answer() : debateAnswer(peerOf(s));
+      const wrapped = { title: s.schema.title, properties: value };
+      const turn = Object.freeze({ ...ok(wrapped, s.sessionID ?? `ses_${s.label}`), finalText: `\`\`\`json\n${JSON.stringify(wrapped)}\n\`\`\`` });
+      turns.push(turn);
+      expected.push(structuredClone(turn));
+      return turn;
+    }, { mode: 'debate', rounds: 2, structuredOutput: mode, judge: { type: 'model', ...MEMBERS[2] } });
+    const pkg = await h.run();
+    assert.equal(pkg.status, 'completed');
+    assert.deepEqual(pkg.failures, []);
+    assert.deepEqual(pkg.rounds, { requested: 2, completed: 2 });
+    assert.ok(pkg.roundsData.every((r) => r.responses.length === 3));
+    assert.deepEqual(pkg.roundsData[0].responses[0].response, answer());
+    assert.deepEqual(pkg.final.responses[0].response, debateAnswer('B'));
+    assert.deepEqual(pkg.judge.synthesis, synthesis(['A', 'B', 'C']));
+    assert.deepEqual(turns, expected, 'structured and finalText stay untouched');
+    assert.equal(h.events.filter((e) => e.type === 'member-done').length, 6);
+    assert.equal(h.events.some((e) => /failed|normaliz|unwrap/.test(e.type)), false);
+  });
+
+  test(`${mode} only unwraps one object level when properties itself validates`, async () => {
+    for (const properties of [null, [], 'answer', {}, answer({ confidence: 2 }), { properties: answer() }, assets.schemas.member.properties]) {
+      const wrapped = { title: 'ConclaveMember', properties };
+      const rawText = JSON.stringify(wrapped);
+      const h = harness((s) => s.label === 'A' ? { ...ok(wrapped, 'ses_A'), finalText: rawText } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+      const pkg = await h.run();
+      assert.deepEqual(pkg.final.responses.map((r) => r.label), ['B', 'C']);
+      assert.equal(pkg.failures[0].errorType, 'InvalidStructuredOutput');
+      assert.match(pkg.failures[0].message, /\$\.position é obrigatório/);
+      assert.equal(pkg.failures[0].rawText, rawText);
+    }
+  });
+
+  test(`${mode} drops schema keywords echoed beside valid values`, async () => {
+    const echoed = { title: 'ConclaveMember', $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', ...answer() };
+    const h = harness((s) => s.label === 'A' ? { ...ok(echoed, 'ses_A'), finalText: JSON.stringify(echoed) } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+    const pkg = await h.run();
+    assert.deepEqual(pkg.failures, []);
+    assert.deepEqual(pkg.final.responses.find((r) => r.label === 'A').response, answer());
+    const bad = { title: 'ConclaveMember', ...answer({ confidence: 2 }) };
+    const h2 = harness((s) => s.label === 'A' ? ok(bad, 'ses_A') : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+    const pkg2 = await h2.run();
+    assert.equal(pkg2.failures[0].errorType, 'InvalidStructuredOutput');
+  });
+
+  test(`${mode} preserves an already valid object even when it has valid properties`, async () => {
+    const promptAssets = structuredClone(assets);
+    promptAssets.schemas.member.additionalProperties = true;
+    const response = answer({ properties: answer({ position: 'Different nested position.' }) });
+    const h = harness((s) => ok(response, `ses_${s.label}`), { promptAssets, structuredOutput: mode });
+    const pkg = await h.run();
+    assert.deepEqual(pkg.failures, []);
+    assert.deepEqual(pkg.final.responses[0].response, response);
+  });
+
+  test(`${mode} never rescues failed turns with schema-shaped values`, async () => {
+    const h = harness((s) => s.label === 'A' ? { ...failed('Timeout', { finalText: 'raw failure' }), structured: { properties: answer() } } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+    const pkg = await h.run();
+    assert.deepEqual(pkg.failures.map((f) => [f.errorType, f.rawText]), [['Timeout', 'raw failure']]);
   });
 }

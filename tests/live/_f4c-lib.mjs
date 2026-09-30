@@ -52,15 +52,21 @@ export async function liveConclave(args, { env, cwd }) {
   return { ...res, json };
 }
 
+export function failureDetails(pkg) {
+  return (pkg?.failures ?? []).map((f) => [f.label, f.round, f.errorType, String(f.message ?? '').slice(0, 200)]);
+}
+
 export async function attempts(n, fn) {
   const results = [];
   for (let i = 0; i < n; i += 1) {
     const started = Date.now();
+    const detail = {};
     try {
-      const detail = await fn(i);
+      Object.assign(detail, await fn(i, detail));
       results.push({ run: i + 1, ok: true, seconds: Math.round((Date.now() - started) / 1000), detail });
     } catch (err) {
-      results.push({ run: i + 1, ok: false, seconds: Math.round((Date.now() - started) / 1000), detail: String(err?.message ?? err).slice(0, 2000) });
+      const error = String(err?.message ?? err).slice(0, 2000);
+      results.push({ run: i + 1, ok: false, seconds: Math.round((Date.now() - started) / 1000), detail: { ...detail, error } });
     }
   }
   return results;

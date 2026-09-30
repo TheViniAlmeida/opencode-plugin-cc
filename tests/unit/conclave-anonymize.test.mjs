@@ -13,9 +13,10 @@ const catalog = makeCatalog([
 const known = buildKnownNames(catalog);
 const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot|openai|chatgpt|gpt|anthropic|claude/i;
 
-test('buildKnownNames collects provider ids, model ids, names, families and vendors', () => {
-  for (const name of ['omniroute-personal', 'omniroute', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'opencode-go', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) assert.ok(known.exact.includes(name), `exact should include ${name}`);
-  assert.deepEqual([...known.families].sort(), ['claude', 'deepseek', 'gpt', 'kimi', 'qwen', 'sonnet'].sort());
+test('catalog names include full ids, phrases and curated families and vendors', () => {
+  for (const name of ['omniroute-personal', DS, 'opencode-go/qwen3.8-max', 'kimi-k3', 'Qwen3.8 Max', 'alibaba', 'moonshot', 'anthropic', 'openai', 'chatgpt']) assert.ok(known.exact.includes(name), `exact should include ${name}`);
+  for (const word of ['omniroute', 'personal', 'opencode-go', 'sonnet']) assert.ok(!known.exact.includes(word));
+  assert.deepEqual([...known.families].sort(), ['anthropic', 'claude', 'deepseek', 'gpt', 'kimi', 'openai', 'qwen'].sort());
 });
 test('generic words from model ids never become family words', () => { for (const generic of ['flash', 'max', 'mini', 'pro', 'go', 'opencode']) assert.ok(!known.families.includes(generic), `${generic} must not be a family word`); });
 test('self-identification is scrubbed, with case and version variants', () => {
@@ -49,4 +50,78 @@ test('short exact model ids containing digits are redacted without matching shor
   assert.equal(anonymize('I am o3 from openai.', names), `I am ${REDACTED_NAME} from ${REDACTED_NAME}.`);
   assert.equal(anonymize('R1 thinks', names), `${REDACTED_NAME} thinks`);
   assert.equal(anonymize('go ahead, a max of 2', names), 'go ahead, a max of 2');
+});
+
+test('a large catalog preserves ordinary prose while redacting model identification', () => {
+  const prose = 'For a small Node.js CLI with zero runtime dependencies, tools in the ecosystem are free and built-in; users cannot add comments.';
+  const rows = Array.from({ length: 8501 }, (_, i) => ({ full: `synthetic-provider/archive/model-${i}`, name: `Synthetic Model ${i}` }));
+  rows.push(
+    { full: 'free-tools/small', name: 'Free Tools Small' },
+    { full: 'ecosystem-users/zero-shot-1', name: 'Zero Shot 1' },
+    { full: 'for-coding/comments', name: 'For Coding' },
+    { full: 'synthetic-provider/redacted', name: 'Redacted' },
+    ...catalog.models,
+  );
+  const names = buildKnownNames(makeCatalog(rows, []));
+  assert.equal(anonymize(prose, names), prose);
+  for (const word of ['for', 'small', 'zero', 'shot', 'tools', 'ecosystem', 'free', 'users', 'comments', 'redacted', 'synthetic', 'archive']) {
+    assert.ok(!names.exact.includes(word), `not an exact name: ${word}`);
+    assert.ok(!names.families.includes(word), `not a family: ${word}`);
+  }
+  for (const identification of ['I am Qwen3.7-Flash by Alibaba', 'as DeepSeek V4', 'Kimi K2.6 from Moonshot', DS, 'opencode-go/qwen3.8-max']) {
+    const clean = anonymize(identification, names);
+    assert.doesNotMatch(clean, FORBIDDEN);
+    assert.ok(clean.includes(REDACTED_NAME));
+    assert.doesNotMatch(clean, /\[\[redacted\]\]/);
+    assert.equal(anonymize(clean, names), clean);
+  }
+  for (const phrase of ['Free Tools Small', 'For Coding', 'zero-shot-1', 'free-tools/small', 'free-tools']) assert.equal(anonymize(phrase, names), REDACTED_NAME);
+});
+
+test('only participants supply uncurated families and provider words', () => {
+  const model = { providerID: 'acme-cloud', modelID: 'private-route/zeta-sonnet-9-pro', full: 'acme-cloud/private-route/zeta-sonnet-9-pro', name: 'Unrelated Display Phrase' };
+  const catalogNames = buildKnownNames(makeCatalog([model], []));
+  const participantNames = buildKnownNames(makeCatalog([model], []), { extraModels: [model] });
+  const prose = 'Zeta-10 from acme using Sonnet 8';
+  assert.equal(anonymize(prose, catalogNames), prose);
+  assert.equal(anonymize(prose, participantNames), `${REDACTED_NAME} from ${REDACTED_NAME} using ${REDACTED_NAME} 8`);
+  assert.ok(participantNames.exact.includes('private-route'));
+  for (const word of ['cloud', 'pro', 'unrelated', 'display', 'phrase']) {
+    assert.ok(!participantNames.exact.includes(word));
+    assert.ok(!participantNames.families.includes(word));
+  }
+  assert.equal(anonymize('Unrelated Display Phrase', participantNames), REDACTED_NAME);
+});
+
+test('catalog display phrases never supply families even when they contain curated words', () => {
+  const names = buildKnownNames(makeCatalog([{ full: 'acme/plain', name: 'Qwen Quasar Edition' }], []));
+  assert.equal(anonymize('Qwen Quasar Edition', names), REDACTED_NAME);
+  assert.equal(anonymize('Quasar Edition and Quasar2', names), 'Quasar Edition and Quasar2');
+  assert.ok(!names.families.includes('quasar'));
+});
+
+test('curated short and formerly generic families come from the vendor map', () => {
+  const names = buildKnownNames(makeCatalog([
+    { full: 'acme/yi-34b', name: 'Yi 34B' },
+    { full: 'acme/command-r-plus', name: 'Command R Plus' },
+    { full: 'acme/nemotron-70b', name: 'Nemotron 70B' },
+  ], []));
+  assert.ok(names.families.includes('yi'));
+  assert.ok(names.families.includes('command'));
+  assert.equal(anonymize('Yi-35b by 01ai, Command by Cohere, Nemotron by Nvidia', names), `${REDACTED_NAME} by ${REDACTED_NAME}, ${REDACTED_NAME} by ${REDACTED_NAME}, ${REDACTED_NAME} by ${REDACTED_NAME}`);
+  const prose = 'Generators yield results, and the commander avoids the nemotroncache identifier.';
+  assert.equal(anonymize(prose, names), prose);
+});
+
+test('replacement markers cannot be rematched by exact names or families across passes', () => {
+  for (const names of [
+    { exact: ['redacted', 'Qwen3.7-Flash'], families: ['redacted'] },
+    { exact: ['Qwen3.7-Flash'], families: ['red', 'qwen'] },
+    ['redacted', 'Qwen3.7-Flash'],
+  ]) {
+    const clean = anonymize(`${REDACTED_NAME} Qwen3.7-Flash`, names);
+    assert.equal(clean, `${REDACTED_NAME} ${REDACTED_NAME}`);
+    assert.equal(anonymize(clean, names), clean);
+    assert.doesNotMatch(clean, /\[\[redacted\]\]/);
+  }
 });

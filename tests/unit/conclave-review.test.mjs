@@ -69,8 +69,28 @@ test('review prompts include the text structured output contract and review sche
   const [prompt] = new Set(h.calls.map((c) => c.prompt));
   assert.match(prompt, /Return only one JSON object inside a single ```json fence, with no text outside it\./);
   assert.match(prompt, /Follow this JSON Schema:/);
+  assert.match(prompt, /Return a JSON instance with field values, not the schema\./);
   assert.match(prompt, /"findings"/);
 });
+
+for (const mode of ['text', 'tool']) {
+  test(`${mode} accepts schema-shaped review values before clustering`, async () => {
+    const turns = [];
+    const h = harness((spec) => {
+      const wrapped = { title: spec.schema.title, properties: REVIEWS[spec.label] };
+      const turn = Object.freeze({ ...ok(wrapped, `ses_${spec.label}`), finalText: JSON.stringify(wrapped) });
+      turns.push(turn);
+      return turn;
+    }, { structuredOutput: mode });
+    const pkg = await h.run();
+    assert.equal(pkg.status, 'completed');
+    assert.deepEqual(pkg.failures, []);
+    assert.equal(pkg.review.validMembers, 3);
+    assert.equal(pkg.review.clusters.length, 2);
+    assert.deepEqual(pkg.final.responses.map((r) => r.response), Object.values(REVIEWS));
+    for (const turn of turns) assert.equal(turn.finalText, JSON.stringify(turn.structured));
+  });
+}
 
 test('review prompts include the tool structured output contract', async () => {
   const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`), { structuredOutput: 'tool' });
