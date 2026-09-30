@@ -549,3 +549,120 @@ export function conclaveVerdict(clusters, memberVerdicts) {
   }
   return { verdict: reasons.length > 0 ? 'needs-attention' : 'approve', reasons };
 }
+
+// ---------------------------------------------------------------------------
+// Rounds, judge and package
+// ---------------------------------------------------------------------------
+
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(limit || 1, items.length));
+  await Promise.all(Array.from({ length: width }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await fn(items[i], i);
+    }
+  }));
+  return results;
+}
+
+function truncateText(text, max) {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n…[truncated ${text.length - max} chars]`;
+}
+
+function byLabel(a, b) { return a.label.localeCompare(b.label); }
+
+function outputContract(mode, schema) {
+  return mode === 'tool' ? '' : `Retorne apenas um objeto JSON em uma única cerca \`\`\`json, sem texto fora dela. Siga este esquema:\n${JSON.stringify(schema, null, 2)}`;
+}
+
+async function safeTurn(deps, spec) {
+  try { return await deps.turn(spec); }
+  catch (err) {
+    return { status: 'failed', sessionID: spec.sessionID ?? null, structured: null, finalText: '', errorType: err?.code ?? err?.name ?? 'Error', errorClass: 'fatal', errorMessage: err?.message ?? String(err) };
+  }
+}
+
+function checkTurn(turn, schema) {
+  if (!turn || turn.status !== 'completed') {
+    const errorType = turn?.status === 'cancelled' ? 'Cancelled' : (turn?.errorType ?? 'Failed');
+    return { ok: false, errorType, message: turn?.errorMessage ?? `turn ended with status ${turn?.status ?? 'unknown'}` };
+  }
+  if (turn.structured === null || turn.structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
+  const errors = validateSchema(turn.structured, schema);
+  if (errors.length) return { ok: false, errorType: 'InvalidStructuredOutput', message: errors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('; ') };
+  return { ok: true };
+}
+
+function failureRecord({ label, round, role, turn, check }) {
+  return { label, round, role, errorType: check.errorType, errorClass: turn?.errorClass ?? null, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null };
+}
+
+function formatLabeled(entries, knownNames, tag) {
+  return entries.map(e => `<${tag} label="${e.label}">\n${truncateText(JSON.stringify(anonymizeValue(e.response, knownNames), null, 2), PEER_RESPONSE_MAX_CHARS)}\n</${tag}>`).join('\n\n');
+}
+
+function memberSpecPrompt(run, state, round, previous) {
+  const { flags, assets } = run; const label = state.member.label;
+  if (round === 1) { const schema = buildMemberSchema(assets.schemas.member); return { schema, prompt: fillTemplate(assets.prompts.member, { SELF_LABEL: label, QUESTION: run.question, PROJECT_CONTEXT: run.projectContext, OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true }) }; }
+  const peers = previous.responses.filter(r => r.label !== label); const peerLabels = peers.map(p => p.label);
+  const schema = buildDebateSchema(assets.schemas.member, peerLabels); return { schema, prompt: fillTemplate(assets.prompts.debate, { SELF_LABEL: label, ROUND: round, TOTAL_ROUNDS: flags.rounds, QUESTION: run.question, PEER_LABELS: peerLabels.join(', '), PEER_RESPONSES: formatLabeled(peers, run.knownNames, 'peer'), OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true }) };
+}
+
+function collectRound(run, round, outcomes) {
+  const entry = { round, responses: [], failures: [] };
+  for (const { label, sessionID, turn, check } of outcomes) {
+    if (check.ok) { entry.responses.push({ label, response: turn.structured }); run.emit({ type: 'member-done', role: 'member', label, round, sessionID: sessionID ?? null }); }
+    else { const failure = failureRecord({ label, round, role: 'member', turn, check }); entry.failures.push(failure); run.failures.push(failure); run.emit({ type: 'member-failed', ...failure }); }
+  }
+  entry.responses.sort(byLabel); entry.failures.sort(byLabel); return entry;
+}
+function quorumFailure(entry, quorum) { return { code: 'QUORUM_NOT_MET', round: entry.round, valid: entry.responses.length, quorum }; }
+
+async function runDiscussion(run) {
+  const { flags, deps, emit } = run; const states = flags.members.map(member => ({ member, sessionID: null, active: true })); const roundsData = []; let completedRounds = 0;
+  for (let round = 1; round <= flags.rounds; round += 1) {
+    const active = states.filter(s => s.active); const previous = roundsData.at(-1); emit({ type: 'round-start', round, labels: active.map(s => s.member.label) });
+    const outcomes = await mapLimit(active, run.maxParallel, async state => {
+      const label = state.member.label; const { schema, prompt } = memberSpecPrompt(run, state, round, previous); emit({ type: 'member-start', role: 'member', label, round });
+      const turn = await safeTurn(deps, { role: 'member', label, round, member: state.member, sessionID: state.sessionID, prompt, schema, title: `OPC: conclave: ${label}: ${run.question.slice(0, 48)}` });
+      if (turn?.sessionID) state.sessionID = turn.sessionID;
+      return { label, sessionID: state.sessionID, turn, check: checkTurn(turn, schema) };
+    });
+    const entry = collectRound(run, round, outcomes); for (const f of entry.failures) { const state = states.find(s => s.member.label === f.label); if (state) state.active = false; }
+    roundsData.push(entry); if (entry.responses.length < flags.quorum) return { ok: false, roundsData, completedRounds, review: null, failure: quorumFailure(entry, flags.quorum) }; completedRounds = round;
+  }
+  return { ok: true, roundsData, completedRounds, review: null, failure: null };
+}
+
+function reviewForJudge(review) {
+  return { verdict: review.verdict, validMembers: review.validMembers, clusters: review.clusters.map(c => ({ id: c.id, file: c.file, line_start: c.line_start, line_end: c.line_end, severity: c.severity, title: c.title, body: c.body, recommendation: c.recommendation, agreement: c.agreement.text, labels: c.labels, meanConfidence: c.meanConfidence })) };
+}
+
+async function runJudge(run, finalResponses, review) {
+  const { flags, assets, deps, emit, knownNames } = run;
+  if (flags.judge.type === 'claude') return { type: 'claude', status: 'pending' };
+  const labels = finalResponses.map(r => r.label); const schema = buildSynthesisSchema(assets.schemas.synthesis, labels);
+  const question = run.question || (review ? `Code review of ${review.target ?? 'the current changes'}` : '');
+  const prompt = fillTemplate(assets.prompts.judge, { QUESTION: question, MODE: flags.mode, LABELS: labels.join(', '), DEBATE_NOTE: flags.rounds > 1 ? ` and then debated for ${flags.rounds - 1} more round(s)` : '', RESPONSES: formatLabeled(finalResponses, knownNames, 'answer'), REVIEW_SUMMARY: review ? JSON.stringify(anonymizeValue(reviewForJudge(review), knownNames), null, 2) : 'Not a review conclave.', OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true });
+  emit({ type: 'judge-start', model: flags.judge.full });
+  const turn = await safeTurn(deps, { role: 'judge', label: 'judge', round: null, member: flags.judge, sessionID: null, prompt, schema, title: 'OPC: conclave: judge' }); const check = checkTurn(turn, schema);
+  if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message } }; }
+  emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: turn.structured };
+}
+
+function synthesisInputOf(run, phase, finalResponses) {
+  return { question: run.question, mode: run.flags.mode, labels: finalResponses.map(r => r.label), rounds: phase.completedRounds, responses: finalResponses.map(r => ({ label: r.label, response: anonymizeValue(r.response, run.knownNames) })), review: phase.review ? anonymizeValue(reviewForJudge(phase.review), run.knownNames) : null };
+}
+
+export async function runConclave({ ctx = {}, question = '', flags, deps }) {
+  const now = deps.now ?? Date.now; const startedAt = now();
+  const run = { question: String(question ?? ''), flags, deps, assets: deps.assets ?? loadConclaveAssets(), knownNames: deps.knownNames ?? { exact: [], families: [] }, emit: deps.onEvent ?? (() => {}), maxParallel: flags.maxParallel ?? ctx.config?.jobs?.maxParallel ?? 4, projectContext: projectContextBlock(ctx.config?.project), structuredOutput: ctx.config?.conclave?.structuredOutput ?? 'text', failures: [], warnings: [...(flags.warnings ?? [])] };
+  const phase = await runDiscussion(run); const lastRound = phase.roundsData.at(-1); const finalResponses = lastRound?.responses ?? []; const status = phase.ok ? 'completed' : 'failed';
+  const judge = phase.ok ? await runJudge(run, finalResponses, phase.review) : { type: flags.judge.type, ...(flags.judge.type === 'model' ? { model: flags.judge.full } : {}), status: 'skipped' };
+  const endedAt = now();
+  return { schemaVersion: 1, kind: 'conclave', status, failure: phase.failure, mode: flags.mode, question: run.question, rounds: { requested: flags.rounds, completed: phase.completedRounds }, quorum: flags.quorum, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), durationMs: endedAt - startedAt, warnings: run.warnings, failures: run.failures, roundsData: phase.roundsData, final: { round: lastRound?.round ?? 0, responses: finalResponses }, review: phase.review, judge, synthesisInput: phase.ok ? synthesisInputOf(run, phase, finalResponses) : null, composition: flags.members.map(m => ({ label: m.label, model: m.full })) };
+}
