@@ -1,9 +1,9 @@
 # Relatório da fase F4c — Conclave
 
-- **Data:** 30/09/2026 (início)
+- **Data:** 30/09/2026
 - **Branch:** `feat/opc-f4c`
-- **OpenCode:** versão do `opencode --version` no portão
-- **Modelos ao vivo:** rotas por ambiente (`OPC_LIVE_MODEL`, `_2`, `_3`); as rotas `omniroute-personal/opencode-go/*` do plano respondem 402 no gateway usado (Ajustes pós-F4b, item 9)
+- **OpenCode:** 1.18.32 (`opencode --version`)
+- **Modelos ao vivo:** rotas por ambiente — `OPC_LIVE_MODEL=omniroute-personal/cmd/deepseek/deepseek-v4-flash`, `OPC_LIVE_MODEL_2=…/cmd/Qwen/Qwen3.7-Flash`, `OPC_LIVE_MODEL_3=…/cmd/moonshotai/Kimi-K2.6` (juiz modelo = `_3`); as rotas `omniroute-personal/opencode-go/*` do plano respondem 402 no gateway usado (Ajustes pós-F4b, item 9)
 - **Legenda:** `PASSOU` · `N/A` (com justificativa) · `NÃO VALIDADO` (com motivo)
 
 ## 1. Premissas sobre F0–F4b (Tarefa 0)
@@ -29,525 +29,179 @@ Conferidas em 30/09/2026 contra a `main` com a F4b mergeada.
 
 ## 2. `npm test`
 
+Resultado: **PASSOU** — `node scripts/run-tests.mjs` (o mesmo comando de `npm test`) fora do sandbox, no commit `a7005e9`:
+
 ```
-(saída completa de npm test)
+1..1780
+# tests 1780
+# suites 0
+# pass 1779
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
 ```
+
+O teste pulado é o preexistente `cross-UID exclusion cannot be exercised without permission to chown` (exige root para `chown`; sem mudança nesta fase). `git diff --check`: sem achados.
 
 ## 3. Aceite de integração (spec §13.3, F4c)
 
+Todos em `tests/integration/conclave-acceptance.test.mjs`, na suíte da seção 2.
+
 | Item | Teste | Resultado |
 |---|---|---|
-| Composição: 1 membro, quorum inválido | `conclave-acceptance` › composition: 1 member, invalid quorum… | |
-| Anonimização (inclusive autoidentificação) | `conclave-acceptance` › anonymization… | |
-| Quorum atingido | `conclave-acceptance` › quorum met… | |
-| Quorum não atingido | `conclave-acceptance` › quorum not met… | |
-| `conclave-member-timeout` descartado | `conclave-acceptance` › member timeout… | |
-| `StructuredOutputError` de membro descartado | `conclave-acceptance` › quorum met: a StructuredOutputError member… | |
-| Dedupe e concordância com fixtures sobrepostas | `conclave-acceptance` › review: overlapping findings… | |
-| Findings sem `file` | idem (`noFile`) + `conclave-cluster` | |
-| Veredito | idem + `conclave-verdict` | |
-| `--allow-judge-member` | `conclave-acceptance` › --allow-judge-member… | |
+| Composição: 1 membro, quorum inválido | composition: 1 member, invalid quorum, conflicting flags and bad rounds exit 2 without prompting | PASSOU |
+| Anonimização (inclusive autoidentificação) | anonymization: no model, vendor or provider name reaches debate or judge prompts, even when members self-identify | PASSOU |
+| Quorum atingido | quorum met: text mode reports MissingStructuredOutput…; quorum met: tool mode discards and lists a StructuredOutputError member… | PASSOU |
+| Quorum não atingido | quorum not met: exit 7, group failed, partial answers kept and no judge | PASSOU |
+| `conclave-member-timeout` descartado | member timeout: the silent member is aborted, discarded and left out of the debate | PASSOU |
+| `StructuredOutputError` de membro descartado | quorum met: tool mode discards and lists a StructuredOutputError member; the rest synthesize | PASSOU |
+| Dedupe e concordância com fixtures sobrepostas | review: overlapping findings dedupe into clusters with k/N agreement; findings without file stay alone; verdict | PASSOU |
+| Findings sem `file` | idem + `conclave-cluster` | PASSOU |
+| Veredito | idem + `conclave-verdict` | PASSOU |
+| `--allow-judge-member` | --allow-judge-member: required when the judge is also a member | PASSOU |
 
 ## 4. Aceite ao vivo
 
-Comando: `OPC_LIVE=1 node --test --test-reporter=spec tests/live/f4c-opinion.mjs tests/live/f4c-debate.mjs tests/live/f4c-review.mjs tests/live/f4c-judge.mjs`
+Comando: `OPC_LIVE=1 node --test --test-concurrency=1 --test-reporter=spec tests/live/f4c-opinion.mjs tests/live/f4c-debate.mjs tests/live/f4c-review.mjs tests/live/f4c-judge.mjs` — rodada 2, no commit `4866b01`, 5/5 testes, exit 0, `opencode serve` preexistentes do operador intactos (lista de PIDs e horários de início comparada antes e depois).
 
 | Item | Critério objetivo | Execuções (ok/total) | Resultado |
 |---|---|---|---|
-| Opinion com 3 modelos | 3 respostas válidas no schema, sem falhas | /3 | |
-| Debate com 2 rodadas | rodada 2 válida no schema de debate, `changed` booleano registrado | /3 | |
-| Review cruzado num diff real | `k/N` com N = membros válidos; ≥ 1 cluster com k ≥ 2 | /3 | |
-| Juiz por modelo | síntese válida no `conclave-synthesis` | /3 | |
-| Juiz Claude | pacote anonimizado + síntese feita pelo Claude com a skill `opc-conclave` (seção 5) | 1/1 | |
-| Modelo extra | `OPC_LIVE_MODEL_4` (sem ele → `N/A` com o motivo) | — | |
+| Opinion com 3 modelos | 3 respostas válidas no schema, sem falhas | 2/3 (run 3: um membro com `Timeout` de 600 s) | PASSOU |
+| Debate com 2 rodadas | rodada 2 válida no schema de debate, `changed` booleano registrado | 3/3 (run 1: uma resposta da rodada 2 realmente fora do schema, descartada) | PASSOU |
+| Review cruzado num diff real | `k/N` com N = membros válidos; ≥ 1 cluster com k ≥ 2 | 3/3 | PASSOU |
+| Juiz por modelo | síntese válida no `conclave-synthesis` | 3/3 | PASSOU |
+| Juiz Claude | pacote anonimizado + síntese feita pelo Claude com a skill `opc-conclave` (seção 5) | 1/1 | PASSOU |
+| Modelo extra | `OPC_LIVE_MODEL_4` | — | N/A — só três rotas funcionais no gateway do portão |
+
+Histórico: a rodada 1 (código anterior às correções do portão) falhou em opinion e juiz modelo. Um membro devolvia os valores no formato do schema (`{"title": …, "properties": {…}}` ou `title` ao lado dos valores), o que virava `InvalidStructuredOutput`. O catálogo real (8501 modelos) transformava palavras comuns em nomes conhecidos (`For a small … zero …` → `[redacted] a [[redacted]] …`). As duas coisas foram corrigidas (seção 8).
+
+Depois da rodada 2, `088d4c3` e `a7005e9` só estreitaram os nomes conhecidos e corrigiram achados de revisão. A anonimização foi reconferida contra o catálogo real sem modelos: a prosa comum sai intacta e a autoidentificação continua redigida. Os três exemplos de `docs/conclave.md` foram executados ao vivo no código final (`a7005e9` + docs), com exit 0 nos três; no review, `NaN` aparece intacto.
+
+Saída redigida dos testes ao vivo (`docs/phases/F4c-live-output.md`):
+
+````
+### debate (2 rodadas, 3 membros)
 
 ```
-(saída redigida dos testes ao vivo, incluindo as linhas de diagnóstico)
+run 1: ok (217s) {"failures":[["B",2,"InvalidStructuredOutput","$.critiques é obrigatório; $.changed é obrigatório; $.title não é permitido"]],"jobId":"conc-muo3yyjh-yxeyu0","changed":[["A",false],["C",false]]}
+run 2: ok (243s) {"failures":[],"jobId":"conc-muo42vea-5o0utq","changed":[["A",true],["B",false],["C",false]]}
+run 3: ok (202s) {"failures":[],"jobId":"conc-muo482o8-l25fud","changed":[["A",true],["B",false],["C",false]]}
 ```
+
+### juiz modelo (2 membros + juiz)
+
+```
+run 1: ok (263s) {"failures":[],"jobId":"conc-muo4d7rz-16rr0q","confidence":0.76,"recommendation":"Implement config storage as JSON using only JSON.parse and JSON.stringify. Ship an example config file with a .json.example extension containing inline documentation comments, plus a README section ex"}
+run 2: ok (125s) {"failures":[],"jobId":"conc-muo4i4md-z6qdea","confidence":0.82,"recommendation":"Ship with JSON and a well-documented example config. Treat the 'zero runtime dependencies' constraint as absolute. Gather user feedback: if you receive repeated complaints about the lack of comments o"}
+run 3: ok (166s) {"failures":[],"jobId":"conc-muo4ksxu-2xsjk1","confidence":0.8,"recommendation":"Use JSON for user configuration. Keep the config flat and small. Document every key and provide a commented example in the README so users rarely need inline comments in the file itself. If you must s"}
+```
+
+### juiz Claude (pacote anonimizado)
+
+```
+run 1: ok (82s) {"jobId":"conc-muo4p5tz-q27q80","responses":3,"failures":[]}
+```
+
+### opinion (3 membros)
+
+```
+run 1: ok (172s) {"failures":[],"jobId":"conc-muo4sb1m-5k32k7","durationMs":109683,"confidences":[["A",0.75],["B",0.72],["C",0.68]]}
+run 2: ok (81s) {"failures":[],"jobId":"conc-muo4v8j1-4jw1xz","durationMs":53912,"confidences":[["A",0.85],["B",0.72],["C",0.85]]}
+run 3: FAIL (626s) {"failures":[["A",1,"Timeout","O turno excedeu 600000 ms e foi interrompido"]],"error":"Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ [\n+   {\n+     errorClass: 'recoverable',\n+     errorType: 'Timeout',\n+     label: 'A',\n+     message: 'O turno excedeu 600000 ms e foi interrompido',\n+     rawText: null,\n+     role: 'member',\n+     round: 1\n+   }\n+ ]\n- []\n"}
+```
+
+### review cruzado (3 membros)
+
+```
+run 1: ok (138s) {"failures":[],"jobId":"conc-muo5b6lk-psiopo","verdict":"needs-attention","clusters":[["critical","2/3","src/stats.js",9,"Uso de eval permite execução arbitrária de código"],["critical","1/3","src/stats.js",12,"eval() com entrada não confiável permite RCE"],["high","3/3","src/stats.js",2,"Erro off-by-one no loop da função average"],["medium","2/3","src/stats.js",6,"Divisão por zero ao receber array vazio"]]}
+run 2: ok (83s) {"failures":[],"jobId":"conc-muo5dfcv-rxabua","verdict":"needs-attention","clusters":[["critical","2/3","src/stats.js",8,"Uso de eval para executar fórmula arbitrária do usuário"],["critical","1/3","src/stats.js",9,"Execução de código arbitrário via eval em runUserFormula"],["high","2/3","src/stats.js",3,"Off-by-one causa corrupção silenciosa de resultado ([redacted])"],["high","1/3","src/stats.js",3,"Off-by-one no laço de average acessa índice fora do array"],["medium","2/3","src/stats.js",2,"Divisão por zero se average receber array vazio"],["medium","1/3","src/stats.js",2,"Sem tratamento de entrada nula/vazia em average"],["low","1/3","src/stats.js",1,"Ausência de testes para o comportamento introduzido"]]}
+run 3: ok (67s) {"failures":[],"jobId":"conc-muo5f7ft-6x7rln","verdict":"needs-attention","clusters":[["critical","3/3","src/stats.js",9,"Injeção de código via eval() em entrada de usuário"],["high","1/3","src/stats.js",2,"Loop com condição de limite incorreta causa [redacted]"],["high","1/3","src/stats.js",3,"Erro off-by-one causa [redacted] em average()"],["high","1/3","src/stats.js",2,"Erro de limite no laço soma elemento undefined e retorna [redacted]"]]}
+```
+````
 
 ## 5. Síntese pelo Claude (juiz Claude, ao vivo)
 
-- Job: `conc-…`
-- Síntese produzida seguindo a skill `opc-conclave` (colar aqui):
+- Job: `conc-muo4p5tz-q27q80` (opinion, 3 membros, 0 falhas); pacote lido de `synthesisInput`.
+- Síntese produzida seguindo a skill `opc-conclave`:
 
 ```
-(síntese)
+## Conclave: JSON ou TOML para a config de um CLI Node.js sem dependências
+
+### Consenso
+- A, B e C: JSON. JSON.parse/JSON.stringify são nativos e cumprem "zero dependências" sem custo;
+  TOML exigiria um parser próprio ou vendorizado, desproporcional para um CLI pequeno.
+- A, B e C: a falta de comentários é o custo real do JSON, compensável com documentação,
+  arquivo de exemplo ou uma chave `_comment`.
+
+### Divergências
+- Peso da edição manual: A e B a consideram tolerável numa config curta; C ressalta que o custo
+  cresce com o tamanho da config e é o gatilho para reavaliar.
+- Condição de mudança: A e C aceitariam TOML com um parser pequeno vendorizado no repositório;
+  B só com necessidade documentada de comentários ou aninhamento acima de 3 níveis.
+
+### Posição ponderada (confiança: 0.85)
+JSON. Nenhuma resposta citou evidência verificável (listas `evidence` vazias), então o peso
+vem da qualidade do argumento: C traz os pontos mais fortes (escrita programática com
+JSON.stringify não destrói anotações do usuário; um parser JSONC caseiro reintroduz a
+complexidade evitada).
+
+### Recomendação
+Use JSON com JSON.parse/JSON.stringify, mensagens de erro claras quando o usuário tentar
+comentar o arquivo e um exemplo de config documentado. Reavalie TOML só se a config crescer e
+virar muito editada à mão, vendorizando um parser pequeno e conforme a especificação.
+
+### Relatórios minoritários
+- C: evitar a dependência pode empurrar para um parser JSONC caseiro; JSON não distingue
+  "ausente" de `null`, o que complica a mescla de defaults.
+
+### Composição
+A = omniroute-personal/cmd/moonshotai/Kimi-K2.6 · B = omniroute-personal/cmd/Qwen/Qwen3.7-Flash ·
+C = omniroute-personal/cmd/deepseek/deepseek-v4-flash
 ```
 
-- Conferência: composição consultada só no fim; nenhuma menção de marca no raciocínio.
+- Conferência: a composição foi lida só depois da síntese escrita; o raciocínio usou apenas os rótulos.
 
 ## 6. Contrato (`tests/live/contract.mjs`)
 
+Resultado: **PASSOU** — `OPC_LIVE=1 node tests/live/contract.mjs`:
+
 ```
-(saída; divergências e ajuste do fake, se houver)
+# Contrato OpenCode 1.18.32 × fake
+
+Sem divergências nos campos usados.
 ```
+
+A F4c não passou a usar endpoints novos (sessões, prompt, mensagens e abort já vinham da F2/F4a); nenhum ajuste no fake.
 
 ## 7. Documentação
 
 | Item | Resultado |
 |---|---|
-| `docs/conclave.md` com exemplos executados (sem marcadores `F4C-LIVE-OUTPUT`) | |
-| `docs/commands.md` (seção `/opc:conclave`) | |
-| `docs/configuration.md` (seção `conclave`) | |
-| `node scripts/scan-secrets.mjs docs/` sem achados | |
-| `CHANGELOG.md` atualizado | |
+| `docs/conclave.md` com exemplos executados (sem marcadores `F4C-LIVE-OUTPUT`) | PASSOU — três saídas reais (opinion, debate com juiz modelo, review), `grep -c F4C-LIVE-OUTPUT` = 0 |
+| `docs/commands.md` (seção `/opc:conclave`) | PASSOU |
+| `docs/configuration.md` (seção `conclave`, incluindo `structuredOutput`) | PASSOU |
+| `node scripts/scan-secrets.mjs docs/` sem achados | PASSOU — "scan-secrets: nenhum achado." |
+| `CHANGELOG.md` atualizado | PASSOU |
+
+Sem id pessoal de provider nem caminho pessoal nos arquivos versionados (`grep` por esses padrões: 0 ocorrências).
 
 ## 8. Desvios e decisões
 
 | Desvio | Motivo | Muda interface? |
 |---|---|---|
-| | | |
+| Ajustes pós-F4b (itens 1–12) | Interfaces reais da F4b (assinatura de `runWorker`, `refreshGroup`, cancelamento diferido) e gateway sem `json_schema` | Sim, `conclave.structuredOutput` (novo, `text` padrão) |
+| Falhas de persistência do coordenador → `coordinator_error` | Revisão final: gravação falha não é falha de membro | Não (novo `errorCode` de grupo) |
+| Caminhos `file` citados por modelos anonimizados por componente | Revisão final: nomes vazavam por caminhos | Não |
+| Texto livre do juiz (inclusive mensagem de erro) em cerca | Revisão final: texto podia forjar `## Composição` | Não |
+| Um só contrato de saída por prompt; no review `tool`, instrução explícita que substitui a cerca `json` da F2b | Revisões: instruções conflitantes | Não |
+| Nomes conhecidos: do catálogo só identificadores específicos; famílias do catálogo só da lista curada; nome de exibição só como frase; números, versões e tokens de código fora | Ao vivo: catálogo de 8501 modelos redigia prosa comum; provider `nan` redigia `NaN` | Não |
+| Decisão: palavras do id de provider só contam quando específicas; o id completo sai sempre | Re-revisão: `omniroute-personal` redigia "personal"; o id nomeia a rota, não o modelo | Não |
+| Respostas no formato do schema aceitas quando validam (`properties`; `$schema`/`$id`/`title`/`type`/`description` ao lado dos valores) | Ao vivo: um membro perdido por execução | Não |
+| Testes ao vivo com rotas por ambiente | `opencode-go/*` responde 402 no gateway | Não |
 
 ## 9. Pendências para a F5
 
-- 
-````
-````markdown
----
-description: Consulta vários modelos do OpenCode em paralelo (opinião, debate ou review cruzado) e sintetiza consenso, divergências e recomendação
-argument-hint: '<pergunta> [--models a,b,c | --pool nome] [--mode opinion|review|debate] [--rounds 1-3] [--judge claude|<modelo>] [--quorum N] [--allow-judge-member] [--background]'
-allowed-tools: Bash(opc:*), Bash(git:*), AskUserQuestion
----
-
-Rode um conclave do opc: vários modelos respondem à mesma pergunta sem se ver, podem debater
-anonimamente e, no fim, alguém sintetiza (um modelo juiz ou você, Claude).
-
-Argumentos do usuário: `$ARGUMENTS`
-
-## Passos
-
-1. Se `$ARGUMENTS` estiver vazio, pergunte ao usuário (AskUserQuestion) qual é a pergunta e
-   pare até ter a resposta. No `--mode review` a pergunta é opcional (vira o foco do review).
-2. No `--mode review` sem `--background`: meça o tamanho do diff com
-   `git status --short --untracked-files=all` e `git diff --shortstat`. Se o diff for grande
-   (mais de ~20 arquivos ou ~1500 linhas), pergunte uma vez (AskUserQuestion) entre
-   "Esperar" e "Background", recomendando Background.
-3. Execute exatamente um comando, passando os argumentos por stdin (nunca interpole
-   `$ARGUMENTS` na linha de comando):
-
-```bash
-opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
-$ARGUMENTS
-OPC_ARGS_5f1d0c7a_EOF
-```
-
-   O texto do heredoc chega verbatim (aspas, crases e apóstrofos não são interpretados); as
-   flags conhecidas são reconhecidas como palavras inteiras em qualquer posição. Se o usuário
-   escolheu Background no passo 2, use `opc conclave --background --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'`
-   (a flag fica na linha de comando, antes de `--raw-args-stdin`).
-4. Leia a saída inteira:
-   - **Background:** mostre o id do job e as linhas `/opc:status <id>` e `/opc:result <id>`.
-     Pare.
-   - **Exit 2 ou 4:** mostre a mensagem de erro como veio (composição, quorum, política). Não
-     tente de novo com outros modelos por conta própria.
-   - **Exit 7 (quorum não atingido):** mostre o cabeçalho, as falhas e as respostas parciais.
-     Não sintetize como se houvesse consenso.
-   - **Sucesso com juiz Claude** (a seção "Síntese" pede a skill `opc-conclave`): use a skill
-     `opc-conclave` e sintetize a partir das respostas por rótulo. Se precisar de detalhes que
-     não estão no texto, rode `opc result <id> --json` (saída `{ group, members }`; o pacote
-     está em `group.result`).
-   - **Sucesso com juiz modelo:** mostre a síntese do juiz e, com a skill `opc-conclave`,
-     confira se ela é fiel às respostas; aponte divergências entre o juiz e os membros.
-   - **Modo review:** apresente o veredito, os clusters por severidade com a concordância
-     `k/N` e as recomendações. Não corrija nada: pergunte ao usuário o que fazer.
-5. A composição (rótulo → modelo) só aparece no fim da sua resposta, copiada da tabela
-   "Composição".
-````
-````markdown
----
-name: opc-conclave
-description: Como sintetizar o resultado de um conclave do opc (/opc:conclave) — consenso, divergências, posição ponderada pela confiança e recomendação — sem viés de marca de modelo. Use sempre que a saída de `opc conclave` ou `opc result <conc-id>` pedir síntese pelo Claude, ou para conferir a síntese de um juiz modelo.
----
-
-# Síntese de conclave
-
-Um conclave junta respostas independentes de vários modelos, identificadas só por rótulos
-(`A`, `B`, `C`…). Sua tarefa é transformar essas respostas numa síntese útil, fiel ao que foi
-dito e imune à marca de quem disse.
-
-## Regra de ouro: rótulos antes de marcas
-
-- Leia e pese as respostas **somente pelos rótulos**. A tabela "Composição" (rótulo → modelo)
-  fica no fim da saída de propósito: não a consulte antes de terminar a síntese.
-- Nunca dê mais ou menos peso a uma resposta por causa do modelo, do vendor ou do provider que
-  a produziu, nem por reputação ou tamanho do modelo. O peso vem de argumento, evidência e
-  confiança declarada.
-- Não especule sobre qual modelo escreveu qual resposta e não comente estilo de marca
-  ("isso parece coisa do modelo X").
-- Trechos `[redacted]` são nomes removidos pelo opc. Não tente reconstruí-los.
-- Na resposta final, a composição aparece só numa seção "Composição" no fim, copiada da saída,
-  sem adjetivos sobre os modelos.
-
-## Como sintetizar
-
-1. **Quorum e falhas primeiro.** Diga quantas respostas válidas houve, de quantos membros, e
-   liste as falhas (rótulo, rodada, tipo). Se o status for `falhou` (quorum não atingido), não
-   apresente consenso: mostre as respostas parciais como parciais.
-2. **Consenso.** Afirmações sustentadas pela maioria dos membros válidos, em linguagem
-   neutra. Diga "A, B e C concordam que…". Concordância genérica ("depende") não conta como
-   consenso.
-3. **Divergências.** Para cada ponto em disputa: o tópico, cada posição e os rótulos que a
-   sustentam. Prefira poucos tópicos reais a muitos tópicos cosméticos.
-4. **Posição ponderada.** Pondere cada posição pela confiança declarada (`confidence`, 0 a 1)
-   **e** pela qualidade da evidência:
-   - evidência com `arquivo:linha` que você conferiu vale mais que afirmação solta; quando
-     for barato, leia o arquivo citado para confirmar;
-   - evidência inventada ou errada derruba o peso daquela resposta, e isso deve ser dito;
-   - uma resposta bem fundamentada pode vencer várias sem fundamento: diga quando isso
-     acontecer, em vez de contar votos.
-5. **Confiança da síntese.** Dê a sua confiança (baixa/média/alta, ou um número de 0 a 1) e o
-   motivo: dispersão das posições, qualidade da evidência, falhas de membros.
-6. **Recomendação.** O que o usuário deve fazer agora, concreto e acionável. Se a resposta
-   honesta for "precisa de mais informação", diga qual informação.
-7. **Relatórios minoritários.** Posições que perderam mas são bem argumentadas e mudariam a
-   decisão se um fato se confirmar (use `would_change_mind_if` dos membros).
-
-## Debate (rodadas 2 e 3)
-
-- Use as respostas da **última rodada** como posição final de cada membro.
-- `changed: true` indica que o membro mudou de posição. Diga quem mudou e por qual argumento
-  (veja as `critiques` dirigidas a ele). Mudança por bom argumento reforça a posição de
-  destino; mudança sem motivo claro, não.
-
-## Juiz modelo
-
-Quando a síntese veio de um juiz modelo, confira-a contra as respostas brutas: consenso que
-não existe, divergência omitida, posição ponderada sem base ou minoria importante esquecida.
-Apresente a síntese do juiz com as correções apontadas. Se o juiz falhou, faça a síntese você
-mesmo a partir das respostas.
-
-## Modo review
-
-- Apresente o veredito do conclave e os motivos (cluster severo com concordância ≥ 2, ou
-  maioria de `needs-attention`).
-- Liste os clusters por severidade com `k/N` (N = membros válidos) e `arquivo:linhas`.
-  Concordância alta aumenta a prioridade; um achado `1/N` pode ser real, então verifique o
-  código antes de descartá-lo.
-- Achados sem arquivo aparecem isolados; trate-os como observações gerais.
-- **Não corrija nada.** Pergunte ao usuário quais achados tratar.
-
-## Formato da resposta
-
-```
-## Conclave: <pergunta resumida>
-Quorum: <válidos>/<membros> · Rodadas: <n> · Falhas: <lista ou "nenhuma">
-
-### Consenso
-### Divergências
-### Posição ponderada (confiança: …)
-### Recomendação
-### Relatórios minoritários
-### Composição
-| Rótulo | Modelo |
-```
-````
-````markdown
-# Conclave
-
-O conclave consulta **vários modelos ao mesmo tempo** sobre a mesma pergunta e entrega uma
-síntese: consenso, divergências, posição ponderada pela confiança e recomendação. Os modelos
-respondem sem se ver, podem debater de forma anônima e são avaliados só por rótulos (`A`, `B`,
-`C`…). Quem sintetiza é um modelo juiz ou o próprio Claude.
-
-- Comando no Claude: `/opc:conclave`
-- Terminal: `opc conclave`
-- Fase de entrega: F4c
-
-## Início rápido
-
-```bash
-# Opinião de três modelos (pool padrão da config), síntese pelo Claude
-opc conclave "Devemos guardar a config do CLI em JSON ou TOML?"
-
-# Modelos explícitos e debate de 2 rodadas
-opc conclave --models fast,strong,k3 --mode debate "Vale a pena um write-ahead log aqui?"
-
-# Review cruzado do diff atual, com juiz modelo
-opc conclave --mode review --judge strong "Foque em segurança"
-```
-
-No Claude, use `/opc:conclave <pergunta> [flags]`. O comando roda o conclave e, quando o juiz é
-o Claude, aplica a skill `opc-conclave` para sintetizar.
-
-## Modos
-
-| Modo | O que faz | Rodadas |
-|---|---|---|
-| `opinion` (padrão) | Cada membro responde à pergunta, às cegas | `--rounds` ou `conclave.rounds` (padrão 1); com 2 ou 3, roda também as rodadas de debate |
-| `debate` | Rodada 1 às cegas, depois rodadas em que cada membro vê as respostas anônimas dos outros | padrão 2; aceita 2 ou 3; `--rounds 1` é erro |
-| `review` | Cada membro faz o review do mesmo diff; os achados são agrupados e contados | sempre 1; `--rounds` diferente de 1 é erro |
-
-`--rounds` aceita de 1 a 3. Acima disso, erro de uso (exit 2).
-
-## Composição
-
-- **Membros:** `--models a,b,c` (aliases, IDs completos ou nomes curtos no `defaultProvider`)
-  **ou** `--pool nome` (lista em `conclave.pools`). Sem nenhum dos dois, vale
-  `conclave.defaultPool`. As duas flags juntas são erro de uso.
-- **Política:** cada membro passa pela política (provider e modelo). Entradas negadas,
-  inexistentes, de provider desconectado ou duplicadas (o mesmo modelo por alias e por ID) são
-  **puladas com aviso** no stderr (`[opc] conclave: skipping ...`).
-- **Mínimo de 2 membros válidos.** Com menos, erro de uso (exit 2) listando cada entrada e o
-  motivo. Se **todas** as entradas foram negadas pela política, o erro é de política (exit 4).
-- **Rótulos:** os membros são embaralhados e recebem `A`, `B`, `C`… O mapeamento rótulo →
-  modelo fica só no job e aparece no **fim** da saída, na seção "Composição".
-- **Quorum:** `--quorum N` ou `conclave.quorum` (padrão 2). Precisa ficar entre 2 e o número de
-  membros válidos; fora disso, erro de uso.
-
-## Rodadas e anonimização
-
-1. **Rodada 1 (cega):** mesma pergunta para todos, cada membro na sua sessão, em paralelo
-   (até `jobs.maxParallel`). Perfil `read-only`: o membro pode ler, buscar e listar arquivos
-   do workspace, mas não edita nem roda comandos. Resposta no schema `conclave-member`:
-   `position`, `confidence` (0 a 1), `key_points`, `risks`, `evidence`
-   (`file`, `line_start`, `line_end`, `note`) e `would_change_mind_if`.
-2. **Rodadas 2 e 3:** cada membro continua **na mesma sessão** e recebe as respostas da rodada
-   anterior dos outros membros, por rótulo. Devolve o mesmo schema mais `critiques`
-   (`target`, `point`, com `target` restrito aos rótulos dos colegas) e `changed` (se mudou de
-   posição).
-3. **Anonimização:** antes de repassar respostas a outro membro ou ao juiz, o opc remove do
-   texto os nomes conhecidos e põe `[redacted]` no lugar. A lista vem do catálogo `/provider`:
-   - IDs de provider (`omniroute-personal`) e as palavras que os compõem;
-   - IDs de modelo completos e parciais (`opencode-go/kimi-k3`, `kimi-k3`, `opencode-go`);
-   - nomes de exibição dos modelos (`Kimi K3`);
-   - a família de cada modelo (`kimi`, `qwen`, `deepseek`), inclusive com sufixos de versão
-     (`Qwen3.8`, `KIMI-k3`);
-   - os vendors conhecidos dessas famílias (por exemplo `moonshot`, `alibaba`, `openai`).
-
-   Palavras genéricas que aparecem em IDs (`flash`, `max`, `pro`, `mini`, `code`…) **não** são
-   removidas.
-
-**Limites da anonimização** (documentados de propósito):
-
-- A **pergunta do usuário** vai igual para todos. Se você citar um modelo na pergunta, ele
-  aparece.
-- O estilo de escrita de um modelo não é disfarçado.
-- Uma palavra comum que também seja nome de provider conectado (ex.: um provider chamado
-  `opencode`) é removida das respostas repassadas.
-
-## Quorum e falhas
-
-- Um membro é **descartado da rodada** e listado em "Falhas" quando:
-  - o turno falha (erro do provider, servidor, cancelamento do membro);
-  - estoura `conclave.memberTimeoutSec` (o opc aborta a sessão; tipo `Timeout`);
-  - devolve `StructuredOutputError` (o texto bruto fica em `rawText`, até 4 KB);
-  - devolve saída estruturada fora do schema (`InvalidStructuredOutput`) ou nenhuma
-    (`MissingStructuredOutput`).
-- Membro descartado **não volta** nas rodadas seguintes.
-- Membros não têm fallback de modelo: cada membro é um modelo específico.
-- Se as respostas válidas de uma rodada ficarem **abaixo do quorum**, o grupo termina `failed`
-  (exit 7), sem juiz, entregando as respostas parciais e as falhas.
-
-## Síntese
-
-| Juiz | Como funciona |
-|---|---|
-| `claude` (padrão) | O pacote traz `synthesisInput` (respostas anonimizadas, por rótulo). A skill `opc-conclave` orienta o Claude a sintetizar consenso, divergências, posição ponderada, confiança, recomendação e relatórios minoritários, sem viés de marca |
-| `<modelo>` | Uma sessão `read-only` com o prompt `conclave-judge.md` e o schema `conclave-synthesis`. O juiz vê só rótulos |
-
-- Juiz que também é membro exige `--allow-judge-member` (senão, erro de uso).
-- O juiz modelo passa pela política; negado → exit 4.
-- Se o juiz modelo falhar, o conclave continua `completed`, com aviso, e o Claude sintetiza a
-  partir de `synthesisInput`.
-
-Schema `conclave-synthesis`: `consensus[]`, `disagreements[{topic, positions[{members[],
-stance}]}]`, `weighted_position`, `confidence` (0 a 1), `recommendation`,
-`minority_reports[{members[], summary}]`.
-
-## Modo review
-
-- O opc coleta o diff uma vez (mesma regra do `/opc:review`: `--base`, `--scope`, staged,
-  unstaged e untracked; diff grande em partes) e manda o mesmo prompt e o schema
-  `review-output` a todos os membros.
-- A pergunta é opcional e vira o foco do review.
-- **Agrupamento (dedupe):** dois achados entram no mesmo cluster quando:
-  1. estão no **mesmo arquivo** (caminhos normalizados: `./` e `\` não importam);
-  2. as linhas **se sobrepõem ou distam até 3** (um achado sem linhas só se junta a outro sem
-     linhas);
-  3. os títulos têm similaridade (Jaccard de tokens, sem acentos e sem palavras vazias)
-     **≥ 0,3**.
-- **Achados sem arquivo** (vazio, `N/A`, `-`, `none`…) nunca são agrupados: cada um vira um
-  cluster próprio com concordância `1/N`.
-- **Cluster:** severidade máxima, concordância `k/N` (N = membros válidos, inclusive os que não
-  acharam nada), confiança média, rótulos que o encontraram e o título, corpo e recomendação do
-  achado de maior confiança.
-- **Veredito:** `needs-attention` se algum cluster com severidade `high` ou `critical` tiver
-  concordância ≥ 2, **ou** se mais da metade dos membros válidos der `needs-attention`. Senão,
-  `approve`. Um review com `needs-attention` sai com exit 0.
-- O conclave não corrige nada.
-
-## Saída
-
-**Markdown** (padrão):
-
-1. Cabeçalho: status, rodadas concluídas/pedidas, quorum, válidos/membros, duração e id do job.
-2. Falha do grupo (se houver), avisos e tabela de falhas.
-3. Pergunta.
-4. Corpo: respostas da rodada final por rótulo (opinion/debate) ou veredito e clusters
-   (review).
-5. Síntese (juiz modelo) ou a instrução para o Claude sintetizar.
-6. **Composição** (rótulo → modelo), sempre por último.
-
-**`--json`** devolve o pacote completo:
-
-| Campo | Conteúdo |
-|---|---|
-| `jobId`, `schemaVersion`, `kind`, `status`, `failure` | Identificação e resultado (`failure.code`: `QUORUM_NOT_MET` ou `REVIEW_CONTEXT_FAILED`) |
-| `mode`, `question`, `rounds{requested, completed}`, `quorum` | Parâmetros efetivos |
-| `startedAt`, `endedAt`, `durationMs` | Tempo |
-| `warnings[]`, `failures[{label, round, role, errorType, errorClass, message, rawText}]` | Avisos e membros descartados |
-| `roundsData[{round, responses[{label, response}], failures[]}]` | Todas as rodadas, respostas originais (não anonimizadas) |
-| `final{round, responses[]}` | Respostas válidas da última rodada |
-| `review` | Só no modo review: `validMembers`, `memberVerdicts`, `verdict`, `reasons[]`, `clusters[]` |
-| `judge` | `{type:"claude", status:"pending"}` ou `{type:"model", model, status, synthesis \| error}`; `status:"skipped"` quando o grupo falhou |
-| `synthesisInput` | Pacote anonimizado para a síntese pelo Claude (`null` se o grupo falhou) |
-| `composition[{label, model}]` | Mapeamento rótulo → modelo (último campo) |
-
-## Jobs
-
-- O conclave é um **job-grupo** (`conc-…`) com um job por membro (`role: member:A`…) e, com
-  juiz modelo, um job `judge`. Um único worker coordena tudo, com uma conexão SSE
-  compartilhada.
-- `--background` devolve o id na hora; acompanhe com `/opc:status <id>` e veja com
-  `/opc:result <id>` (`--json` devolve `{ group, members }`, com o pacote em `group.result`).
-- `/opc:cancel <id>` cancela o grupo; cancelar o job de um membro aborta só a sessão dele (o
-  membro vira falha e o quorum decide).
-- Limites: cada conclave ocupa **1** vaga em `jobs.maxActive` (só o grupo conta; membros e juiz
-  não); os turnos
-  simultâneos respeitam `jobs.maxParallel`.
-
-## Configuração
-
-```json
-{
-  "conclave": {
-    "pools": { "default": ["fast", "strong", "k3"], "duo": ["fast", "strong"] },
-    "defaultPool": "default",
-    "judge": "claude",
-    "rounds": 1,
-    "quorum": 2,
-    "memberTimeoutSec": 900
-  }
-}
-```
-
-Detalhes de cada chave em [configuration.md](configuration.md#conclave). O `.opc.json` do
-workspace pode sobrescrever essas preferências, mas todo modelo continua passando pela política.
-
-## Custos e tempo
-
-Um conclave custa aproximadamente `membros × rodadas` turnos, mais um turno de juiz modelo.
-Controles: `--rounds` (máximo 3), `--quorum`, `jobs.maxParallel`, `jobs.maxActive` e
-`conclave.memberTimeoutSec`.
-
-## Exit codes
-
-| Código | Quando |
-|---|---|
-| 0 | Conclave concluído (inclusive review com `needs-attention` e juiz modelo que falhou) |
-| 2 | Composição inválida (menos de 2 membros, quorum, rodadas, modo, flags conflitantes, juiz membro sem `--allow-judge-member`) |
-| 4 | Todos os membros negados pela política, juiz negado, ou execução de dentro do servidor OpenCode (`OPC_INSIDE_SERVER=1`: delegação não recursa) |
-| 5 | Servidor OpenCode indisponível |
-| 6 | `--wait-timeout` estourou (o conclave continua em background) |
-| 7 | Quorum não atingido ou falha ao coletar o diff |
-| 130 | Conclave cancelado |
-
-## Exemplos executados
-
-Saídas reais do portão da F4c (redigidas: caminhos pessoais trocados por `~`).
-
-### Opinião com três modelos
-
-```bash
-opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max,omniroute-personal/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
-```
-
-<!-- F4C-LIVE-OUTPUT: opinion -->
-
-### Debate de duas rodadas com juiz modelo
-
-```bash
-opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max --mode debate --rounds 2 --judge omniroute-personal/opencode-go/kimi-k3 "Para um CLI Node.js sem dependências, a config do usuário deve ficar em JSON ou TOML?"
-```
-
-<!-- F4C-LIVE-OUTPUT: debate -->
-
-### Review cruzado
-
-```bash
-opc conclave --models omniroute-personal/opencode-go/deepseek-v4.1-flash,omniroute-personal/opencode-go/qwen3.8-max,omniroute-personal/opencode-go/kimi-k3 --mode review "Foque em correção e segurança"
-```
-
-<!-- F4C-LIVE-OUTPUT: review -->
-
-## Solução de problemas
-
-| Sintoma | Causa provável | O que fazer |
-|---|---|---|
-| `a conclave needs at least 2 valid members` | Entradas negadas, inexistentes ou duplicadas | Leia os avisos `skipping` no stderr; ajuste `--models` ou a pool |
-| `quorum must be an integer between 2 and N` | `--quorum` (ou `conclave.quorum`) maior que os membros válidos | Diminua o quorum ou acrescente membros |
-| Exit 7 com `QUORUM_NOT_MET` | Membros estouraram o tempo ou falharam no schema | Veja a tabela de falhas; aumente `conclave.memberTimeoutSec` ou troque o modelo |
-| Membro com `InvalidStructuredOutput` | O modelo devolveu JSON fora do schema | Troque o membro; modelos sem suporte a `json_schema` não servem para o conclave |
-| `judge ... failed` nos avisos | O juiz modelo falhou | O Claude sintetiza a partir do pacote; ou rode de novo com outro `--judge` |
-| `[redacted]` em trechos das respostas | Anonimização de nomes de modelo/vendor/provider | Esperado; a composição está no fim da saída |
-````
-````markdown
-## /opc:conclave
-
-Consulta vários modelos em paralelo e sintetiza consenso, divergências e recomendação. Guia
-completo: [conclave.md](conclave.md).
-
-- **Fase:** F4c · **Modelo invoca:** sim · **Terminal:** `opc conclave`
-- **Uso:** `/opc:conclave <pergunta> [--models a,b,c | --pool nome] [--mode opinion|review|debate] [--rounds 1-3] [--judge claude|<modelo>] [--quorum N] [--allow-judge-member] [--background]`
-
-| Flag | Padrão | Descrição |
-|---|---|---|
-| `<pergunta>` | — | Obrigatória em `opinion` e `debate`; no `review`, vira o foco |
-| `--models a,b,c` | — | Membros (aliases, IDs completos ou nomes curtos). Exclusiva com `--pool` |
-| `--pool nome` | `conclave.defaultPool` | Pool definida em `conclave.pools` |
-| `--mode` | `opinion` | `opinion`, `debate` (rodadas ≥ 2) ou `review` (diff atual, 1 rodada) |
-| `--rounds N` | `opinion`: `conclave.rounds`; `debate`: 2 | De 1 a 3 |
-| `--judge` | `conclave.judge` (`claude`) | `claude` ou um modelo (passa pela política) |
-| `--quorum N` | `conclave.quorum` (2) | Respostas válidas mínimas por rodada; entre 2 e o número de membros |
-| `--allow-judge-member` | desligado | Permite que o juiz seja também membro |
-| `--background` | desligado | Devolve o id do job na hora |
-| `--wait-timeout s` | sem limite | Tempo máximo de espera em foreground (exit 6; o job continua) |
-| `--base ref`, `--scope auto\|working-tree\|branch` | `auto` | Só no `--mode review` (mesma regra do `/opc:review`) |
-| `--json` | desligado | Pacote completo em JSON |
-
-**Exit codes:** 0 concluído (inclusive review `needs-attention`) · 2 composição inválida ·
-4 política (ou chamado de dentro do servidor OpenCode) · 5 servidor · 6 `--wait-timeout` · 7 quorum não atingido · 130 cancelado.
-
-**Exemplos:**
-
-```bash
-opc conclave "JSON ou TOML para a config do CLI?"
-opc conclave --models fast,strong,k3 --mode debate --rounds 2 --judge strong "Vale um write-ahead log?"
-opc conclave --mode review --quorum 2 "Foque em segurança"
-opc conclave --pool duo --background "Qual estratégia de cache?"
-```
-
-Saídas reais: seção "Exemplos executados" do [conclave.md](conclave.md#exemplos-executados).
-````
-````markdown
-## conclave
-
-Preferências do `/opc:conclave` ([guia](conclave.md)). Podem ser sobrescritas no `.opc.json`;
-todo modelo citado continua passando pela política (`policy.*`).
-
-| Chave | Tipo | Padrão | Descrição |
-|---|---|---|---|
-| `conclave.pools` | objeto `{nome: [modelos]}` | `{}` | Listas de membros; cada entrada aceita alias, ID completo ou nome curto |
-| `conclave.defaultPool` | string | `"default"` | Pool usada quando não há `--models` nem `--pool` |
-| `conclave.judge` | `"claude"` ou modelo | `"claude"` | Juiz padrão da síntese |
-| `conclave.rounds` | inteiro 1–3 | `1` | Rodadas do modo `opinion`; o `debate` usa o maior entre 2 e este valor |
-| `conclave.quorum` | inteiro ≥ 2 | `2` | Respostas válidas mínimas por rodada (não pode passar do número de membros) |
-| `conclave.memberTimeoutSec` | inteiro | `900` | Tempo máximo de cada turno de membro ou juiz; ao estourar, a sessão é abortada e o membro descartado |
-
-Relacionadas: `jobs.maxParallel` (turnos simultâneos do conclave) e `jobs.maxActive` (cada
-conclave ocupa 1 vaga — só o job-grupo conta).
-
-```bash
-opc config set conclave.judge omniroute-personal/opencode-go/qwen3.8-max
-opc config set conclave.memberTimeoutSec 600 --workspace
-```
+- Agrupamento de achados usa similaridade de título: achados iguais com títulos em idiomas diferentes (`eval` em PT e EN, linhas 9-11 e 10-12) ficam em clusters separados. Candidato a melhoria (normalização por arquivo+linha com peso maior), fora do escopo da F4c.
+- Modelo extra ao vivo (`OPC_LIVE_MODEL_4`): N/A neste gateway.
+- Escrita na colmeia (`myprojects`) da F4c: PENDENTE-COLMEIA.
