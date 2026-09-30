@@ -347,3 +347,50 @@ export function spreadCandidates(candidates, used, rr) {
   }
   return [candidates[index], ...candidates.slice(0, index), ...candidates.slice(index + 1)];
 }
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+// Marks pending subtasks whose dependency failed or was cancelled; repeats until stable.
+export function propagateDependencyFailures(subtasks, states) {
+  const changed = [];
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const s of subtasks) {
+      const st = states.get(s.id);
+      if (st.status !== 'pending') continue;
+      const bad = s.dependsOn.find((d) => ['failed', 'cancelled'].includes(states.get(d)?.status));
+      if (bad === undefined) continue;
+      const dependencyStatus = states.get(bad).status;
+      st.status = 'cancelled';
+      st.errorCode = 'dependency_failed';
+      st.errorMessage = `dependência "${bad}" ${dependencyStatus === 'failed' ? 'falhou' : 'cancelada'}`;
+      changed.push(s.id);
+      progress = true;
+    }
+  }
+  return changed;
+}
+
+// Ready = pending with every dependency completed. Read subtasks fill free slots up to
+// maxParallel; write subtasks never run next to another write subtask.
+export function pickReady(subtasks, states, { maxParallel }) {
+  const running = subtasks.filter((s) => states.get(s.id).status === 'running');
+  let slots = Math.max(0, maxParallel - running.length);
+  let writeBusy = running.some((s) => isWriteKind(s.kind));
+  const picked = [];
+  for (const s of subtasks) {
+    if (slots === 0) break;
+    if (states.get(s.id).status !== 'pending') continue;
+    if (!s.dependsOn.every((d) => states.get(d)?.status === 'completed')) continue;
+    if (isWriteKind(s.kind)) {
+      if (writeBusy) continue;
+      writeBusy = true;
+    }
+    picked.push(s);
+    slots -= 1;
+  }
+  return picked;
+}
