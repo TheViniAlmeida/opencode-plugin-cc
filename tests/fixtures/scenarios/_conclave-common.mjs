@@ -10,7 +10,10 @@ export function textOf(body) {
 
 export function kindOf(body) {
   const prompt = textOf(body);
-  const embeddedTitle = prompt.match(/"title"\s*:\s*"([^"]+)"/)?.[1];
+  // Text mode: the output contract embeds the schema, but peer answers and review findings can
+  // carry their own "title" fields earlier in the prompt, so look for the known schema titles.
+  const embedded = new Set([...prompt.matchAll(/"title"\s*:\s*"(Conclave(?:Synthesis|Debate|Member))"/g)].map((m) => m[1]));
+  const embeddedTitle = ['ConclaveSynthesis', 'ConclaveDebate', 'ConclaveMember'].find((t) => embedded.has(t));
   const title = body?.format?.schema?.title ?? embeddedTitle ?? null;
   if (title === 'ConclaveMember') return 'member';
   if (title === 'ConclaveDebate') return 'debate';

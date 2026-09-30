@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadConclaveAssets, buildMemberSchema, buildDebateSchema, buildSynthesisSchema, validateSchema } from '../../plugins/opc/scripts/lib/conclave.mjs';
+import { loadConclaveAssets, buildMemberSchema, buildDebateSchema, buildSynthesisSchema, validateSchema, clusterFindings } from '../../plugins/opc/scripts/lib/conclave.mjs';
 
 const assets = loadConclaveAssets();
 const SCENARIOS = ['conclave-opinion', 'conclave-debate', 'conclave-member-timeout', 'conclave-member-structured-error', 'conclave-self-identify', 'conclave-review', 'judge-ok'];
@@ -83,6 +83,33 @@ test('review scenario returns the fixture findings exactly in both output modes'
       assert.ok(output.findings.length > 0);
     }
   }
+});
+
+test('review scenario: the judge prompt with findings before the contract is still a judge turn', async () => {
+  const synthesis = buildSynthesisSchema(assets.schemas.synthesis, ['A', 'B']);
+  const answers = '<answer label="A">\n{"verdict":"needs-attention","findings":[{"title":"Division by zero when count is 0"}]}\n</answer>';
+  for (const mode of ['tool', 'text']) {
+    const turn = await emitted('conclave-review', body(MODELS[2], synthesis, `<labels>A, B</labels>\n${answers}`, mode));
+    assert.deepEqual(validateSchema(outputOf(turn, mode), synthesis), [], mode);
+  }
+});
+
+test('review scenario findings overlap as the acceptance tests expect', async () => {
+  const reviewSchema = structuredClone(assets.schemas.review);
+  const byLabel = {};
+  for (const [label, modelID] of [['A', MODELS[0]], ['B', MODELS[1]], ['C', MODELS[2]]]) {
+    byLabel[label] = outputOf(await emitted('conclave-review', body(modelID, reviewSchema, 'diff', 'text')), 'text').findings;
+  }
+  const clusters = clusterFindings(byLabel);
+  const shape = clusters.map((c) => [c.file, c.line_start, c.agreement.text]).sort((x, y) => String(x).localeCompare(String(y)));
+  assert.deepEqual(shape, [
+    ['src/calc.js', 10, '2/3'],
+    ['src/calc.js', 30, '1/3'],
+    ['src/list.js', 40, '1/3'],
+    ['src/list.js', 5, '1/3'],
+    [null, 1, '1/3'],
+    [null, 1, '1/3'],
+  ].sort((x, y) => String(x).localeCompare(String(y))));
 });
 
 test('self-identify scenario really names model, provider and vendor', async () => {
