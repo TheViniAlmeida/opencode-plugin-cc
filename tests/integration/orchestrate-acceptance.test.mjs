@@ -76,7 +76,7 @@ test('F4b: write subtask without --write is rejected', async (t) => {
   assert.equal(code, 7);
   const out = JSON.parse(stdout);
   assert.equal(out.errorCode, 'invalid_plan');
-  assert.match(out.orchestration.planErrors.join('\n'), /subtarefa "w1" tem tipo "task" \(escreve arquivos\), mas a orquestração foi iniciada sem --write/);
+  assert.match(out.orchestration.planErrors.join('\n'), /subtarefa "w1" tem kind "task" \(escreve arquivos\), mas a orquestração foi iniciada sem --write/);
   assert.equal(subtaskTurns(env).length, 0);
 });
 
@@ -89,7 +89,7 @@ test('F4b: write subtasks run in series (non-overlapping windows); reads run in 
   assert.equal(overlaps(w1, w2), false, `write windows overlap: w1=[${w1.start},${w1.end}] w2=[${w2.start},${w2.end}]`);
   assert.equal(overlaps(r1, r2), true, 'read subtasks should overlap');
   const w1Session = sessionPosts(env).find((r) => r.body.title.startsWith('OPC: orch-task: w1'));
-  assert.notDeepEqual(w1Session.body.permission[0], DENY_ALL, 'write subtask uses the write profile');
+  assert.deepEqual(w1Session.body.permission[0], { permission: 'external_directory', pattern: '*', action: 'deny' }, 'write subtask uses the write profile');
 });
 
 test('F4b: dependency results are injected into the dependent prompt', async (t) => {
@@ -124,10 +124,11 @@ test('F4b: models are spread across subtasks', async (t) => {
 });
 
 test('F4b: Claude synthesis returns the structured package without a synthesis session', async (t) => {
-  const { code, stdout, stderr, env } = await orchestrate(t, 'decompose-ok', ['Audit the error handling']);
+  const { code, stdout, stderr, env } = await orchestrate(t, 'decompose-ok', ['--json', 'Audit the error handling']);
   assert.equal(code, 0, stderr);
-  assert.match(stdout, /## Síntese\n\nSíntese a cargo do Claude/);
-  assert.match(stdout, /RESULT\[a\] by /);
+  const out = JSON.parse(stdout);
+  assert.deepEqual(out.orchestration.synthesis, { mode: 'claude', status: 'pending', model: null, text: null, errorMessage: null, attempts: [] });
+  assert.deepEqual(sessionPosts(env).filter((r) => r.body.title.startsWith('OPC: orch-synth: ')), [], 'Claude synthesis creates no OpenCode synthesis session');
   assert.equal(readTurnLog(env).filter((e) => e.role === 'synthesizer').length, 0);
 });
 
@@ -146,6 +147,7 @@ test('F4b: model synthesis runs a read-only session with every result', async (t
   const rendered = await runCli(['result', out.jobId], { env, cwd: ws });
   assert.match(rendered.stdout, /Sintetizador: `omniroute-personal\/opencode-go\/kimi-k3`\n\nSYNTHESIS-OK/);
   assert.match(rendered.stdout, /RESULT\[a\] by /, 'raw results are delivered with the synthesis');
+  assert.match(rendered.stdout, /RESULT\[b\] by /, 'raw results are delivered with the synthesis');
 });
 
 test('F4b: StructuredOutputError in the planner fails the group', async (t) => {
