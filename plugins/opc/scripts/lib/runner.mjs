@@ -199,6 +199,7 @@ export async function runTurn({
   onPermission = async () => {},
   onQuestion = async () => {},
   onRequestResolved = async () => {},
+  isCancelled = () => false,
   signal,
 } = {}) {
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -477,6 +478,8 @@ export async function runTurn({
     try {
       try { await onSession({ sessionID, childSessionIDs: [] }); }
       catch (err) { finish('callback-failed', { detail: err }); }
+      // The owner may receive cancellation while session creation/publication is pending.
+      if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
       if (!settled && !signal?.aborted) {
         await sendPrompt(api, sessionID, buildBody(request, messageID));
         promptAccepted = true;
@@ -508,6 +511,11 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, assistantMessageIDs: [...assistantIDs], childSessionIDs: [...children] };
+    if (outcome.reason === 'cancelled' && !promptAccepted) {
+      // No turn was submitted: cleanup is best-effort and cannot turn cancellation into failure.
+      try { await api.abort(sessionID); } catch { /* The unused session may outlive a disconnected server. */ }
+      return { ...base, ...extractTurn([]), status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
+    }
     const safetyFailure = outcome.reason === 'child-permission-failed' || outcome.reason === 'callback-failed';
     if (safetyFailure) {
       const sessionAborts = [];

@@ -501,3 +501,38 @@ test('C2: failed session persistence aborts before sending the prompt', async ()
   assert.equal(api.calls.some(([name]) => name === 'promptAsync'), false);
   assert.ok(api.calls.some(([name]) => name === 'abort'));
 });
+
+for (const stage of ['createSession', 'onSession']) {
+  for (const abortMode of ['ok', 'server-down']) {
+    test(`F4b fix2: cancellation during ${stage} prevents prompting (${abortMode})`, async () => {
+      const hub = stubHub();
+      const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body) });
+      let entered, release;
+      const started = new Promise((resolve) => { entered = resolve; });
+      const blocked = new Promise((resolve) => { release = resolve; });
+      let cancelled = false;
+      const pause = async () => { entered(); await blocked; };
+      if (stage === 'createSession') {
+        const create = api.createSession;
+        api.createSession = async (body) => { await pause(); return create(body); };
+      }
+      if (abortMode === 'server-down') api.abort = async (id) => {
+        api.calls.push(['abort', id]);
+        throw new ConnectionError('SERVER_DOWN', 'connection refused');
+      };
+      const running = runTurn({ api, hub, request: baseRequest(),
+        isCancelled: () => cancelled, onSession: stage === 'onSession' ? pause : async () => {},
+      });
+      await started;
+      cancelled = true;
+      release();
+      const result = await running;
+      assert.equal(api.calls.some(([name]) => name === 'promptAsync'), false);
+      assert.ok(api.calls.some(([name, id]) => name === 'abort' && id === 'ses_new'));
+      assert.equal(result.status, 'cancelled');
+      assert.equal(result.errorType, 'Cancelled');
+      assert.equal(result.toolsRan, false);
+      assert.deepEqual(hub.tracked, []);
+    });
+  }
+}

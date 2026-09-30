@@ -648,6 +648,11 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     report.status = job.status;
     return { job, report };
   }
+  // Only orchestration's in-process members honor persisted intent before prompting.
+  // Their coordinator must stay alive to abort the new session and record the attempt.
+  if (job.kind === 'orch' && isGroupMember(job) && !job.pid && job.attemptInFlight && !job.sessionID) {
+    return { ok: true, job, report: { ...report, deferred: true, status: job.status } };
+  }
   const client = api === undefined ? existingServerApi(ctx) : api;
   const lastAttempt = job.attempts?.at(-1);
   // attemptInFlight=false + an attempt recorded for the current session means that turn already ended
@@ -827,7 +832,7 @@ export async function cancelGroup(ctx, groupId) {
         appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
         return { id: member.id, ok: false };
       }
-      return { id: member.id, ok: true };
+      return { id: member.id, ok: true, deferred: result.report?.deferred === true };
     } catch (err) {
       const reason = redactText(err?.message ?? String(err));
       appendJobLog(ctx.stateDir, groupId, `[opc] cancel ${member.id} falhou: ${reason}`);
@@ -840,6 +845,10 @@ export async function cancelGroup(ctx, groupId) {
   let ok = failedMembers.length === 0;
   // a member kept running: withdraw the request so the coordinator's final refresh aggregates normally (a retry sets it again)
   if (!ok) await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: null });
+  if (ok && results.some((result) => result.deferred)) {
+    // Do not terminate/freeze the coordinator while it still owes pre-prompt cleanup.
+    return { group: readJob(ctx.stateDir, groupId), cancelledMembers, failedMembers, ok: true, deferred: true };
+  }
   if (ok) {
     const latest = readJob(ctx.stateDir, groupId);
     if (ACTIVE_STATUSES.includes(latest?.status)) {

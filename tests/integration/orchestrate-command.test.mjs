@@ -56,3 +56,35 @@ test('C1: cancel group aborts an in-flight member and returns a cancelled group'
   const result = await runCli(['result', jobId, '--json'], { env, cwd: ws });
   assert.equal(result.code, 130, result.stderr);
 });
+
+test('F4b fix2: cancel group during delayed POST /session prevents the write prompt and exits 130', async (t) => {
+  const { ws, env } = setup(t, 'orchestrate-create-delayed');
+  const started = await runCli(['orchestrate', '--background', '--write', '--json', 'Update a disposable file'], { env, cwd: ws });
+  assert.equal(started.code, 0, started.stderr || started.stdout);
+  const { jobId } = JSON.parse(started.stdout);
+  await waitFor(() => readFakeState(env).delayedCreateStartedAt, { timeoutMs: 20000, message: 'delayed write session creation' });
+  const member = jobsIn(env, ws).find((m) => m.groupId === jobId && m.role === 'worker:1');
+  assert.equal(member.sessionID, null);
+  assert.equal(member.attemptInFlight, true);
+  const cancelled = await runCli(['cancel', jobId, '--json'], { env, cwd: ws });
+  assert.equal(cancelled.code, 0, cancelled.stderr || cancelled.stdout);
+  assert.deepEqual(JSON.parse(cancelled.stdout).failedMembers, []);
+  assert.ok(jobIn(env, ws, jobId).cancelRequestedAt);
+  assert.ok(jobIn(env, ws, member.id).cancelRequestedAt);
+  const finalMember = await waitFor(() => {
+    const value = jobIn(env, ws, member.id);
+    return ['completed', 'failed', 'cancelled'].includes(value.status) && value;
+  }, { timeoutMs: 20000, message: 'delayed member finalization' });
+  assert.equal(finalMember.status, 'cancelled');
+  assert.equal(finalMember.attempts[0].status, 'cancelled');
+  const state = readFakeState(env);
+  assert.ok(state.delayedCreateFinishedAt - state.delayedCreateStartedAt > 2000);
+  const session = Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-task:'));
+  assert.ok(session, 'the delayed session was created');
+  assert.equal(finalMember.sessionID, session.id);
+  assert.equal(state.requests.filter((r) => r.method === 'POST' && r.path === `/session/${session.id}/prompt_async`).length, 0);
+  assert.ok(state.aborts.includes(session.id));
+  await waitFor(() => jobIn(env, ws, jobId).status === 'cancelled', { message: 'cancelled group' });
+  const result = await runCli(['result', jobId, '--json'], { env, cwd: ws });
+  assert.equal(result.code, 130, result.stderr || result.stdout);
+});

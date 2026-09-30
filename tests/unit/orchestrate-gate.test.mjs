@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
-import { createGroup, readJob, listGroupMembers, cancelJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { createGroup, readJob, listGroupMembers, cancelJob, cancelGroup, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { runWorker } from '../../plugins/opc/scripts/commands/orchestrate.mjs';
 import { RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { installSessionApi } from '../fixtures/fake-session-api.mjs';
@@ -72,3 +72,40 @@ test('C1: real worker publishes an active session so cancelJob aborts it and gro
   assert.equal(await worker, 130);
   assert.equal(readJob(ctx.stateDir, group.id).status, 'cancelled');
 });
+
+for (const target of ['group', 'member']) {
+  test(`F4b fix2: real worker honors ${target} cancellation while session creation is blocked`, async (t) => {
+    const { ctx, request, options, fake, api } = fixture(t);
+    const { group } = await createGroup(ctx.stateDir, { kind: 'orch' }, []);
+    let entered, release;
+    const started = new Promise((resolve) => { entered = resolve; });
+    const blocked = new Promise((resolve) => { release = resolve; });
+    const create = api.createSession;
+    let delayedSession;
+    api.createSession = async (body) => {
+      if (body.title.startsWith('OPC: orch-ask: a ')) { entered(); await blocked; delayedSession = await create(body); return delayedSession; }
+      return create(body);
+    };
+    const worker = runWorker(ctx, group, request, options);
+    await started;
+    const member = listGroupMembers(ctx.stateDir, group.id).find((m) => m.role === 'worker:1');
+    assert.equal(member.sessionID, null);
+    assert.equal(member.attemptInFlight, true);
+    let result;
+    try {
+      result = target === 'group' ? await cancelGroup(ctx, group.id) : await cancelJob(ctx, member.id, { api, exitWaitMs: 1 });
+    } finally { release(); }
+    const exitCode = await worker;
+    assert.equal(result.ok, true);
+    assert.equal(target === 'group' ? result.deferred : result.report.deferred, true);
+    assert.equal(fake.state.messages[delayedSession.id].filter((m) => m.info.role === 'user').length, 0);
+    assert.ok(fake.state.aborts.includes(delayedSession.id));
+    const saved = readJob(ctx.stateDir, member.id);
+    assert.equal(saved.status, 'cancelled');
+    assert.equal(saved.attempts[0].status, 'cancelled');
+    assert.equal(saved.attemptInFlight, false);
+    assert.equal(exitCode, target === 'group' ? 130 : 0);
+    assert.equal(readJob(ctx.stateDir, group.id).status, target === 'group' ? 'cancelled' : 'completed');
+    if (target === 'member') assert.equal(listGroupMembers(ctx.stateDir, group.id).find((m) => m.role === 'worker:2').status, 'completed');
+  });
+}
