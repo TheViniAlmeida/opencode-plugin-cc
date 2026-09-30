@@ -18,7 +18,7 @@ const REVIEWS = {
 };
 const CONTEXT = { label: 'working tree diff', summary: '1 file changed', content: 'diff --git a/src/calc.js b/src/calc.js', truncated: false, files: ['src/calc.js'] };
 
-function harness(respond, { judge = { type: 'claude' }, quorum = 2, collectReview = async () => CONTEXT, promptAssets = assets } = {}) {
+function harness(respond, { judge = { type: 'claude' }, quorum = 2, collectReview = async () => CONTEXT, promptAssets = assets, structuredOutput } = {}) {
   const calls = [];
   let collected = 0;
   const deps = {
@@ -29,7 +29,7 @@ function harness(respond, { judge = { type: 'claude' }, quorum = 2, collectRevie
     turn: async (spec) => { calls.push(spec); return respond(spec); },
   };
   const flags = { mode: 'review', rounds: 1, quorum, members: MEMBERS, judge, maxParallel: 4, warnings: [] };
-  return { calls, deps, collected: () => collected, run: (q = '') => runConclave({ ctx: { config: {} }, question: q, flags, deps }) };
+  return { calls, deps, collected: () => collected, run: (q = '') => runConclave({ ctx: { config: structuredOutput ? { conclave: { structuredOutput } } : {} }, question: q, flags, deps }) };
 }
 
 test('review mode collects the diff once and sends the same review prompt and schema to every member', async () => {
@@ -46,6 +46,22 @@ test('review mode collects the diff once and sends the same review prompt and sc
   assert.match(prompt, /The complete diff is included above\./);
   assert.doesNotMatch(prompt, /<user_focus>/);
   assert.ok(h.calls.every((c) => c.schema.properties.findings && c.schema.$schema === undefined));
+});
+
+test('review prompts include the text structured output contract and review schema', async () => {
+  const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`));
+  await h.run();
+  const [prompt] = new Set(h.calls.map((c) => c.prompt));
+  assert.match(prompt, /Return only one JSON object inside a single ```json fence, with no text outside it\./);
+  assert.match(prompt, /Follow this JSON Schema:/);
+  assert.match(prompt, /"findings"/);
+});
+
+test('review prompts include the tool structured output contract', async () => {
+  const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`), { structuredOutput: 'tool' });
+  await h.run();
+  const [prompt] = new Set(h.calls.map((c) => c.prompt));
+  assert.match(prompt, /Return your answer only through the structured output\./);
 });
 
 test('with the real F2b review prompt (no {{USER_FOCUS}}) the question still reaches the members as <user_focus>', async () => {

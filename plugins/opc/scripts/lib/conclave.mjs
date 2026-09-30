@@ -797,6 +797,7 @@ async function runReview(run) {
   // focus, A19) is appended instead of silently dropped.
   const focus = run.question.trim();
   if (focus && !assets.prompts.review.includes('{{USER_FOCUS}}')) prompt = `${prompt}\n\n<user_focus>\n${focus}\n</user_focus>`;
+  prompt = `${prompt}\n\n${outputContract(run.structuredOutput, schema)}`;
   emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
   const outcomes = await mapLimit(flags.members, run.maxParallel, async (member) => {
     emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
