@@ -21,7 +21,7 @@ Conferidos contra o código da F0–F4b mergeado na `main`. Onde este plano dive
 1. **Assinatura do worker.** O despacho real é `mod.runWorker(ctx, job, request, options = {})`: o `task-worker` consome a entrada privada (`consumeInput`) e passa o pedido como 3º argumento. O registro do job **não** tem o `request` bruto — `safeJob` só guarda uma lista fechada de metadados (`kind`, `model`, `title`…). Onde o plano usa `job.request` (Tarefa 11, `runWorker(ctx, job)`), use o parâmetro `request`. Precedente: `commands/orchestrate.mjs` (`runWorker(ctx, job, request, options)` com `options.openApiImpl`/`options.discoveryLoader` injetáveis para teste sem socket). Consequência: `status/result --json` **não** mostram `request.members`/`request.judge`; a composição que o usuário vê vem do pacote (`group.result.composition`) e dos membros (`role`, `model`). Nenhum teste pode ler `group.request.members`.
 2. **Saída estruturada em modo texto (padrão).** No gateway real, `format: {type:'json_schema'}` falha com `StructuredOutputError` ("Model did not produce structured output") — foi o que derrubou o planner da F4b ao vivo. Acrescente `conclave.structuredOutput` (`text` padrão | `tool`) ao `DEFAULT_CONFIG` e ao `CONFIG_SCHEMA` (mesmo formato de `orchestrate.structuredOutput`), valendo para membros, debate, juiz e review do conclave.
    - `tool`: `format: {type:'json_schema', schema}` como no plano.
-   - `text`: `format` omitido; o prompt ganha um bloco de contrato de saída ("Retorne apenas um objeto JSON em uma única cerca ```json …" + o schema da rodada serializado, incluindo `title` e o `enum` de rótulos) — os templates `conclave-*.md` recebem `{{OUTPUT_CONTRACT}}`; no review, o bloco é anexado ao prompt da F2b. O turno passa `textJson: (v) => isPlainObject(v) ? null : 'resposta deve ser um objeto JSON'` (o runner extrai com `extractTextJson` de `lib/text-json.mjs`). O validador aceita **qualquer objeto** de propósito: quem classifica é o `validateSchema` local, para que JSON fora do schema continue virando `InvalidStructuredOutput` (Review Focus 4).
+   - `text`: `format` omitido; o prompt ganha um bloco de contrato de saída (em inglês, como todo prompt de modelo: "Return only one JSON object inside a single ```json fence, with no text outside it. Follow this JSON Schema:" + o schema da rodada serializado, incluindo `title` e o `enum` de rótulos; no modo `tool`: "Return your answer only through the structured output.") — os templates `conclave-*.md` recebem `{{OUTPUT_CONTRACT}}` e não trazem frase fixa de contrato (só o bloco decide texto ou ferramenta); no review, o bloco é anexado ao prompt da F2b. O turno passa `textJson: (v) => isPlainObject(v) ? null : 'resposta deve ser um objeto JSON'` (o runner extrai com `extractTextJson` de `lib/text-json.mjs`). O validador aceita **qualquer objeto** de propósito: quem classifica é o `validateSchema` local, para que JSON fora do schema continue virando `InvalidStructuredOutput` (Review Focus 4).
    - Em `text`, texto sem JSON termina `completed` com `structured` nulo → `MissingStructuredOutput` (com `rawText`); `StructuredOutputError` só existe em `tool`. Testes que esperam `StructuredOutputError` rodam com `conclave.structuredOutput: 'tool'`; cada um ganha um gêmeo em `text` esperando `MissingStructuredOutput`.
    - Fake: `kindOf(body)` em `_conclave-common.mjs` usa `body.format?.schema?.title` e, sem `format`, o `"title"` do schema embutido no texto do prompt; as respostas do fake saem como `structured` em `tool` e como cerca ```json em `text`. Integração roda no padrão (`text`) e mantém ao menos um aceite completo em `tool`.
 3. **Turno do conclave (`runTurn`, A22).** Leia `runTurn` antes (assinatura real: `{ api, hub, request, onProgress, onSession, onPermission, onQuestion, onRequestResolved, isCancelled, signal }`; `request.messageID` é opcional — o runner usa `request.messageID ?? newMessageId()`). Obrigatório:
@@ -990,7 +990,6 @@ Answer the question below on its merits. You work in read-only mode: you may rea
 - evidence: references you actually checked, as file, line_start, line_end and note. Use null lines when the evidence is a whole file. Leave the list empty rather than inventing references.
 - would_change_mind_if: the specific fact or argument that would make you switch.
 - Do not say who or what you are: no model, vendor, product or provider names. Refer to yourself only as member {{SELF_LABEL}}.
-- Reply only through the structured output.
 </rules>
 ```
 
@@ -1024,7 +1023,6 @@ The other members answered the same question in the previous round. They appear 
 - Weigh arguments and evidence, never the presumed identity of a peer.
 - Read-only: you may read files to verify a peer's evidence; do not edit files or run commands.
 - Do not mention model, vendor, product or provider names.
-- Reply only through the structured output.
 </rules>
 ```
 
@@ -1064,7 +1062,6 @@ Write the synthesis:
 - Do not count votes blindly: one well-evidenced answer can outweigh several unsupported ones; say so when it happens.
 - You may read files to check cited evidence; do not edit files or run commands.
 - Refer to members only by label. Do not guess or mention which model, vendor or provider wrote an answer.
-- Reply only through the structured output.
 </rules>
 ```
 
