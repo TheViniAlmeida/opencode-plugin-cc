@@ -23,8 +23,8 @@ test('delegationAutoEnabled exige true literal', () => {
   assert.equal(delegationAutoEnabled({ global: { delegation: { auto: 1 } } }), false);
 });
 
-test('DELEGATION_COMMANDS lista ask, plan e review', () => {
-  assert.deepEqual(DELEGATION_COMMANDS.map((c) => c.slash), ['/opc:ask', '/opc:plan', '/opc:review']);
+test('DELEGATION_COMMANDS lista ask, plan, review e orchestrate', () => {
+  assert.deepEqual(DELEGATION_COMMANDS.map((c) => c.slash), ['/opc:ask', '/opc:plan', '/opc:review', '/opc:orchestrate']);
   for (const c of DELEGATION_COMMANDS) assert.ok(c.cli.startsWith('opc ') && c.use.length > 0);
 });
 

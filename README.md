@@ -52,7 +52,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | disponível |
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | disponível |
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | disponível |
-| `/opc:orchestrate` | F4b | planejado |
+| `/opc:orchestrate` | F4b | Decompõe a tarefa em subtarefas executadas por vários modelos e sintetiza (`--planner`, `--max`, `--synthesizer`, `--write`, `--background`) |
 | `/opc:conclave` | F4c | planejado |
 | servidor MCP, `/opc:transfer` | F5 | planejado |
 
@@ -65,6 +65,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:adversarial-review` | Review que desafia a abordagem, com texto de foco |
 | `/opc:rescue` | Delega investigação ou correção ao OpenCode, continuando ou iniciando sessão |
 | `/opc:task`, `/opc:ask`, `/opc:plan` | Turnos avulsos de escrita, pergunta e plano |
+| `/opc:orchestrate` | Decompõe tarefas em partes executadas por vários modelos e sintetiza os resultados |
 | `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
 | `opc monitor` | Acompanha jobs do workspace no terminal, sem alterar estado |
 | `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo, diff e tarefas |
