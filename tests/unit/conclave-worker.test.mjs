@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGroup, readJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
-import { finalizeConclaveCoordinatorFailure, renderConclaveForeground } from '../../plugins/opc/scripts/commands/conclave.mjs';
+import { finalizeConclaveCoordinatorFailure, renderConclaveForeground, presentConclaveResult } from '../../plugins/opc/scripts/commands/conclave.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 function stateDir(t) {
@@ -54,4 +54,18 @@ test('foreground failure summary does not render a partial conclave package', ()
   assert.match(out, /Código:\*\* coordinator_error/);
   assert.match(out, /Erro:\*\* event write failed/);
   assert.doesNotMatch(out, /Síntese|Rodadas|Válidos/);
+});
+
+test('presenter handles failed refreshed group summaries in text and JSON modes', () => {
+  const job = { id: 'conc-test', status: 'failed', errorCode: 'coordinator_error', errorMessage: 'provider unavailable', result: { counts: { failed: 1 }, warnings: [], members: [] } };
+  let output = '';
+  const code = presentConclaveResult({ out: (value) => { output = value; } }, job, false);
+  assert.equal(code, 7);
+  assert.match(output, /Status:\*\* failed/);
+  assert.match(output, /Código:\*\* coordinator_error/);
+  assert.match(output, /Erro:\*\* provider unavailable/);
+  let json;
+  const jsonCode = presentConclaveResult({ json: (value) => { json = value; } }, job, true);
+  assert.equal(jsonCode, 7);
+  assert.deepEqual(json, { jobId: 'conc-test', status: 'failed', errorCode: 'coordinator_error', errorMessage: 'provider unavailable' });
 });

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runConclave, buildKnownNames, loadConclaveAssets } from '../../plugins/opc/scripts/lib/conclave.mjs';
 import { fillTemplate } from '../../plugins/opc/scripts/lib/prompts.mjs';
+import { renderConclave } from '../../plugins/opc/scripts/lib/render.mjs';
 import { makeCatalog, MEMBERS, KM, synthesis, ok, failed } from './_conclave-fixtures.mjs';
 
 const realAssets = loadConclaveAssets();
@@ -46,6 +47,20 @@ test('review mode collects the diff once and sends the same review prompt and sc
   assert.match(prompt, /The complete diff is included above\./);
   assert.doesNotMatch(prompt, /<user_focus>/);
   assert.ok(h.calls.every((c) => c.schema.properties.findings && c.schema.$schema === undefined));
+});
+
+test('review verdict enums and reasons remain structural when they collide with known model names', async () => {
+  const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`));
+  h.deps.knownNames = { exact: ['approve', 'needs-attention', 'attention'], families: [] };
+  const pkg = await h.run();
+  assert.deepEqual(pkg.review.memberVerdicts, { A: 'needs-attention', B: 'needs-attention', C: 'approve' });
+  assert.equal(pkg.review.verdict, 'needs-attention');
+  assert.doesNotMatch(JSON.stringify(pkg.review.reasons), /\[redacted\]/);
+  const rendered = renderConclave(pkg);
+  const table = rendered.slice(rendered.indexOf('## Veredito por membro'));
+  assert.match(table, /\| A \| needs-attention \|/);
+  assert.match(table, /\| C \| approve \|/);
+  assert.doesNotMatch(table, /\[redacted\]/);
 });
 
 test('review prompts include the text structured output contract and review schema', async () => {

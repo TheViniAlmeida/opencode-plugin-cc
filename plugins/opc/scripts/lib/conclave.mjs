@@ -638,7 +638,7 @@ function anonymizeConclavePackage(value, knownNames) {
   if (Array.isArray(value)) return value.map((item) => anonymizeConclavePackage(item, knownNames));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
-    if (STRUCTURAL_FIELDS.has(key) || key === 'question' || key === 'composition') return [key, item];
+    if (STRUCTURAL_FIELDS.has(key) || key === 'question' || key === 'composition' || key === 'memberVerdicts' || key === 'reasons') return [key, item];
     if (key === 'response' || key === 'structured' || key === 'synthesis') return [key, anonymizeModelContent(item, knownNames)];
     if (FREE_TEXT_FIELDS.has(key)) return [key, anonymizeFreeText(item, knownNames)];
     if (key === 'warnings' && Array.isArray(item)) return [key, item.map((warning) => typeof warning === 'string' ? anonymize(warning, knownNames) : warning)];

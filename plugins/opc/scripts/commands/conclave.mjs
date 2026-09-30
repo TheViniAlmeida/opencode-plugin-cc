@@ -17,8 +17,15 @@ const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
 
 export function renderConclaveForeground(job) {
-  if (job.result) return job.rendered ?? renderConclave(job.result);
+  if (job.result?.kind === 'conclave' && job.result?.rounds && job.result?.composition) return job.rendered ?? renderConclave(job.result);
   return `# opc conclave · falha\n**Status:** ${job.status}\n**Código:** ${job.errorCode ?? 'unknown'}\n**Erro:** ${job.errorMessage ?? 'erro do coordenador sem detalhes'}\n`;
+}
+
+export function presentConclaveResult(ctx, job, asJson) {
+  const isPackage = job.result?.kind === 'conclave' && job.result?.rounds && job.result?.composition;
+  if (asJson) ctx.json(isPackage ? job.result : { jobId: job.id, status: job.status, errorCode: job.errorCode ?? null, errorMessage: job.errorMessage ?? null });
+  else ctx.out(renderConclaveForeground(job));
+  return exitCodeForJob(job);
 }
 
 export async function run(ctx, argv) {
@@ -60,9 +67,7 @@ export async function run(ctx, argv) {
     }
     const done = await waitForJob(ctx, group.id, { waitTimeoutMs: flags['wait-timeout'] ? flags['wait-timeout'] * 1000 : undefined });
     const job = readJob(ctx.stateDir, done.id) ?? done;
-    if (flags.json) ctx.json(job.result ?? { jobId: job.id, status: job.status, errorCode: job.errorCode ?? null, errorMessage: job.errorMessage ?? null });
-    else ctx.out(renderConclaveForeground(job));
-    return exitCodeForJob(job);
+    return presentConclaveResult(ctx, job, flags.json);
   } finally { conn.close(); }
 }
 
