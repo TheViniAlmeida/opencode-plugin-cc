@@ -1006,3 +1006,89 @@ export function renderMonitor(snapshot, { color = false } = {}) {
   for (const warning of snapshot.warnings ?? []) out.push(warning);
   return redactText(`${out.join('\n')}\n`);
 }
+
+// ---------------------------------------------------------------------------
+// F4b: orchestration
+// ---------------------------------------------------------------------------
+
+const ORCH_OUTCOME_LABEL = {
+  completed: 'concluída',
+  completed_with_warnings: 'concluída com avisos',
+  failed: 'falhou',
+  cancelled: 'cancelada',
+};
+const ORCH_SUBTASK_LABEL = { completed: 'concluída', failed: 'falhou', cancelled: 'cancelada', pending: 'pendente', running: 'em execução' };
+
+function orchFence(text, lang = '') {
+  const body = safeOutputText(String(text ?? ''));
+  const ticks = body.includes('```') ? '````' : '```';
+  return `${ticks}${lang}\n${body}\n${ticks}`;
+}
+
+function orchSeconds(ms) {
+  return `${((Number(ms) || 0) / 1000).toFixed(1)} s`;
+}
+
+function orchPortuguese(value) {
+  return safeOutputText(String(value ?? '').replace(/dependency cycle/g, 'ciclo de dependência').replace(/invalid plan/g, 'plano inválido'));
+}
+
+function orchDisplay(value) {
+  const text = safeOutputText(String(value ?? '').replace(/\s+/g, ' ').trim());
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+}
+
+export function renderOrchestration(pkg, { jobId = null } = {}) {
+  if (!pkg) return '# opc orchestrate\n\nNenhum resultado registrado para este job.\n';
+  const lines = ['# opc orchestrate', ''];
+  lines.push(`Tarefa: ${orchDisplay(pkg.task)}`);
+  const meta = [`Status: ${ORCH_OUTCOME_LABEL[pkg.outcome] ?? safeOutputText(pkg.status ?? '')}`];
+  if (jobId) meta.push(`job ${safeOutputText(jobId)}`);
+  if (pkg.plan) meta.push(`${pkg.plan.subtasks.length} subtarefas`);
+  meta.push(orchSeconds(pkg.durationMs));
+  lines.push(meta.join(' · '));
+  if (pkg.planner?.model) lines.push(`Planner: ${safeOutputText(pkg.planner.model)}`);
+  if (pkg.errorCode) lines.push(`Erro: ${safeOutputText(pkg.errorCode)}: ${orchPortuguese(pkg.errorMessage ?? '')}`.trimEnd());
+  lines.push('');
+
+  if (pkg.errorCode === 'invalid_plan') {
+    lines.push('## Plano inválido', '', ...(pkg.planErrors ?? []).map((e) => `- ${orchPortuguese(e)}`), '', '### Plano bruto', '', orchFence(JSON.stringify(pkg.rawPlan, null, 2), 'json'), '');
+  } else if (!pkg.plan && pkg.rawPlan != null) {
+    const raw = typeof pkg.rawPlan === 'string' ? pkg.rawPlan : JSON.stringify(pkg.rawPlan, null, 2);
+    lines.push('## Saída bruta do planner', '', orchFence(raw), '');
+  }
+
+  if (pkg.plan) {
+    lines.push('## Plano', '', safeOutputText(pkg.plan.rationale ?? ''), '');
+    const subtasks = pkg.subtasks ?? [];
+    const rows = subtasks.map((s) => [s.id, s.kind, s.tier ?? '-', s.model ?? '-', ORCH_SUBTASK_LABEL[s.status] ?? s.status, s.dependsOn?.length ? s.dependsOn.join(', ') : '-']);
+    lines.push(renderTable(['id', 'tipo', 'tier', 'modelo', 'status', 'depende de'], rows), '');
+    lines.push('## Resultados', '');
+    for (const s of subtasks) {
+      lines.push(`### ${safeOutputText(s.id)} — ${safeOutputText(s.title)}`, '');
+      const took = s.startedAt != null && s.endedAt != null ? ` · ${orchSeconds(s.endedAt - s.startedAt)}` : '';
+      const status = ORCH_SUBTASK_LABEL[s.status] ?? safeOutputText(s.status);
+      const detail = s.status === 'completed' ? status : `${status} (${safeOutputText(s.errorCode ?? '')}): ${safeOutputText(s.errorMessage ?? '')}`.trimEnd();
+      lines.push(`\`${safeOutputText(s.kind)}\` · modelo \`${safeOutputText(s.model ?? '-')}\` · ${detail}${took}`, '');
+      if (s.touchedFiles?.length) lines.push(`Arquivos tocados: ${s.touchedFiles.map(safeOutputText).join(', ')}`, '');
+      if (s.status === 'completed' || (s.result && s.errorCode === 'structured_output')) {
+        lines.push(s.result == null ? '' : safeOutputText(s.result), '');
+        if (s.resultTruncated) lines.push(`_(resultado truncado em 64 KB; íntegra na sessão ${safeOutputText(s.sessionID ?? '-')})_`, '');
+      }
+    }
+  }
+
+  if (pkg.synthesis) {
+    lines.push('## Síntese', '');
+    const synth = pkg.synthesis;
+    if (synth.mode === 'model' && synth.status === 'completed') {
+      lines.push(`Sintetizador: \`${safeOutputText(synth.model ?? '-')}\``, '', safeOutputText(synth.text ?? ''), '');
+    } else {
+      if (synth.mode === 'model') lines.push(`A síntese pelo modelo \`${safeOutputText(synth.model ?? '-')}\` falhou: ${safeOutputText(synth.errorMessage ?? 'erro desconhecido')}.`, '');
+      lines.push('Síntese a cargo do Claude: confira os resultados acima contra o código (arquivos e linhas citados) antes de apresentá-los e escreva a síntese seguindo a skill `opc-delegation`.', '');
+    }
+  }
+
+  if (pkg.warnings?.length) lines.push('## Avisos', '', ...pkg.warnings.map((w) => `- ${safeOutputText(w)}`), '');
+  return redactText(`${lines.join('\n').trimEnd()}\n`);
+}
