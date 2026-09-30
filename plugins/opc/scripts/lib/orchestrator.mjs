@@ -5,7 +5,7 @@ import { configModelLabel, normalizeModelId } from './models.mjs';
 import { OpcError, UsageError } from './opc-error.mjs';
 import { safeOutputText } from './redact.mjs';
 import { TIERS } from './routing.mjs';
-import { fillTemplate, projectContextBlock } from './prompts.mjs';
+import { fillTemplate, loadPrompt as loadPromptFile, loadSchema as loadSchemaFile, projectContextBlock, sessionTitle, summarize } from './prompts.mjs';
 import { truncateUtf8 } from './git.mjs';
 
 // ---------------------------------------------------------------------------
@@ -393,4 +393,139 @@ export function pickReady(subtasks, states, { maxParallel }) {
     slots -= 1;
   }
   return picked;
+}
+
+// ---------------------------------------------------------------------------
+// runOrchestration
+// ---------------------------------------------------------------------------
+
+function safeMembers(members, log) {
+  const wrap = (fn, fallback) => async (...args) => {
+    if (typeof fn !== 'function') return fallback;
+    try { return await fn(...args); } catch (err) {
+      log(`aviso: bookkeeping de job membro falhou: ${err?.message ?? err}`);
+      return fallback;
+    }
+  };
+  const update = wrap(members?.update, undefined);
+  const finish = wrap(members?.finish, undefined);
+  return {
+    start: wrap(members?.start, null),
+    update: async (id, patch) => (id == null ? undefined : update(id, patch)),
+    finish: async (id, patch) => (id == null ? undefined : finish(id, patch)),
+  };
+}
+
+function memberPatch(result) {
+  const status = result.status === 'completed' ? 'completed' : result.status === 'cancelled' ? 'cancelled' : 'failed';
+  return { status, model: result.model ?? null, attempts: result.attempts ?? [], sessionID: result.sessionID ?? null,
+    errorClass: result.errorClass ?? null, errorType: result.errorType ?? null,
+    errorMessage: status === 'completed' ? null : result.errorMessage ?? result.errorType ?? null };
+}
+
+async function safeTurn(deps, spec) {
+  try { return await deps.runTurn(spec); } catch (err) {
+    return { status: 'failed', errorClass: 'fatal', errorType: err?.code ?? 'Error', errorMessage: err?.message ?? String(err) };
+  }
+}
+
+function positiveInt(value, fallback) { return Number.isInteger(value) && value > 0 ? value : fallback; }
+
+export async function runOrchestration({ ctx, task, flags = {}, deps }) {
+  if (!deps || typeof deps.runTurn !== 'function') throw new TypeError('runOrchestration requires deps.runTurn');
+  const now = deps.now ?? Date.now;
+  const log = deps.log ?? (() => {});
+  const members = safeMembers(deps.members, log);
+  const loadPrompt = deps.loadPrompt ?? loadPromptFile;
+  const loadSchema = deps.loadSchema ?? loadSchemaFile;
+  const signal = deps.signal ?? null;
+  const aborted = () => signal?.aborted === true;
+  const config = ctx?.config ?? {};
+  const policy = config.policy ?? {};
+  const write = flags.write === true;
+  const maxSubtasks = positiveInt(flags.maxSubtasks, positiveInt(config.orchestrate?.maxSubtasks, 5));
+  const maxParallel = positiveInt(config.jobs?.maxParallel, 4);
+  const synthesisMode = flags.synthesizer === 'model' ? 'model' : 'claude';
+  const projectContext = safeProjectContext(config.project);
+  const startedAt = now();
+  const warnings = [];
+  const pkg = { schemaVersion: 1, task, write, maxSubtasks, status: 'running', outcome: null, errorCode: null, errorMessage: null,
+    planner: null, plan: null, rawPlan: null, planErrors: [], subtasks: [], synthesis: null, warnings, durationMs: 0 };
+  const finish = (status, outcome, errorCode = null, errorMessage = null) => { Object.assign(pkg, { status, outcome, errorCode, errorMessage, durationMs: now() - startedAt }); return pkg; };
+
+  let plannerRoute;
+  try { plannerRoute = deps.resolvePlanner(); } catch (err) { return finish('failed', 'failed', 'planner_failed', `o modelo do planejador não pôde ser resolvido: ${err.message}`); }
+  warnings.push(...(plannerRoute.warnings ?? []));
+  const plannerTitle = sessionTitle('orch-plan', summarize(task));
+  const plannerMember = await members.start('planner', { title: plannerTitle, model: plannerRoute.candidates[0]?.full ?? null });
+  const plannerResult = await safeTurn(deps, { role: 'planner', memberId: plannerMember, subtaskId: null, kind: 'plan', profile: 'read-only', title: plannerTitle,
+    prompt: buildDecomposePrompt({ template: loadPrompt('orchestrate-decompose'), task, maxSubtasks, write, projectContext, agents: allowedAgentNames(deps.agentsIndex, policy) }),
+    format: { type: 'json_schema', schema: planSchema(loadSchema('orchestrate-plan'), maxSubtasks) }, agent: null, candidates: plannerRoute.candidates,
+    fallbackEligible: plannerRoute.fallbackEligible === true, write: false, signal });
+  await members.finish(plannerMember, memberPatch(plannerResult));
+  pkg.planner = { status: plannerResult.status, model: plannerResult.model ?? plannerRoute.candidates[0]?.full ?? null, sessionID: plannerResult.sessionID ?? null,
+    attempts: plannerResult.attempts ?? [], errorType: plannerResult.errorType ?? null, errorMessage: plannerResult.errorMessage ?? null };
+  if (aborted() || plannerResult.status === 'cancelled') return finish('cancelled', 'cancelled', 'cancelled', 'orquestração cancelada durante a decomposição');
+  if (plannerResult.status !== 'completed' || !isPlainObject(plannerResult.structured)) {
+    pkg.rawPlan = plannerResult.structured ?? plannerResult.finalText ?? null;
+    const code = plannerResult.errorType === 'StructuredOutputError' ? 'planner_structured_output' : 'planner_failed';
+    return finish('failed', 'failed', code, `o planejador falhou: ${plannerResult.errorMessage ?? 'nenhum plano estruturado foi retornado'}`);
+  }
+
+  const verdict = validatePlan(plannerResult.structured, { write, policy, maxSubtasks, agentsIndex: deps.agentsIndex ?? null });
+  if (!verdict.ok) { pkg.rawPlan = plannerResult.structured; pkg.planErrors = verdict.errors; return finish('failed', 'failed', 'invalid_plan', `plano inválido: ${verdict.errors.join('; ')}`); }
+  const subtasks = plannerResult.structured.subtasks.map(normalizeSubtask);
+  pkg.plan = { rationale: plannerResult.structured.rationale, subtasks };
+
+  const states = new Map(subtasks.map((s, index) => [s.id, { status: 'pending', index, memberId: null, model: null, attempts: [], sessionID: null, errorCode: null, errorMessage: null, result: null, resultTruncated: false, touchedFiles: [], startedAt: null, endedAt: null }]));
+  const used = new Set(); const rr = { next: 0 }; const running = new Map();
+  const applyResult = (st, result, ordered) => {
+    st.endedAt = now(); st.model = result.model ?? ordered[0].full; st.attempts = result.attempts ?? []; st.sessionID = result.sessionID ?? null; st.touchedFiles = result.touchedFiles ?? [];
+    const cut = truncateBytes(result.finalText || (result.structured != null ? JSON.stringify(result.structured) : ''), RESULT_MAX_BYTES); st.result = cut.text; st.resultTruncated = cut.truncated;
+    if (result.status === 'completed') st.status = 'completed'; else if (result.status === 'cancelled') { st.status = 'cancelled'; st.errorCode = 'cancelled'; st.errorMessage = result.errorMessage ?? 'cancelada'; }
+    else { st.status = 'failed'; st.errorCode = result.errorType === 'StructuredOutputError' ? 'structured_output' : 'turn_failed'; st.errorMessage = result.errorMessage ?? result.errorType ?? 'falha no turno'; }
+    used.add(st.model);
+  };
+  const runOne = async (s, ordered, fallbackEligible) => {
+    const st = states.get(s.id); const title = sessionTitle(`orch-${s.kind}`, summarize(`${s.id} ${s.title}`));
+    st.memberId = await members.start(`worker:${st.index + 1}`, { title, model: ordered[0].full, subtaskId: s.id });
+    const result = await safeTurn(deps, { role: 'worker', memberId: st.memberId, subtaskId: s.id, kind: s.kind, profile: isWriteKind(s.kind) ? 'write' : 'read-only', title,
+      prompt: buildSubtaskPrompt({ task, subtask: s, dependencies: s.dependsOn.map((id) => ({ id, text: states.get(id).result ?? '' })), projectContext }), format: null, agent: s.agent,
+      candidates: ordered, fallbackEligible, write: isWriteKind(s.kind), signal });
+    applyResult(st, result, ordered); await members.finish(st.memberId, memberPatch(result));
+  };
+  const start = (s) => {
+    const st = states.get(s.id); st.status = 'running'; st.startedAt = now(); let route;
+    try { route = deps.resolveSubtask(s); } catch (err) { route = { candidates: [], warnings: [], reasons: [err.message] }; }
+    warnings.push(...(route.warnings ?? []));
+    if (!route.candidates?.length) { st.status = 'failed'; st.endedAt = now(); st.errorCode = 'no_model'; st.errorMessage = `nenhum modelo utilizável: ${(route.reasons ?? []).join('; ') || 'rota vazia'}`; return; }
+    const ordered = spreadCandidates(route.candidates, used, rr); used.add(ordered[0].full); running.set(s.id, runOne(s, ordered, route.fallbackEligible === true).then(() => s.id));
+  };
+  for (;;) {
+    const cancelledNow = propagateDependencyFailures(subtasks, states);
+    if (aborted()) for (const s of subtasks) { const st = states.get(s.id); if (st.status === 'pending') Object.assign(st, { status: 'cancelled', errorCode: 'cancelled', errorMessage: 'orquestração cancelada' }); }
+    else { const picked = pickReady(subtasks, states, { maxParallel }); for (const s of picked) start(s); }
+    if (running.size === 0) { if (cancelledNow.length === 0) break; continue; }
+    const doneId = await Promise.race(running.values()); running.delete(doneId);
+  }
+  for (const s of subtasks) { const st = states.get(s.id); if (st.status === 'pending') Object.assign(st, { status: 'cancelled', errorCode: 'unscheduled', errorMessage: 'nunca ficou pronta' }); }
+  pkg.subtasks = subtasks.map((s) => { const st = states.get(s.id); return { ...s, status: st.status, errorCode: st.errorCode, errorMessage: st.errorMessage, model: st.model, attempts: st.attempts, sessionID: st.sessionID, memberId: st.memberId, result: st.result, resultTruncated: st.resultTruncated, touchedFiles: st.touchedFiles, startedAt: st.startedAt, endedAt: st.endedAt }; });
+  for (const s of pkg.subtasks) if (s.status !== 'completed') warnings.push(`subtarefa "${s.id}" ${s.status} (${s.errorCode}): ${s.errorMessage}`);
+  if (aborted()) return finish('cancelled', 'cancelled', 'cancelled', 'orquestração cancelada');
+  const completed = pkg.subtasks.filter((s) => s.status === 'completed').length;
+  if (completed === 0) return finish('failed', 'failed', 'all_subtasks_failed', 'nenhuma subtarefa foi concluída');
+
+  if (synthesisMode === 'claude') pkg.synthesis = { mode: 'claude', status: 'pending', model: null, text: null, errorMessage: null, attempts: [] };
+  else {
+    let synthRoute; try { synthRoute = deps.resolveSynthesizer(); } catch (err) { synthRoute = { candidates: [], warnings: [], error: err.message }; }
+    warnings.push(...(synthRoute.warnings ?? [])); let result;
+    if (!synthRoute.candidates?.length) result = { status: 'failed', errorMessage: `o modelo sintetizador não pôde ser resolvido: ${synthRoute.error ?? 'rota vazia'}` };
+    else { const synthTitle = sessionTitle('orch-synth', summarize(task)); const synthMember = await members.start('synthesizer', { title: synthTitle, model: synthRoute.candidates[0].full });
+      result = await safeTurn(deps, { role: 'synthesizer', memberId: synthMember, subtaskId: null, kind: 'ask', profile: 'read-only', title: synthTitle, prompt: buildSynthesizePrompt({ template: loadPrompt('orchestrate-synthesize'), task, rationale: pkg.plan.rationale, subtasks: pkg.subtasks }), format: null, agent: null, candidates: synthRoute.candidates, fallbackEligible: synthRoute.fallbackEligible === true, write: false, signal });
+      await members.finish(synthMember, memberPatch(result)); }
+    const ok = result.status === 'completed'; pkg.synthesis = { mode: 'model', status: ok ? 'completed' : 'failed', model: result.model ?? synthRoute.candidates?.[0]?.full ?? null, text: ok ? result.finalText ?? '' : null, errorMessage: ok ? null : result.errorMessage ?? result.errorType ?? 'falha na síntese', attempts: result.attempts ?? [] };
+    if (!ok) warnings.push('a síntese por modelo falhou; o Claude deve sintetizar a partir dos resultados brutos');
+  }
+  if (aborted()) return finish('cancelled', 'cancelled', 'cancelled', 'orquestração cancelada');
+  return finish('completed', completed < subtasks.length || pkg.synthesis.status === 'failed' ? 'completed_with_warnings' : 'completed');
 }
