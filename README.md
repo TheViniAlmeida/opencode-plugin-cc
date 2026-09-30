@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F4a — roteamento, fallback, delegação, worker e monitor entregue**. Descoberta,
-> onboarding, turnos, reviews, sessões, delegação e acompanhamento de jobs estão disponíveis.
+> Estado: **F4b — orquestração entregue**. Descoberta, onboarding, turnos, reviews, sessões,
+> delegação, acompanhamento de jobs e orquestração em vários modelos estão disponíveis.
 
 ## Requisitos
 
@@ -52,7 +52,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:review`, `/opc:adversarial-review`, `/opc:rescue`, stop gate, hooks | F2b | disponível |
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | disponível |
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | disponível |
-| `/opc:orchestrate` | F4b | Decompõe a tarefa em subtarefas executadas por vários modelos e sintetiza (`--planner`, `--max`, `--synthesizer`, `--write`, `--background`) |
+| `/opc:orchestrate` | F4b | disponível |
 | `/opc:conclave` | F4c | planejado |
 | servidor MCP, `/opc:transfer` | F5 | planejado |
 
@@ -87,8 +87,9 @@ Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 - [Comandos F1](docs/commands.md)
 - [Relatório da F1](docs/phases/F1-report.md)
 - [Relatório da F3](docs/phases/F3-report.md)
-- [Swarm: roteamento, fallback e monitor](docs/swarm.md)
+- [Swarm: roteamento, fallback, monitor e orquestração](docs/swarm.md)
 - [Relatório da F4a](docs/phases/F4a-report.md)
+- [Relatório da F4b](docs/phases/F4b-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos

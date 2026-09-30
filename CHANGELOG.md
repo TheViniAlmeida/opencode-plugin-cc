@@ -6,6 +6,16 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado — F4b (orquestração)
+
+- F4b — Orquestração: `/opc:orchestrate` e `opc orchestrate` (decomposição por planner,
+  validação do plano com detecção de ciclos, leituras paralelas, escritas em série, rota por
+  tier/tipo com espalhamento de modelos, injeção de dependências e síntese pelo Claude ou por
+  modelo).
+- Schema `orchestrate-plan` e prompts `orchestrate-decompose`/`orchestrate-synthesize`.
+- Seção "Orquestração" na skill `opc-delegation`, em `docs/swarm.md`, `docs/commands.md`,
+  configuração, troubleshooting, arquitetura e relatório de fase.
+
 ### Adicionado — F4a (roteamento, fallback, delegação, worker, monitor)
 
 - Fallback de modelo para rotas em lista (`routing.tasks.<tipo>` e `--tier light|heavy`): nova sessão por tentativa, backoff de 2/4/8 s, até `routing.fallback.maxAttempts`; cada tentativa registrada em `attempts[]` do job e exibida em `opc result`.

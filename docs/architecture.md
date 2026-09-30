@@ -79,3 +79,20 @@ No boot gerenciado, `server.json` é publicado antes de `attach.secret`; o segre
 O runner limita retries anunciados pelo OpenCode. Se a interrupção não for confirmada, produz `AbortUnconfirmed` e bloqueia fallback; se for confirmada, `RetryCapExceeded` pode avançar ao próximo candidato. Cancelamento, falhas fatais, `--resume`, modelo explícito e turno de escrita que já executou ferramenta não fazem fallback.
 
 `opc monitor` cria contexto somente leitura e lê diretamente `state.json`, `jobs/*.json` e os trechos finais dos logs. Ele não reconcilia jobs, não cria diretórios e não grava estado. O snapshot alimenta tanto o quadro de terminal quanto `--json`; cada item calcula tentativa atual/limite a partir de `attempts[]` e `attemptLimit`.
+
+## Orquestração (F4b)
+
+`lib/orchestrator.mjs` contém decomposição, validação, agendamento e síntese; suas dependências
+são injetáveis, portanto o módulo não acessa HTTP diretamente. `scripts/commands/orchestrate.mjs`
+monta essas dependências, cria um único grupo `orch-…` e despacha um worker coordenador.
+
+O grupo conta uma vez em `jobs.maxActive`. Seus membros são criados sob demanda com os papéis
+`planner`, `worker:<n>` e `synthesizer`, e o coordenador respeita `jobs.maxParallel`. Leituras
+prontas rodam em paralelo; escritas são mutuamente exclusivas, mas podem coexistir com leituras.
+O resultado de uma dependência concluída é injetado na próxima subtarefa com limite de 8 KB e
+marcadores neutralizados. Rotas de subtarefas recebem espalhamento de modelos antes do fallback.
+
+O coordenador atualiza membros e grupo por dependências injetadas, registra tentativas e usa
+`refreshGroup` como único finalizador de estado agregado. Falhas de persistência tornam-se
+`coordinator_error`; o cancelamento antes da criação/publicação da sessão é deferido e conferido
+antes de enviar o prompt do membro.

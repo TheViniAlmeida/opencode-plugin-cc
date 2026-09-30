@@ -454,3 +454,52 @@ opc attach --pane ses_<id>
 ```
 
 Saída real: `NÃO VALIDADO` — a validação manual de attach e `--pane` não foi executada no portão F3.
+
+## `/opc:orchestrate`
+
+Decompõe uma tarefa em subtarefas executadas por modelos do OpenCode e entrega os resultados
+para síntese. O modelo pode invocar este comando; o fluxo está em
+[swarm.md](swarm.md#orquestração-opcorchestrate).
+
+```text
+/opc:orchestrate <tarefa> [--planner <modelo>] [--max N] [--synthesizer claude|<modelo>] [--write] [--background]
+opc orchestrate <tarefa> [mesmas flags] [--timeout s] [--wait-timeout s] [--json] [--cwd dir]
+opc orchestrate [flags] --raw-args-stdin
+```
+
+Com `--raw-args-stdin`, ponha as flags dentro do corpo quoted do heredoc, antes da linha `--`;
+a tarefa fica depois dessa linha. Isso preserva o texto verbatim.
+
+```bash
+opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--max 3 --synthesizer claude --background
+--
+Mapeie as rotas HTTP, revise a validação de entrada e proponha testes.
+OPC_ARGS_5f1d0c7a_EOF
+```
+
+| Flag | Padrão | Efeito |
+|---|---|---|
+| `--planner <m>` (`-m`) | `orchestrate.planner` | Modelo único do planner, sem fallback |
+| `--max N` | `orchestrate.maxSubtasks` (5) | Máximo de subtarefas, de 2 a 20 |
+| `--synthesizer claude\|<m>` | `orchestrate.synthesizer` (`claude`) | Responsável pela síntese |
+| `--write` | desligado | Permite subtarefas `task`, serializadas entre si e com perfil `write` |
+| `--background` | desligado | Retorna imediatamente o id do grupo |
+| `--timeout s` | 1800 | Limite de cada turno do planner, subtarefa ou sintetizador |
+| `--wait-timeout s` | sem limite | Só limita o foreground; o grupo continua |
+| `--json` | desligado | Emite `jobId`, `status`, `errorCode` e o pacote `orchestration` |
+
+**Exit codes:** 0 concluída, inclusive com avisos; 2 uso; 3 subtarefa aguardando permissão;
+4 planner/sintetizador negado ou `OPC_INSIDE_SERVER=1`; 5 conexão; 6 `--wait-timeout`; 7
+`invalid_plan`, `planner_failed`, `planner_structured_output`, `all_subtasks_failed` ou
+`coordinator_error`; 130 cancelada.
+
+Planner e sintetizador passam pela política antes de criar o job. As rotas de subtarefa são
+resolvidas durante a execução: entrada negada é apenas avisada e rota sem candidato falha a
+subtarefa. Para acompanhar ou recuperar resultado de um grupo em background:
+
+```bash
+opc orchestrate --synthesizer omniroute-personal/cmd/<modelo> --background "Revise src/cache"
+opc status orch-<id> --wait
+opc result orch-<id>
+```
