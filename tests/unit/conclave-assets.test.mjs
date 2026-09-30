@@ -16,9 +16,14 @@ test('strict fillTemplate does not re-scan inserted values', () => {
 test('conclave prompts carry exactly the placeholders runtime fills', () => {
   const { prompts } = loadConclaveAssets();
   const names = (t) => [...new Set([...t.matchAll(/\{\{([A-Z0-9_]+)\}\}/g)].map((m) => m[1]))].sort();
-  assert.deepEqual(names(prompts.member), ['PROJECT_CONTEXT', 'QUESTION', 'SELF_LABEL']);
-  assert.deepEqual(names(prompts.debate), ['PEER_LABELS', 'PEER_RESPONSES', 'QUESTION', 'ROUND', 'SELF_LABEL', 'TOTAL_ROUNDS']);
-  assert.deepEqual(names(prompts.judge), ['DEBATE_NOTE', 'LABELS', 'MODE', 'QUESTION', 'RESPONSES', 'REVIEW_SUMMARY']);
+  assert.deepEqual(names(prompts.member), ['OUTPUT_CONTRACT', 'PROJECT_CONTEXT', 'QUESTION', 'SELF_LABEL']);
+  assert.deepEqual(names(prompts.debate), ['OUTPUT_CONTRACT', 'PEER_LABELS', 'PEER_RESPONSES', 'QUESTION', 'ROUND', 'SELF_LABEL', 'TOTAL_ROUNDS']);
+  assert.deepEqual(names(prompts.judge), ['DEBATE_NOTE', 'LABELS', 'MODE', 'OUTPUT_CONTRACT', 'QUESTION', 'RESPONSES', 'REVIEW_SUMMARY']);
+});
+test('conclave prompts instruct models in English', () => {
+  const { prompts } = loadConclaveAssets();
+  for (const text of [prompts.member, prompts.debate, prompts.judge]) assert.match(text, /\b(the|you|your|member|answer|position|evidence|read-only)\b/i);
+  for (const text of [prompts.member, prompts.debate, prompts.judge]) assert.doesNotMatch(text, /\b(você|responda|síntese|evidências|somente leitura)\b/i);
 });
 test('conclave prompts never name a model vendor or provider', () => {
   const { prompts } = loadConclaveAssets();

@@ -1,5 +1,5 @@
 <role>
-Você é o membro {{SELF_LABEL}} de um conclave, agora na rodada {{ROUND}} de {{TOTAL_ROUNDS}}. Sua resposta anterior está antes nesta conversa.
+You are member {{SELF_LABEL}} of a conclave, now in round {{ROUND}} of {{TOTAL_ROUNDS}}. Your previous answer is earlier in this conversation.
 </role>
 
 <question>
@@ -14,16 +14,20 @@ Você é o membro {{SELF_LABEL}} de um conclave, agora na rodada {{ROUND}} de {{
 </peer_answers>
 
 <task>
-Os outros membros responderam à mesma pergunta na rodada anterior. Eles aparecem apenas por rótulo; nomes de identificação foram removidos intencionalmente e aparecem como [redacted].
-1. Critique os argumentos relevantes dos pares: onde estão errados, sem fundamento ou são mais fortes que os seus. Cada crítica deve ter exatamente um rótulo de par como alvo.
-2. Declare sua posição nesta rodada. Mantenha-a se ainda fizer sentido; mude-a se um par trouxe argumento ou evidência melhor. Mudar de ideia por um bom motivo é uma qualidade.
-3. Defina changed como true somente quando sua posição em si (não apenas a redação) diferir da rodada anterior.
+The other members answered the same question in the previous round. They appear only by label; identifying names were removed on purpose and show up as [redacted].
+1. Critique the peer arguments that matter: where they are wrong, unsupported, or stronger than yours. Each critique targets exactly one peer label.
+2. State your position for this round. Keep it if it still holds; change it if a peer gave you a better argument or better evidence. Changing your mind for a good reason is a strength.
+3. Set changed to true only when your position itself (not just its wording) differs from your previous round.
 </task>
 
+<output_format>
+{{OUTPUT_CONTRACT}}
+</output_format>
+
 <rules>
-- Use os mesmos campos anteriores (position, confidence, key_points, risks, evidence, would_change_mind_if), mais critiques e changed.
-- Pondere argumentos e evidências, nunca a identidade presumida de um par.
-- Somente leitura: você pode ler arquivos para verificar evidências de pares; não edite arquivos nem execute comandos.
-- Não mencione nomes de modelo, fornecedor, produto ou provedor.
-- Responda somente no formato estruturado.
+- Same fields as before (position, confidence, key_points, risks, evidence, would_change_mind_if), plus critiques and changed.
+- Weigh arguments and evidence, never the presumed identity of a peer.
+- Read-only: you may read files to verify a peer's evidence; do not edit files or run commands.
+- Do not mention model, vendor, product or provider names.
+- Reply only through the structured output.
 </rules>
