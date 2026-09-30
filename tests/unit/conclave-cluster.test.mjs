@@ -99,24 +99,28 @@ test('two findings without lines in the same file cluster when titles match', ()
   assert.equal(clusters[0].line_start, null);
 });
 
-test('clusters are sorted by each tiebreaker in order', () => {
+test('clusters are sorted by every comparator criterion in order', () => {
   const clusters = clusterFindings({
     A: [
-      f('same.js', 1, 1, 'Alpha', 'high', 0.8),
-      f('same.js', 1, 1, 'Bravo', 'high', 0.8),
+      f('same.js', 20, 20, 'Alpha', 'high', 0.8),
+      f('same.js', 10, 10, 'Bravo', 'high', 0.8),
       f('confidence.js', 1, 1, 'Confidence low', 'high', 0.5),
       f('z.js', 1, 1, 'Location Z', 'high', 0.8),
       f('a.js', 1, 1, 'Location A', 'high', 0.8),
       f('agreement low', 1, 1, 'Agreement low', 'high', 0.8),
+      f('severity-medium.js', 1, 1, 'Severity medium', 'medium', 0.8),
+      f('severity-critical.js', 1, 1, 'Severity critical', 'critical', 0.8),
     ],
     B: [
       f('confidence.js', 1, 1, 'Confidence low', 'high', 0.8),
       f('z.js', 1, 1, 'Location Z', 'high', 0.8),
       f('a.js', 1, 1, 'Location A', 'high', 0.8),
+      f('severity-medium.js', 1, 1, 'Severity medium', 'medium', 0.8),
+      f('severity-critical.js', 1, 1, 'Severity critical', 'critical', 0.8),
     ],
   });
   assert.deepEqual(clusters.map((c) => c.title), [
-    'Location A', 'Location Z', 'Confidence low', 'Agreement low', 'Alpha', 'Bravo',
+    'Severity critical', 'Location A', 'Location Z', 'Confidence low', 'Agreement low', 'Bravo', 'Alpha', 'Severity medium',
   ]);
 });
 
