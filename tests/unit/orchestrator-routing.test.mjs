@@ -58,6 +58,25 @@ test('denied and unknown entries are skipped with warnings', () => {
   assert.match(w, /ignorado k3: negado pela política \(policy\.models\.deny/);
 });
 
+test('invalid config entries are masked in reasons and warnings', () => {
+  const secretShaped = `sk-proj-${'x'.repeat(40)}`;
+  const config = baseConfig({ tasks: { ask: [secretShaped] } });
+  const r = resolveSubtaskCandidates(sub(), { config, catalog });
+  const output = [...r.reasons, ...r.warnings].join('\n');
+  assert.equal(r.candidates.length, 0);
+  assert.ok(!output.includes(secretShaped));
+  assert.match(output, /\*\*\*/);
+});
+
+test('unexpected normalization errors propagate', () => {
+  const config = baseConfig({ tasks: { ask: ['fast'] } });
+  const malformedCatalog = { ...catalog, connected: null };
+  assert.throws(
+    () => resolveSubtaskCandidates(sub(), { config, catalog: malformedCatalog }),
+    TypeError,
+  );
+});
+
 test('every entry denied yields no candidates and the reasons (subtask fails, group goes on)', () => {
   const config = baseConfig({ tasks: { ask: ['k3'] } }, { providers: { deny: ['omniroute-personal'] } });
   const r = resolveSubtaskCandidates(sub(), { config, catalog });

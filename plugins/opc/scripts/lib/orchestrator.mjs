@@ -1,7 +1,9 @@
 // Orchestration: decompose a task with a planner model, run subtasks across models, synthesize.
 // Composes runner + jobs through injected deps; never talks HTTP directly (spec §3.1).
 import { evaluate } from './policy.mjs';
-import { normalizeModelId } from './models.mjs';
+import { configModelLabel, normalizeModelId } from './models.mjs';
+import { OpcError, UsageError } from './opc-error.mjs';
+import { safeOutputText } from './redact.mjs';
 import { TIERS } from './routing.mjs';
 import { fillTemplate, projectContextBlock } from './prompts.mjs';
 import { truncateUtf8 } from './git.mjs';
@@ -310,15 +312,22 @@ export function resolveSubtaskCandidates(subtask, { config, catalog }) {
   for (const entry of entries) {
     let id;
     try {
-      id = normalizeModelId(entry, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+      id = normalizeModelId(entry, {
+        catalog,
+        defaultProvider: config.defaultProvider,
+        aliases: config.aliases ?? {},
+        fromConfig: true,
+      });
     } catch (err) {
-      reasons.push(`${entry}: ${err.message}`);
+      if (!(err instanceof OpcError || err instanceof UsageError)) throw err;
+      reasons.push(`${configModelLabel(entry)}: ${safeOutputText(err.message)}`);
       continue;
     }
     const byProvider = evaluate('provider', id.providerID, policy);
     const byModel = evaluate('model', id.full, policy);
     if (!byProvider.allowed || !byModel.allowed) {
-      reasons.push(`${entry}: negado pela política (${(byProvider.allowed ? byModel.rule : byProvider.rule) ?? 'política'})`);
+      const rule = (byProvider.allowed ? byModel.rule : byProvider.rule) ?? 'política';
+      reasons.push(`${configModelLabel(entry)}: negado pela política (${safeOutputText(rule)})`);
       continue;
     }
     if (!candidates.some((c) => c.full === id.full)) candidates.push({ ...id, source });
