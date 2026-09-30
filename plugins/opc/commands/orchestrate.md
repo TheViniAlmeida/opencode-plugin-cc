@@ -35,5 +35,7 @@ Regras:
     plano bruto, se houver. Não tente cumprir a tarefa por outro caminho sem pedido do usuário.
   - **2 / 4 / 5** — erro de uso, política (inclusive `INSIDE_SERVER`: opc não delega de dentro do
     servidor OpenCode) ou conexão: mostre a mensagem e a correção sugerida.
+  - **130** — a orquestração foi cancelada; mostre a saída de erro como está. Não tente novamente
+    nem execute a tarefa por conta própria.
 - Com `--background`: informe o id e os comandos `/opc:status <id> --wait` e `/opc:result <id>`.
 - Subtarefas `task` alteram arquivos: liste os "Arquivos tocados" e recomende revisar o diff.

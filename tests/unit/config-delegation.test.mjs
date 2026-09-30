@@ -26,6 +26,7 @@ test('delegationAutoEnabled exige true literal', () => {
 test('DELEGATION_COMMANDS lista ask, plan, review e orchestrate', () => {
   assert.deepEqual(DELEGATION_COMMANDS.map((c) => c.slash), ['/opc:ask', '/opc:plan', '/opc:review', '/opc:orchestrate']);
   for (const c of DELEGATION_COMMANDS) assert.ok(c.cli.startsWith('opc ') && c.use.length > 0);
+  assert.equal(DELEGATION_COMMANDS.at(-1).use, 'trabalho com partes independentes que ganham com vários modelos');
 });
 
 test('delegationReminder lista comandos e regras em menos de 1.000 caracteres', () => {

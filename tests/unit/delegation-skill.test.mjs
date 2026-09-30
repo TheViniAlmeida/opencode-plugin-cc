@@ -57,7 +57,7 @@ test('forbids chaining delegation', () => {
 
 test('uses the canonical --raw-args-stdin heredoc for prompts and points to opc-worker for Agent Teams', () => {
   const { body } = load();
-  assert.match(body, /--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n[^\n]+\nOPC_ARGS/);
+  assert.match(body, /--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n(?:[^\n]+\n)?--\n[^\n]+\nOPC_ARGS/);
   assert.doesNotMatch(body, /OPC_PROMPT/);
   assert.doesNotMatch(body, /--args-stdin/);
   assert.ok(body.includes('`opc-worker`'));

@@ -26,16 +26,20 @@ test('/opc:orchestrate is model-invocable and passes arguments through a quoted 
   assert.ok(!/Bash\(\*\)|--dangerously|--no-verify/.test(text));
   assert.ok(text.includes("opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n$ARGUMENTS\nOPC_ARGS_5f1d0c7a_EOF\n"));
   assert.ok(!text.includes('--args-stdin <<'), 'free text never goes through --args-stdin (shell-like split)');
-  for (const code of ['**0**', '**3**', '**6**', '**7**']) assert.ok(text.includes(code), `documents exit ${code}`);
+  for (const code of ['**0**', '**3**', '**6**', '**7**', '**130**']) assert.ok(text.includes(code), `documents exit ${code}`);
 });
 
 test('opc-delegation skill carries the orchestration synthesis guidance', () => {
   const text = read('plugins/opc/skills/opc-delegation/SKILL.md');
   assert.ok(text.includes('## Orquestração (`/opc:orchestrate`)'));
-  for (const phrase of ['invalid_plan', 'dependency_failed', 'Síntese a cargo do Claude', 'Arquivos tocados', 'opc-result-handling', "--raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--\n"]) {
+  for (const phrase of ['invalid_plan', 'dependency_failed', 'Síntese a cargo do Claude', 'Arquivos tocados', 'opc-result-handling', "opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'\n--max N --synthesizer claude --background\n--\n"]) {
     assert.ok(text.includes(phrase), `mentions ${phrase}`);
   }
   assert.ok(!text.includes('when that command is available'), 'orchestrate is available from F4b on');
+  const examples = [...text.matchAll(/^opc [^\n]*--raw-args-stdin[^\n]*$/gm)].map(([line]) => line);
+  assert.ok(examples.length > 0, 'raw args examples present');
+  for (const line of examples) assert.equal(line, line.match(/^opc (?:ask|orchestrate) --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'$/)?.[0], `flags must stay in heredoc body: ${line}`);
+  assert.ok(text.includes('flags in the first line of the quoted heredoc body'), 'documents flags at the start of heredoc body');
 });
 
 test('prompt templates exist and use only known placeholders', () => {

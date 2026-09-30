@@ -4,6 +4,8 @@ import { coordinatorDeps, createOrchestrationGroup, normalizeRequest, runWorker 
 import { createGroup, readJob, jobLogPath, updateJob, consumeJobInput } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { Readable } from 'node:stream';
+import { parseArgs, readRawArgs } from '../../plugins/opc/scripts/lib/args.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -16,6 +18,12 @@ test('task comes from positionals and defaults come from config', () => {
 test('flags override config', () => {
   const r = normalizeRequest(config, { max: 3, planner: 'k3', synthesizer: 'fast', write: true, background: true, timeout: 60, 'wait-timeout': 5 }, ['t']);
   assert.equal(r.maxSubtasks, 3); assert.equal(r.planner, 'k3'); assert.equal(r.synthesizer, 'model'); assert.equal(r.synthesizerModel, 'fast'); assert.equal(r.write, true); assert.equal(r.background, true); assert.equal(r.timeoutSec, 60); assert.equal(r.waitTimeoutSec, 5);
+});
+test('opc orchestrate --raw-args-stdin parses flags from the heredoc body', async () => {
+  const spec = { 'raw-args-stdin': { type: 'boolean' }, planner: { type: 'string' }, model: { type: 'string', alias: 'm' }, max: { type: 'number' }, synthesizer: { type: 'string' }, write: { type: 'boolean' }, background: { type: 'boolean' }, timeout: { type: 'number' }, 'wait-timeout': { type: 'number' }, json: { type: 'boolean' } };
+  const raw = await readRawArgs(['--raw-args-stdin'], spec, { stdin: Readable.from(['--max 2 --synthesizer claude\n--\nInvestigate independent modules\n']) });
+  const { flags, positionals } = parseArgs(raw.argv, { flags: spec, allowPositionals: true });
+  assert.deepEqual(normalizeRequest(config, flags, [raw.text]), { task: 'Investigate independent modules', maxSubtasks: 2, write: false, background: false, json: false, planner: null, synthesizer: 'claude', synthesizerModel: null, timeoutSec: 1800, waitTimeoutSec: null });
 });
 test('-m/--model acts as the planner model', () => {
   assert.equal(normalizeRequest(config, { model: 'k3' }, ['t']).planner, 'k3');

@@ -27,10 +27,11 @@ You (Claude) stay the lead. OpenCode is a second engine you can hand self-contai
 
 ## How to call it
 
-Put the flags on the command line before `--raw-args-stdin` and pass the prompt through a quoted heredoc whose first line is `--`, so the shell expands nothing and no word of the prompt is read as a flag:
+Put all flags in the first line of the quoted heredoc body, followed by a line containing only `--`; put the task after that line. The shell command line contains only the command, `--raw-args-stdin` and the quoted heredoc delimiter. `parsePromptArgs` extracts known leading flags before `--` and treats everything after it as task text:
 
 ```bash
-opc ask [--model <m> | --tier light|heavy] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+opc ask --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--model <m>
 --
 <self-contained question: goal, relevant paths, what a good answer contains>
 OPC_ARGS_5f1d0c7a_EOF
@@ -72,11 +73,14 @@ To run delegations as teammates, spawn teammates with the `opc-worker` agent typ
 mapear o código, revisar um módulo e planejar testes. **Não use** para uma pergunta única
 (`/opc:ask`), para uma edição pequena ou quando as partes dependem todas umas das outras.
 
-**Como chamar:** flags antes de `--raw-args-stdin`; a tarefa pelo heredoc com delimitador entre
-aspas (o texto chega verbatim; a linha `--` impede que palavras da tarefa virem flags):
+**Como chamar:** coloque as flags conhecidas nas primeiras linhas do corpo do heredoc, seguidas
+por uma linha exatamente `--` e então pela tarefa. `parsePromptArgs` extrai somente as flags
+iniciais antes de `--`; o restante é texto da tarefa. A linha do shell contém apenas o comando,
+`--raw-args-stdin` e o delimitador citado:
 
 ```bash
-opc orchestrate [--max N] [--synthesizer claude|<modelo>] [--background] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--max N --synthesizer claude --background
 --
 <tarefa autocontida: objetivo, caminhos relevantes, o que cada parte deve entregar>
 OPC_ARGS_5f1d0c7a_EOF
