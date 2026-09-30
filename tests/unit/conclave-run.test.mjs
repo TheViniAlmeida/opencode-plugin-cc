@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runConclave, buildKnownNames, loadConclaveAssets, validateSchema, REDACTED_NAME } from '../../plugins/opc/scripts/lib/conclave.mjs';
+import { renderConclave } from '../../plugins/opc/scripts/lib/render.mjs';
 import { makeCatalog, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed } from './_conclave-fixtures.mjs';
 
 const assets = loadConclaveAssets();
 const knownNames = buildKnownNames(makeCatalog());
 const FORBIDDEN = /deepseek|qwen|kimi|omniroute|opencode-go|alibaba|moonshot/i;
 
-function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4, structuredOutput = 'text', omitKnownNames = false, knownNames: suppliedKnownNames = knownNames } = {}) {
+function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'opinion', judge = { type: 'claude' }, maxParallel = 4, structuredOutput = 'text', omitKnownNames = false, knownNames: suppliedKnownNames = knownNames, onEvent = null, collectReview = null } = {}) {
   const calls = [];
   const events = [];
   let clock = 1_000;
@@ -15,7 +16,8 @@ function harness(respond, { members = MEMBERS, rounds = 1, quorum = 2, mode = 'o
     assets,
     ...(omitKnownNames ? {} : { knownNames: suppliedKnownNames }),
     now: () => (clock += 500),
-    onEvent: (e) => events.push(e),
+    onEvent: onEvent ?? ((e) => events.push(e)),
+    ...(collectReview ? { collectReview } : {}),
     turn: async (spec) => { calls.push(spec); return respond(spec, calls); },
   };
   const flags = { mode, rounds, quorum, members, judge, maxParallel, warnings: [] };
@@ -89,12 +91,49 @@ test('the question stays literal in the package and in synthesisInput (A5)', asy
 });
 
 test('member and review strings are anonymized throughout package except question and composition', async () => {
-  const reviewAnswer = { verdict:'needs-attention', summary:'Kimi review', findings:[{title:'Kimi issue',body:'DeepSeek body',recommendation:'Qwen fix',file:'src/a.js',line_start:1,severity:'high',confidence:.9}] };
-  const h = harness((s) => ok(s.label === 'A' ? reviewAnswer : { ...reviewAnswer, verdict:'approve' }, `ses_${s.label}`), { mode:'review', judge:{type:'claude'} });
+  const reviewAnswer = { verdict:'needs-attention', summary:'Kimi review', next_steps:['Review Kimi changes'], findings:[{title:'Kimi issue',body:'DeepSeek body',recommendation:'Qwen fix',file:'src/a.js',line_start:1,line_end:1,severity:'high',confidence:.9}] };
+  const h = harness((s) => ok(s.label === 'A' ? reviewAnswer : { ...reviewAnswer, verdict:'approve' }, `ses_${s.label}`), { mode:'review', judge:{type:'claude'}, knownNames:{ exact:['claude','opinion','completed','pending','member','high','approve'], families:['kimi','deepseek','qwen'] }, collectReview: async () => ({ content:'review fixture', label:'fixture' }) });
   const pkg = await h.run('Question includes kimi-k3 intentionally');
-  const beforeComposition = { roundsData:pkg.roundsData, final:pkg.final, review:pkg.review, judge:pkg.judge, failures:pkg.failures, warnings:pkg.warnings, synthesisInput:pkg.synthesisInput };
+  const beforeComposition = { roundsData:pkg.roundsData, final:pkg.final, review:pkg.review, judge:pkg.judge, failures:pkg.failures, warnings:pkg.warnings, synthesisInput:pkg.synthesisInput ? { ...pkg.synthesisInput, question: '' } : null };
   assert.doesNotMatch(JSON.stringify(beforeComposition), /kimi|deepseek|qwen/i);
   assert.match(pkg.question, /kimi-k3/);
   if (pkg.synthesisInput) assert.match(pkg.synthesisInput.question, /kimi-k3/);
   assert.match(JSON.stringify(pkg.composition), /deepseek|qwen/i);
+  for (const { response } of pkg.roundsData[0].responses) {
+    assert.ok(['needs-attention', 'approve'].includes(response.verdict));
+    assert.equal(response.findings[0].severity, 'high');
+    assert.equal(response.findings[0].file, 'src/a.js');
+    assert.equal(response.findings[0].line_start, 1);
+  }
+  assert.ok(pkg.review.clusters.every((cluster) => cluster.severity === 'high' && cluster.line_start === 1));
+  assert.ok(pkg.review.clusters.every((cluster) => cluster.agreement.text === '3/3'));
+});
+
+test('field-aware anonymization preserves package structure and redacts model text', async () => {
+  const names = { exact: ['claude', 'opinion', 'completed', 'pending', 'member', 'high', 'approve'], families: [] };
+  const response = answer({ position: 'I am Claude and my opinion is approve by a member with high confidence' });
+  const h = harness(() => ok(response, 'ses_A'), { members: MEMBERS.slice(0, 2), quorum: 2, knownNames: names });
+  const pkg = await h.run();
+  assert.equal(pkg.mode, 'opinion');
+  assert.equal(pkg.status, 'completed');
+  assert.deepEqual(pkg.judge, { type: 'claude', status: 'pending' });
+  const clean = pkg.final.responses[0].response;
+  assert.equal(clean.position, `I am ${REDACTED_NAME} and my ${REDACTED_NAME} is ${REDACTED_NAME} by a ${REDACTED_NAME} with ${REDACTED_NAME} confidence`);
+  assert.deepEqual([pkg.schemaVersion, pkg.kind, pkg.status, pkg.mode, pkg.rounds.requested, pkg.judge.type, pkg.judge.status], [1, 'conclave', 'completed', 'opinion', 1, 'claude', 'pending']);
+  assert.doesNotThrow(() => renderConclave(pkg));
+});
+
+test('runConclave awaits onEvent callbacks in order', async () => {
+  const seen = [];
+  const h = harness(() => ok(answer(), 'ses'), { members: MEMBERS.slice(0, 2), quorum: 2, onEvent: async (event) => {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    seen.push(event.type === 'member-start' || event.type === 'member-done' ? `${event.type}:${event.label}` : event.type);
+  } });
+  await h.run();
+  assert.deepEqual(seen, ['round-start', 'member-start:A', 'member-start:B', 'member-done:A', 'member-done:B']);
+});
+
+test('runConclave rejects when onEvent rejects without an unhandled rejection', async () => {
+  const h = harness(() => ok(answer(), 'ses'), { onEvent: async () => { throw new Error('event persistence failed'); } });
+  await assert.rejects(h.run(), /event persistence failed/);
 });

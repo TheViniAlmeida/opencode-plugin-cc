@@ -23,10 +23,10 @@ test('delegationAutoEnabled exige true literal', () => {
   assert.equal(delegationAutoEnabled({ global: { delegation: { auto: 1 } } }), false);
 });
 
-test('DELEGATION_COMMANDS lista ask, plan, review e orchestrate', () => {
-  assert.deepEqual(DELEGATION_COMMANDS.map((c) => c.slash), ['/opc:ask', '/opc:plan', '/opc:review', '/opc:orchestrate']);
+test('DELEGATION_COMMANDS lista ask, plan, review, orchestrate e conclave', () => {
+  assert.deepEqual(DELEGATION_COMMANDS.map((c) => c.slash), ['/opc:ask', '/opc:plan', '/opc:review', '/opc:orchestrate', '/opc:conclave']);
   for (const c of DELEGATION_COMMANDS) assert.ok(c.cli.startsWith('opc ') && c.use.length > 0);
-  assert.equal(DELEGATION_COMMANDS.at(-1).use, 'trabalho com partes independentes que ganham com vários modelos');
+  assert.equal(DELEGATION_COMMANDS.at(-1).use, 'consulta paralela, debate e revisão por vários modelos');
 });
 
 test('delegationReminder lista comandos e regras em menos de 1.000 caracteres', () => {

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeWorkspace, testEnv, runCli, fakeRequests, writeGlobalConfig } from '../helpers.mjs';
+import { kindOf } from '../fixtures/scenarios/_conclave-common.mjs';
 export { fakeRequests };
 export const PREFIX = 'omniroute-personal/opencode-go/';
 export const DS = `${PREFIX}deepseek-v4.1-flash`;
@@ -23,8 +24,9 @@ export async function conclave(args, { env, cwd, stdin = '', timeoutMs = 90_000 
 }
 export function promptRequests(env) { return fakeRequests(env).filter((r) => r.method === 'POST' && /^\/session\/[^/]+\/prompt_async$/.test(r.path)); }
 export function sessionOfRequest(request) { return request.path.split('/')[2]; }
-export function requestsBySchema(env, title) { return promptRequests(env).filter((r) => (r.body?.format?.schema?.title ?? null) === title); }
-export function reviewRequests(env) { const titles = new Set(['ConclaveMember', 'ConclaveDebate', 'ConclaveSynthesis']); return promptRequests(env).filter((r) => !titles.has(r.body?.format?.schema?.title)); }
+const KIND_BY_TITLE = { ConclaveSynthesis: 'judge', ConclaveDebate: 'debate', ConclaveMember: 'member' };
+export function requestsBySchema(env, title) { return promptRequests(env).filter((r) => kindOf(r.body) === KIND_BY_TITLE[title]); }
+export function reviewRequests(env) { return promptRequests(env).filter((r) => kindOf(r.body) === 'review'); }
 export function textOf(body) { return (body?.parts ?? []).filter((p) => p.type === 'text').map((p) => p.text).join('\n'); }
 export function section(text, tag) { const start = text.indexOf(`<${tag}>`); const end = text.indexOf(`</${tag}>`); return start >= 0 && end > start ? text.slice(start, end) : ''; }
 export function labelOf(pkg, full) { return pkg.composition.find((c) => c.model === full)?.label ?? null; }

@@ -16,6 +16,11 @@ const isPlainObject = (value) => value !== null && typeof value === 'object' && 
 const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode: { type: 'string', default: 'opinion' }, rounds: { type: 'number' }, judge: { type: 'string' }, quorum: { type: 'number' }, 'allow-judge-member': { type: 'boolean', default: false }, background: { type: 'boolean', default: false }, 'wait-timeout': { type: 'number' }, base: { type: 'string' }, scope: { type: 'string' }, json: { type: 'boolean', default: false }, 'raw-args-stdin': { type: 'boolean' } }, allowPositionals: true };
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
 
+export function renderConclaveForeground(job) {
+  if (job.result) return job.rendered ?? renderConclave(job.result);
+  return `# opc conclave · falha\n**Status:** ${job.status}\n**Código:** ${job.errorCode ?? 'unknown'}\n**Erro:** ${job.errorMessage ?? 'erro do coordenador sem detalhes'}\n`;
+}
+
 export async function run(ctx, argv) {
   const raw = await readRawArgs(argv, SPEC.flags, { stdin: ctx.stdin });
   const { flags, positionals } = parseArgs(raw.argv, SPEC);
@@ -56,7 +61,7 @@ export async function run(ctx, argv) {
     const done = await waitForJob(ctx, group.id, { waitTimeoutMs: flags['wait-timeout'] ? flags['wait-timeout'] * 1000 : undefined });
     const job = readJob(ctx.stateDir, done.id) ?? done;
     if (flags.json) ctx.json(job.result ?? { jobId: job.id, status: job.status, errorCode: job.errorCode ?? null, errorMessage: job.errorMessage ?? null });
-    else ctx.out(job.rendered ?? renderConclave({ jobId: job.id, status: job.status, mode }));
+    else ctx.out(renderConclaveForeground(job));
     return exitCodeForJob(job);
   } finally { conn.close(); }
 }
@@ -103,9 +108,29 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (g) => ({ ...(g.status === 'cancelled' ? {} : { status: pkg.status }), result, rendered, pendingRequest: null }) });
     return exitCodeForJob(final);
   } catch (err) {
-    const message = safeOutputText(err?.message ?? String(err));
-    appendJobLog(ctx.stateDir, job.id, `[opc] falha do conclave: ${message}`);
-    const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (g) => ({ status: g.status === 'cancelled' ? 'cancelled' : 'failed', errorCode: err?.code ?? 'coordinator_error', errorMessage: message, pendingRequest: null }) });
+    const final = await finalizeConclaveCoordinatorFailure(ctx.stateDir, job, [
+      ...request.members.map((member) => member.jobId), request.judge?.jobId,
+    ].filter(Boolean), err, now);
     return exitCodeForJob(final) ?? toExitCode(err);
   } finally { conn?.close(); }
+}
+
+export async function finalizeConclaveCoordinatorFailure(stateDir, job, childIds, err, now = () => new Date().toISOString()) {
+  const message = safeOutputText(err?.message ?? String(err));
+  appendJobLog(stateDir, job.id, `[opc] falha do conclave: ${message}`);
+  const group = readJob(stateDir, job.id);
+  const completedAt = now();
+  for (const id of childIds) {
+    const child = readJob(stateDir, id);
+    if (!child || !ACTIVE_STATUSES.includes(child.status)) continue;
+    const cancelled = Boolean(group?.cancelRequestedAt || child.cancelRequestedAt);
+    await updateJob(stateDir, id, {
+      status: cancelled ? 'cancelled' : 'failed',
+      errorCode: cancelled ? 'cancelled' : 'coordinator_error',
+      errorMessage: message,
+      attemptInFlight: false,
+      completedAt,
+    });
+  }
+  return refreshGroup(stateDir, job.id, { final: true, decorate: (g) => ({ status: g.status === 'cancelled' ? 'cancelled' : 'failed', errorCode: err?.code ?? 'coordinator_error', errorMessage: message, pendingRequest: null }) });
 }

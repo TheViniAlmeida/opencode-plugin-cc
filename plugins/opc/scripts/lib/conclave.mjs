@@ -610,8 +610,44 @@ function failureRecord({ label, round, role, turn, check }) {
   return { label, round, role, errorType: check.errorType, errorClass: turn?.errorClass ?? null, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null };
 }
 
+const STRUCTURAL_FIELDS = new Set([
+  'type', 'status', 'mode', 'label', 'labels', 'round', 'role', 'errorType', 'errorClass',
+  'verdict', 'severity', 'file', 'line', 'line_start', 'line_end', 'agreement', 'id', 'ids', 'code',
+  'schemaVersion', 'kind', 'confidence', 'validMembers', 'meanConfidence', 'rounds',
+  'quorum', 'durationMs', 'startedAt', 'endedAt', 'sessionID', 'model', 'target',
+]);
+const FREE_TEXT_FIELDS = new Set(['title', 'body', 'recommendation', 'summary', 'next_steps', 'message', 'rawText']);
+
+function anonymizeFreeText(value, knownNames) {
+  if (typeof value === 'string') return anonymize(value, knownNames);
+  if (Array.isArray(value)) return value.map((item) => anonymizeFreeText(item, knownNames));
+  return value;
+}
+
+function anonymizeModelContent(value, knownNames) {
+  if (typeof value === 'string') return anonymize(value, knownNames);
+  if (Array.isArray(value)) return value.map((item) => anonymizeModelContent(item, knownNames));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    STRUCTURAL_FIELDS.has(key) ? item : anonymizeModelContent(item, knownNames),
+  ]));
+}
+
+function anonymizeConclavePackage(value, knownNames) {
+  if (Array.isArray(value)) return value.map((item) => anonymizeConclavePackage(item, knownNames));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (STRUCTURAL_FIELDS.has(key) || key === 'question' || key === 'composition') return [key, item];
+    if (key === 'response' || key === 'structured' || key === 'synthesis') return [key, anonymizeModelContent(item, knownNames)];
+    if (FREE_TEXT_FIELDS.has(key)) return [key, anonymizeFreeText(item, knownNames)];
+    if (key === 'warnings' && Array.isArray(item)) return [key, item.map((warning) => typeof warning === 'string' ? anonymize(warning, knownNames) : warning)];
+    return [key, anonymizeConclavePackage(item, knownNames)];
+  }));
+}
+
 function formatLabeled(entries, knownNames, tag) {
-  return entries.map(e => `<${tag} label="${e.label}">\n${truncateText(JSON.stringify(anonymizeValue(e.response, knownNames), null, 2), PEER_RESPONSE_MAX_CHARS)}\n</${tag}>`).join('\n\n');
+  return entries.map(e => `<${tag} label="${e.label}">\n${truncateText(JSON.stringify(anonymizeModelContent(e.response, knownNames), null, 2), PEER_RESPONSE_MAX_CHARS)}\n</${tag}>`).join('\n\n');
 }
 
 function memberSpecPrompt(run, state, round, previous) {
@@ -621,11 +657,11 @@ function memberSpecPrompt(run, state, round, previous) {
   const schema = buildDebateSchema(assets.schemas.member, peerLabels); return { schema, prompt: fillTemplate(assets.prompts.debate, { SELF_LABEL: label, ROUND: round, TOTAL_ROUNDS: flags.rounds, QUESTION: run.question, PEER_LABELS: peerLabels.join(', '), PEER_RESPONSES: formatLabeled(peers, run.knownNames, 'peer'), OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true }) };
 }
 
-function collectRound(run, round, outcomes) {
+async function collectRound(run, round, outcomes) {
   const entry = { round, responses: [], failures: [] };
   for (const { label, sessionID, turn, check } of outcomes) {
-    if (check.ok) { entry.responses.push({ label, response: turn.structured }); run.emit({ type: 'member-done', role: 'member', label, round, sessionID: sessionID ?? null }); }
-    else { const failure = failureRecord({ label, round, role: 'member', turn, check }); entry.failures.push(failure); run.failures.push(failure); run.emit({ type: 'member-failed', ...failure }); }
+    if (check.ok) { entry.responses.push({ label, response: turn.structured }); await run.emit({ type: 'member-done', role: 'member', label, round, sessionID: sessionID ?? null }); }
+    else { const failure = failureRecord({ label, round, role: 'member', turn, check }); entry.failures.push(failure); run.failures.push(failure); await run.emit({ type: 'member-failed', ...failure }); }
   }
   entry.responses.sort(byLabel); entry.failures.sort(byLabel); return entry;
 }
@@ -639,11 +675,11 @@ async function runDiscussion(run) {
   for (let round = 1; round <= flags.rounds; round += 1) {
     const active = states.filter((state) => state.active);
     const previous = roundsData.at(-1);
-    emit({ type: 'round-start', round, labels: active.map((state) => state.member.label) });
+    await emit({ type: 'round-start', round, labels: active.map((state) => state.member.label) });
     const outcomes = await mapLimit(active, run.maxParallel, async (state) => {
       const label = state.member.label;
       const { schema, prompt } = memberSpecPrompt(run, state, round, previous);
-      emit({ type: 'member-start', role: 'member', label, round });
+      await emit({ type: 'member-start', role: 'member', label, round });
       const turn = await safeTurn(deps, {
         role: 'member', label, round, member: state.member, sessionID: state.sessionID, prompt, schema,
         title: `OPC: conclave: ${label}: ${run.question.slice(0, 48)}`,
@@ -657,7 +693,7 @@ async function runDiscussion(run) {
       }
       return { label, sessionID: state.sessionID, turn, check };
     });
-    const entry = collectRound(run, round, outcomes);
+    const entry = await collectRound(run, round, outcomes);
     for (const failure of entry.failures) {
       const failedState = states.find((state) => state.member.label === failure.label);
       if (failedState) failedState.active = false;
@@ -680,15 +716,15 @@ async function runJudge(run, finalResponses, review) {
   if (flags.judge.type === 'claude') return { type: 'claude', status: 'pending' };
   const labels = finalResponses.map(r => r.label); const schema = buildSynthesisSchema(assets.schemas.synthesis, labels);
   const question = run.question || (review ? `Code review of ${review.target ?? 'the current changes'}` : '');
-  const prompt = fillTemplate(assets.prompts.judge, { QUESTION: question, MODE: flags.mode, LABELS: labels.join(', '), DEBATE_NOTE: flags.rounds > 1 ? ` and then debated for ${flags.rounds - 1} more round(s)` : '', RESPONSES: formatLabeled(finalResponses, knownNames, 'answer'), REVIEW_SUMMARY: review ? JSON.stringify(anonymizeValue(reviewForJudge(review), knownNames), null, 2) : 'Not a review conclave.', OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true });
-  emit({ type: 'judge-start', model: flags.judge.full });
+  const prompt = fillTemplate(assets.prompts.judge, { QUESTION: question, MODE: flags.mode, LABELS: labels.join(', '), DEBATE_NOTE: flags.rounds > 1 ? ` and then debated for ${flags.rounds - 1} more round(s)` : '', RESPONSES: formatLabeled(finalResponses, knownNames, 'answer'), REVIEW_SUMMARY: review ? JSON.stringify(anonymizeConclavePackage(reviewForJudge(review), knownNames), null, 2) : 'Not a review conclave.', OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true });
+  await emit({ type: 'judge-start', model: flags.judge.full });
   const turn = await safeTurn(deps, { role: 'judge', label: 'judge', round: null, member: flags.judge, sessionID: null, prompt, schema, title: 'OPC: conclave: judge' }); const check = checkTurn(turn, schema);
-  if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null } }; }
-  emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: turn.structured };
+  if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); await emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null } }; }
+  await emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: turn.structured };
 }
 
 function synthesisInputOf(run, phase, finalResponses) {
-  return { question: run.question, mode: run.flags.mode, labels: finalResponses.map(r => r.label), rounds: phase.completedRounds, responses: finalResponses.map(r => ({ label: r.label, response: anonymizeValue(r.response, run.knownNames) })), review: phase.review ? anonymizeValue(reviewForJudge(phase.review), run.knownNames) : null };
+  return { question: run.question, mode: run.flags.mode, labels: finalResponses.map(r => r.label), rounds: phase.completedRounds, responses: finalResponses.map(r => ({ label: r.label, response: anonymizeModelContent(r.response, run.knownNames) })), review: phase.review ? anonymizeConclavePackage(reviewForJudge(phase.review), run.knownNames) : null };
 }
 
 export async function runConclave({ ctx = {}, question = '', flags, deps }) {
@@ -704,7 +740,13 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     deps,
     assets: deps.assets ?? loadConclaveAssets(),
     knownNames: mergeKnownNames(deps.knownNames, derivedKnownNames),
-    emit: deps.onEvent ?? (() => {}),
+    emit: (() => {
+      let eventQueue = Promise.resolve();
+      return (event) => {
+        eventQueue = eventQueue.then(() => deps.onEvent?.(event));
+        return eventQueue;
+      };
+    })(),
     maxParallel: flags.maxParallel ?? ctx.config?.jobs?.maxParallel ?? 4,
     projectContext: projectContextBlock(ctx.config?.project),
     structuredOutput: ctx.config?.conclave?.structuredOutput ?? 'text',
@@ -742,16 +784,7 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
   };
   // Protect every member/judge supplied string in the package while preserving the
   // original question (A5) and the deliberately identifying composition (A20).
-  const protectedPkg = anonymizeValue({
-    ...pkg,
-    roundsData: pkg.roundsData,
-    final: pkg.final,
-    review: pkg.review,
-    judge: pkg.judge?.type === 'model' ? { ...pkg.judge, model: undefined } : pkg.judge,
-    warnings: pkg.warnings,
-    failures: pkg.failures,
-    synthesisInput: pkg.synthesisInput ? { ...pkg.synthesisInput, question: run.question } : null,
-  }, run.knownNames);
+  const protectedPkg = anonymizeConclavePackage(pkg, run.knownNames);
   Object.assign(pkg, protectedPkg, { question: run.question, composition: pkg.composition });
   if (pkg.synthesisInput) pkg.synthesisInput.question = run.question;
   if (pkg.judge?.type === 'model') pkg.judge.model = flags.judge.full;
@@ -813,16 +846,16 @@ async function runReview(run) {
   const focus = run.question.trim();
   if (focus && !assets.prompts.review.includes('{{USER_FOCUS}}')) prompt = `${prompt}\n\n<user_focus>\n${focus}\n</user_focus>`;
   prompt = `${prompt}\n\n${outputContract(run.structuredOutput, schema)}`;
-  emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
+  await emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
   const outcomes = await mapLimit(flags.members, run.maxParallel, async (member) => {
-    emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
+    await emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
     const turn = await safeTurn(deps, {
       role: 'member', label: member.label, round: 1, member, sessionID: null, prompt, schema,
       title: `OPC: conclave: review ${member.label}`,
     });
     return { label: member.label, sessionID: turn?.sessionID ?? null, turn, check: checkTurn(turn, validation) };
   });
-  const entry = collectRound(run, 1, outcomes);
+  const entry = await collectRound(run, 1, outcomes);
   if (entry.responses.length < flags.quorum) {
     return { ok: false, roundsData: [entry], completedRounds: 0, review: null, failure: quorumFailure(entry, flags.quorum) };
   }
