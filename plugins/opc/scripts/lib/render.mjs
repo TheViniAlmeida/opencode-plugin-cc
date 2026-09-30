@@ -1132,22 +1132,28 @@ function bulletList(items) {
 }
 
 function renderMemberResponse({ label, response }) {
+  if (response && ('verdict' in response || 'summary' in response || 'findings' in response)) {
+    const lines = [`### Membro ${safeOutputText(label)} · review`, '', `**Veredito:** ${safeOutputText(response.verdict ?? '-')}`, ''];
+    if (response.summary) lines.push('**Resumo:**', '', orchFence(response.summary), '');
+    if (response.findings?.length) lines.push('**Achados:**', '', orchFence(JSON.stringify(response.findings, null, 2), 'json'), '');
+    return lines.join('\n');
+  }
   const lines = [];
   const changed = typeof response.changed === 'boolean' ? ` · mudou de posição: ${response.changed ? 'sim' : 'não'}` : '';
   lines.push(`### Membro ${label} · confiança ${Number(response.confidence).toFixed(2)}${changed}`, '');
-  lines.push(`**Posição:** ${response.position}`, '');
+  lines.push(`**Posição:** ${orchFence(response.position ?? '')}`, '');
   if (response.key_points?.length) lines.push('**Pontos-chave:**', bulletList(response.key_points), '');
   if (response.risks?.length) lines.push('**Riscos:**', bulletList(response.risks), '');
   if (response.evidence?.length) {
     lines.push('**Evidências:**', bulletList(response.evidence.map((e) => `\`${conclaveLocation(e.file, e.line_start, e.line_end)}\` — ${e.note}`)), '');
   }
-  if (response.would_change_mind_if) lines.push(`**Mudaria de ideia se:** ${response.would_change_mind_if}`, '');
+  if (response.would_change_mind_if) lines.push(`**Mudaria de ideia se:** ${orchFence(response.would_change_mind_if)}`, '');
   if (response.critiques?.length) lines.push('**Críticas:**', bulletList(response.critiques.map((c) => `→ ${c.target}: ${c.point}`)), '');
   return lines.join('\n');
 }
 
 function renderConclaveReview(review) {
-  const lines = [`## Veredito: ${review.verdict}`, ''];
+  const lines = [`## Veredito: ${safeOutputText(review.verdict)}`, ''];
   if (review.reasons.length) lines.push(bulletList(review.reasons.map((r) => (CONCLAVE_REASON_PT[r.code] ?? ((x) => x.code))(r))), '');
   lines.push(`Membros válidos: ${review.validMembers}${review.truncated ? ' · diff truncado (membros leram os arquivos)' : ''}`, '');
   lines.push('## Achados agrupados', '');
@@ -1156,11 +1162,11 @@ function renderConclaveReview(review) {
   } else {
     lines.push(renderTable(
       ['#', 'Severidade', 'Concordância', 'Confiança média', 'Local', 'Título', 'Rótulos'],
-      review.clusters.map((c) => [c.id, c.severity ?? '-', c.agreement.text, c.meanConfidence ?? '-', conclaveLocation(c.file, c.line_start, c.line_end), c.title, c.labels.join(', ')]),
+      review.clusters.map((c) => [c.id, c.severity ?? '-', c.agreement.text, c.meanConfidence ?? '-', conclaveLocation(c.file, c.line_start, c.line_end), safeOutputText(c.title).replace(/[\r\n]+/g, ' ').replace(/\b(kimi|deepseek|qwen)\b/ig, '[redacted]'), c.labels.join(', ')]),
     ));
     for (const c of review.clusters) {
-      lines.push(`### ${c.id} · ${c.severity ?? '-'} · ${c.agreement.text} · \`${conclaveLocation(c.file, c.line_start, c.line_end)}\``, '', c.body, '');
-      if (c.recommendation) lines.push(`**Recomendação:** ${c.recommendation}`, '');
+      lines.push(`### ${safeOutputText(c.id)} · ${safeOutputText(c.severity ?? '-')} · ${safeOutputText(c.agreement.text)} · \`${safeOutputText(conclaveLocation(c.file, c.line_start, c.line_end))}\``, '', orchFence(safeOutputText(c.body).replace(/\b(kimi|deepseek|qwen)\b/ig, '[redacted]')), '');
+      if (c.recommendation) lines.push(`**Recomendação:** ${safeOutputText(c.recommendation).replace(/[\r\n]+/g, ' ').replace(/\b(kimi|deepseek|qwen)\b/ig, '[redacted]')}`, '');
     }
   }
   lines.push('## Veredito por membro', '');
@@ -1218,7 +1224,7 @@ export function renderConclave(pkg) {
   }
   if (pkg.question) lines.push('## Pergunta', '', pkg.question.split('\n').map((l) => `> ${l}`).join('\n'), '');
   if (pkg.mode === 'review' && pkg.review) {
-    lines.push(renderConclaveReview(pkg.review));
+    lines.push(renderConclaveReview(redactOutput(pkg.review)));
   } else if (valid > 0) {
     const shown = pkg.synthesisInput?.responses?.length ? pkg.synthesisInput.responses : pkg.final.responses;
     lines.push(`## Respostas (rodada ${pkg.final.round})`, '');
@@ -1227,5 +1233,5 @@ export function renderConclave(pkg) {
   lines.push(renderConclaveSynthesis(pkg));
   lines.push('## Composição', '');
   lines.push(renderTable(['Rótulo', 'Modelo'], pkg.composition.map((c) => [c.label, c.model])));
-  return lines.join('\n');
+  return safeOutputText(lines.join('\n'));
 }

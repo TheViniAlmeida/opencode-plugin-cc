@@ -740,6 +740,20 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     synthesisInput: phase.ok ? synthesisInputOf(run, phase, finalResponses) : null,
     composition: flags.members.map((member) => ({ label: member.label, model: member.full })),
   };
+  // Protect every member/judge supplied string in the package while preserving the
+  // original question (A5) and the deliberately identifying composition (A20).
+  const protectedPkg = anonymizeValue({
+    ...pkg,
+    roundsData: pkg.roundsData,
+    final: pkg.final,
+    review: pkg.review,
+    judge: pkg.judge?.type === 'model' ? { ...pkg.judge, model: undefined } : pkg.judge,
+    warnings: pkg.warnings,
+    failures: pkg.failures,
+    synthesisInput: pkg.synthesisInput,
+  }, run.knownNames);
+  Object.assign(pkg, protectedPkg, { question: run.question, composition: pkg.composition });
+  if (pkg.judge?.type === 'model') pkg.judge.model = flags.judge.full;
   return pkg;
 }
 

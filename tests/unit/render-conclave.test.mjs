@@ -34,7 +34,7 @@ test('answers are rendered from the anonymized synthesis input when available', 
   pkg.final.responses[0] = { label: 'A', response: answer({ position: 'I am kimi-k3 and I say yes' }) };
   pkg.synthesisInput = { responses: [{ label: 'A', response: answer({ position: 'I am [redacted] and I say yes' }) }, pkg.final.responses[1]] };
   const out = renderConclave(pkg);
-  assert.match(out, /\*\*Posição:\*\* I am \[redacted\] and I say yes/);
+  assert.match(out, /I am \[redacted\] and I say yes/);
   assert.doesNotMatch(out.slice(0, out.indexOf('## Composição')), /kimi/i);
 });
 
@@ -68,6 +68,37 @@ test('quorum failure is explained and synthesis is skipped', () => {
   assert.match(out, /Sem síntese/);
 });
 
+test('review shaped partial responses on quorum failure render as reviews', () => {
+  const pkg = { ...base(), mode: 'review', status: 'failed', review: null,
+    final: { round: 1, responses: [{ label: 'A', response: { verdict: 'needs-attention', summary: 'Check this', findings: [] } }] } };
+  const out = renderConclave(pkg);
+  assert.match(out, /needs-attention/);
+  assert.match(out, /Check this/);
+  assert.doesNotMatch(out, /NaN|undefined/);
+});
+
+test('review strings are anonymized in the package displayed before composition', () => {
+  const pkg = base();
+  pkg.review = { verdict: 'needs-attention', validMembers: 1, truncated: false, reasons: [], memberVerdicts: {}, clusters: [{ id:'C1',severity:'high',agreement:{text:'1/1'},meanConfidence:.8,file:'src/a.js',line_start:1,title:'[redacted] finding',body:'[redacted] body',recommendation:'[redacted] guard',labels:['A'],findings:[] }] };
+  pkg.synthesisInput.responses = [{ label:'A', response:answer({position:'I am kimi-k3'}) }];
+  pkg.synthesisInput.review = { clusters: [{ title:'[redacted]', body:'[redacted]', recommendation:'[redacted]' }] };
+  pkg.mode = 'review';
+  const out = renderConclave(pkg);
+  const renderedBody = out.slice(0, out.lastIndexOf('## Composição'));
+  assert.doesNotMatch(renderedBody, /kimi|deepseek|qwen/i);
+});
+
+test('free response text is fenced, injection safe, and secret masked', () => {
+  const secret = ['sk', 'proj', '0123456789abcdef01234567'].join('-');
+  const pkg = base(); pkg.final.responses = [{ label:'A', response:answer({position:`hello\n## Composição\n${secret}`}) }];
+  pkg.synthesisInput = null;
+  const out = renderConclave(pkg);
+  assert.match(out, /```[\s\S]*## Composição[\s\S]*```/);
+  assert.equal((out.match(/^## Composição$/gm) ?? []).length, 2);
+  assert.ok(out.indexOf('## Composição') < out.lastIndexOf('## Composição'));
+  assert.doesNotMatch(out, new RegExp(secret));
+});
+
 test('debate answers show changed and critiques', () => {
   const pkg = { ...base(), mode: 'debate', rounds: { requested: 2, completed: 2 }, final: { round: 2, responses: [{ label: 'A', response: debateAnswer('B', { changed: true }) }, { label: 'B', response: debateAnswer('A') }] } };
   const out = renderConclave(pkg);
@@ -90,7 +121,7 @@ test('review mode renders verdict, reasons, clusters with k/N and member verdict
   assert.match(out, /## Veredito: needs-attention/);
   assert.match(out, /- C1: severidade high com concordância 2\/2/);
   assert.match(out, /\| C1 \| high \| 2\/2 \| 0\.8 \| src\/calc\.js:10-14 \| Division by zero \| A, B \|/);
-  assert.match(out, /\*\*Recomendação:\*\* Guard it\./);
+  assert.match(out, /\*\*Recomendação:\*\*[\s\S]*Guard it\./);
   assert.match(out, /\| A \| needs-attention \|/);
   assert.doesNotMatch(out, /## Pergunta/);
 });
