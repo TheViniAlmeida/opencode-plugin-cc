@@ -24,5 +24,4 @@ Answer the question below on its merits. You work in read-only mode: you may rea
 - evidence: references you actually checked, as file, line_start, line_end and note. Use null lines when the evidence is a whole file. Leave the list empty rather than inventing references.
 - would_change_mind_if: the specific fact or argument that would make you switch.
 - Do not say who or what you are: no model, vendor, product or provider names. Refer to yourself only as member {{SELF_LABEL}}.
-- Reply only through the structured output.
 </rules>

@@ -29,5 +29,4 @@ The other members answered the same question in the previous round. They appear 
 - Weigh arguments and evidence, never the presumed identity of a peer.
 - Read-only: you may read files to verify a peer's evidence; do not edit files or run commands.
 - Do not mention model, vendor, product or provider names.
-- Reply only through the structured output.
 </rules>

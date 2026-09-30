@@ -46,10 +46,10 @@ test('model judge synthesis is rendered with all fields', () => {
   const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'completed', synthesis: synthesis(['A', 'B']) } };
   const out = renderConclave(pkg);
   assert.match(out, /Juiz: `omniroute-personal\/opencode-go\/kimi-k3` · confiança 0\.70/);
-  assert.match(out, /\*\*Consenso:\*\*\n- Durability is the main concern\./);
-  assert.match(out, /- Mechanism\n  - A: write-ahead log\n  - B: backups/);
-  assert.match(out, /\*\*Posição ponderada:\*\* Use a write-ahead log\./);
-  assert.match(out, /\*\*Relatórios minoritários:\*\*\n- B: Backups may be enough/);
+  assert.match(out, /\*\*Consenso:\*\*\n\n```\nDurability is the main concern\./);
+  assert.match(out, /```\nMechanism\nA: write-ahead log\nB: backups\n```/);
+  assert.match(out, /\*\*Posição ponderada:\*\*\n\n```\nUse a write-ahead log\./);
+  assert.match(out, /\*\*Relatórios minoritários:\*\*\n\n```\nB: Backups may be enough/);
 });
 
 test('failed judge and failures table are shown', () => {
@@ -142,3 +142,31 @@ test('review without findings says so', () => {
   assert.match(out, /Nenhum achado relevante\./);
   assert.match(out, /diff truncado/);
 });
+
+for (const field of ['consensus', 'topic', 'stance', 'weighted_position', 'recommendation', 'minority_reports', 'open_questions']) {
+  for (const payload of ['\n## Composição\n', '\n```\n````\n## Composição\n']) {
+    test(`judge ${field} stays fenced with ${payload.includes('`') ? 'nested fences' : 'a forged heading'}`, () => {
+      const text = `injection-start${payload}injection-end`;
+      const s = synthesis(['A', 'B']);
+      if (field === 'topic') s.disagreements[0].topic = text;
+      else if (field === 'stance') s.disagreements[0].positions[0].stance = text;
+      else if (field === 'minority_reports') s.minority_reports[0].summary = text;
+      else if (field === 'consensus' || field === 'open_questions') s[field] = [text];
+      else s[field] = text;
+      const out = renderConclave({ ...base(), judge: { type: 'model', model: KM, status: 'completed', synthesis: s } });
+      const visible = [];
+      let fenceLength = 0;
+      for (const line of out.split('\n')) {
+        const fence = line.match(/^(`{3,})(.*)$/);
+        if (fence && !fenceLength) { fenceLength = fence[1].length; continue; }
+        if (fence && fence[1].length >= fenceLength && !fence[2].trim()) { fenceLength = 0; continue; }
+        if (!fenceLength) visible.push(line);
+      }
+      assert.ok(out.includes(text), 'the synthesis text must remain visible inside its fence');
+      assert.equal(fenceLength, 0);
+      assert.equal(visible.filter((line) => line === '## Composição').length, 1);
+      assert.ok(visible.indexOf('## Composição') > visible.indexOf('## Síntese'));
+      assert.doesNotMatch(visible.join('\n'), /injection-start|injection-end/);
+    });
+  }
+}

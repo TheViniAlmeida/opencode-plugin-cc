@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runConclave, buildKnownNames, loadConclaveAssets, validateSchema, REDACTED_NAME } from '../../plugins/opc/scripts/lib/conclave.mjs';
+import { runConclave, buildKnownNames, loadConclaveAssets, validateSchema, REDACTED_NAME, ConclavePersistenceError } from '../../plugins/opc/scripts/lib/conclave.mjs';
 import { renderConclave } from '../../plugins/opc/scripts/lib/render.mjs';
 import { makeCatalog, MEMBERS, KM, answer, debateAnswer, synthesis, ok, failed } from './_conclave-fixtures.mjs';
 
@@ -137,3 +137,86 @@ test('runConclave rejects when onEvent rejects without an unhandled rejection', 
   const h = harness(() => ok(answer(), 'ses'), { onEvent: async () => { throw new Error('event persistence failed'); } });
   await assert.rejects(h.run(), /event persistence failed/);
 });
+
+for (const role of ['member', 'judge']) {
+  test(`marked ${role} persistence errors propagate unchanged`, async () => {
+    const error = new ConclavePersistenceError(Object.assign(new Error('state write failed'), { code: 'EIO' }));
+    const h = harness((spec) => {
+      if (spec.role === role) throw error;
+      return ok(answer(), `ses_${spec.label}`);
+    }, { judge: { type: 'model', ...MEMBERS[2] } });
+    await assert.rejects(h.run(), (err) => err === error && err.code === 'coordinator_error');
+  });
+}
+
+test('cancelled turn remains a member failure when the other members reach quorum', async () => {
+  const h = harness((spec) => spec.label === 'A'
+    ? { ...failed('Cancelled'), status: 'cancelled' }
+    : ok(answer(), `ses_${spec.label}`));
+  const pkg = await h.run();
+  assert.equal(pkg.status, 'completed');
+  assert.deepEqual(pkg.failures.map((f) => [f.label, f.errorType]), [['A', 'Cancelled']]);
+});
+
+test('persistence failure drains in-flight turns and stops scheduling queued members', async () => {
+  let release, started;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const running = new Promise((resolve) => { started = resolve; });
+  let drained = false;
+  const error = new ConclavePersistenceError(new Error('state write failed'));
+  const h = harness(async (spec) => {
+    if (spec.label === 'A') { await running; throw error; }
+    started();
+    await blocked;
+    drained = true;
+    return ok(answer(), `ses_${spec.label}`);
+  }, { maxParallel: 2 });
+  let settled = false;
+  const result = h.run().finally(() => { settled = true; });
+  const rejection = assert.rejects(result, (err) => err === error);
+  await running;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  release();
+  await rejection;
+  assert.equal(drained, true);
+  assert.deepEqual(h.calls.map((c) => c.label), ['A', 'B']);
+});
+
+test('evidence file names are anonymized in packages, peers, judge and Markdown', async () => {
+  const evidence = [{ file: 'deepseek/notes.md', line_start: 1, line_end: 2, note: 'Checked notes.' }];
+  const h = harness((spec) => spec.role === 'judge'
+    ? ok(synthesis(['A', 'B', 'C']), 'ses_judge')
+    : ok(spec.round === 1 ? answer({ evidence }) : debateAnswer(peerOf(spec), { evidence }), `ses_${spec.label}`),
+  { mode: 'debate', rounds: 2, judge: { type: 'model', ...MEMBERS[2] } });
+  const pkg = await h.run();
+  const json = JSON.stringify(pkg);
+  assert.doesNotMatch(json.slice(0, json.indexOf('"composition":')), /deepseek/i);
+  for (const round of pkg.roundsData) {
+    for (const entry of round.responses) assert.equal(entry.response.evidence[0].file, '[redacted]/notes.md');
+  }
+  assert.equal(pkg.synthesisInput.responses[0].response.evidence[0].file, '[redacted]/notes.md');
+  for (const call of h.calls.filter((c) => c.round === 2 || c.role === 'judge')) {
+    assert.doesNotMatch(call.prompt, /deepseek/i);
+    assert.ok(call.prompt.includes('[redacted]/notes.md'));
+  }
+  const markdown = renderConclave(pkg);
+  assert.doesNotMatch(markdown.slice(0, markdown.indexOf('## Composição')), /deepseek/i);
+  assert.deepEqual(evidence[0], { file: 'deepseek/notes.md', line_start: 1, line_end: 2, note: 'Checked notes.' });
+});
+
+for (const mode of ['text', 'tool']) {
+  test(`${mode} member, debate and judge prompts have exactly one mode-specific contract`, async () => {
+    const h = harness((spec) => spec.role === 'judge'
+      ? ok(synthesis(['A', 'B', 'C']), 'ses_judge')
+      : ok(spec.round === 1 ? answer() : debateAnswer(peerOf(spec)), `ses_${spec.label}`),
+    { mode: 'debate', rounds: 2, structuredOutput: mode, judge: { type: 'model', ...MEMBERS[2] } });
+    await h.run();
+    assert.equal(h.calls.length, 7);
+    for (const { prompt } of h.calls) {
+      assert.doesNotMatch(prompt, /Reply only through the structured output/);
+      assert.equal(prompt.split('Return your answer only through the structured output.').length - 1, mode === 'tool' ? 1 : 0);
+      assert.equal(prompt.split('Return only one JSON object inside a single ```json fence').length - 1, mode === 'text' ? 1 : 0);
+    }
+  });
+}

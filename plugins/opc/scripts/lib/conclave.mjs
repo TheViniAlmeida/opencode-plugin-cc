@@ -568,14 +568,19 @@ export function conclaveVerdict(clusters, memberVerdicts) {
 async function mapLimit(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;
+  let stopped = false;
   const width = Math.max(1, Math.min(limit || 1, items.length));
-  await Promise.all(Array.from({ length: width }, async () => {
-    while (next < items.length) {
+  const lanes = await Promise.allSettled(Array.from({ length: width }, async () => {
+    while (!stopped && next < items.length) {
       const i = next;
       next += 1;
-      results[i] = await fn(items[i], i);
+      try { results[i] = await fn(items[i], i); }
+      catch (err) { stopped = true; throw err; }
     }
   }));
+  // Drain in-flight turns before the worker finalizes their jobs and closes the API.
+  const failure = lanes.find((lane) => lane.status === 'rejected');
+  if (failure) throw failure.reason;
   return results;
 }
 
@@ -590,9 +595,18 @@ function outputContract(mode, schema) {
   return mode === 'tool' ? 'Return your answer only through the structured output.' : `Return only one JSON object inside a single \`\`\`json fence, with no text outside it. Follow this JSON Schema:\n${JSON.stringify(schema, null, 2)}`;
 }
 
+export class ConclavePersistenceError extends Error {
+  constructor(cause) {
+    super(cause?.message ?? String(cause), { cause });
+    this.name = 'ConclavePersistenceError';
+    this.code = 'coordinator_error';
+  }
+}
+
 async function safeTurn(deps, spec) {
   try { return await deps.turn(spec); }
   catch (err) {
+    if (err instanceof ConclavePersistenceError) throw err;
     return { status: 'failed', sessionID: spec.sessionID ?? null, structured: null, finalText: '', errorType: err?.code ?? err?.name ?? 'Error', errorClass: 'fatal', errorMessage: err?.message ?? String(err) };
   }
 }
@@ -614,7 +628,7 @@ function failureRecord({ label, round, role, turn, check }) {
 
 const STRUCTURAL_FIELDS = new Set([
   'type', 'status', 'mode', 'label', 'labels', 'round', 'role', 'errorType', 'errorClass',
-  'verdict', 'severity', 'file', 'line', 'line_start', 'line_end', 'agreement', 'id', 'ids', 'code',
+  'verdict', 'severity', 'line', 'line_start', 'line_end', 'agreement', 'id', 'ids', 'code',
   'schemaVersion', 'kind', 'confidence', 'validMembers', 'meanConfidence', 'rounds',
   'quorum', 'durationMs', 'startedAt', 'endedAt', 'sessionID', 'model', 'target',
 ]);
@@ -626,13 +640,18 @@ function anonymizeFreeText(value, knownNames) {
   return value;
 }
 
+function anonymizeFilePath(value, knownNames) {
+  if (typeof value !== 'string') return value;
+  return value.split(/([\\/])/).map((part) => anonymize(part, knownNames)).join('');
+}
+
 function anonymizeModelContent(value, knownNames) {
   if (typeof value === 'string') return anonymize(value, knownNames);
   if (Array.isArray(value)) return value.map((item) => anonymizeModelContent(item, knownNames));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [
     key,
-    STRUCTURAL_FIELDS.has(key) ? item : anonymizeModelContent(item, knownNames),
+    key === 'file' ? anonymizeFilePath(item, knownNames) : STRUCTURAL_FIELDS.has(key) ? item : anonymizeModelContent(item, knownNames),
   ]));
 }
 
@@ -640,6 +659,7 @@ function anonymizeConclavePackage(value, knownNames) {
   if (Array.isArray(value)) return value.map((item) => anonymizeConclavePackage(item, knownNames));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (key === 'file') return [key, anonymizeFilePath(item, knownNames)];
     if (STRUCTURAL_FIELDS.has(key) || key === 'question' || key === 'composition' || key === 'memberVerdicts' || key === 'reasons') return [key, item];
     if (key === 'response' || key === 'structured' || key === 'synthesis') return [key, anonymizeModelContent(item, knownNames)];
     if (FREE_TEXT_FIELDS.has(key)) return [key, anonymizeFreeText(item, knownNames)];

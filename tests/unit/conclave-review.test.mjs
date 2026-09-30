@@ -165,3 +165,26 @@ test('the review prompt shipped by F2b is compatible with the variables conclave
   const vars = { TARGET_LABEL: 't', REVIEW_INPUT: 'i', REVIEW_SUMMARY: 's', USER_FOCUS: 'f', REVIEW_COLLECTION_GUIDANCE: 'g', PROJECT_CONTEXT: '' };
   assert.doesNotThrow(() => fillTemplate(realAssets.prompts.review, vars, { strict: true }));
 });
+
+test('review file names are anonymized after clustering raw paths', async () => {
+  const reviews = Object.fromEntries(['A', 'B', 'C'].map((label) => [label, {
+    verdict: 'needs-attention', summary: 'Check the guard.', next_steps: [],
+    findings: [finding(`src/${label === 'C' ? 'qwen' : 'deepseek'}/calc.js`, 10, 12, 'Division by zero', 'high', 0.9)],
+  }]));
+  const h = harness((spec) => spec.role === 'judge'
+    ? ok(synthesis(['A', 'B', 'C']), 'ses_judge')
+    : ok(reviews[spec.label], `ses_${spec.label}`), { judge: { type: 'model', ...MEMBERS[2] } });
+  const pkg = await h.run();
+  // Both paths anonymize identically, but only the two identical raw paths cluster.
+  assert.equal(pkg.review.clusters.length, 2);
+  assert.deepEqual(pkg.review.clusters.map((c) => c.labels).sort(), [['A', 'B'], ['C']]);
+  assert.ok(pkg.review.clusters.every((c) => c.file === 'src/[redacted]/calc.js'));
+  const json = JSON.stringify(pkg);
+  assert.doesNotMatch(json.slice(0, json.indexOf('"composition":')), /deepseek|qwen/i);
+  assert.doesNotMatch(h.calls.find((c) => c.role === 'judge').prompt, /deepseek|qwen/i);
+  assert.equal(pkg.final.responses[0].response.findings[0].file, 'src/[redacted]/calc.js');
+  assert.equal(pkg.synthesisInput.review.clusters[0].file, 'src/[redacted]/calc.js');
+  const markdown = renderConclave(pkg);
+  assert.doesNotMatch(markdown.slice(0, markdown.indexOf('## Composição')), /deepseek|qwen/i);
+  assert.equal(reviews.A.findings[0].file, 'src/deepseek/calc.js');
+});

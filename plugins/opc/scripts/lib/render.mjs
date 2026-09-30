@@ -1192,15 +1192,15 @@ function renderConclaveSynthesis(pkg) {
   }
   const s = judge.synthesis;
   lines.push(`Juiz: \`${judge.model}\` · confiança ${Number(s.confidence).toFixed(2)}`, '');
-  lines.push('**Consenso:**', s.consensus.length ? bulletList(s.consensus) : '- (nenhum)', '');
+  lines.push('**Consenso:**', '', s.consensus.length ? orchFence(s.consensus.join('\n')) : '- (nenhum)', '');
   lines.push('**Divergências:**');
   if (s.disagreements.length === 0) lines.push('- (nenhuma)');
   for (const d of s.disagreements) {
-    lines.push(`- ${d.topic}`);
-    for (const p of d.positions) lines.push(`  - ${p.members.join(', ')}: ${p.stance}`);
+    lines.push('', orchFence([d.topic, ...d.positions.map((p) => `${p.members.join(', ')}: ${p.stance}`)].join('\n')));
   }
-  lines.push('', `**Posição ponderada:** ${s.weighted_position}`, '', `**Recomendação:** ${s.recommendation}`, '');
-  if (s.minority_reports.length) lines.push('**Relatórios minoritários:**', bulletList(s.minority_reports.map((m) => `${m.members.join(', ')}: ${m.summary}`)), '');
+  lines.push('', '**Posição ponderada:**', '', orchFence(s.weighted_position), '', '**Recomendação:**', '', orchFence(s.recommendation), '');
+  if (s.minority_reports.length) lines.push('**Relatórios minoritários:**', '', orchFence(s.minority_reports.map((m) => `${m.members.join(', ')}: ${m.summary}`).join('\n')), '');
+  if (s.open_questions?.length) lines.push('**Questões em aberto:**', '', orchFence(s.open_questions.join('\n')), '');
   return lines.join('\n');
 }
 

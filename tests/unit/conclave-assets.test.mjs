@@ -25,6 +25,13 @@ test('conclave prompts instruct models in English', () => {
   for (const text of [prompts.member, prompts.debate, prompts.judge]) assert.match(text, /\b(the|you|your|member|answer|position|evidence|read-only)\b/i);
   for (const text of [prompts.member, prompts.debate, prompts.judge]) assert.doesNotMatch(text, /\b(você|responda|síntese|evidências|somente leitura)\b/i);
 });
+test('conclave prompt templates leave the output mode solely to OUTPUT_CONTRACT', () => {
+  const { prompts } = loadConclaveAssets();
+  for (const text of [prompts.member, prompts.debate, prompts.judge]) {
+    assert.equal(text.match(/\{\{OUTPUT_CONTRACT\}\}/g)?.length, 1);
+    assert.doesNotMatch(text, /only through the structured output|single ```json fence/i);
+  }
+});
 test('conclave prompts never name a model vendor or provider', () => {
   const { prompts } = loadConclaveAssets();
   for (const text of [prompts.member, prompts.debate, prompts.judge]) assert.doesNotMatch(text, /deepseek|qwen|kimi|claude|anthropic|openai|gpt|gemini|omniroute|opencode/i);

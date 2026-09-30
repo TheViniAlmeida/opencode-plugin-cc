@@ -35,5 +35,4 @@ Write the synthesis:
 - Do not count votes blindly: one well-evidenced answer can outweigh several unsupported ones; say so when it happens.
 - You may read files to check cited evidence; do not edit files or run commands.
 - Refer to members only by label. Do not guess or mention which model, vendor or provider wrote an answer.
-- Reply only through the structured output.
 </rules>

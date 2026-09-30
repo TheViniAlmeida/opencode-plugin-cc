@@ -6,7 +6,7 @@ import { buildCatalog } from '../lib/models.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
 import { createGroup, updateJob, readJob, spawnWorker, waitForJob, assertNotInsideServer, withServerLock, refreshGroup, appendJobLog, ACTIVE_STATUSES, listGroupMembers, recordAttempt } from '../lib/jobs.mjs';
 import { resolveReviewTarget, collectReviewContext } from '../lib/git.mjs';
-import { composeMembers, validateConclaveOptions, runConclave, buildKnownNames, loadConclaveAssets } from '../lib/conclave.mjs';
+import { composeMembers, validateConclaveOptions, runConclave, buildKnownNames, loadConclaveAssets, ConclavePersistenceError } from '../lib/conclave.mjs';
 import { renderConclave } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { redactOutput, redactText, safeOutputText } from '../lib/redact.mjs';
@@ -71,7 +71,7 @@ export async function run(ctx, argv) {
   } finally { conn.close(); }
 }
 
-export async function runWorker(ctx, job, request, { openApiImpl = openApi, turnRunner = runTurn } = {}) {
+export async function runWorker(ctx, job, request, { openApiImpl = openApi, turnRunner = runTurn, updateJobImpl = updateJob, recordAttemptImpl = recordAttempt } = {}) {
   const now = () => new Date().toISOString();
   let conn;
   try {
@@ -87,15 +87,30 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     const isCancelled = (id) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (id && readJob(ctx.stateDir, id)?.cancelRequestedAt));
     const turn = async (spec) => {
       const id = spec.role === 'judge' ? request.judge.jobId : ids.get(spec.label);
-      await updateJob(ctx.stateDir, id, { status: 'running', phase: spec.role === 'judge' ? 'judging' : `round-${spec.round}`, attemptInFlight: true, ...(!spec.sessionID ? { startedAt: now() } : {}) });
-      const result = await turnRunner({ api: conn.api, hub: conn.hub,
-        request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, ...(ctx.config.conclave?.structuredOutput === 'tool' ? { format: { type: 'json_schema', schema: spec.schema } } : {}), textJson: ctx.config.conclave?.structuredOutput === 'tool' ? null : (value) => isPlainObject(value) ? null : 'resposta deve ser um objeto JSON', messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
-        isCancelled: () => isCancelled(id),
-        onSession: ({ sessionID, childSessionIDs = [] }) => updateJob(ctx.stateDir, id, { sessionID, childSessionIDs }).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.abort(sessionID); }),
-        onPermission: (p) => conn.api.replyPermission(p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
-        onQuestion: (q) => conn.api.rejectQuestion(q.id),
-      });
-      await recordAttempt(ctx.stateDir, id, { model: spec.member.full, status: result.status, sessionID: result.sessionID ?? null, errorType: result.errorType ?? null, errorClass: result.errorClass ?? null, errorMessage: safeOutputText(result.errorMessage ?? '') || null, completedAt: now() });
+      let persistenceError;
+      const persist = async (write) => {
+        try { return await write(); }
+        catch (err) {
+          persistenceError ??= new ConclavePersistenceError(err);
+          throw persistenceError;
+        }
+      };
+      await persist(() => updateJobImpl(ctx.stateDir, id, { status: 'running', phase: spec.role === 'judge' ? 'judging' : `round-${spec.round}`, attemptInFlight: true, ...(!spec.sessionID ? { startedAt: now() } : {}) }));
+      let result;
+      try {
+        result = await turnRunner({ api: conn.api, hub: conn.hub,
+          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, ...(ctx.config.conclave?.structuredOutput === 'tool' ? { format: { type: 'json_schema', schema: spec.schema } } : {}), textJson: ctx.config.conclave?.structuredOutput === 'tool' ? null : (value) => isPlainObject(value) ? null : 'resposta deve ser um objeto JSON', messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
+          isCancelled: () => isCancelled(id),
+          onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.abort(sessionID); }),
+          onPermission: (p) => conn.api.replyPermission(p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
+          onQuestion: (q) => conn.api.rejectQuestion(q.id),
+        });
+      } catch (err) {
+        throw persistenceError ?? err;
+      }
+      // runTurn converts callback exceptions to outcomes; retain the original write failure.
+      if (persistenceError) throw persistenceError;
+      await persist(() => recordAttemptImpl(ctx.stateDir, id, { model: spec.member.full, status: result.status, sessionID: result.sessionID ?? null, errorType: result.errorType ?? null, errorClass: result.errorClass ?? null, errorMessage: safeOutputText(result.errorMessage ?? '') || null, completedAt: now() }));
       return result;
     };
     const pkg = await runConclave({ ctx: { config: ctx.config, workspaceRoot: ctx.workspaceRoot }, question: request.question,
