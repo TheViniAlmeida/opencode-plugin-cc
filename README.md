@@ -4,8 +4,8 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F4b — orquestração entregue**. Descoberta, onboarding, turnos, reviews, sessões,
-> delegação, acompanhamento de jobs e orquestração em vários modelos estão disponíveis.
+> Estado: **F4c — conclave entregue**. Descoberta, onboarding, turnos, reviews, sessões,
+> delegação, acompanhamento de jobs, orquestração e conclave em vários modelos estão disponíveis.
 
 ## Requisitos
 
@@ -53,7 +53,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:sessions`, `/opc:session`, `/opc:subagent`, `/opc:command`, `/opc:attach` | F3 | disponível |
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | disponível |
 | `/opc:orchestrate` | F4b | disponível |
-| `/opc:conclave` | F4c | planejado |
+| `/opc:conclave` | F4c | disponível |
 | servidor MCP, `/opc:transfer` | F5 | planejado |
 
 ## Mapa do mínimo (paridade com o codex-plugin-cc)
@@ -66,6 +66,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:rescue` | Delega investigação ou correção ao OpenCode, continuando ou iniciando sessão |
 | `/opc:task`, `/opc:ask`, `/opc:plan` | Turnos avulsos de escrita, pergunta e plano |
 | `/opc:orchestrate` | Decompõe tarefas em partes executadas por vários modelos e sintetiza os resultados |
+| `/opc:conclave` | Consulta vários modelos em paralelo para opinião, debate ou review cruzado |
 | `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
 | `opc monitor` | Acompanha jobs do workspace no terminal, sem alterar estado |
 | `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo, diff e tarefas |
@@ -90,6 +91,8 @@ Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 - [Swarm: roteamento, fallback, monitor e orquestração](docs/swarm.md)
 - [Relatório da F4a](docs/phases/F4a-report.md)
 - [Relatório da F4b](docs/phases/F4b-report.md)
+- [Conclave](docs/conclave.md)
+- [Relatório da F4c](docs/phases/F4c-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos

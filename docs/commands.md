@@ -503,3 +503,50 @@ opc orchestrate --synthesizer omniroute-personal/cmd/<modelo> --background "Revi
 opc status orch-<id> --wait
 opc result orch-<id>
 ```
+
+## `/opc:conclave`
+
+Consulta vários modelos em paralelo e sintetiza consenso, divergências e recomendação. Guia
+completo: [conclave.md](conclave.md).
+
+- **Fase:** F4c · **Modelo invoca:** sim · **Terminal:** `opc conclave`
+- **Uso:** `/opc:conclave <pergunta> [--models a,b,c | --pool nome] [--mode opinion|review|debate] [--rounds 1-3] [--judge claude|<modelo>] [--quorum N] [--allow-judge-member] [--background]`
+
+Com `--raw-args-stdin`, ponha as flags e a pergunta dentro do corpo quoted do heredoc; não as
+passe na linha de comando. O parser reconhece flags conhecidas como palavras inteiras dentro do
+corpo.
+
+```bash
+opc conclave --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--models fast,strong,k3 --mode debate --rounds 2
+Vale um write-ahead log?
+OPC_ARGS_5f1d0c7a_EOF
+```
+
+| Flag | Padrão | Descrição |
+|---|---|---|
+| `<pergunta>` | — | Obrigatória em `opinion` e `debate`; em `review`, vira o foco |
+| `--models a,b,c` | — | Membros; exclusiva com `--pool` |
+| `--pool nome` | `conclave.defaultPool` | Pool definida em `conclave.pools` |
+| `--mode` | `opinion` | `opinion`, `debate` (2–3 rodadas) ou `review` (diff atual, 1 rodada) |
+| `--rounds N` | `opinion`: `conclave.rounds`; `debate`: 2 | Inteiro de 1 a 3 |
+| `--judge` | `conclave.judge` (`claude`) | `claude` ou modelo sujeito à política |
+| `--quorum N` | `conclave.quorum` (2) | Respostas válidas mínimas; de 2 ao total de membros |
+| `--allow-judge-member` | desligado | Permite juiz que também é membro |
+| `--base ref`, `--scope auto\|working-tree\|branch` | `auto` | Apenas em `--mode review` |
+| `--background` | desligado | Devolve o id do job imediatamente |
+| `--wait-timeout s` | sem limite | Limite do foreground; exit 6, o job continua |
+| `--json` | desligado | Pacote completo em JSON |
+
+**Exit codes:** 0 concluído, inclusive review `needs-attention`; 2 composição ou uso inválidos;
+4 política ou `OPC_INSIDE_SERVER=1`; 5 servidor; 6 `--wait-timeout`; 7 quorum não atingido ou
+coleta de diff falhou; 130 cancelado.
+
+```bash
+opc conclave "JSON ou TOML para a config do CLI?"
+opc conclave --models fast,strong,k3 --mode debate --rounds 2 --judge strong "Vale um write-ahead log?"
+opc conclave --mode review --quorum 2 "Foque em segurança"
+opc conclave --pool duo --background "Qual estratégia de cache?"
+```
+
+Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).

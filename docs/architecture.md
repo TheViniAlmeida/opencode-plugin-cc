@@ -96,3 +96,24 @@ O coordenador atualiza membros e grupo por dependências injetadas, registra ten
 `refreshGroup` como único finalizador de estado agregado. Falhas de persistência tornam-se
 `coordinator_error`; o cancelamento antes da criação/publicação da sessão é deferido e conferido
 antes de enviar o prompt do membro.
+
+## Conclave (F4c)
+
+`lib/conclave.mjs` concentra lógica pura e testável: composição, anonimização, validação local
+de schema, rodadas, agrupamento de achados, veredito e síntese. `runConclave` recebe o turno por
+injeção em `deps.turn`; o módulo não acessa HTTP diretamente.
+
+`scripts/commands/conclave.mjs` resolve membros contra catálogo e política, registra um único
+job-grupo `conc-…` por `createGroup` e despacha um coordenador. Os filhos têm `role`
+`member:<rótulo>` e, quando aplicável, `judge`; um único worker abre uma `EventHub` compartilhada
+e conecta `deps.turn` a `runTurn`.
+
+Antes de `composition`, toda string produzida por membro ou juiz é anonimizada. Os campos
+estruturais e a pergunta do usuário permanecem literais; `composition` é deliberadamente o
+mapeamento identificador, exibido por último. `refreshGroup(..., { final: true, decorate })` é o
+único finalizador do grupo e preserva um grupo já cancelado.
+
+Enquanto a sessão de membro ou juiz está sendo criada, `attemptInFlight` permite cancelamento
+adiado. A sessão é publicada antes do prompt; se o cancelamento chegou nesse intervalo, ela é
+abortada antes de enviar a pergunta. Falhas de persistência do coordenador são explícitas e
+encerram o grupo como `coordinator_error`.

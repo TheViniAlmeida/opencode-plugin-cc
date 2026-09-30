@@ -6,6 +6,15 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado — F4c (conclave)
+
+- `/opc:conclave` e `opc conclave`: consulta paralela a N ≥ 2 modelos nos modos `opinion`, `debate` (2–3 rodadas anônimas na mesma sessão de cada membro) e `review` (review cruzado do diff com agrupamento de achados e concordância `k/N`).
+- Composição com política por membro, rótulos aleatórios, quorum por rodada e descarte de membros com timeout, `StructuredOutputError` ou saída fora do schema.
+- Anonimização de nomes de modelo, vendor e provider antes do debate e do juiz.
+- Síntese por juiz modelo (schema `conclave-synthesis`, `--allow-judge-member`) ou pelo Claude com a skill `opc-conclave`.
+- Schemas `conclave-member` e `conclave-synthesis`; prompts `conclave-member.md`, `conclave-debate.md` e `conclave-judge.md`.
+- Documentação: `docs/conclave.md`, seção do conclave em `docs/commands.md`, `docs/configuration.md`, arquitetura e troubleshooting.
+
 ### Adicionado — F4b (orquestração)
 
 - F4b — Orquestração: `/opc:orchestrate` e `opc orchestrate` (decomposição por planner,
