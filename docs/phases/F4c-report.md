@@ -29,13 +29,13 @@ Conferidas em 30/09/2026 contra a `main` com a F4b mergeada.
 
 ## 2. `npm test`
 
-Resultado: **PASSOU** — `node scripts/run-tests.mjs` (o mesmo comando de `npm test`) fora do sandbox, no commit `a7005e9`:
+Resultado: **PASSOU** — `node scripts/run-tests.mjs` (o mesmo comando de `npm test`) fora do sandbox, no commit final do código (`fix(conclave): participant tokens, group start write and judge error type`):
 
 ```
-1..1780
-# tests 1780
+1..1782
+# tests 1782
 # suites 0
-# pass 1779
+# pass 1781
 # fail 0
 # cancelled 0
 # skipped 1
@@ -197,6 +197,7 @@ Sem id pessoal de provider nem caminho pessoal nos arquivos versionados (`grep` 
 | Um só contrato de saída por prompt; no review `tool`, instrução explícita que substitui a cerca `json` da F2b | Revisões: instruções conflitantes | Não |
 | Nomes conhecidos: do catálogo só identificadores específicos; famílias do catálogo só da lista curada; nome de exibição só como frase; números, versões e tokens de código fora | Ao vivo: catálogo de 8501 modelos redigia prosa comum; provider `nan` redigia `NaN` | Não |
 | Decisão: palavras do id de provider só contam quando específicas; o id completo sai sempre | Re-revisão: `omniroute-personal` redigia "personal"; o id nomeia a rota, não o modelo | Não |
+| Tokens do id do próprio participante contam mesmo quando parecem código (`v0`); a primeira gravação do grupo e o `errorType` do juiz também protegidos | Segunda re-revisão | Não |
 | Respostas no formato do schema aceitas quando validam (`properties`; `$schema`/`$id`/`title`/`type`/`description` ao lado dos valores) | Ao vivo: um membro perdido por execução | Não |
 | Testes ao vivo com rotas por ambiente | `opencode-go/*` responde 402 no gateway | Não |
 

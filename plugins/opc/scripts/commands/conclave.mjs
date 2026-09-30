@@ -74,22 +74,22 @@ export async function run(ctx, argv) {
 export async function runWorker(ctx, job, request, { openApiImpl = openApi, turnRunner = runTurn, updateJobImpl = updateJob, recordAttemptImpl = recordAttempt } = {}) {
   const now = () => new Date().toISOString();
   let conn;
+  // Every coordinator write outside a turn also finalizes as coordinator_error when it fails.
+  const persisted = async (write) => {
+    try { return await write(); }
+    catch (err) { throw err instanceof ConclavePersistenceError ? err : new ConclavePersistenceError(err); }
+  };
   try {
     const linked = listGroupMembers(ctx.stateDir, job.id);
     const idsByRole = new Map(linked.map((m) => [m.role, m.id]));
     request = { ...request, members: request.members.map((m) => ({ ...m, jobId: idsByRole.get(`member:${m.label}`) })), judge: { ...request.judge, jobId: idsByRole.get('judge') ?? null } };
-    await updateJob(ctx.stateDir, job.id, { status: 'running', phase: 'starting', startedAt: now() });
+    await persisted(() => updateJobImpl(ctx.stateDir, job.id, { status: 'running', phase: 'starting', startedAt: now() }));
     conn = await openApiImpl(ctx, { withHub: true, respawn: false });
     const catalog = buildCatalog(await conn.api.providers());
     const knownNames = buildKnownNames(catalog, { extraModels: [...request.members, ...(request.judge.type === 'model' ? [request.judge] : [])] });
     const rules = profileRules(ctx, 'read-only');
     const ids = new Map(request.members.map((m) => [m.label, m.jobId]));
     const isCancelled = (id) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (id && readJob(ctx.stateDir, id)?.cancelRequestedAt));
-    // Every coordinator write outside a turn also finalizes as coordinator_error when it fails.
-    const persisted = async (write) => {
-      try { return await write(); }
-      catch (err) { throw err instanceof ConclavePersistenceError ? err : new ConclavePersistenceError(err); }
-    };
     const turn = async (spec) => {
       const id = spec.role === 'judge' ? request.judge.jobId : ids.get(spec.label);
       let persistenceError;

@@ -344,12 +344,13 @@ export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   };
   // A lone catalog token is specific when curated, or when it mixes letters and digits; numbers, versions
   // and code tokens (`18`, `v0`, `e2e`, `utf8`) collide with ordinary prose and stay out.
-  const specificToken = (v) => CURATED_NAME_WORDS.has(v.toLowerCase())
-    || (/\p{L}/u.test(v) && /\p{N}/u.test(v) && !CODE_TOKEN.test(v));
+  const mixed = (v) => /\p{L}/u.test(v) && /\p{N}/u.test(v);
+  const specificToken = (v) => CURATED_NAME_WORDS.has(v.toLowerCase()) || (mixed(v) && !CODE_TOKEN.test(v));
+  // A participant's own model tokens always count, code-like or not (a member on `v0` must not say "v0").
   const addToken = (value, participant = false) => {
     const v = String(value ?? '').trim();
     const word = v.toLowerCase();
-    if (specificToken(v) || (participant && v.length >= 3 && !GENERIC_NAME_WORDS.has(word))) addExact(v);
+    if (specificToken(v) || (participant && (mixed(v) || (v.length >= 3 && !GENERIC_NAME_WORDS.has(word))))) addExact(v);
   };
   const addProvider = (provider, participant = false) => {
     const id = String(provider ?? '').trim();

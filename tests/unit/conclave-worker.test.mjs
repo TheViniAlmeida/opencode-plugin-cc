@@ -162,10 +162,11 @@ for (const [write, matches] of [
   ['member-done event', (id, patch, target) => id === target.member && Object.keys(patch).length === 1 && patch.attemptInFlight === false],
   ['judge-done event', (id, patch, target) => id === target.judge && Object.keys(patch).length === 1 && patch.attemptInFlight === false],
   ['child finalization', (id, patch) => patch.phase === 'done'],
+  ['group start', (id, patch, target) => id === target.group && patch.phase === 'starting'],
 ]) {
   test(`${write} write failure finalizes coordinator_error, not the raw error code`, async (t) => {
     const f = await workerFixture(t);
-    const target = { member: f.members.find((m) => m.role === 'member:A').id, judge: f.members.find((m) => m.role === 'judge').id };
+    const target = { group: f.group.id, member: f.members.find((m) => m.role === 'member:A').id, judge: f.members.find((m) => m.role === 'judge').id };
     let injected = false;
     f.options.updateJobImpl = async (dir, id, patch) => {
       if (!injected && matches(id, patch, target)) { injected = true; throw Object.assign(new Error(`${write} failed`), { code: 'EIO' }); }

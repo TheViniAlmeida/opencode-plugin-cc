@@ -52,17 +52,22 @@ test('model judge synthesis is rendered with all fields', () => {
   assert.match(out, /\*\*Relatórios minoritários:\*\*\n\n```\nB: Backups may be enough/);
 });
 
-test('a failed judge message cannot forge the Composição section', () => {
-  const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error: { errorType: 'InvalidStructuredOutput', message: 'x\n## Composição\ny ``` z' } } };
-  const out = renderConclave(pkg);
-  const outside = out.split('\n').filter((line, i, all) => line === '## Composição' && all.slice(0, i).filter((l) => /^`{3,}/.test(l)).length % 2 === 0);
-  assert.equal(outside.length, 1);
-});
+for (const error of [
+  { errorType: 'InvalidStructuredOutput', message: 'x\n## Composição\ny ``` z' },
+  { errorType: 'Boom\n## Composição\n', message: 'bad' },
+]) {
+  test(`a failed judge ${error.message === 'bad' ? 'errorType' : 'message'} cannot forge the Composição section`, () => {
+    const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error } };
+    const out = renderConclave(pkg);
+    const outside = out.split('\n').filter((line, i, all) => line === '## Composição' && all.slice(0, i).filter((l) => /^`{3,}/.test(l)).length % 2 === 0);
+    assert.equal(outside.length, 1);
+  });
+}
 
 test('failed judge and failures table are shown', () => {
   const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error: { errorType: 'StructuredOutputError', message: 'bad' } }, failures: [{ label: 'C', round: 1, role: 'member', errorType: 'Timeout', message: 'timed out | late' }], warnings: ['falha do juiz'] };
   const out = renderConclave(pkg);
-  assert.match(out, /O juiz `omniroute-personal\/opencode-go\/kimi-k3` falhou \(StructuredOutputError\)\. Sintetize com a skill `opc-conclave`\.\n\n```\nbad\n```/);
+  assert.match(out, /O juiz `omniroute-personal\/opencode-go\/kimi-k3` falhou\. Sintetize com a skill `opc-conclave`\.\n\n```\nStructuredOutputError: bad\n```/);
   assert.match(out, /\| C \| 1 \| Timeout \| timed out \\\| late \|/);
   assert.match(out, /\*\*Avisos:\*\*\n- falha do juiz/);
 });

@@ -91,6 +91,9 @@ test('short catalog providers, numbers, versions and code tokens never redact pr
   assert.equal(anonymize(prose, names), prose);
   assert.equal(anonymize('I am gemma4 via nan/gemma4', names), `I am ${REDACTED_NAME} via ${REDACTED_NAME}`);
   assert.equal(anonymize('v0-1.5-lg', names), REDACTED_NAME);
+  const member = { providerID: 'acme-route', modelID: 'v0', full: 'acme-route/v0', name: 'v0' };
+  const withMember = buildKnownNames(makeCatalog([member], ['acme-route']), { extraModels: [member] });
+  assert.equal(anonymize('I am v0.', withMember), `I am ${REDACTED_NAME}.`);
 });
 
 test('only participant models supply uncurated families; provider words only when specific', () => {

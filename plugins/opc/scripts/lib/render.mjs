@@ -1187,8 +1187,8 @@ function renderConclaveSynthesis(pkg) {
     return lines.join('\n');
   }
   if (judge.status === 'failed') {
-    lines.push(`O juiz \`${judge.model}\` falhou (${judge.error?.errorType}). Sintetize com a skill \`opc-conclave\`.`, '');
-    if (judge.error?.message) lines.push(orchFence(judge.error.message), '');
+    lines.push(`O juiz \`${judge.model}\` falhou. Sintetize com a skill \`opc-conclave\`.`, '');
+    lines.push(orchFence([judge.error?.errorType, judge.error?.message].filter(Boolean).join(': ')), '');
     return lines.join('\n');
   }
   const s = judge.synthesis;

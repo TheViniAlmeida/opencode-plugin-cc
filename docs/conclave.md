@@ -48,7 +48,7 @@ valor diferente de 1 é erro de uso (exit 2).
    - do catálogo inteiro: só identificadores específicos, como ids completos, ids com namespace e ids de provider com 4 ou mais caracteres; um token isolado conta apenas se mistura letras e dígitos (`k2.6`, `r1`) ou pertence à lista curada de famílias e vendors (`openai`, `anthropic`, `alibaba`, `moonshot`, entre outros);
    - nomes de exibição, só como frase inteira, nunca palavra por palavra.
 
-   O id de provider nomeia a rota ou o gateway, não o modelo: o id completo (`omniroute-personal`) sai sempre, mas suas palavras (`personal`) só contam quando são específicas. Palavras genéricas (`flash`, `max`, `pro`, `mini`, `code`, `cmd`), números, versões e tokens de código (`18`, `v0`, `e2e`, `utf8`, `NaN`) não são removidos.
+   O id de provider nomeia a rota ou o gateway, não o modelo: o id completo (`omniroute-personal`) sai sempre, mas suas palavras (`personal`) só contam quando são específicas. Palavras genéricas (`flash`, `max`, `pro`, `mini`, `code`, `cmd`), números, versões e tokens de código (`18`, `v0`, `e2e`, `utf8`, `NaN`) não são removidos, exceto quando são tokens do id do próprio membro ou juiz (um membro em `v0` não pode dizer `v0`).
 
 Invariantes e limites:
 
