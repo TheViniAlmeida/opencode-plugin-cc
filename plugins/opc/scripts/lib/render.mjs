@@ -23,6 +23,7 @@ export const DELEGATION_COMMANDS = [
   { cli: 'opc plan', slash: '/opc:plan', use: 'planos de implementação: arquivos, ordem, escolhas, riscos e testes' },
   { cli: 'opc review --wait', slash: '/opc:review', use: 'revisão das alterações atuais' },
   { cli: 'opc orchestrate', slash: '/opc:orchestrate', use: 'trabalho com partes independentes que ganham com vários modelos' },
+  { cli: 'opc conclave', slash: '/opc:conclave', use: 'consulta paralela, debate e revisão por vários modelos' },
 ];
 
 export function delegationReminder(commands = DELEGATION_COMMANDS) {
