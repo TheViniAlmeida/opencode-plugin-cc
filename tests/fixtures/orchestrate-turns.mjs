@@ -9,10 +9,10 @@ export function promptText(body) {
   return (body?.parts ?? []).filter((p) => p?.type === 'text').map((p) => p.text).join('\n');
 }
 
-// planner = structured output requested; synthesizer = results block; subtask = <subtask id>.
+// planner = structured output requested or decompose prompt; synthesizer = results block; subtask = <subtask id>.
 export function classifyTurn(body) {
   const text = promptText(body);
-  if (body?.format?.type === 'json_schema') return { role: 'planner', subtaskId: null, text };
+  if (body?.format?.type === 'json_schema' || text.startsWith('You are the planner of a multi-model orchestration run by opc.')) return { role: 'planner', subtaskId: null, text };
   if (text.includes('<orchestration_results>')) return { role: 'synthesizer', subtaskId: null, text };
   const match = text.match(/<subtask id="([^"]+)">/);
   if (match) return { role: 'subtask', subtaskId: match[1], text };
@@ -28,7 +28,9 @@ export function makeOrchestrateScenario({ plan = null, plannerError = null, fail
       const delay = turn.role === 'subtask' ? subtaskDelayMs : 20;
       setTimeout(async () => {
         if (turn.role === 'planner') {
-          await fake.emitTurn(sessionID, plannerError ? { error: plannerError } : { text: '', structured: plan });
+          await fake.emitTurn(sessionID, plannerError ? { error: plannerError } : body?.format?.type === 'json_schema'
+            ? { text: '', structured: plan }
+            : { text: `\`\`\`json\n${JSON.stringify(plan)}\n\`\`\`` });
         } else if (turn.role === 'synthesizer') {
           await fake.emitTurn(sessionID, { text: synthesisText });
         } else if (turn.role === 'subtask' && failSubtasks.includes(turn.subtaskId)) {

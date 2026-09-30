@@ -34,7 +34,7 @@ test('executa plano válido, espalha modelos e mantém síntese Claude pendente'
   assert.equal(pkg.outcome, 'completed');
   assert.deepEqual(pkg.subtasks.map((s) => [s.id, s.status, s.result]), [['a', 'completed', 'RESULT[a]'], ['b', 'completed', 'RESULT[b]'], ['c', 'completed', 'RESULT[c]']]);
   assert.deepEqual(pkg.synthesis, { mode: 'claude', status: 'pending', model: null, text: null, errorMessage: null, attempts: [] });
-  assert.equal(calls[0].format.schema.properties.subtasks.maxItems, 5);
+  assert.equal(calls[0].format, null);
   assert.equal(calls[0].profile, 'read-only');
 });
 
@@ -165,7 +165,7 @@ test('rota vazia síncrona não impede o despacho das subtarefas seguintes', asy
 });
 
 test('runTurn throwing e todo texto do pacote são mascarados', async () => {
-  const secret = 'sk-test-orchestrator-secret-123';
+  const secret = ['sk', 'test', 'orchestrator', 'secret', '123'].join('-');
   registerSecret(secret);
   const plan = { rationale: `plan ${secret}`, subtasks: [sub('a'), sub('b')] };
   const { deps } = makeDeps({ plan, turn: async (spec) => { if (spec.subtaskId === 'a') throw new Error(`socket ${secret}`); return { status: 'completed', finalText: secret }; } });
@@ -185,20 +185,66 @@ test('AbortSignal cancela subtarefas pendentes e o grupo', async () => {
   assert.equal(pkg.subtasks[1].status, 'cancelled');
 });
 
-test('bookkeeping de membros é opcional e tolera falhas', async () => {
-  const started = [];
-  const finished = [];
-  const members = { start: async (role, fields) => { started.push([role, fields.subtaskId ?? null]); if (role === 'worker:2') throw new Error('TOO_MANY_JOBS'); return `m-${role}`; }, update: async () => {}, finish: async (id, patch) => { finished.push([id, patch.status]); } };
-  const { deps } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] }, members });
-  const logs = [];
-  deps.log = (line) => logs.push(line);
-  const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', flags: { synthesizer: 'model' }, deps });
-  assert.equal(pkg.status, 'completed');
-  assert.deepEqual(started, [['planner', null], ['worker:1', 'a'], ['worker:2', 'b'], ['synthesizer', null]]);
-  assert.deepEqual(finished.map((f) => f[0]).sort(), ['m-planner', 'm-synthesizer', 'm-worker:1']);
-  assert.equal(pkg.subtasks[1].memberId, null);
-  assert.ok(logs.some((l) => /bookkeeping de job membro falhou: TOO_MANY_JOBS/.test(l)));
+for (const operation of ['start', 'finish']) {
+  test(`C2: member ${operation} failure fails the coordinator and masks diagnostics`, async () => {
+    const secret = ['sk', 'proj', 'gatebookkeeping123456789'].join('-');
+    const logs = [];
+    const members = { start: async () => 'm-planner', finish: async () => {} };
+    members[operation] = async () => { throw new Error(`storage failed ${secret}`); };
+    const { deps, calls } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] }, members });
+    deps.log = (line) => logs.push(line);
+    const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', deps });
+    assert.equal(pkg.status, 'failed');
+    assert.equal(pkg.errorCode, 'coordinator_error');
+    assert.match(pkg.errorMessage, /storage failed/);
+    assert.equal(pkg.errorMessage.includes(secret), false);
+    assert.equal(logs.join(' ').includes(secret), false);
+    assert.ok(logs.some((line) => line.includes('storage failed')));
+    assert.equal(calls.length, operation === 'start' ? 0 : 1);
+  });
+}
+
+test('C2: worker registration failure waits for active siblings and starts no unregistered turn', async () => {
+  let siblingDone = false;
+  const members = { start: async (role) => { if (role === 'worker:2') throw new Error('registration failed'); return role; }, finish: async () => {} };
+  const { deps, calls } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b'), sub('c', { dependsOn: ['a'] })] }, members,
+    turn: async () => { await sleep(20); siblingDone = true; return { status: 'completed' }; } });
+  const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', deps });
+  assert.equal(pkg.status, 'failed');
+  assert.equal(pkg.errorCode, 'coordinator_error');
+  assert.equal(siblingDone, true);
+  assert.deepEqual(calls.filter((c) => c.role === 'worker').map((c) => c.subtaskId), ['a']);
 });
+
+for (const structured of [['bad'], 'bad']) {
+  test(`I2: present non-object planner output is invalid_plan (${typeof structured})`, async () => {
+    const { deps, calls } = makeDeps({ plannerResult: { status: 'completed', structured } });
+    const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', deps });
+    assert.equal(pkg.errorCode, 'invalid_plan');
+    assert.deepEqual(pkg.rawPlan, structured);
+    assert.deepEqual(pkg.planErrors, ['plano deve ser um objeto JSON']);
+    assert.equal(calls.length, 1);
+  });
+}
+
+for (const mode of ['text', 'tool']) {
+  test(`I4: planner requests ${mode} output with the effective schema`, async () => {
+    const { deps, calls } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] } });
+    await runOrchestration({ ctx: ctxOf({ orchestrate: { structuredOutput: mode } }), task: 't', flags: { maxSubtasks: 2 }, deps });
+    if (mode === 'text') {
+      assert.equal(calls[0].format, null);
+      assert.equal(typeof calls[0].textJson, 'function');
+      assert.equal(calls[0].textJson({}), null);
+      assert.match(calls[0].prompt, /apenas.*objeto JSON.*única cerca ```json/);
+      assert.match(calls[0].prompt, /"maxItems": 2/);
+      assert.match(calls[0].prompt, /"dependsOn"/);
+    } else {
+      assert.equal(calls[0].format.type, 'json_schema');
+      assert.equal(calls[0].format.schema.properties.subtasks.maxItems, 2);
+      assert.equal(calls[0].textJson, null);
+    }
+  });
+}
 
 test('flags.maxSubtasks sobrescreve o limite da configuração', async () => {
   const { deps } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b'), sub('c')] } });
@@ -230,4 +276,16 @@ test('mascara segredos em nomes de propriedades e valores de plano inválido', a
   assert.equal(serialized.includes(secretShapedValue), false);
   assert.equal(logged.includes(registeredSecret), false);
   assert.equal(logged.includes(secretShapedValue), false);
+});
+
+test('I2: invalid non-object raw plans stay masked', async () => {
+  const secret = ['sk', 'proj', 'gateinvalid123456789'].join('-');
+  for (const structured of [[secret], secret]) {
+    const { deps } = makeDeps({ plannerResult: { status: 'completed', structured } });
+    const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', deps });
+    assert.equal(pkg.errorCode, 'invalid_plan');
+    assert.ok(pkg.planErrors.length > 0);
+    assert.equal(JSON.stringify(pkg).includes(secret), false);
+    assert.ok(JSON.stringify(pkg.rawPlan).includes('***'));
+  }
 });

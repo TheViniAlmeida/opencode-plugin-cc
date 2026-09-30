@@ -46,6 +46,6 @@ test('prompt templates exist and use only known placeholders', () => {
   const decompose = read('plugins/opc/prompts/orchestrate-decompose.md');
   const synthesize = read('plugins/opc/prompts/orchestrate-synthesize.md');
   const names = (t) => [...new Set([...t.matchAll(/\{\{([A-Z_]+)\}\}/g)].map((m) => m[1]))].sort();
-  assert.deepEqual(names(decompose), ['AGENTS', 'MAX_SUBTASKS', 'PROJECT_CONTEXT', 'TARGET_RANGE', 'TASK', 'WRITE_MODE']);
+  assert.deepEqual(names(decompose), ['AGENTS', 'MAX_SUBTASKS', 'OUTPUT_CONTRACT', 'PROJECT_CONTEXT', 'TARGET_RANGE', 'TASK', 'WRITE_MODE']);
   assert.deepEqual(names(synthesize), ['RATIONALE', 'RESULTS', 'TASK']);
 });

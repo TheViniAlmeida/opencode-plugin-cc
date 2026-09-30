@@ -74,7 +74,7 @@ test('resolved member requests refresh the group pending state', async (t) => {
   assert.equal(readJob(stateDir, members[0].id).pendingRequest, null);
 });
 
-test('failed recordAttempt is logged and clears attemptInFlight', async (t) => {
+test('C2: failed recordAttempt fails the coordinator and clears attemptInFlight', async (t) => {
   const { root, stateDir } = groupFixture(t);
   const { group, members } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, [{ status: 'running', title: 'member' }]);
   const ctx = { stateDir, workspaceRoot: root, env: {}, config: { policy: {}, routing: {} } };
@@ -86,10 +86,10 @@ test('failed recordAttempt is logged and clears attemptInFlight', async (t) => {
       return { result: { status: 'completed' }, attempts: [{ model: 'p/a' }] };
     },
   });
-  await deps.runTurn({ role: 'worker', profile: 'read-only', prompt: 'p', title: 'member', memberId: members[0].id, candidates: [{ full: 'p/a' }] });
-  await deps.flush();
+  await assert.rejects(deps.runTurn({ role: 'worker', profile: 'read-only', prompt: 'p', title: 'member', memberId: members[0].id, candidates: [{ full: 'p/a' }] }), (err) => err.code === 'coordinator_error');
+  await assert.rejects(deps.flush(), (err) => err.code === 'coordinator_error');
   assert.equal(readJob(stateDir, members[0].id).attemptInFlight, false);
-  assert.match(fs.readFileSync(jobLogPath(stateDir, group.id), 'utf8'), /falha ao registrar tentativa: simulated record failure/);
+  assert.match(fs.readFileSync(jobLogPath(stateDir, group.id), 'utf8'), /falha ao registrar tentativa: .*simulated record failure/);
 });
 
 test('orchestrate registration uses createGroup under the server lock', async (t) => {
@@ -170,3 +170,72 @@ test('a requested cancellation remains cancelled when orchestration returns comp
   assert.notEqual(code, 0);
   assert.equal(readJob(stateDir, group.id).status, 'cancelled');
 });
+
+test('C1: member sessions are persisted while an attempt is in flight', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, [{ status: 'running' }]);
+  const memberId = members[0].id;
+  const deps = coordinatorDeps({ ctx: { stateDir, workspaceRoot: root, config: {}, env: {} }, job: group, request: {}, conn: { api: {}, hub: {} }, discovery: {},
+    turnRunner: async ({ onSession }) => {
+      await onSession({ sessionID: 'ses_active', childSessionIDs: [] });
+      assert.equal(readJob(stateDir, memberId).sessionID, 'ses_active');
+      assert.equal(readJob(stateDir, memberId).attemptInFlight, true);
+      await onSession({ sessionID: 'ses_active', childSessionIDs: ['ses_child'] });
+      assert.deepEqual(readJob(stateDir, memberId).childSessionIDs, ['ses_child']);
+      return { status: 'completed', sessionID: 'ses_active' };
+    },
+  });
+  await deps.runTurn({ role: 'worker', profile: 'read-only', prompt: 'p', title: 'member', memberId, candidates: [{ full: 'p/a', providerID: 'p', modelID: 'a' }] });
+});
+
+test('I1: fallback cancelled before its first attempt returns cancelled and exit 130', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, []);
+  const controller = new AbortController(); controller.abort();
+  const deps = coordinatorDeps({ ctx: { stateDir, workspaceRoot: root, config: {}, env: {} }, job: group, request: {}, conn: { api: {}, hub: {} }, discovery: {}, signal: controller.signal,
+    turnRunner: async () => assert.fail('no turn may start'),
+  });
+  const result = await deps.runTurn({ role: 'planner', profile: 'read-only', prompt: 'p', title: 'planner', candidates: [{ full: 'p/a' }] });
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(result.attempts, []);
+  const { exitCodeForJob } = await import('../../plugins/opc/scripts/commands/task.mjs');
+  assert.equal(exitCodeForJob(result), 130);
+});
+
+for (const operation of ['start', 'finish', 'update']) {
+  test(`C2: ${operation} failure persists a failed group with masked coordinator diagnostics`, async (t) => {
+    const { runOrchestration } = await import('../../plugins/opc/scripts/lib/orchestrator.mjs');
+    const { root, stateDir } = groupFixture(t);
+    const { group } = await createGroup(stateDir, { kind: 'orch', status: 'queued' }, []);
+    const secret = ['sk', 'proj', 'gatepersist123456789'].join('-');
+    let turns = 0;
+    const ctx = { stateDir, workspaceRoot: root, env: {}, config: {} };
+    const code = await runWorker(ctx, group, { task: 'audit', plannerRoute: { candidates: [{ full: 'p/a' }] } }, {
+      openApiImpl: async () => ({ api: {}, hub: {}, close() {} }),
+      discoveryLoader: async () => ({ agents: [] }),
+      orchestrationRunner: async (args) => {
+        args.deps.members[operation] = async () => { throw new Error(`storage failed ${secret}`); };
+        args.deps.runTurn = async (spec) => {
+          turns += 1;
+          if (operation === 'update') {
+            const { coordinatorError } = await import('../../plugins/opc/scripts/lib/orchestrator.mjs');
+            try { await args.deps.members.update(spec.memberId, { sessionID: 'ses_active' }); }
+            catch (err) { throw coordinatorError(err); }
+          }
+          return { status: 'completed', structured: { rationale: 'r', subtasks: [] } };
+        };
+        return runOrchestration(args);
+      },
+    });
+    assert.equal(code, 7);
+    const stored = readJob(stateDir, group.id);
+    assert.equal(stored.status, 'failed');
+    assert.equal(stored.errorCode, 'coordinator_error');
+    assert.match(stored.errorMessage, /storage failed/);
+    assert.equal(stored.errorMessage.includes(secret), false);
+    const log = fs.readFileSync(jobLogPath(stateDir, group.id), 'utf8');
+    assert.match(log, /storage failed/);
+    assert.equal(log.includes(secret), false);
+    assert.equal(turns, operation === 'start' ? 0 : 1);
+  });
+}

@@ -18,4 +18,4 @@ Rules for the plan:
 - "id" is short and unique, using letters, digits, "-" or "_" (for example "api-audit").
 - "rationale" explains the split in two or three sentences.
 
-You may inspect the repository with read-only tools to understand its layout before splitting. Return the plan only through the structured output.
+You may inspect the repository with read-only tools to understand its layout before splitting. {{OUTPUT_CONTRACT}}

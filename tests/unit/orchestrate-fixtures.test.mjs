@@ -25,6 +25,7 @@ test('classifyTurn recognises planner, synthesizer and subtask prompts', () => {
   assert.equal(classifyTurn({ parts: [{ type: 'text', text: '<orchestration_results>\n</orchestration_results>' }] }).role, 'synthesizer');
   assert.deepEqual(classifyTurn({ parts: [{ type: 'text', text: 'ctx\n<subtask id="w1">\ndo\n</subtask>' }] }).subtaskId, 'w1');
   assert.equal(classifyTurn({ parts: [] }).role, 'other');
+  assert.equal(classifyTurn({ parts: [{ type: 'text', text: 'You are the planner of a multi-model orchestration run by opc.\n<task>audit</task>' }] }).role, 'planner');
 });
 
 test('readTurnLog remains appended at the end of the shared helpers file', () => {
@@ -41,10 +42,12 @@ test('scenario logs each turn with its window and emits the planned result', asy
   const fake = { emitTurn: (sessionID, turn) => emitted.push([sessionID, turn]) };
   const scenario = makeOrchestrateScenario({ plan: OK, failSubtasks: ['b'], subtaskDelayMs: 30 });
   scenario.onPromptAsync(fake, 'ses_p', { model: { modelID: 'm0' }, format: { type: 'json_schema' }, parts: [{ type: 'text', text: 'plan it' }] });
+  scenario.onPromptAsync(fake, 'ses_text', { model: { modelID: 'm0' }, parts: [{ type: 'text', text: 'You are the planner of a multi-model orchestration run by opc.' }] });
   scenario.onPromptAsync(fake, 'ses_a', { model: { modelID: 'm1' }, parts: [{ type: 'text', text: '<subtask id="a">\nx\n</subtask>' }] });
   scenario.onPromptAsync(fake, 'ses_b', { model: { modelID: 'm2' }, parts: [{ type: 'text', text: '<subtask id="b">\nx\n</subtask>' }] });
   await new Promise((r) => setTimeout(r, 120));
   assert.deepEqual(emitted.find(([s]) => s === 'ses_p')[1], { text: '', structured: OK });
+  assert.deepEqual(emitted.find(([s]) => s === 'ses_text')[1], { text: '\x60\x60\x60json\n' + JSON.stringify(OK) + '\n\x60\x60\x60' });
   assert.deepEqual(emitted.find(([s]) => s === 'ses_a')[1], { text: 'RESULT[a] by m1' });
   assert.equal(emitted.find(([s]) => s === 'ses_b')[1].error.name, 'UnknownError');
   const log = readFileSync(turnLogPath(), 'utf8').trim().split('\n').map((l) => JSON.parse(l));

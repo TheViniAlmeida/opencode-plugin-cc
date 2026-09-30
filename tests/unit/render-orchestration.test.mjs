@@ -15,7 +15,7 @@ const base = () => ({
 test('renderiza cabeçalho, plano, resultados e nota de síntese do Claude', () => {
   const pkg = base(); pkg.plan.subtasks = pkg.subtasks;
   const out = renderOrchestration(pkg, { jobId: 'orch-abc' });
-  assert.match(out, /^# opc orchestrate\n\nTarefa: Audit the repo\nStatus: concluída · job orch-abc · 2 subtarefas · 12\.3 s\nPlanner: p\/planner\n/);
+  assert.match(out, /^# opc orchestrate\n\nTarefa:\n\n```\nAudit   the repo\n```\n\nStatus: concluída · job orch-abc · 2 subtarefas · 12\.3 s\nPlanner: p\/planner\n/);
   assert.match(out, /## Plano\n\nTwo angles\.\n/);
   assert.match(out, /\| a \| ask \| light \| p\/m1 \| concluída \| - \|/);
   assert.match(out, /\| b \| review \| - \| - \| cancelada \| a \|/);
@@ -73,3 +73,10 @@ test('a cerca da saída bruta excede o maior conjunto de crases do conteúdo', (
 });
 
 test('pacote nulo renderiza aviso curto', () => assert.equal(renderOrchestration(null), '# opc orchestrate\n\nNenhum resultado registrado para este job.\n'));
+
+test('M1: the entire multiline task remains inside a longer fence', () => {
+  const pkg = base();
+  pkg.task = 'Steps:\n- first\n- second\n\n````js\nconst n = 1;\n````\n';
+  const out = renderOrchestration(pkg);
+  assert.ok(out.includes(`Tarefa:\n\n\`\`\`\`\`\n${pkg.task}\n\`\`\`\`\`\n`));
+});

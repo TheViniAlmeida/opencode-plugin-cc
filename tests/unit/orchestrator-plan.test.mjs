@@ -114,3 +114,12 @@ test('normalizeSubtask fills optional fields and dedupes dependsOn', () => {
     id: 'a', title: 'Title a', prompt: 'Do a', kind: 'ask', tier: null, agent: null, files: [], dependsOn: ['b'],
   });
 });
+
+test('I3: agents excluded from the prompt cannot drive planned sessions', () => {
+  const agentsIndex = new Map([['general', { mode: 'subagent' }], ['unsafe name', { mode: 'primary' }]]);
+  for (const agent of agentsIndex.keys()) {
+    const result = validatePlan(plan([sub('a', { agent }), sub('b')]), { agentsIndex });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join(' '), /agente/);
+  }
+});

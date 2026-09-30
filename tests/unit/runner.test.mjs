@@ -469,3 +469,35 @@ for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
     if (mode === 'delayed-idle') assert.equal(idleObserved, true);
   });
 }
+
+test('I4: generic textJson validator extracts a planner JSON fence without sending format', async () => {
+  const plan = { rationale: 'r', subtasks: [] };
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body, { text: '\x60\x60\x60json\n' + JSON.stringify(plan) + '\n\x60\x60\x60' }) });
+  const result = await runTurn({ api, hub, request: baseRequest({ textJson: () => null }) });
+  assert.deepEqual(result.structured, plan);
+  assert.equal(result.structuredSource, 'text');
+  assert.equal(Object.hasOwn(api.calls.find(([name]) => name === 'promptAsync')[2], 'format'), false);
+});
+
+test('C1: session callback completes before prompt and tracks children', async () => {
+  const saved = [];
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid, body) => {
+    assert.deepEqual(saved, [{ sessionID: sid, childSessionIDs: [] }]);
+    hub.emit({ type: 'session.created', properties: { info: { id: 'ses_child', parentID: sid } } });
+    completeTurn(hub, api, sid, body);
+  } });
+  await runTurn({ api, hub, request: baseRequest(), onSession: async (event) => { await new Promise((r) => setImmediate(r)); saved.push(event); } });
+  assert.deepEqual(saved.at(-1), { sessionID: 'ses_new', childSessionIDs: ['ses_child'] });
+});
+
+test('C2: failed session persistence aborts before sending the prompt', async () => {
+  const hub = stubHub();
+  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body) });
+  const result = await runTurn({ api, hub, request: baseRequest(), onSession: async () => { throw new Error('storage failed'); } });
+  assert.equal(result.errorType, 'CallbackFailed');
+  assert.equal(result.abortConfirmed, true);
+  assert.equal(api.calls.some(([name]) => name === 'promptAsync'), false);
+  assert.ok(api.calls.some(([name]) => name === 'abort'));
+});

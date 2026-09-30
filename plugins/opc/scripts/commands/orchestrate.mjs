@@ -7,7 +7,7 @@ import { runTurn, newMessageId } from '../lib/runner.mjs';
 import { updateJob, spawnWorker, waitForJob, appendJobLog, assertNotInsideServer, withServerLock, createGroup, addGroupMember, listGroupMembers, recordAttempt, readJob, refreshGroup } from '../lib/jobs.mjs';
 import { ACTIVE_JOB_STATUSES } from '../lib/state.mjs';
 import { sessionTitle, summarize } from '../lib/prompts.mjs';
-import { runOrchestration, resolveSubtaskCandidates, MIN_SUBTASKS, MAX_SUBTASKS_CAP } from '../lib/orchestrator.mjs';
+import { runOrchestration, coordinatorError, resolveSubtaskCandidates, MIN_SUBTASKS, MAX_SUBTASKS_CAP } from '../lib/orchestrator.mjs';
 import { renderOrchestration, renderPermissionRequest } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
@@ -74,8 +74,13 @@ export function coordinatorDeps({ ctx, job, request, conn, discovery, agentsInde
   const config = ctx.config ?? {}; const now = () => new Date().toISOString(); const log = (line) => appendJobLog(ctx.stateDir, job.id, `[opc] ${redactText(line)}`);
   const groupUpdates = createSerialUpdater(ctx.stateDir, job.id); const memberUpdates = new Map();
   let groupChain = Promise.resolve();
+  let persistenceFailure = null;
+  const persist = async (operation) => {
+    try { return await operation(); }
+    catch (err) { persistenceFailure ??= coordinatorError(err); throw persistenceFailure; }
+  };
   const refresh = () => {
-    groupChain = groupChain.then(() => refreshGroup(ctx.stateDir, job.id)).catch((err) => appendJobLog(ctx.stateDir, job.id, `[opc] falha ao atualizar grupo: ${safeOutputText(err?.message ?? err)}`));
+    groupChain = groupChain.then(() => persist(() => refreshGroup(ctx.stateDir, job.id))).catch((err) => log(`falha ao atualizar grupo: ${safeOutputText(err?.message ?? err)}`));
     return groupChain;
   };
   const updaterFor = (id) => { if (!memberUpdates.has(id)) memberUpdates.set(id, createSerialUpdater(ctx.stateDir, id)); return memberUpdates.get(id); };
@@ -89,27 +94,26 @@ export function coordinatorDeps({ ctx, job, request, conn, discovery, agentsInde
   }).then(() => refresh());
   const members = {
     async start(role, fields) { const m = await addGroupMember(ctx.stateDir, job.id, { kind: 'orch', role, title: fields.title, summary: fields.title, workspaceRoot: ctx.workspaceRoot, claudeSessionId: job.claudeSessionId ?? null, status: 'running', startedAt: now(), pid: null, model: fields.model ?? null, request: { type: 'orchestrate-member', subtaskId: fields.subtaskId ?? null } }); return m.id; },
-    async update(id, patch) { await updaterFor(id).update(patch); },
-    async finish(id, patch) { await updaterFor(id).update({ ...patch, pendingRequest: null, completedAt: now() }); memberUpdates.delete(id); await syncGroupPending(); },
+    async update(id, patch) { return persist(() => updaterFor(id).update(patch)); },
+    async finish(id, patch) { await persist(() => updaterFor(id).update({ ...patch, pendingRequest: null, completedAt: now() })); await persist(() => updaterFor(id).flush()); memberUpdates.delete(id); await persist(syncGroupPending); },
   };
   const timeoutMs = (config.policy?.permissionTimeoutSec ?? 600) * 1000; const fallbackCfg = config.routing?.fallback ?? {}; const backoffMs = backoffFromEnv(ctx.env);
   const isCancelled = (memberId) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (memberId && readJob(ctx.stateDir, memberId)?.cancelRequestedAt));
-  const bridgeUpdate = (memberId) => memberId ? async (patch) => { const v = await updaterFor(memberId).update(patch); await syncGroupPending(); return v; } : (patch) => groupUpdates.update(patch);
+  const bridgeUpdate = (memberId) => memberId ? async (patch) => { const v = await members.update(memberId, patch); await persist(syncGroupPending); return v; } : (patch) => persist(() => groupUpdates.update(patch));
   const runTurnForSpec = async (spec) => {
     const label = spec.subtaskId ? `subtask ${spec.subtaskId}` : spec.role; const turnSignal = spec.signal ?? signal; const rules = profileRules(ctx, spec.profile);
     const bridge = createBridge({ update: bridgeUpdate(spec.memberId), jobId: spec.memberId ?? job.id, stateDir: ctx.stateDir, api: conn.api, profileKind: spec.profile, policy: config.policy ?? {}, timeoutMs, log: (line) => log(`${label}: ${line}`) });
-    const base = { newSession: { title: spec.title, permission: rules }, childPermission: spec.profile === 'read-only' ? null : rules, parts: [{ type: 'text', text: spec.prompt }], agent: spec.agent ?? null, format: spec.format ?? null, timeoutMs: (request.timeoutSec ?? DEFAULT_TURN_TIMEOUT_SEC) * 1000, fallbackCfg };
+    const base = { newSession: { title: spec.title, permission: rules }, childPermission: spec.profile === 'read-only' ? null : rules, parts: [{ type: 'text', text: spec.prompt }], agent: spec.agent ?? null, format: spec.format ?? null, textJson: spec.textJson ?? null, timeoutMs: (request.timeoutSec ?? DEFAULT_TURN_TIMEOUT_SEC) * 1000, fallbackCfg };
     try {
       const outcome = await fallbackRunner({ candidates: spec.candidates, fallbackEligible: spec.fallbackEligible, fallbackCfg, write: spec.write, backoffMs, contextLimitOf: (c) => typeof c.contextLimit === 'number' ? c.contextLimit : discovery.catalog?.byFull?.get?.(c.full)?.limit?.context ?? null, signal: turnSignal, isCancelled: () => isCancelled(spec.memberId),
-        runAttempt: (candidate) => turnRunner({ api: conn.api, hub: conn.hub, request: attemptRequest(base, candidate, { messageId: newMessageId }), onProgress: (event) => { if (event?.phase) log(`${label}: ${event.phase}`); }, onPermission: (req) => bridge.onPermission(req), onQuestion: (req) => bridge.onQuestion(req), onRequestResolved: (event) => bridge.onResolved(event), signal: turnSignal }),
+        runAttempt: (candidate) => turnRunner({ api: conn.api, hub: conn.hub, request: attemptRequest(base, candidate, { messageId: newMessageId }), onProgress: (event) => { if (event?.phase) log(`${label}: ${event.phase}`); }, onSession: async (sessions) => { if (spec.memberId) await members.update(spec.memberId, sessions); }, onPermission: (req) => bridge.onPermission(req), onQuestion: (req) => bridge.onQuestion(req), onRequestResolved: (event) => bridge.onResolved(event), signal: turnSignal }),
         onAttemptStart: async (candidate) => {
           log(`${label}: tentativa em ${candidate.full}`);
-          if (spec.memberId) try { await members.update(spec.memberId, { model: candidate.full, attemptInFlight: true }); }
-          catch (err) { log(`${label}: falha ao registrar início da tentativa: ${safeOutputText(err?.message ?? err)}`); }
+          if (spec.memberId) await members.update(spec.memberId, { model: candidate.full, attemptInFlight: true });
         },
         onAttemptEnd: async (record) => {
           if (!spec.memberId) return;
-          try { await attemptRecorder(ctx.stateDir, spec.memberId, record); }
+          try { await persist(() => attemptRecorder(ctx.stateDir, spec.memberId, record)); }
           catch (err) {
             log(`${label}: falha ao registrar tentativa: ${safeOutputText(err?.message ?? err)}`);
             try { await members.update(spec.memberId, { attemptInFlight: false }); }
@@ -117,16 +121,18 @@ export function coordinatorDeps({ ctx, job, request, conn, discovery, agentsInde
               log(`${label}: falha ao limpar attemptInFlight: ${safeOutputText(clearErr?.message ?? clearErr)}`);
               throw clearErr;
             }
+            throw err;
           }
-          if (record.sessionID) try { await members.update(spec.memberId, { sessionID: record.sessionID }); }
-          catch (err) { log(`${label}: falha ao registrar sessão da tentativa: ${safeOutputText(err?.message ?? err)}`); }
+          if (record.sessionID) await members.update(spec.memberId, { sessionID: record.sessionID });
         },
         onBackoff: async (delay, next) => log(`${label}: nova tentativa em ${next.full} após ${Math.round(delay / 1000)}s`),
       });
-      return { ...outcome.result, status: outcome.stopReason === 'cancelled' ? 'cancelled' : outcome.result.status, model: outcome.attempts.at(-1)?.model ?? null, attempts: outcome.attempts, ...(describeStop(outcome) ?? {}) };
+      if (persistenceFailure) throw persistenceFailure;
+      const result = outcome.result ?? { status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'failed' };
+      return { ...result, status: outcome.stopReason === 'cancelled' || isCancelled(spec.memberId) ? 'cancelled' : result.status, model: outcome.attempts.at(-1)?.model ?? null, attempts: outcome.attempts, ...(describeStop(outcome) ?? {}) };
     } finally { bridge.dispose(); }
   };
-  return { agentsIndex, signal, log, members, resolvePlanner: () => request.plannerRoute, resolveSynthesizer: () => request.synthRoute, resolveSubtask: (s) => resolveSubtaskCandidates(s, { config, catalog: discovery.catalog }) ?? resolveCandidates({ kind: s.kind, flags: {}, config, catalog: discovery.catalog, opencodeConfig: discovery.opencodeConfig }), runTurn: runTurnForSpec, refresh, flush: async () => { await groupUpdates.flush(); await groupChain; } };
+  return { agentsIndex, signal, log, members, resolvePlanner: () => request.plannerRoute, resolveSynthesizer: () => request.synthRoute, resolveSubtask: (s) => resolveSubtaskCandidates(s, { config, catalog: discovery.catalog }) ?? resolveCandidates({ kind: s.kind, flags: {}, config, catalog: discovery.catalog, opencodeConfig: discovery.opencodeConfig }), runTurn: runTurnForSpec, refresh, flush: async () => { await persist(() => groupUpdates.flush()); await groupChain; for (const updater of memberUpdates.values()) await persist(() => updater.flush()); if (persistenceFailure) throw persistenceFailure; } };
 }
 
 export async function runWorker(ctx, job, request, { openApiImpl = openApi, discoveryLoader = loadDiscovery, orchestrationRunner = runOrchestration } = {}) {
@@ -145,7 +151,7 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, disc
     }) });
     return exitCodeForJob(final);
   } catch (err) {
-    await deps?.flush().catch(() => {}); const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (computedGroup) => ({ status: computedGroup.status === 'cancelled' ? 'cancelled' : 'failed', errorCode: err?.code ?? 'coordinator_error', errorMessage: redactText(err?.message ?? String(err)), pendingRequest: null }) });
-    appendJobLog(ctx.stateDir, job.id, `[opc] falha do coordenador: ${redactText(err?.message ?? err)}`); return exitCodeForJob(final);
+    await deps?.flush().catch(() => {}); const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (computedGroup) => ({ status: computedGroup.status === 'cancelled' ? 'cancelled' : 'failed', errorCode: err?.code ?? 'coordinator_error', errorMessage: safeOutputText(err?.message ?? String(err)), pendingRequest: null }) });
+    appendJobLog(ctx.stateDir, job.id, `[opc] falha do coordenador: ${safeOutputText(err?.message ?? err)}`); return exitCodeForJob(final);
   } finally { conn?.close(); process.off('SIGTERM', onSigterm); }
 }

@@ -1038,7 +1038,7 @@ function orchPortuguese(value) {
 export function renderOrchestration(pkg, { jobId = null } = {}) {
   if (!pkg) return '# opc orchestrate\n\nNenhum resultado registrado para este job.\n';
   const lines = ['# opc orchestrate', ''];
-  lines.push(`Tarefa: ${safeOutputText(String(pkg.task ?? '').replace(/\s+/g, ' ').trim())}`);
+  lines.push('Tarefa:', '', orchFence(pkg.task ?? ''), '');
   const meta = [`Status: ${ORCH_OUTCOME_LABEL[pkg.outcome] ?? safeOutputText(pkg.status ?? '')}`];
   if (jobId) meta.push(`job ${safeOutputText(jobId)}`);
   if (pkg.plan) meta.push(`${pkg.plan.subtasks.length} subtarefas`);
