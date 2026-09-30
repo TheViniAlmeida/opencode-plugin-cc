@@ -85,5 +85,6 @@ test('member and review strings are anonymized throughout package except questio
   const beforeComposition = { roundsData:pkg.roundsData, final:pkg.final, review:pkg.review, judge:pkg.judge, failures:pkg.failures, warnings:pkg.warnings, synthesisInput:pkg.synthesisInput };
   assert.doesNotMatch(JSON.stringify(beforeComposition), /kimi|deepseek|qwen/i);
   assert.match(pkg.question, /kimi-k3/);
+  if (pkg.synthesisInput) assert.match(pkg.synthesisInput.question, /kimi-k3/);
   assert.match(JSON.stringify(pkg.composition), /deepseek|qwen/i);
 });

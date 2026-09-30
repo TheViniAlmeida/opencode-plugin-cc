@@ -1141,13 +1141,13 @@ function renderMemberResponse({ label, response }) {
   const lines = [];
   const changed = typeof response.changed === 'boolean' ? ` · mudou de posição: ${response.changed ? 'sim' : 'não'}` : '';
   lines.push(`### Membro ${label} · confiança ${Number(response.confidence).toFixed(2)}${changed}`, '');
-  lines.push(`**Posição:** ${orchFence(response.position ?? '')}`, '');
+  lines.push('**Posição:**', '', orchFence(response.position ?? ''), '');
   if (response.key_points?.length) lines.push('**Pontos-chave:**', bulletList(response.key_points), '');
   if (response.risks?.length) lines.push('**Riscos:**', bulletList(response.risks), '');
   if (response.evidence?.length) {
     lines.push('**Evidências:**', bulletList(response.evidence.map((e) => `\`${conclaveLocation(e.file, e.line_start, e.line_end)}\` — ${e.note}`)), '');
   }
-  if (response.would_change_mind_if) lines.push(`**Mudaria de ideia se:** ${orchFence(response.would_change_mind_if)}`, '');
+  if (response.would_change_mind_if) lines.push('**Mudaria de ideia se:**', '', orchFence(response.would_change_mind_if), '');
   if (response.critiques?.length) lines.push('**Críticas:**', bulletList(response.critiques.map((c) => `→ ${c.target}: ${c.point}`)), '');
   return lines.join('\n');
 }

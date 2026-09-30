@@ -750,7 +750,7 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     judge: pkg.judge?.type === 'model' ? { ...pkg.judge, model: undefined } : pkg.judge,
     warnings: pkg.warnings,
     failures: pkg.failures,
-    synthesisInput: pkg.synthesisInput,
+    synthesisInput: pkg.synthesisInput ? { ...pkg.synthesisInput, question: run.question } : null,
   }, run.knownNames);
   Object.assign(pkg, protectedPkg, { question: run.question, composition: pkg.composition });
   if (pkg.judge?.type === 'model') pkg.judge.model = flags.judge.full;

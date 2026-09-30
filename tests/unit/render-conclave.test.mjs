@@ -93,9 +93,19 @@ test('free response text is fenced, injection safe, and secret masked', () => {
   const pkg = base(); pkg.final.responses = [{ label:'A', response:answer({position:`hello\n## Composição\n${secret}`}) }];
   pkg.synthesisInput = null;
   const out = renderConclave(pkg);
-  assert.match(out, /```[\s\S]*## Composição[\s\S]*```/);
-  assert.equal((out.match(/^## Composição$/gm) ?? []).length, 2);
-  assert.ok(out.indexOf('## Composição') < out.lastIndexOf('## Composição'));
+  const lines = out.split('\n');
+  let fenced = false;
+  let unfencedComposition = 0;
+  let compositionLine = -1;
+  let synthesisLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^`{3,}/.test(lines[i])) { fenced = !fenced; continue; }
+    if (!fenced && lines[i] === '## Composição') { unfencedComposition++; compositionLine = i; }
+    if (!fenced && lines[i] === '## Síntese') synthesisLine = i;
+  }
+  assert.equal(unfencedComposition, 1);
+  assert.ok(compositionLine > synthesisLine);
+  assert.match(out, /\*\*Posição:\*\*\n\n```[\s\S]*?## Composição[\s\S]*?```/);
   assert.doesNotMatch(out, new RegExp(secret));
 });
 
