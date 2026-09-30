@@ -13,7 +13,7 @@ import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, re
 
 // F3: group and command workers live in their own command modules.
 // Later phases extend this single dispatch table.
-export const WORKER_DELEGATES = Object.freeze({ sub: './subagent.mjs', cmd: './command.mjs' });
+export const WORKER_DELEGATES = Object.freeze({ sub: './subagent.mjs', cmd: './command.mjs', orch: './orchestrate.mjs' });
 
 const FINAL_LOG_LIMIT = 64 * 1024;
 const METADATA_LIMIT = 4000;
