@@ -420,6 +420,16 @@ export function renderAttempts(attempts) {
 }
 
 export function renderCancel(job, report) {
+  if (report?.deferred) {
+    return redactText([
+      '# opc cancelamento',
+      '',
+      `Cancelamento de ${job.id} (${job.kind}) pendente: a sessão ainda está sendo criada.`,
+      '- O coordenador conclui o cancelamento antes de enviar o prompt.',
+      `- Confirme com \`/opc:status ${job.id} --wait\`.`,
+      '',
+    ].join('\n'));
+  }
   const sessionResult = report.aborted ? (report.idle ? 'cancelada; sessão ociosa' : 'cancelada; o estado ocioso não foi confirmado em 10 s') : 'não enviada (sem sessão ou servidor)';
   return redactText([
     '# opc cancelamento',

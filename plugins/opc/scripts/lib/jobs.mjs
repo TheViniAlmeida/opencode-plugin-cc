@@ -839,15 +839,16 @@ export async function cancelGroup(ctx, groupId) {
       return { id: member.id, ok: false };
     }
   }));
-  const cancelledMembers = results.filter((result) => result.ok).map((result) => result.id);
+  const cancelledMembers = results.filter((result) => result.ok && !result.deferred).map((result) => result.id);
+  const deferredMembers = results.filter((result) => result.ok && result.deferred).map((result) => result.id);
   const failedMembers = results.filter((result) => !result.ok).map((result) => result.id);
   let cancelled = group;
   let ok = failedMembers.length === 0;
   // a member kept running: withdraw the request so the coordinator's final refresh aggregates normally (a retry sets it again)
   if (!ok) await updateJob(ctx.stateDir, groupId, { cancelRequestedAt: null });
-  if (ok && results.some((result) => result.deferred)) {
+  if (ok && deferredMembers.length) {
     // Do not terminate/freeze the coordinator while it still owes pre-prompt cleanup.
-    return { group: readJob(ctx.stateDir, groupId), cancelledMembers, failedMembers, ok: true, deferred: true };
+    return { group: readJob(ctx.stateDir, groupId), cancelledMembers, deferredMembers, failedMembers, ok: true, deferred: true };
   }
   if (ok) {
     const latest = readJob(ctx.stateDir, groupId);

@@ -37,6 +37,8 @@ test('F4b fix2: group cancellation stays deferred until the coordinator publishe
   assert.equal(result.ok, true);
   assert.equal(result.deferred, true);
   assert.deepEqual(result.failedMembers, []);
+  assert.deepEqual(result.deferredMembers, [member.id]);
+  assert.deepEqual(result.cancelledMembers, [], 'a deferred member is not reported as cancelled');
   assert.ok(readJob(stateDir, group.id).cancelRequestedAt);
   assert.ok(readJob(stateDir, member.id).cancelRequestedAt);
   assert.notEqual(result.group.status, 'cancelled', 'do not freeze or terminate the coordinator before session cleanup');
@@ -63,4 +65,40 @@ test('F4b fix2: a published orchestration session still requires confirmed abort
   assert.equal(result.code, 'CANCEL_FAILED');
   assert.equal(result.report.deferred, undefined);
   assert.equal(result.job.cancelRequestedAt, null);
+});
+
+test('F4b gate: opc cancel reports a deferred group cancellation as pending, not cancelled', async (t) => {
+  const { run } = await import('../../plugins/opc/scripts/commands/cancel.mjs');
+  for (const json of [false, true]) {
+    const stateDir = trackTempDir(t, makeTempDir('opc-cancel-cmd-'));
+    const { group, members: [member] } = await createGroup(stateDir, { kind: 'orch' }, [{ kind: 'orch', status: 'running', attemptInFlight: true }]);
+    const out = []; const jsonOut = [];
+    const ctx = { stateDir, out: (s) => out.push(s), err: (s) => out.push(s), json: (v) => jsonOut.push(v) };
+    const code = await run(ctx, [group.id, ...(json ? ['--json'] : [])]);
+    assert.equal(code, 0);
+    if (json) {
+      assert.equal(jsonOut[0].pending, true);
+      assert.deepEqual(jsonOut[0].deferredMembers, [member.id]);
+      assert.deepEqual(jsonOut[0].cancelledMembers, []);
+    } else {
+      assert.match(out.join(''), new RegExp(`# Cancelamento do grupo ${group.id} pendente`));
+      assert.match(out.join(''), new RegExp(`pendente \\(sessão em criação\\): ${member.id}`));
+      assert.doesNotMatch(out.join(''), /Grupo .* cancelado/);
+    }
+  }
+});
+
+test('F4b gate: opc cancel of a deferred member says pending', async (t) => {
+  const { run } = await import('../../plugins/opc/scripts/commands/cancel.mjs');
+  const { renderCancel } = await import('../../plugins/opc/scripts/lib/render.mjs');
+  const text = renderCancel({ id: 'orch-a-b', kind: 'orch' }, { deferred: true, aborted: false, worker: 'not-running' });
+  assert.match(text, /Cancelamento de orch-a-b \(orch\) pendente/);
+  assert.doesNotMatch(text, /^Cancelada /m);
+  const stateDir = trackTempDir(t, makeTempDir('opc-cancel-member-'));
+  const { members: [member] } = await createGroup(stateDir, { kind: 'orch' }, [{ kind: 'orch', status: 'running', attemptInFlight: true }]);
+  const jsonOut = [];
+  const code = await run({ stateDir, out: () => {}, err: () => {}, json: (v) => jsonOut.push(v) }, [member.id, '--json']);
+  assert.equal(code, 0);
+  assert.equal(jsonOut[0].pending, true);
+  assert.equal(jsonOut[0].status, 'running');
 });
