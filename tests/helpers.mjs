@@ -111,6 +111,9 @@ export function makeWorkspace(t, { git = true, name = 'ws' } = {}) {
     run('config', 'user.name', 'opc-test');
     run('config', 'user.email', 'opc-test@example.invalid');
     run('config', 'commit.gpgsign', 'false');
+    // Background auto-maintenance would add and remove .git/objects/maintenance.lock under the tests' snapshots.
+    run('config', 'maintenance.auto', 'false');
+    run('config', 'gc.auto', '0');
     run('add', '.');
     run('commit', '-q', '-m', 'init');
   }
