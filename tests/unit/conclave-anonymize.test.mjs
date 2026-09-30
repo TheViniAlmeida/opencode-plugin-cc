@@ -35,3 +35,18 @@ test('extra models are covered even when missing from the catalog', () => {
   const names = buildKnownNames(makeCatalog([], []), { extraModels: [{ providerID: 'acme', modelID: 'zeta-9-pro', full: 'acme/zeta-9-pro', name: 'Zeta 9 Pro' }] });
   assert.equal(anonymize('I am Zeta-9 from acme', names), `I am ${REDACTED_NAME} from ${REDACTED_NAME}`);
 });
+
+test('short exact model ids containing digits are redacted without matching short prose', () => {
+  const names = buildKnownNames(makeCatalog([
+    { providerID: 'openai', modelID: 'o3', full: 'openai/o3', name: 'o3' },
+    { providerID: 'deepseek', modelID: 'R1', full: 'deepseek/R1', name: 'R1' },
+    { providerID: 'acme', modelID: 'k2', full: 'acme/k2', name: 'k2' },
+  ], ['openai', 'deepseek', 'acme']));
+
+  assert.ok(names.exact.includes('o3'));
+  assert.ok(names.exact.includes('R1'));
+  assert.ok(names.exact.includes('k2'));
+  assert.equal(anonymize('I am o3 from openai.', names), `I am ${REDACTED_NAME} from ${REDACTED_NAME}.`);
+  assert.equal(anonymize('R1 thinks', names), `${REDACTED_NAME} thinks`);
+  assert.equal(anonymize('go ahead, a max of 2', names), 'go ahead, a max of 2');
+});

@@ -331,18 +331,18 @@ function familyWordsOf(text) {
 export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   const exact = new Set();
   const families = new Set();
-  const addExact = (value) => {
+  const addExact = (value, { modelId = false } = {}) => {
     const v = String(value ?? '').trim();
-    if (v.length >= 3) exact.add(v);
+    if (v.length >= 3 || (modelId && /\p{N}/u.test(v))) exact.add(v);
   };
   const providers = new Set(catalog?.connected ?? []);
   for (const m of [...(catalog?.models ?? []), ...extraModels]) {
     if (!m?.modelID) continue;
     if (m.providerID) providers.add(m.providerID);
     addExact(m.full);
-    addExact(m.modelID);
+    addExact(m.modelID, { modelId: true });
     const segments = String(m.modelID).split('/');
-    addExact(segments.at(-1));
+    addExact(segments.at(-1), { modelId: true });
     for (const namespace of segments.slice(0, -1)) addExact(namespace);
     addExact(m.name);
     for (const w of familyWordsOf(segments.at(-1))) families.add(w);
