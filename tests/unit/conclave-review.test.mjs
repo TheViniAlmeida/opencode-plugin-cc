@@ -93,10 +93,13 @@ for (const mode of ['text', 'tool']) {
 }
 
 test('review prompts include the tool structured output contract', async () => {
-  const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`), { structuredOutput: 'tool' });
+  const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`), { structuredOutput: 'tool', promptAssets: realAssets });
   await h.run();
   const [prompt] = new Set(h.calls.map((c) => c.prompt));
   assert.match(prompt, /Return your answer only through the structured output\./);
+  assert.match(prompt, /This overrides the <output_contract> above: do not write a ```json fence\./);
+  assert.ok(prompt.includes('<output_contract>') && prompt.lastIndexOf('only through the structured output') > prompt.lastIndexOf('</output_contract>'));
+  assert.doesNotMatch(prompt, /Follow this JSON Schema:/);
 });
 
 test('with the real F2b review prompt (no {{USER_FOCUS}}) the question still reaches the members as <user_focus>', async () => {

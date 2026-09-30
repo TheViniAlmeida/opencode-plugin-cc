@@ -158,6 +158,28 @@ for (const role of ['member:A', 'judge']) {
   }
 }
 
+for (const [write, matches] of [
+  ['member-done event', (id, patch, target) => id === target.member && Object.keys(patch).length === 1 && patch.attemptInFlight === false],
+  ['judge-done event', (id, patch, target) => id === target.judge && Object.keys(patch).length === 1 && patch.attemptInFlight === false],
+  ['child finalization', (id, patch) => patch.phase === 'done'],
+]) {
+  test(`${write} write failure finalizes coordinator_error, not the raw error code`, async (t) => {
+    const f = await workerFixture(t);
+    const target = { member: f.members.find((m) => m.role === 'member:A').id, judge: f.members.find((m) => m.role === 'judge').id };
+    let injected = false;
+    f.options.updateJobImpl = async (dir, id, patch) => {
+      if (!injected && matches(id, patch, target)) { injected = true; throw Object.assign(new Error(`${write} failed`), { code: 'EIO' }); }
+      return updateJob(dir, id, patch);
+    };
+    assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 7);
+    assert.equal(injected, true);
+    const group = readJob(f.ctx.stateDir, f.group.id);
+    assert.equal(group.status, 'failed');
+    assert.equal(group.errorCode, 'coordinator_error');
+    for (const child of listGroupMembers(f.ctx.stateDir, f.group.id)) assert.equal(ACTIVE_STATUSES.includes(child.status), false);
+  });
+}
+
 for (const outcome of ['failed', 'cancelled', 'thrown']) {
   test(`worker keeps ${outcome} runner outcomes as member failures`, async (t) => {
     const f = await workerFixture(t);

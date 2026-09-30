@@ -222,7 +222,7 @@ for (const mode of ['text', 'tool']) {
   });
 }
 
-test('runConclave adds member and judge identity words to filtered catalog names', async () => {
+test('runConclave adds member and judge model words to filtered catalog names; provider words only when specific', async () => {
   const members = [member('A', 'acme-cloud/zeta-9-pro'), member('B', 'other-provider/sigma-2')];
   const judge = { type: 'model', ...member('judge', 'arbiter-host/quasar-8') };
   const prose = 'For a small Node.js CLI with zero runtime dependencies, tools in the ecosystem are free and built-in; users cannot add comments.';
@@ -236,11 +236,11 @@ test('runConclave adds member and judge identity words to filtered catalog names
     : ok(answer({ position: `${prose} Zeta from acme; Sigma from other; Quasar from arbiter.` }), `ses_${s.label}`),
   { members, judge, knownNames: names });
   const pkg = await h.run();
-  assert.equal(pkg.final.responses[0].response.position, `${prose} ${REDACTED_NAME} from ${REDACTED_NAME}; ${REDACTED_NAME} from ${REDACTED_NAME}; ${REDACTED_NAME} from ${REDACTED_NAME}.`);
-  assert.equal(pkg.judge.synthesis.recommendation, `${REDACTED_NAME} from ${REDACTED_NAME} agrees.`);
+  assert.equal(pkg.final.responses[0].response.position, `${prose} ${REDACTED_NAME} from acme; ${REDACTED_NAME} from other; ${REDACTED_NAME} from arbiter.`);
+  assert.equal(pkg.judge.synthesis.recommendation, `${REDACTED_NAME} from arbiter agrees.`);
   const prompt = h.calls.find((s) => s.role === 'judge').prompt;
   assert.ok(prompt.includes(prose));
-  assert.doesNotMatch(prompt, /zeta|acme|sigma|quasar|arbiter/i);
+  assert.doesNotMatch(prompt, /zeta|sigma|quasar|acme-cloud|arbiter-host/i);
 });
 
 for (const mode of ['text', 'tool']) {

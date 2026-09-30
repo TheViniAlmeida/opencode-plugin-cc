@@ -93,13 +93,18 @@ test('short catalog providers, numbers, versions and code tokens never redact pr
   assert.equal(anonymize('v0-1.5-lg', names), REDACTED_NAME);
 });
 
-test('only participants supply uncurated families and provider words', () => {
+test('only participant models supply uncurated families; provider words only when specific', () => {
   const model = { providerID: 'acme-cloud', modelID: 'private-route/zeta-sonnet-9-pro', full: 'acme-cloud/private-route/zeta-sonnet-9-pro', name: 'Unrelated Display Phrase' };
   const catalogNames = buildKnownNames(makeCatalog([model], []));
   const participantNames = buildKnownNames(makeCatalog([model], []), { extraModels: [model] });
   const prose = 'Zeta-10 from acme using Sonnet 8';
   assert.equal(anonymize(prose, catalogNames), prose);
-  assert.equal(anonymize(prose, participantNames), `${REDACTED_NAME} from ${REDACTED_NAME} using ${REDACTED_NAME} 8`);
+  assert.equal(anonymize(prose, participantNames), `${REDACTED_NAME} from acme using ${REDACTED_NAME} 8`);
+  assert.equal(anonymize('served by acme-cloud', participantNames), `served by ${REDACTED_NAME}`);
+  const gateway = { providerID: 'omniroute-personal', modelID: 'cmd/deepseek/deepseek-v4-flash', full: 'omniroute-personal/cmd/deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' };
+  const gatewayNames = buildKnownNames(makeCatalog([gateway], []), { extraModels: [gateway] });
+  assert.equal(anonymize('This personal project runs a cmd script; I am DeepSeek via omniroute-personal.', gatewayNames), `This personal project runs a cmd script; I am ${REDACTED_NAME} via ${REDACTED_NAME}.`);
+  assert.equal(anonymize('[DeepSeek] and [deepseek-v4-flash]', gatewayNames), `${REDACTED_NAME} and ${REDACTED_NAME}`);
   assert.ok(participantNames.exact.includes('private-route'));
   for (const word of ['cloud', 'pro', 'unrelated', 'display', 'phrase']) {
     assert.ok(!participantNames.exact.includes(word));

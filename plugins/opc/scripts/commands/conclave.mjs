@@ -85,6 +85,11 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     const rules = profileRules(ctx, 'read-only');
     const ids = new Map(request.members.map((m) => [m.label, m.jobId]));
     const isCancelled = (id) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (id && readJob(ctx.stateDir, id)?.cancelRequestedAt));
+    // Every coordinator write outside a turn also finalizes as coordinator_error when it fails.
+    const persisted = async (write) => {
+      try { return await write(); }
+      catch (err) { throw err instanceof ConclavePersistenceError ? err : new ConclavePersistenceError(err); }
+    };
     const turn = async (spec) => {
       const id = spec.role === 'judge' ? request.judge.jobId : ids.get(spec.label);
       let persistenceError;
@@ -117,15 +122,15 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
       flags: { mode: request.mode, rounds: request.rounds, quorum: request.quorum, members: request.members, judge: request.judge, warnings: request.warnings ?? [], maxParallel: ctx.config.jobs?.maxParallel ?? 4 },
       deps: { turn, knownNames, assets: loadConclaveAssets(), collectReview: request.mode === 'review' ? () => ({ ...collectReviewContext(request.reviewCwd ?? ctx.cwd, request.target), label: request.target?.label ?? null }) : null,
         onEvent: async (event) => {
-          if (event.type === 'member-failed') { const id = ids.get(event.label); if (id) await updateJob(ctx.stateDir, id, { status: 'failed', errorCode: event.errorType, errorMessage: safeOutputText(event.message), attemptInFlight: false, completedAt: now() }); }
-          if (event.type === 'member-done') { const id = ids.get(event.label); if (id) await updateJob(ctx.stateDir, id, { attemptInFlight: false }); }
-          if (event.type === 'judge-failed' || event.type === 'judge-done') { const id = request.judge.jobId; if (id) await updateJob(ctx.stateDir, id, { attemptInFlight: false }); }
+          if (event.type === 'member-failed') { const id = ids.get(event.label); if (id) await persisted(() => updateJobImpl(ctx.stateDir, id, { status: 'failed', errorCode: event.errorType, errorMessage: safeOutputText(event.message), attemptInFlight: false, completedAt: now() })); }
+          if (event.type === 'member-done') { const id = ids.get(event.label); if (id) await persisted(() => updateJobImpl(ctx.stateDir, id, { attemptInFlight: false })); }
+          if (event.type === 'judge-failed' || event.type === 'judge-done') { const id = request.judge.jobId; if (id) await persisted(() => updateJobImpl(ctx.stateDir, id, { attemptInFlight: false })); }
         } } });
     const result = redactOutput({ jobId: job.id, ...pkg });
     const rendered = redactOutput(renderConclave(result));
-    for (const m of request.members) { const current = readJob(ctx.stateDir, m.jobId); if (current && ACTIVE_STATUSES.includes(current.status)) await updateJob(ctx.stateDir, m.jobId, { status: 'completed', phase: 'done', attemptInFlight: false, completedAt: now() }); }
-    if (request.judge.jobId) { const current = readJob(ctx.stateDir, request.judge.jobId); if (current && ACTIVE_STATUSES.includes(current.status)) await updateJob(ctx.stateDir, request.judge.jobId, { status: pkg.judge.status === 'completed' ? 'completed' : 'failed', phase: 'done', attemptInFlight: false, completedAt: now() }); }
-    const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (g) => ({ ...(g.status === 'cancelled' ? {} : { status: pkg.status }), result, rendered, pendingRequest: null }) });
+    for (const m of request.members) { const current = readJob(ctx.stateDir, m.jobId); if (current && ACTIVE_STATUSES.includes(current.status)) await persisted(() => updateJobImpl(ctx.stateDir, m.jobId, { status: 'completed', phase: 'done', attemptInFlight: false, completedAt: now() })); }
+    if (request.judge.jobId) { const current = readJob(ctx.stateDir, request.judge.jobId); if (current && ACTIVE_STATUSES.includes(current.status)) await persisted(() => updateJobImpl(ctx.stateDir, request.judge.jobId, { status: pkg.judge.status === 'completed' ? 'completed' : 'failed', phase: 'done', attemptInFlight: false, completedAt: now() })); }
+    const final = await persisted(() => refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (g) => ({ ...(g.status === 'cancelled' ? {} : { status: pkg.status }), result, rendered, pendingRequest: null }) }));
     return exitCodeForJob(final);
   } catch (err) {
     const final = await finalizeConclaveCoordinatorFailure(ctx.stateDir, job, [

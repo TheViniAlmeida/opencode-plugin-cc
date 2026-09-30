@@ -354,8 +354,10 @@ export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   const addProvider = (provider, participant = false) => {
     const id = String(provider ?? '').trim();
     if (participant || id.length >= 4 || CURATED_NAME_WORDS.has(id.toLowerCase())) addExact(id);
-    for (const word of String(provider ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u)) addToken(word, participant);
-    for (const word of familyWordsOf(provider, participant)) families.add(word);
+    // A provider id names a route or gateway, not the model: its words count only when specific
+    // (`omniroute-personal` must not redact "personal"); the full id above is always redacted.
+    for (const word of id.toLowerCase().split(/[^\p{L}\p{N}]+/u)) addToken(word);
+    for (const word of familyWordsOf(id)) families.add(word);
   };
   const addModel = (m, participant = false) => {
     if (!m?.modelID) return;
@@ -414,7 +416,8 @@ function compileNames(knownNames) {
 
 export function anonymize(text, knownNames) {
   if (typeof text !== 'string' || text === '') return typeof text === 'string' ? text : '';
-  return text.replace(compileNames(knownNames), REDACTED_NAME);
+  // A name already in brackets (`[Qwen]`) becomes one marker, never a nested one.
+  return text.replace(compileNames(knownNames), REDACTED_NAME).replaceAll(`[${REDACTED_NAME}]`, REDACTED_NAME);
 }
 
 export function anonymizeValue(value, knownNames) {
@@ -894,7 +897,11 @@ async function runReview(run) {
   // focus, A19) is appended instead of silently dropped.
   const focus = run.question.trim();
   if (focus && !assets.prompts.review.includes('{{USER_FOCUS}}')) prompt = `${prompt}\n\n<user_focus>\n${focus}\n</user_focus>`;
-  prompt = `${prompt}\n\n${outputContract(run.structuredOutput, schema)}`;
+  // review.md (F2b) asks for a ```json fence; in tool mode that instruction is overridden explicitly.
+  const contract = run.structuredOutput === 'tool'
+    ? `This overrides the <output_contract> above: do not write a \`\`\`json fence. ${outputContract('tool', schema)}`
+    : outputContract(run.structuredOutput, schema);
+  prompt = `${prompt}\n\n${contract}`;
   await emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
   const outcomes = await mapLimit(flags.members, run.maxParallel, async (member) => {
     await emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
