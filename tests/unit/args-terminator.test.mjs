@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { test } from 'node:test';
 
 import { parseArgs, RAW_ARGS_FLAG, readRawArgs, resolveArgv } from '../../plugins/opc/scripts/lib/args.mjs';
+import { normalizeResumeFlag } from '../../plugins/opc/scripts/commands/task.mjs';
 
 const SPEC = { flags: { json: { type: 'boolean' }, write: { type: 'boolean' }, model: { type: 'string' } }, allowPositionals: true };
 const PROMPT_FLAGS = { write: { type: 'boolean' }, model: { type: 'string', alias: 'm' } };
@@ -32,6 +33,10 @@ test('"--" followed by nothing is accepted', () => {
 
 test('a tail after "--" is still refused when the command takes no positionals', () => {
   assert.throws(() => parseArgs(['--', 'x'], { flags: { json: { type: 'boolean' } } }), (e) => e.exitCode === 2);
+});
+
+test('normalizeResumeFlag preserves --resume after -- as literal prompt text', () => {
+  assert.deepEqual(normalizeResumeFlag(['--', '--resume']), ['--', '--resume']);
 });
 
 test('resolveArgv ignores --args-stdin that appears after "--"', async () => {

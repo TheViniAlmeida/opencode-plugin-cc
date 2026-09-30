@@ -24,12 +24,16 @@ test('task, ask and plan accept --background, --wait-timeout and a "--" terminat
 });
 
 test('subagent, orchestrate and conclave accept --background and --wait-timeout', async (t) => {
-  const env = configuredEnv(t);
   const ws = makeWorkspace(t);
-  const heads = [['subagent', '--agent', 'general'], ['orchestrate'], ['conclave', '--models', FIXTURE_MODELS.fast]];
-  for (const head of heads) {
+  for (const [head, scenario] of [
+    [['subagent', '--agent', 'general'], 'ok'],
+    [['orchestrate'], 'ok'],
+    [['conclave', '--models', `${FIXTURE_MODELS.fast},${FIXTURE_MODELS.strong}`], 'conclave-opinion'],
+  ]) {
+    const env = configuredEnv(t, { scenario });
     for (const mode of [['--background'], ['--wait-timeout', '1']]) {
       const r = await cliJson([...head, ...mode, '--', 'x'], { env, cwd: ws });
+      assert.equal(r.code, 0, `${head[0]} ${mode[0]} exits successfully: ${r.stderr}`);
       assert.equal(r.code, 0, `${head[0]} ${mode[0]} exits successfully: ${r.stderr}`);
       assert.doesNotMatch(r.stderr, UNKNOWN_FLAG, `${head[0]} ${mode[0]}: ${r.stderr}`);
     }

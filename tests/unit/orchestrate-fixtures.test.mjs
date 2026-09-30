@@ -30,7 +30,7 @@ test('classifyTurn recognises planner, synthesizer and subtask prompts', () => {
 
 test('readTurnLog remains appended at the end of the shared helpers file', () => {
   const helpers = readFileSync(new URL('../helpers.mjs', import.meta.url), 'utf8');
-  assert.match(helpers, /\/\/ ---- F4b: orchestration helpers \(appended\) ----[\s\S]*\/\/ ---- end F4b ----\s*$/);
+  assert.match(helpers, /\/\/ ---- F4b: orchestration helpers \(appended\) ----[\s\S]*\/\/ ---- end F4b ----\s*\/\/ ---- F5: MCP client, job id lookup, config \(appended\) ----[\s\S]*\/\/ ---- end F5 ----\s*$/);
 });
 
 test('scenario logs each turn with its window and emits the planned result', async (t) => {

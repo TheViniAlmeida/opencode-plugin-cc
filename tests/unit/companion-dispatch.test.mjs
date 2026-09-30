@@ -23,6 +23,21 @@ test('importing the companion does not run the CLI (F0 invokedDirectly guard)', 
   assert.equal(process.exitCode, exitCodeBeforeImport);
 });
 
+test('main dispatches the subcommand and literal argv tail through injected boundaries', async () => {
+  const tail = ['--flag', '--', '--resume', 'literal prompt'];
+  const ctx = { marker: 'injected context' };
+  let loadedName;
+  let received;
+  const code = await dispatch(['fake-command', ...tail], {
+    env: {}, cwd: os.tmpdir(), stdin: noStdin(), stdout: sink(), stderr: sink(),
+    commandLoader: async (name) => { loadedName = name; return { run: async (gotCtx, argv) => { received = [gotCtx, argv]; return 37; } }; },
+    contextFactory: async () => ctx,
+  });
+  assert.equal(loadedName, 'fake-command');
+  assert.deepEqual(received, [ctx, tail]);
+  assert.equal(code, 37);
+});
+
 test('unknown subcommand: exit 2, io.onError gets the typed USAGE error, stderr gets the rendered error', async () => {
   let seen = null;
   const stderr = sink();
