@@ -711,7 +711,7 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     failures: [],
     warnings: [...(flags.warnings ?? [])],
   };
-  const phase = await runDiscussion(run);
+  const phase = flags.mode === 'review' ? await runReview(run) : await runDiscussion(run);
   const lastRound = phase.roundsData.at(-1);
   const finalResponses = lastRound?.responses ?? [];
   const status = phase.ok ? 'completed' : 'failed';
@@ -741,4 +741,84 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     composition: flags.members.map((member) => ({ label: member.label, model: member.full })),
   };
   return pkg;
+}
+
+// ---------------------------------------------------------------------------
+// Review mode
+// ---------------------------------------------------------------------------
+
+function reviewTemplateVars(context, question, projectContext = '') {
+  return {
+    PROJECT_CONTEXT: projectContext,
+    TARGET_LABEL: context.label ?? 'the current changes',
+    REVIEW_INPUT: context.content ?? '',
+    REVIEW_SUMMARY: context.summary ?? '',
+    USER_FOCUS: question.trim() || 'No extra focus was given; review for correctness, security and maintainability.',
+    REVIEW_COLLECTION_GUIDANCE: context.truncated
+      ? 'The diff above was truncated to fit. Read the changed files listed in the summary with the read tool before concluding.'
+      : 'The complete diff is included above.',
+  };
+}
+
+// Members receive the strict review schema; validation accepts findings without a location,
+// which then become singleton clusters (spec §11.2).
+function lenientReviewSchema(reviewSchemaFile) {
+  const schema = stripMeta(reviewSchemaFile);
+  const item = schema?.properties?.findings?.items;
+  if (!item?.properties) return schema;
+  const locationKeys = ['file', 'line_start', 'line_end'];
+  for (const key of locationKeys) {
+    const prop = item.properties[key];
+    if (!prop) continue;
+    const types = Array.isArray(prop.type) ? prop.type : (prop.type ? [prop.type] : []);
+    const relaxed = { ...prop };
+    if (types.length) relaxed.type = [...new Set([...types, 'null'])];
+    delete relaxed.minLength;
+    delete relaxed.minimum;
+    item.properties[key] = relaxed;
+  }
+  if (Array.isArray(item.required)) item.required = item.required.filter((k) => !locationKeys.includes(k));
+  return schema;
+}
+
+async function runReview(run) {
+  const { flags, deps, emit, assets } = run;
+  let context;
+  try {
+    if (typeof deps.collectReview !== 'function') throw new Error('review mode needs deps.collectReview');
+    context = await deps.collectReview();
+  } catch (err) {
+    return { ok: false, roundsData: [], completedRounds: 0, review: null, failure: { code: 'REVIEW_CONTEXT_FAILED', message: err?.message ?? String(err) } };
+  }
+  const schema = stripMeta(assets.schemas.review);
+  const validation = lenientReviewSchema(assets.schemas.review);
+  let prompt = fillTemplate(assets.prompts.review, reviewTemplateVars(context, run.question, run.projectContext), { strict: true });
+  // F2b's review.md has no {{USER_FOCUS}} (only adversarial-review.md does): the question (review
+  // focus, A19) is appended instead of silently dropped.
+  const focus = run.question.trim();
+  if (focus && !assets.prompts.review.includes('{{USER_FOCUS}}')) prompt = `${prompt}\n\n<user_focus>\n${focus}\n</user_focus>`;
+  emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
+  const outcomes = await mapLimit(flags.members, run.maxParallel, async (member) => {
+    emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
+    const turn = await safeTurn(deps, {
+      role: 'member', label: member.label, round: 1, member, sessionID: null, prompt, schema,
+      title: `OPC: conclave: review ${member.label}`,
+    });
+    return { label: member.label, sessionID: turn?.sessionID ?? null, turn, check: checkTurn(turn, validation) };
+  });
+  const entry = collectRound(run, 1, outcomes);
+  if (entry.responses.length < flags.quorum) {
+    return { ok: false, roundsData: [entry], completedRounds: 0, review: null, failure: quorumFailure(entry, flags.quorum) };
+  }
+  const findingsByMember = Object.fromEntries(entry.responses.map((r) => [r.label, Array.isArray(r.response.findings) ? r.response.findings : []]));
+  const memberVerdicts = Object.fromEntries(entry.responses.map((r) => [r.label, r.response.verdict]));
+  const clusters = clusterFindings(findingsByMember, { validCount: entry.responses.length });
+  const { verdict, reasons } = conclaveVerdict(clusters, memberVerdicts);
+  return {
+    ok: true,
+    roundsData: [entry],
+    completedRounds: 1,
+    failure: null,
+    review: { target: context.label ?? null, truncated: Boolean(context.truncated), validMembers: entry.responses.length, memberVerdicts, verdict, reasons, clusters },
+  };
 }
