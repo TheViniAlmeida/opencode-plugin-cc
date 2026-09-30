@@ -210,3 +210,32 @@ opc config set orchestrate.structuredOutput text
 opc config set orchestrate.maxSubtasks 8
 opc config set orchestrate.synthesizer omniroute-personal/cmd/<modelo>
 ```
+
+## conclave
+
+Preferências do `/opc:conclave` ([guia](conclave.md)). Podem ser sobrescritas no `.opc.json`;
+todo modelo citado continua passando pela política (`policy.*`).
+
+| Chave | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `conclave.pools` | objeto `{nome: [modelos]}` | `{}` | Listas de membros; aceita alias, ID completo ou nome curto |
+| `conclave.defaultPool` | string ou `null` | `null` | Pool usada sem `--models` e `--pool`; sem valor, o opc procura a pool `default` |
+| `conclave.judge` | `"claude"` ou modelo | `"claude"` | Juiz padrão da síntese |
+| `conclave.rounds` | inteiro 1–3 | `1` | Rodadas de `opinion`; `debate` usa pelo menos 2 |
+| `conclave.quorum` | inteiro ≥ 2 | `2` | Respostas válidas mínimas por rodada; não pode exceder os membros |
+| `conclave.memberTimeoutSec` | inteiro | `900` | Limite de cada turno de membro ou juiz; ao expirar, aborta a sessão e descarta o membro |
+| `conclave.structuredOutput` | `"text"` ou `"tool"` | `"text"` | `text` pede JSON em cerca e valida localmente; `tool` envia `format: json_schema` |
+
+`text` é o padrão porque, no gateway usado pelo projeto, `format: json_schema` retornou
+`StructuredOutputError` com `Model did not produce structured output`. Em `text`, ausência de
+objeto JSON é `MissingStructuredOutput`; em `tool`, falha de formato é
+`StructuredOutputError`. JSON fora do schema é `InvalidStructuredOutput` nos dois modos.
+
+Relacionadas: `jobs.maxParallel` limita turnos simultâneos e `jobs.maxActive` conta cada
+conclave como uma vaga — somente o job-grupo conta.
+
+```bash
+opc config set conclave.judge omniroute-personal/opencode-go/qwen3.8-max
+opc config set conclave.memberTimeoutSec 600 --workspace
+opc config set conclave.structuredOutput text
+```

@@ -145,3 +145,29 @@ Em algumas respostas estruturadas do OpenCode 1.18.32, `GET /session/:id/message
 - `tmux split-window` falhou: confira `tmux -V` e se há servidor tmux acessível.
 - O attach pede senha: gere novamente a linha com `/opc:attach`; no servidor gerenciado ela lê `<stateDir>/attach.secret`, que é regravado para a identidade atual. Não copie a senha para o shell ou logs.
 - Com `OPC_SERVER_URL`, `--pane` é recusado por desenho: o opc não possui nem grava o segredo do servidor externo.
+
+## Conclave
+
+### Exit 7: `QUORUM_NOT_MET`
+
+Uma rodada terminou com menos respostas válidas que `--quorum` ou `conclave.quorum`. O grupo
+não chama o juiz; use as respostas parciais e a tabela de falhas para identificar timeout,
+provider, cancelamento ou saída inválida. Ajuste os membros, o quorum ou
+`conclave.memberTimeoutSec` e execute novamente.
+
+### Saída estruturada ausente ou inválida
+
+- `MissingStructuredOutput` em `conclave.structuredOutput: "text"`: o turno terminou, mas a resposta não trouxe um objeto JSON extraível. O modo `text` pede uma única cerca `json` e valida localmente.
+- `StructuredOutputError` em `conclave.structuredOutput: "tool"`: o gateway não produziu a saída do protocolo `format: json_schema`. Use `text`, que é o padrão por esse motivo, ou um ambiente compatível.
+- `InvalidStructuredOutput`: havia JSON, mas ele não atende ao schema esperado. Reformule a tarefa ou troque o membro; a falha não recebe fallback automático.
+- `MissingSession`: uma rodada posterior não recebeu a sessão criada na rodada anterior. Reexecute e, se persistir, preserve as falhas para investigar o servidor.
+
+### Composição e juiz
+
+Se todos os membros forem negados pela política, o comando retorna exit 4. Com menos de dois
+membros válidos por entradas inválidas, desconectadas ou duplicadas, retorna exit 2. Leia os
+avisos no stderr para cada entrada pulada.
+
+Se o juiz modelo falhar, o conclave continua concluído, inclui o aviso e preserva
+`synthesisInput`; o Claude sintetiza com a skill `opc-conclave`. Não trate essa falha como
+consenso criado pelo juiz.

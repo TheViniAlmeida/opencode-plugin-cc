@@ -63,3 +63,25 @@ test('I4: opc config edits orchestrate.structuredOutput offline', async (t) => {
   await run(ctx, ['unset', 'orchestrate.structuredOutput', '--json']);
   assert.equal(await get(), 'text');
 });
+
+test('conclave structured output defaults to text and validates both modes', () => {
+  assert.equal(DEFAULT_CONFIG.conclave.structuredOutput, 'text');
+  for (const value of ['text', 'tool']) assert.deepEqual(validateConfigShape({ conclave: { structuredOutput: value } }), { errors: [], warnings: [] });
+  for (const value of ['json', null, 1, [], {}]) assert.equal(validateConfigShape({ conclave: { structuredOutput: value } }).errors.length, 1);
+  assert.equal(mergeConfig({}, { conclave: { structuredOutput: 'tool' } }).config.conclave.structuredOutput, 'tool');
+});
+
+test('opc config edits conclave.structuredOutput offline', async (t) => {
+  const dataDir = trackTempDir(t, makeTempDir('opc-conclave-config-'));
+  const workspaceRoot = trackTempDir(t, makeTempDir('opc-conclave-workspace-'));
+  writeGlobalConfig({ OPC_DATA_DIR: dataDir }, {});
+  let view;
+  const ctx = { dataDir, workspaceRoot, json: (v) => { view = v; }, out() {}, err() {} };
+  const get = async () => { await run(ctx, ['get', 'conclave.structuredOutput', '--json']); return view.value; };
+  assert.equal(await get(), 'text');
+  await run(ctx, ['set', 'conclave.structuredOutput', 'tool', '--json']);
+  assert.equal(await get(), 'tool');
+  await assert.rejects(run(ctx, ['set', 'conclave.structuredOutput', 'invalid']), /text, tool/);
+  await run(ctx, ['unset', 'conclave.structuredOutput', '--json']);
+  assert.equal(await get(), 'text');
+});

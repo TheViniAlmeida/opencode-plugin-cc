@@ -650,7 +650,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   }
   // Only orchestration's in-process members honor persisted intent before prompting.
   // Their coordinator must stay alive to abort the new session and record the attempt.
-  if (job.kind === 'orch' && isGroupMember(job) && !job.pid && job.attemptInFlight && !job.sessionID) {
+  if (['orch', 'conclave-member', 'conclave-judge'].includes(job.kind) && isGroupMember(job) && !job.pid && job.attemptInFlight && !job.sessionID) {
     return { ok: true, job, report: { ...report, deferred: true, status: job.status } };
   }
   const client = api === undefined ? existingServerApi(ctx) : api;

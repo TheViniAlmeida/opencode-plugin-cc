@@ -30,6 +30,18 @@ for (const kind of ['ask', 'orch', 'sub']) {
   });
 }
 
+for (const kind of ['conclave-member', 'conclave-judge']) {
+  test(`F4c: unpublished ${kind} session defers cancellation to its coordinator`, async (t) => {
+    const stateDir = trackTempDir(t, makeTempDir('opc-cancel-conclave-'));
+    const { members: [member] } = await createGroup(stateDir, { kind: 'conclave' }, [{ kind, status: 'running', attemptInFlight: true }]);
+    const result = await cancelJob({ stateDir }, member.id, { api: null, exitWaitMs: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(result.report.deferred, true);
+    assert.equal(result.report.aborted, false);
+    assert.ok(readJob(stateDir, member.id).cancelRequestedAt);
+  });
+}
+
 test('F4b fix2: group cancellation stays deferred until the coordinator publishes its result', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-cancel-group-'));
   const { group, members: [member] } = await createGroup(stateDir, { kind: 'orch' }, [{ kind: 'orch', status: 'running', attemptInFlight: true }]);

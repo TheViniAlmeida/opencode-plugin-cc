@@ -14,6 +14,30 @@
 
 ---
 
+## Ajustes pós-F4b (30/09/2026 — obrigatório ler antes de qualquer tarefa)
+
+Conferidos contra o código da F0–F4b mergeado na `main`. Onde este plano divergir, vale o que está aqui (e o código real: leia cada módulo antes de estendê-lo). Os "Ajustes pós-F4a" do plano da F4b e os anteriores continuam valendo (heredoc, PT-BR, IDs inteiros, jobs só com metadados + entrada privada consumida uma vez, `readSessionMessages`, mascaramento, chaves JSON sem nome de segredo, credenciais falsas montadas em tempo de execução, `DELEGATION_COMMANDS` em `lib/render.mjs`).
+
+1. **Assinatura do worker.** O despacho real é `mod.runWorker(ctx, job, request, options = {})`: o `task-worker` consome a entrada privada (`consumeInput`) e passa o pedido como 3º argumento. O registro do job **não** tem o `request` bruto — `safeJob` só guarda uma lista fechada de metadados (`kind`, `model`, `title`…). Onde o plano usa `job.request` (Tarefa 11, `runWorker(ctx, job)`), use o parâmetro `request`. Precedente: `commands/orchestrate.mjs` (`runWorker(ctx, job, request, options)` com `options.openApiImpl`/`options.discoveryLoader` injetáveis para teste sem socket). Consequência: `status/result --json` **não** mostram `request.members`/`request.judge`; a composição que o usuário vê vem do pacote (`group.result.composition`) e dos membros (`role`, `model`). Nenhum teste pode ler `group.request.members`.
+2. **Saída estruturada em modo texto (padrão).** No gateway real, `format: {type:'json_schema'}` falha com `StructuredOutputError` ("Model did not produce structured output") — foi o que derrubou o planner da F4b ao vivo. Acrescente `conclave.structuredOutput` (`text` padrão | `tool`) ao `DEFAULT_CONFIG` e ao `CONFIG_SCHEMA` (mesmo formato de `orchestrate.structuredOutput`), valendo para membros, debate, juiz e review do conclave.
+   - `tool`: `format: {type:'json_schema', schema}` como no plano.
+   - `text`: `format` omitido; o prompt ganha um bloco de contrato de saída (em inglês, como todo prompt de modelo: "Return only one JSON object inside a single ```json fence, with no text outside it. Follow this JSON Schema:" + o schema da rodada serializado, incluindo `title` e o `enum` de rótulos; no modo `tool`: "Return your answer only through the structured output.") — os templates `conclave-*.md` recebem `{{OUTPUT_CONTRACT}}` e não trazem frase fixa de contrato (só o bloco decide texto ou ferramenta); no review, o bloco é anexado ao prompt da F2b. O turno passa `textJson: (v) => isPlainObject(v) ? null : 'resposta deve ser um objeto JSON'` (o runner extrai com `extractTextJson` de `lib/text-json.mjs`). O validador aceita **qualquer objeto** de propósito: quem classifica é o `validateSchema` local, para que JSON fora do schema continue virando `InvalidStructuredOutput` (Review Focus 4).
+   - Em `text`, texto sem JSON termina `completed` com `structured` nulo → `MissingStructuredOutput` (com `rawText`); `StructuredOutputError` só existe em `tool`. Testes que esperam `StructuredOutputError` rodam com `conclave.structuredOutput: 'tool'`; cada um ganha um gêmeo em `text` esperando `MissingStructuredOutput`.
+   - Fake: `kindOf(body)` em `_conclave-common.mjs` usa `body.format?.schema?.title` e, sem `format`, o `"title"` do schema embutido no texto do prompt; as respostas do fake saem como `structured` em `tool` e como cerca ```json em `text`. Integração roda no padrão (`text`) e mantém ao menos um aceite completo em `tool`.
+3. **Turno do conclave (`runTurn`, A22).** Leia `runTurn` antes (assinatura real: `{ api, hub, request, onProgress, onSession, onPermission, onQuestion, onRequestResolved, isCancelled, signal }`; `request.messageID` é opcional — o runner usa `request.messageID ?? newMessageId()`). Obrigatório:
+   - `onSession({ sessionID, childSessionIDs })` grava `sessionID` no job do membro/juiz **antes** do prompt (a F4b corrigiu exatamente isso); não espere o fim do turno para publicar a sessão.
+   - `isCancelled()` lê `cancelRequestedAt` do grupo e do job do membro/juiz; o runner checa depois de criar a sessão e antes do prompt.
+   - `attemptInFlight: true` no job do membro ao começar o turno e `false` ao registrar o resultado (`recordAttempt`/`updateJob` terminal), como na F4b.
+4. **Cancelamento adiado.** `cancelJob` (`lib/jobs.mjs`) só adia (`report.deferred: true`) quando `job.kind === 'orch'`, é membro de grupo, sem `pid`, com `attemptInFlight` e sem `sessionID`. Estenda a condição para `conclave-member` e `conclave-judge` (conjunto de kinds, sem duplicar o ramo) e cubra com teste espelhando `tests/unit/jobs-cancel-preprompt.test.mjs` e `tests/unit/orchestrate-gate.test.mjs` (cancelamento de grupo com criação de sessão bloqueada → nenhum prompt enviado, sessão abortada, exit 130). `opc cancel` já mostra "pendente" para grupos/membros adiados.
+5. **Finalização do grupo.** O coordenador da F4b fecha o grupo só por `refreshGroup(stateDir, id, { final: true, decorate })` (decorate pode sobrepor `status`, `result`, `rendered`); `refreshGroup` nunca reescreve grupo `cancelled`. Use o mesmo caminho (em vez de `updateJob` direto no grupo, P13) e garanta exit 130 quando o grupo foi cancelado.
+6. **Falhas de persistência.** Falha ao gravar estado de membro não pode ser engolida em `pending.catch(log)` (plano, Tarefa 11): a F4b propaga como `coordinator_error` (`safeMembers`). Registre no log **e** falhe o conclave com erro explícito.
+7. **Mascaramento do pacote.** O pacote e o Markdown passam por `redactOutput` antes de ir a `job.result`/`job.rendered` (chaves e valores; `redact` casa nomes exatos, P10). Textos de modelo vão para o render dentro de cercas seguras (precedente `orchFence` em `lib/render.mjs`).
+8. **Comandos `.md`.** `/opc:conclave` segue o padrão do `/opc:orchestrate`: nada do usuário na linha de shell; flags e pergunta no corpo do heredoc citado com `--raw-args-stdin`; a guarda do delimitador é a frase PT-BR exigida por `tests/unit/commands-md.test.mjs`. Acrescente `conclave` a `DELEGATION_COMMANDS` (texto `use` em PT-BR).
+9. **Ao vivo.** As rotas do plano (`omniroute-personal/opencode-go/*`) respondem 402 (fatal) no gateway usado. Use as rotas por ambiente de `tests/live/_f4a-lib.mjs` (`FAST`/`SECOND`/`THIRD` = `OPC_LIVE_MODEL`, `_2`, `_3`; hoje DeepSeek V4 Flash, Qwen3.7 Flash e Kimi K2.6 em `omniroute-personal/cmd/...`), com `--models` explícito em vez de pool da config. Juiz modelo: 2 membros (`FAST`, `SECOND`) + juiz `THIRD` (ou `OPC_LIVE_JUDGE_MODEL`), sem `--allow-judge-member`. O "4º modelo do catálogo" é opcional (`OPC_LIVE_MODEL_4`); sem ele, registrar `N/A` com o motivo. Saída ao vivo sanitizada (`omniroute-personal`, `<tmp>`, `~`) antes do commit, em `docs/phases/F4c-live-output.md`. Timeouts de membro ao vivo: modelos lentos levam 2–5 min por turno.
+10. **Testes com socket.** O sandbox do executor pode não abrir sockets (`EPERM`): escreva a lógica testável sem socket (como `orchestrate-gate.test.mjs`, com `installSessionApi` + `createApi`) e deixe a integração CLI × fake para o controlador rodar fora do sandbox; relate o que não pôde rodar como `NÃO VALIDADO`, nunca como aprovado.
+11. **Repo de teste.** `makeWorkspace` (`tests/helpers.mjs`) desliga `maintenance.auto`/`gc.auto`; snapshots de diretório em teste não podem depender de arquivos transitórios do git.
+12. **Docs.** `docs/commands.md`, `docs/configuration.md` (incluir `conclave.structuredOutput`), `docs/architecture.md`, `docs/troubleshooting.md`, `README.md` (status e link do relatório) e `CHANGELOG.md` já têm as seções da F4b; acrescente as do conclave no mesmo formato. Tabela de erros do `docs/conclave.md` distingue `text` × `tool` (item 2).
+
 ## Global Constraints
 
 - Node ≥ 20; ESM `.mjs`; zero dependências de runtime e de desenvolvimento; testes só com `node:test`.
@@ -966,7 +990,6 @@ Answer the question below on its merits. You work in read-only mode: you may rea
 - evidence: references you actually checked, as file, line_start, line_end and note. Use null lines when the evidence is a whole file. Leave the list empty rather than inventing references.
 - would_change_mind_if: the specific fact or argument that would make you switch.
 - Do not say who or what you are: no model, vendor, product or provider names. Refer to yourself only as member {{SELF_LABEL}}.
-- Reply only through the structured output.
 </rules>
 ```
 
@@ -1000,7 +1023,6 @@ The other members answered the same question in the previous round. They appear 
 - Weigh arguments and evidence, never the presumed identity of a peer.
 - Read-only: you may read files to verify a peer's evidence; do not edit files or run commands.
 - Do not mention model, vendor, product or provider names.
-- Reply only through the structured output.
 </rules>
 ```
 
@@ -1040,7 +1062,6 @@ Write the synthesis:
 - Do not count votes blindly: one well-evidenced answer can outweigh several unsupported ones; say so when it happens.
 - You may read files to check cited evidence; do not edit files or run commands.
 - Refer to members only by label. Do not guess or mention which model, vendor or provider wrote an answer.
-- Reply only through the structured output.
 </rules>
 ```
 
