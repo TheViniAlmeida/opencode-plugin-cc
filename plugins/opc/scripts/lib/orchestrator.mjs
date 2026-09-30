@@ -403,7 +403,7 @@ function safeMembers(members, log) {
   const wrap = (fn, fallback) => async (...args) => {
     if (typeof fn !== 'function') return fallback;
     try { return await fn(...args); } catch (err) {
-      log(`aviso: bookkeeping de job membro falhou: ${err?.message ?? err}`);
+      log(`aviso: bookkeeping de job membro falhou: ${safeOutputText(err?.message ?? err)}`);
       return fallback;
     }
   };
@@ -418,23 +418,46 @@ function safeMembers(members, log) {
 
 function memberPatch(result) {
   const status = result.status === 'completed' ? 'completed' : result.status === 'cancelled' ? 'cancelled' : 'failed';
-  return { status, model: result.model ?? null, attempts: result.attempts ?? [], sessionID: result.sessionID ?? null,
-    errorClass: result.errorClass ?? null, errorType: result.errorType ?? null,
-    errorMessage: status === 'completed' ? null : result.errorMessage ?? result.errorType ?? null };
+  const safeOptionalText = (value) => value == null ? null : safeOutputText(value);
+  return {
+    status,
+    model: safeOptionalText(result.model),
+    attempts: safePackageValue(result.attempts ?? []),
+    sessionID: safeOptionalText(result.sessionID),
+    errorClass: safeOptionalText(result.errorClass),
+    errorType: safeOptionalText(result.errorType),
+    errorMessage: status === 'completed' ? null : safeOptionalText(result.errorMessage ?? result.errorType),
+  };
 }
 
 async function safeTurn(deps, spec) {
   try { return await deps.runTurn(spec); } catch (err) {
-    return { status: 'failed', errorClass: 'fatal', errorType: err?.code ?? 'Error', errorMessage: err?.message ?? String(err) };
+    return {
+      status: 'failed',
+      errorClass: safeOutputText('fatal'),
+      errorType: safeOutputText(err?.code ?? 'Error'),
+      errorMessage: safeOutputText(err?.message ?? String(err)),
+    };
   }
 }
 
 function positiveInt(value, fallback) { return Number.isInteger(value) && value > 0 ? value : fallback; }
 
+// The orchestration package is often serialized and returned to another process. Apply the
+// same free-text masking used by logs to every string, including nested planner/turn payloads.
+function safePackageValue(value) {
+  if (typeof value === 'string') return safeOutputText(value);
+  if (Array.isArray(value)) return value.map(safePackageValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safePackageValue(item)]));
+  }
+  return value;
+}
+
 export async function runOrchestration({ ctx, task, flags = {}, deps }) {
   if (!deps || typeof deps.runTurn !== 'function') throw new TypeError('runOrchestration requires deps.runTurn');
   const now = deps.now ?? Date.now;
-  const log = deps.log ?? (() => {});
+  const log = typeof deps.log === 'function' ? (line) => deps.log(safeOutputText(line)) : () => {};
   const members = safeMembers(deps.members, log);
   const loadPrompt = deps.loadPrompt ?? loadPromptFile;
   const loadSchema = deps.loadSchema ?? loadSchemaFile;
@@ -451,10 +474,14 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
   const warnings = [];
   const pkg = { schemaVersion: 1, task, write, maxSubtasks, status: 'running', outcome: null, errorCode: null, errorMessage: null,
     planner: null, plan: null, rawPlan: null, planErrors: [], subtasks: [], synthesis: null, warnings, durationMs: 0 };
-  const finish = (status, outcome, errorCode = null, errorMessage = null) => { Object.assign(pkg, { status, outcome, errorCode, errorMessage, durationMs: now() - startedAt }); return pkg; };
+  const finish = (status, outcome, errorCode = null, errorMessage = null) => {
+    Object.assign(pkg, { status, outcome, errorCode, errorMessage, durationMs: now() - startedAt });
+    Object.assign(pkg, safePackageValue(pkg));
+    return pkg;
+  };
 
   let plannerRoute;
-  try { plannerRoute = deps.resolvePlanner(); } catch (err) { return finish('failed', 'failed', 'planner_failed', `o modelo do planejador não pôde ser resolvido: ${err.message}`); }
+  try { plannerRoute = deps.resolvePlanner(); } catch (err) { return finish('failed', 'failed', 'planner_failed', `o modelo do planejador não pôde ser resolvido: ${safeOutputText(err?.message ?? err)}`); }
   warnings.push(...(plannerRoute.warnings ?? []));
   const plannerTitle = sessionTitle('orch-plan', summarize(task));
   const plannerMember = await members.start('planner', { title: plannerTitle, model: plannerRoute.candidates[0]?.full ?? null });
@@ -496,16 +523,17 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
   };
   const start = (s) => {
     const st = states.get(s.id); st.status = 'running'; st.startedAt = now(); let route;
-    try { route = deps.resolveSubtask(s); } catch (err) { route = { candidates: [], warnings: [], reasons: [err.message] }; }
+    try { route = deps.resolveSubtask(s); } catch (err) { route = { candidates: [], warnings: [], reasons: [safeOutputText(err?.message ?? err)] }; }
     warnings.push(...(route.warnings ?? []));
-    if (!route.candidates?.length) { st.status = 'failed'; st.endedAt = now(); st.errorCode = 'no_model'; st.errorMessage = `nenhum modelo utilizável: ${(route.reasons ?? []).join('; ') || 'rota vazia'}`; return; }
+    if (!route.candidates?.length) { st.status = 'failed'; st.endedAt = now(); st.errorCode = 'no_model'; st.errorMessage = `nenhum modelo utilizável: ${(route.reasons ?? []).map(safeOutputText).join('; ') || 'rota vazia'}`; log(`subtask ${s.id}: failed (no_model)`); return; }
     const ordered = spreadCandidates(route.candidates, used, rr); used.add(ordered[0].full); running.set(s.id, runOne(s, ordered, route.fallbackEligible === true).then(() => s.id));
   };
   for (;;) {
     const cancelledNow = propagateDependencyFailures(subtasks, states);
+    let picked = [];
     if (aborted()) for (const s of subtasks) { const st = states.get(s.id); if (st.status === 'pending') Object.assign(st, { status: 'cancelled', errorCode: 'cancelled', errorMessage: 'orquestração cancelada' }); }
-    else { const picked = pickReady(subtasks, states, { maxParallel }); for (const s of picked) start(s); }
-    if (running.size === 0) { if (cancelledNow.length === 0) break; continue; }
+    else { picked = pickReady(subtasks, states, { maxParallel }); for (const s of picked) start(s); }
+    if (running.size === 0) { if (picked.length === 0 && cancelledNow.length === 0) break; continue; }
     const doneId = await Promise.race(running.values()); running.delete(doneId);
   }
   for (const s of subtasks) { const st = states.get(s.id); if (st.status === 'pending') Object.assign(st, { status: 'cancelled', errorCode: 'unscheduled', errorMessage: 'nunca ficou pronta' }); }
