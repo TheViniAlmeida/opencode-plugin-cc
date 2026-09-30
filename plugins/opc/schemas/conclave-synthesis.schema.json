@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConclaveSynthesis",
+  "description": "Synthesis of a conclave produced by a judge model that sees members only by label.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["consensus", "disagreements", "weighted_position", "confidence", "recommendation", "minority_reports"],
+  "properties": {
+    "consensus": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "disagreements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["topic", "positions"],
+        "properties": {
+          "topic": { "type": "string", "minLength": 1 },
+          "positions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["members", "stance"],
+              "properties": {
+                "members": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+                "stance": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "weighted_position": { "type": "string", "minLength": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "recommendation": { "type": "string", "minLength": 1 },
+    "minority_reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["members", "summary"],
+        "properties": {
+          "members": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "summary": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
