@@ -15,7 +15,7 @@ const base = () => ({
 test('renderiza cabeçalho, plano, resultados e nota de síntese do Claude', () => {
   const pkg = base(); pkg.plan.subtasks = pkg.subtasks;
   const out = renderOrchestration(pkg, { jobId: 'orch-abc' });
-  assert.match(out, /^# opc orchestrate\n\nTarefa: Audit the re…\nStatus: concluída · job orch-abc · 2 subtarefas · 12\.3 s\nPlanner: p\/planner\n/);
+  assert.match(out, /^# opc orchestrate\n\nTarefa: Audit the repo\nStatus: concluída · job orch-abc · 2 subtarefas · 12\.3 s\nPlanner: p\/planner\n/);
   assert.match(out, /## Plano\n\nTwo angles\.\n/);
   assert.match(out, /\| a \| ask \| light \| p\/m1 \| concluída \| - \|/);
   assert.match(out, /\| b \| review \| - \| - \| cancelada \| a \|/);
@@ -55,6 +55,21 @@ test('renderiza plano inválido com erros e plano bruto', () => {
 test('renderiza saída bruta do planner quando a decomposição falha', () => {
   const out = renderOrchestration({ task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_structured_output', errorMessage: 'planner failed: schema mismatch', durationMs: 10, planner: { model: 'p/planner' }, plan: null, rawPlan: 'free text plan', planErrors: [], subtasks: [], synthesis: null, warnings: [] });
   assert.match(out, /## Saída bruta do planner\n\n```\nfree text plan\n```/);
+});
+
+test('a cerca da saída bruta excede o maior conjunto de crases do conteúdo', () => {
+  for (const runLength of [3, 4, 6]) {
+    const run = '`'.repeat(runLength);
+    const raw = `antes\n${run}\ndepois`;
+    const out = renderOrchestration({
+      task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_structured_output', errorMessage: 'falha',
+      durationMs: 10, planner: { model: 'p/planner' }, plan: null, rawPlan: raw,
+      planErrors: [], subtasks: [], synthesis: null, warnings: [],
+    });
+    const fence = '`'.repeat(runLength + 1);
+    assert.ok(out.includes(`## Saída bruta do planner\n\n${fence}\n`));
+    assert.ok(out.includes(`\n${run}\ndepois\n${fence}`), `${runLength}-backtick content remains inside its fence`);
+  }
 });
 
 test('pacote nulo renderiza aviso curto', () => assert.equal(renderOrchestration(null), '# opc orchestrate\n\nNenhum resultado registrado para este job.\n'));

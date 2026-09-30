@@ -1021,7 +1021,8 @@ const ORCH_SUBTASK_LABEL = { completed: 'concluída', failed: 'falhou', cancelle
 
 function orchFence(text, lang = '') {
   const body = safeOutputText(String(text ?? ''));
-  const ticks = body.includes('```') ? '````' : '```';
+  const longestRun = Math.max(0, ...[...body.matchAll(/`+/g)].map(([run]) => run.length));
+  const ticks = '`'.repeat(Math.max(3, longestRun + 1));
   return `${ticks}${lang}\n${body}\n${ticks}`;
 }
 
@@ -1033,15 +1034,10 @@ function orchPortuguese(value) {
   return safeOutputText(String(value ?? '').replace(/dependency cycle/g, 'ciclo de dependência').replace(/invalid plan/g, 'plano inválido'));
 }
 
-function orchDisplay(value) {
-  const text = safeOutputText(String(value ?? '').replace(/\s+/g, ' ').trim());
-  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
-}
-
 export function renderOrchestration(pkg, { jobId = null } = {}) {
   if (!pkg) return '# opc orchestrate\n\nNenhum resultado registrado para este job.\n';
   const lines = ['# opc orchestrate', ''];
-  lines.push(`Tarefa: ${orchDisplay(pkg.task)}`);
+  lines.push(`Tarefa: ${safeOutputText(String(pkg.task ?? '').replace(/\s+/g, ' ').trim())}`);
   const meta = [`Status: ${ORCH_OUTCOME_LABEL[pkg.outcome] ?? safeOutputText(pkg.status ?? '')}`];
   if (jobId) meta.push(`job ${safeOutputText(jobId)}`);
   if (pkg.plan) meta.push(`${pkg.plan.subtasks.length} subtarefas`);
