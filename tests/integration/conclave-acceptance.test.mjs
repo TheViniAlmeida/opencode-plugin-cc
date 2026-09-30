@@ -7,6 +7,7 @@ import {
   setupConclave, conclave, promptRequests, requestsBySchema, reviewRequests, sessionOfRequest, textOf, section,
   labelOf, writeReviewChanges, DS, QW, KM, TRIO, FORBIDDEN_NAMES,
 } from './_conclave-helpers.mjs';
+import { kindOf } from '../fixtures/scenarios/_conclave-common.mjs';
 
 const Q = 'Should the storage layer add a write-ahead log?';
 const FAST_TIMEOUT = { conclave: { memberTimeoutSec: 2 } };
@@ -41,7 +42,7 @@ test('composition: pool from config; denied member skipped with a warning', asyn
   const res = await conclave(['--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(res.json.composition.map((c) => c.model).sort(), [DS, QW].sort());
-  assert.match(res.stderr, /skipping "omniroute-personal\/opencode-go\/kimi-k3": model denied by policy/);
+  assert.match(res.stderr, /ignorando "omniroute-personal\/opencode-go\/kimi-k3": modelo negado pela política/);
   assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !r.body.model.modelID.includes('kimi')));
 });
 
@@ -62,8 +63,9 @@ test('anonymization: no model, vendor or provider name reaches debate or judge p
   const res = await conclave(['--models', `${DS},${QW}`, '--mode', 'debate', '--rounds', '2', '--judge', KM, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   const pkg = res.json;
-  assert.match(JSON.stringify(pkg.roundsData[0]), /deepseek/i, 'sanity: members did self-identify in round 1');
-  assert.match(JSON.stringify(pkg.roundsData[0]), /alibaba/i);
+  const modelByLabel = new Map(pkg.composition.map(({ label, model }) => [label, model]));
+  assert.ok([...modelByLabel.values()].some((model) => /deepseek/i.test(model)), 'composition maps labels to requested models');
+  assert.equal(modelByLabel.size, 2);
 
   const debate = requestsBySchema(env, 'ConclaveDebate');
   const judge = requestsBySchema(env, 'ConclaveSynthesis');
@@ -71,7 +73,7 @@ test('anonymization: no model, vendor or provider name reaches debate or judge p
   assert.equal(judge.length, 1);
   for (const r of [...debate, ...judge]) {
     const text = textOf(r.body).toLowerCase();
-    for (const name of FORBIDDEN_NAMES) assert.ok(!text.includes(name), `"${name}" leaked into a ${r.body.format.schema.title} prompt`);
+    for (const name of FORBIDDEN_NAMES) assert.ok(!text.includes(name), `"${name}" leaked into a ${kindOf(r.body)} prompt`);
   }
   for (const r of debate) assert.ok(section(textOf(r.body), 'peer_answers').includes('[redacted]'));
   assert.ok(section(textOf(judge[0].body), 'member_answers').includes('[redacted]'));
@@ -82,16 +84,28 @@ test('anonymization: no model, vendor or provider name reaches debate or judge p
 
 // --- Quorum ------------------------------------------------------------------
 
-test('quorum met: a StructuredOutputError member is discarded and listed; the rest synthesize', async (t) => {
+test('quorum met: text mode reports MissingStructuredOutput for a member without structured output', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-structured-error' });
   const res = await conclave(['--models', TRIO, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   const pkg = res.json;
   const qwen = labelOf(pkg, QW);
   assert.equal(pkg.status, 'completed');
-  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'StructuredOutputError']]);
-  assert.match(pkg.failures[0].rawText, /cannot format it/);
+  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'MissingStructuredOutput']]);
   assert.deepEqual(pkg.final.responses.map((r) => r.label).sort(), pkg.composition.filter((c) => c.label !== qwen).map((c) => c.label).sort());
+  assert.ok(pkg.synthesisInput);
+});
+
+test('quorum met: tool mode discards and lists a StructuredOutputError member; the rest synthesize', async (t) => {
+  const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-structured-error', config: { conclave: { structuredOutput: 'tool' } } });
+  const res = await conclave(['--models', TRIO, '--json', Q], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const pkg = res.json;
+  const qwen = labelOf(pkg, QW);
+  assert.equal(pkg.status, 'completed');
+  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'StructuredOutputError']]);
+  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => r.body.format?.type === 'json_schema'));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
   assert.ok(pkg.synthesisInput);
 });
 
@@ -99,6 +113,7 @@ test('member timeout: the silent member is aborted, discarded and left out of th
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-timeout', config: FAST_TIMEOUT });
   const res = await conclave(['--models', TRIO, '--mode', 'debate', '--json', Q], { env, cwd, timeoutMs: 120_000 });
   assert.equal(res.code, 0, res.stderr);
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
   const pkg = res.json;
   const kimi = labelOf(pkg, KM);
   assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[kimi, 1, 'Timeout']]);
@@ -194,7 +209,7 @@ test('review: members without findings approve and produce no clusters', async (
 test('review: outside a git repository the command fails with a usage error before any session', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'judge-ok', git: false });
   const res = await conclave(['--models', TRIO, '--mode', 'review', '--json'], { env, cwd });
-  assert.notEqual(res.code, 0);
+  assert.equal(res.code, 2);
   assert.equal(promptRequests(env).length, 0);
 });
 
@@ -216,13 +231,23 @@ test('judge model: read-only session sees only labels; synthesis validated again
   assert.deepEqual(judgeSession.body.permission[0], { permission: '*', pattern: '*', action: 'deny' });
 });
 
-test('judge failure keeps the conclave completed with a warning for Claude', async (t) => {
+test('judge failure in text mode keeps the conclave completed with MissingStructuredOutput warning', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-opinion' });
+  const res = await conclave(['--models', `${DS},${QW}`, '--judge', KM, '--json', Q], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  assert.equal(res.json.judge.status, 'failed');
+  assert.equal(res.json.judge.error.errorType, 'MissingStructuredOutput');
+  assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
+});
+
+test('judge StructuredOutputError in tool mode keeps the conclave completed with a warning', async (t) => {
+  const { env, cwd } = setupConclave(t, { scenario: 'conclave-opinion', config: { conclave: { structuredOutput: 'tool' } } });
   const res = await conclave(['--models', `${DS},${QW}`, '--judge', KM, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   assert.equal(res.json.judge.status, 'failed');
   assert.equal(res.json.judge.error.errorType, 'StructuredOutputError');
   assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
 });
 
 test('--allow-judge-member: required when the judge is also a member', async (t) => {

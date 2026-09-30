@@ -60,11 +60,14 @@ test('debate usa configuração com duas ou mais rodadas', () => {
   assert.equal(composeMembers({ config, catalog, mode: 'debate', rng: seq(0) }).rounds, 3);
 });
 test('pula modelos negados, inválidos e duplicados com avisos', () => {
-  const out = compose({ models: [DS, 'strong', QW, EQ, 'nope-model', KM] });
+  const invalid = 'unknown-provider/very-long-model-name';
+  const out = compose({ models: [DS, 'strong', QW, EQ, invalid, KM] });
   assert.deepEqual(out.members.map((m) => m.full).sort(), [DS, KM, QW].sort());
   assert.equal(out.warnings.length, 3);
   assert.ok(out.warnings.some((w) => w.includes(EQ.slice(0, 12)) && /negado pela política/.test(w)));
-  assert.ok(out.warnings.some((w) => w.includes('nope-model')));
+  assert.ok(out.warnings.some((w) => w.includes(`"${EQ}"`) && /negado pela política/.test(w)));
+  assert.ok(out.warnings.some((w) => w.includes(invalid.slice(0, 12))));
+  assert.ok(!out.warnings.some((w) => w.includes(invalid)));
   assert.ok(out.warnings.some((w) => /duplicado/.test(w)));
 });
 test('entrada de modelo vazia é registrada como ignorada com aviso', () => {

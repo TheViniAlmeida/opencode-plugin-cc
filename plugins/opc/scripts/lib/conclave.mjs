@@ -266,18 +266,18 @@ export function composeMembers({
     }
     if (!catalog.connected.has(resolved.providerID)) {
       const reason = 'o provider não está conectado';
-      skipped.push({ entry: preview(entry), reason, denied: false });
-      warnings.push(`conclave: ignorando "${preview(entry)}": ${reason}`);
+      skipped.push({ entry: resolved.full, reason, denied: false });
+      warnings.push(`conclave: ignorando "${resolved.full}": ${reason}`);
       continue;
     }
     const denial = policyDenial(resolved, policy);
     if (denial) {
-      skipped.push({ entry: preview(entry), reason: denial, denied: true });
-      warnings.push(`conclave: ignorando "${preview(entry)}": ${denial}`);
+      skipped.push({ entry: resolved.full, reason: denial, denied: true });
+      warnings.push(`conclave: ignorando "${resolved.full}": ${denial}`);
       continue;
     }
     if (seen.has(resolved.full)) {
-      warnings.push(`conclave: membro duplicado "${preview(entry)}" ignorado`);
+      warnings.push(`conclave: membro duplicado "${resolved.full}" ignorado`);
       continue;
     }
     seen.add(resolved.full);
