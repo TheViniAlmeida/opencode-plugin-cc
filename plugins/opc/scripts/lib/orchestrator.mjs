@@ -172,6 +172,7 @@ export const RESULT_MAX_BYTES = 64 * 1024;
 
 const FRAMING_TAGS = ['dependency', 'subtask', 'orchestration_context', 'orchestration_results', 'result', 'project_context', 'task'];
 const FRAMING_RE = new RegExp(`<(/?)(${FRAMING_TAGS.join('|')})(?=[\\s>/])`, 'gi');
+const SAFE_AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export function neutralizeTags(text) {
   return String(text ?? '').replace(FRAMING_RE, '&lt;$1$2');
@@ -183,21 +184,34 @@ function truncateBytes(text, maxBytes) {
   return { text: cut, truncated: cut.length < full.length, omittedBytes: Buffer.byteLength(full, 'utf8') - Buffer.byteLength(cut, 'utf8') };
 }
 
+function truncatePromptBody(text, maxBytes) {
+  const clean = neutralizeTags(text);
+  const cut = truncateBytes(clean, maxBytes);
+  const note = cut.truncated ? `\n[truncated: ${cut.omittedBytes} bytes omitted]` : '';
+  return { ...cut, text: `${cut.text}${note}` };
+}
+
 function safeProjectContext(project) {
   if (!isPlainObject(project)) return '';
   const clean = (v) => (typeof v === 'string' ? neutralizeTags(v) : Array.isArray(v) ? v.map((x) => neutralizeTags(x)) : v);
   return projectContextBlock({ ...project, goal: clean(project.goal), scope: clean(project.scope), taskTypes: clean(project.taskTypes) });
 }
 
+function isSafeAgentName(name) {
+  return typeof name === 'string' && SAFE_AGENT_NAME_RE.test(name) && neutralizeTags(name) === name;
+}
+
 export function allowedAgentNames(agentsIndex, policy = {}) {
   if (!agentsIndex) return [];
   return [...agentsIndex.entries()]
-    .filter(([name, info]) => info?.mode !== 'subagent' && evaluate('agent', name, policy).allowed)
+    .filter(([name, info]) => isSafeAgentName(name)
+      && info?.mode !== 'subagent' && evaluate('agent', name, policy).allowed)
     .map(([name]) => name)
     .sort();
 }
 
 export function buildDecomposePrompt({ template, task, maxSubtasks, write, projectContext = '', agents = [] }) {
+  const safeAgents = (Array.isArray(agents) ? agents : []).filter(isSafeAgentName);
   return fillTemplate(template, {
     PROJECT_CONTEXT: projectContext,
     TASK: neutralizeTags(task),
@@ -206,8 +220,8 @@ export function buildDecomposePrompt({ template, task, maxSubtasks, write, proje
     WRITE_MODE: write
       ? 'Write mode is ON: use kind "task" for subtasks that must change files. Those run one at a time, after each other.'
       : 'Write mode is OFF: never use kind "task"; only "ask", "plan" and "review" are allowed.',
-    AGENTS: agents.length
-      ? `"agent" is optional; set it only when a specialised agent is clearly needed, choosing from: ${agents.join(', ')}.`
+    AGENTS: safeAgents.length
+      ? `"agent" is optional; set it only when a specialised agent is clearly needed, choosing from: ${safeAgents.join(', ')}.`
       : '"agent" must be omitted.',
   }, { strict: true });
 }
@@ -220,9 +234,8 @@ const KIND_RULES = {
 };
 
 export function formatDependencyBlock(id, text) {
-  const cut = truncateBytes(text, DEPENDENCY_MAX_BYTES);
-  const note = cut.truncated ? `\n[truncated: ${cut.omittedBytes} bytes omitted]` : '';
-  return `<dependency id="${id}">\n${neutralizeTags(cut.text)}${note}\n</dependency>`;
+  const cut = truncatePromptBody(text, DEPENDENCY_MAX_BYTES);
+  return `<dependency id="${id}">\n${cut.text}\n</dependency>`;
 }
 
 export function buildSubtaskPrompt({ task, subtask, dependencies = [], projectContext = '' }) {
@@ -249,9 +262,10 @@ export function buildSubtaskPrompt({ task, subtask, dependencies = [], projectCo
 
 export function buildSynthesizePrompt({ template, task, rationale, subtasks }) {
   const blocks = subtasks.map((s) => {
-    const body = s.status === 'completed'
-      ? truncateBytes(s.result ?? '', SYNTH_RESULT_MAX_BYTES).text
+    const rawBody = s.status === 'completed'
+      ? s.result ?? ''
       : `(no result: ${s.errorCode ?? s.status}${s.errorMessage ? ` - ${s.errorMessage}` : ''})`;
+    const body = truncatePromptBody(rawBody, SYNTH_RESULT_MAX_BYTES).text;
     return `<result id="${s.id}" kind="${s.kind}" status="${s.status}">\n${neutralizeTags(body)}\n</result>`;
   });
   return fillTemplate(template, {
