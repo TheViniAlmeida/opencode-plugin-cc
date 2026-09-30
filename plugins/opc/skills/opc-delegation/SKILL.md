@@ -14,7 +14,7 @@ You (Claude) stay the lead. OpenCode is a second engine you can hand self-contai
 | A question about the codebase that needs reading several files, tracing a flow or finding a root cause | `opc ask` (`/opc:ask`) |
 | An implementation plan: files to touch, order, trade-offs, risks, tests | `opc plan` (`/opc:plan`) |
 | A review of the current diff or branch | `opc review --wait` (`/opc:review`) |
-| An investigation with independent parts | several `opc ask` / `opc plan` jobs with `--background`, or `/opc:orchestrate` when that command is available |
+| An investigation with independent parts | several `opc ask` / `opc plan` jobs with `--background`, or `/opc:orchestrate` |
 
 `ask`, `plan` and `review` always run read-only. Delegating a change (`opc task --write`) is only for when the user asked OpenCode to make it.
 
@@ -27,10 +27,11 @@ You (Claude) stay the lead. OpenCode is a second engine you can hand self-contai
 
 ## How to call it
 
-Put the flags on the command line before `--raw-args-stdin` and pass the prompt through a quoted heredoc whose first line is `--`, so the shell expands nothing and no word of the prompt is read as a flag:
+Put all flags in the first line of the quoted heredoc body, followed by a line containing only `--`; put the task after that line. The shell command line contains only the command, `--raw-args-stdin` and the quoted heredoc delimiter. `parsePromptArgs` extracts known leading flags before `--` and treats everything after it as task text:
 
 ```bash
-opc ask [--model <m> | --tier light|heavy] --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+opc ask --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--model <m>
 --
 <self-contained question: goal, relevant paths, what a good answer contains>
 OPC_ARGS_5f1d0c7a_EOF
@@ -65,3 +66,43 @@ A delegated answer is evidence, not truth.
 ## Agent Teams
 
 To run delegations as teammates, spawn teammates with the `opc-worker` agent type and give each one task text plus flags. Each worker runs exactly one opc command per task and reports `✓ opc done`, `⏸ opc waiting` or `✗ opc failed`. A `⏸` result carrying a permission request comes back to you; handle it with the user, never through the worker.
+
+## Orquestração (`/opc:orchestrate`)
+
+**Quando usar:** a tarefa tem partes separáveis que ganham com modelos diferentes — por exemplo,
+mapear o código, revisar um módulo e planejar testes. **Não use** para uma pergunta única
+(`/opc:ask`), para uma edição pequena ou quando as partes dependem todas umas das outras.
+
+**Como chamar:** coloque as flags conhecidas nas primeiras linhas do corpo do heredoc, seguidas
+por uma linha exatamente `--` e então pela tarefa. `parsePromptArgs` extrai somente as flags
+iniciais antes de `--`; o restante é texto da tarefa. A linha do shell contém apenas o comando,
+`--raw-args-stdin` e o delimitador citado:
+
+```bash
+opc orchestrate --raw-args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
+--max N --synthesizer claude --background
+--
+<tarefa autocontida: objetivo, caminhos relevantes, o que cada parte deve entregar>
+OPC_ARGS_5f1d0c7a_EOF
+```
+
+**Ao receber o resultado:**
+
+1. **`invalid_plan`, `planner_failed`, `planner_structured_output` ou `all_subtasks_failed`:**
+   mostre o motivo e o plano bruto. Não execute as subtarefas por conta própria; sugira
+   reformular a tarefa, ajustar `--max` ou, se o plano pedia escrita, confirmar com o usuário
+   antes de repetir com `--write`.
+2. **Síntese a cargo do Claude** (padrão):
+   - leia cada subtarefa concluída e confira no código as referências `arquivo:linha` que
+     sustentam as conclusões principais (Read/Grep);
+   - junte pontos repetidos; onde as subtarefas divergirem, diga qual evidência é mais forte;
+   - liste as subtarefas que falharam ou foram canceladas (`dependency_failed`) e o que ficou
+     sem cobertura;
+   - cite o id da subtarefa de cada afirmação; não atribua a uma subtarefa o que ela não disse;
+   - marque como "não verificado" o que você não conseguiu conferir.
+3. **Síntese por modelo:** apresente-a e confira contra os resultados brutos com os mesmos
+   critérios; se ela contradisser um resultado, diga.
+4. **Subtarefas `task`** (só com `--write`) alteraram arquivos: liste os "Arquivos tocados" e
+   recomende revisar o diff antes de seguir.
+5. **Exit 3:** pedido de permissão de uma subtarefa de escrita — siga `opc-result-handling`.
+6. Nunca dispare outra orquestração (ou outro job) a partir do resultado sem pedido do usuário.

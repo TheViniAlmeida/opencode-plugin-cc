@@ -77,6 +77,39 @@ O stop gate nunca bloqueia por infraestrutura. O `systemMessage` traz o código 
 
 Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/message` pode retornar 400 `Expected OutputFormatJsonSchema`; a leitura por mensagem individual funciona. Por isso `review.structuredOutput` é `text` por padrão: nenhum `format` é enviado, o modelo retorna um objeto em cerca `json` e o opc faz extração e validação estritas. `tool` é opt-in e usa schema/per-message reads com espera limitada.
 
+## Orquestração
+
+### Planner falhou com `planner_structured_output`
+
+Mantenha ou configure `orchestrate.structuredOutput` como `text`. Nesse modo o planner recebe
+o contrato de retornar um único JSON em cerca `json`, sem `format: json_schema`; o opc extrai e
+valida o objeto. `tool` é opt-in para ambientes onde o formato estruturado do OpenCode funciona.
+
+```bash
+opc config set orchestrate.structuredOutput text
+```
+
+### Planner falhou com `planner_failed` em modo `text`
+
+O turno do planner falhou ou a resposta não trouxe um objeto JSON extraível. O texto recebido
+fica como plano bruto em `opc result orch-<id>`. Tente outro planner (`--planner <modelo>`) ou
+reformule a tarefa com partes mais explícitas.
+
+### Plano recusado com `invalid_plan`
+
+Leia `planErrors` e o plano bruto em `opc result orch-<id>` ou na saída `--json`. Corrija a
+tarefa ou o limite: o plano precisa conter de 2 a `maxSubtasks` itens, ids válidos e únicos,
+dependências existentes sem ciclo e agentes permitidos. Uma subtarefa `task` exige repetir a
+orquestração com `--write` depois da autorização apropriada.
+
+### Cancelamento durante a criação da sessão de membro
+
+Se o cancelamento chegar enquanto a sessão do membro está sendo criada, ele é adiado e é
+honrado antes de o prompt ser enviado: `opc cancel` informa o cancelamento como **pendente**
+(`--json`: `pending: true`, `deferredMembers`), a sessão
+recém-criada é abortada e o grupo termina `cancelled` (exit 130). O cenário é coberto por teste
+de integração com o servidor falso.
+
 ## Erros do provider
 
 Erro 402, como `This model requires an opencode API key`, vem do provider/credencial, não do opc. Verifique o provider conectado e a política de modelo; não grave nem exponha a credencial. No gate, o erro permite com aviso; em review/rescue, o comando informa a falha.

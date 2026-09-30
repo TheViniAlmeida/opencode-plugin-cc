@@ -20,18 +20,24 @@ export async function run(ctx, argv) {
     else ctx.err(message);
     return ExitCode.CONNECTION;
   }
-  if (flags.json) ctx.json({ jobId: job.id, status: job.status, report });
+  if (flags.json) ctx.json({ jobId: job.id, status: job.status, report, ...(report?.deferred ? { pending: true } : {}) });
   else ctx.out(renderCancel(job, report));
   return ExitCode.OK;
 }
 
 export async function cancelForGroup(ctx, job, flags) {
   if (job?.role !== GROUP_ROLE) return null;
-  const { group, cancelledMembers, failedMembers = [], ok = true } = await cancelGroup(ctx, job.id);
+  const { group, cancelledMembers, deferredMembers = [], failedMembers = [], ok = true, deferred = false } = await cancelGroup(ctx, job.id);
   if (failedMembers.length || !ok) {
     if (flags.json) ctx.json({ group, cancelledMembers, failedMembers, error: 'CANCEL_FAILED' });
     else ctx.err(`Falha ao cancelar o grupo ${group.id}; membros que falharam: ${failedMembers.join(', ') || group.id}`);
     return ExitCode.CONNECTION;
+  }
+  if (deferred) {
+    // Intent accepted; the coordinator finishes the cancellation before prompting the pending members.
+    if (flags.json) ctx.json({ group, cancelledMembers, deferredMembers, failedMembers, pending: true });
+    else ctx.out(`# Cancelamento do grupo ${group.id} pendente\n\nMembros cancelados: ${cancelledMembers.join(', ') || '(nenhum)'}\nMembros com cancelamento pendente (sessão em criação): ${deferredMembers.join(', ')}\n\nO coordenador conclui o cancelamento antes de enviar o prompt. Confirme com \`/opc:status ${group.id} --wait\`.\n`);
+    return ExitCode.OK;
   }
   if (flags.json) ctx.json({ group, cancelledMembers, failedMembers });
   else ctx.out(`# Grupo ${group.id} cancelado\n\nMembros cancelados: ${cancelledMembers.join(', ') || '(nenhum ativo)'}\n`);

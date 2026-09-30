@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "opc orchestrate plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subtasks", "rationale"],
+  "properties": {
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Two or three sentences explaining why the task was split this way."
+    },
+    "subtasks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "prompt", "kind", "dependsOn"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$",
+            "description": "Short unique identifier (letters, digits, '-' or '_')."
+          },
+          "title": { "type": "string", "minLength": 1, "description": "One-line summary of the subtask." },
+          "prompt": { "type": "string", "minLength": 1, "description": "Complete, self-contained instruction for the model that executes the subtask." },
+          "kind": { "type": "string", "enum": ["ask", "plan", "review", "task"] },
+          "tier": { "type": "string", "enum": ["light", "heavy"] },
+          "agent": { "type": "string", "minLength": 1 },
+          "files": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "dependsOn": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ids of subtasks whose results this subtask needs. Empty when independent."
+          }
+        }
+      }
+    }
+  }
+}

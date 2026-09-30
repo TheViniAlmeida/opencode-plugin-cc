@@ -37,3 +37,29 @@ test('both review prompts require one JSON fence and describe every schema field
     assert.doesNotMatch(prompt, /Se a ferramenta StructuredOutput não estiver disponível/);
   }
 });
+
+test('I4: orchestrate structured output defaults to text and validates global/workspace modes', () => {
+  assert.equal(DEFAULT_CONFIG.orchestrate.structuredOutput, 'text');
+  for (const source of ['global', 'workspace']) {
+    for (const value of ['text', 'tool']) assert.deepEqual(validateConfigShape({ orchestrate: { structuredOutput: value } }, { source }), { errors: [], warnings: [] });
+    for (const value of ['json', null, 1, [], {}]) assert.equal(validateConfigShape({ orchestrate: { structuredOutput: value } }, { source }).errors.length, 1);
+  }
+  assert.equal(mergeConfig({ orchestrate: { structuredOutput: 'tool' } }, {}).config.orchestrate.structuredOutput, 'tool');
+  assert.equal(mergeConfig({ orchestrate: { structuredOutput: 'tool' } }, { orchestrate: { structuredOutput: 'text' } }).config.orchestrate.structuredOutput, 'text');
+  assert.equal(mergeConfig({}, { orchestrate: { structuredOutput: 'tool' } }).config.orchestrate.structuredOutput, 'tool');
+});
+
+test('I4: opc config edits orchestrate.structuredOutput offline', async (t) => {
+  const dataDir = trackTempDir(t, makeTempDir('opc-orch-config-'));
+  const workspaceRoot = trackTempDir(t, makeTempDir('opc-orch-workspace-'));
+  writeGlobalConfig({ OPC_DATA_DIR: dataDir }, {});
+  let view;
+  const ctx = { dataDir, workspaceRoot, json: (v) => { view = v; }, out() {}, err() {} };
+  const get = async () => { await run(ctx, ['get', 'orchestrate.structuredOutput', '--json']); return view.value; };
+  assert.equal(await get(), 'text');
+  await run(ctx, ['set', 'orchestrate.structuredOutput', 'tool', '--json']);
+  assert.equal(await get(), 'tool');
+  await assert.rejects(run(ctx, ['set', 'orchestrate.structuredOutput', 'invalid']), /text, tool/);
+  await run(ctx, ['unset', 'orchestrate.structuredOutput', '--json']);
+  assert.equal(await get(), 'text');
+});

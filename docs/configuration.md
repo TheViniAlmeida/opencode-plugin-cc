@@ -56,6 +56,7 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `orchestrate.planner` | modelref \| null | `null` | global + workspace | Planejador |
 | `orchestrate.maxSubtasks` | inteiro 2–20 | `5` | global + workspace | Máximo de subtarefas |
 | `orchestrate.synthesizer` | modelref-or-claude | `claude` | global + workspace | Sintetizador |
+| `orchestrate.structuredOutput` | `text` \| `tool` | `text` | global + workspace | Contrato de saída do planner |
 | `delegation.auto` | boolean | `false` | só global | Lembrete de delegação (F4a) |
 | `jobs.maxActive` / `.maxParallel` | inteiros 1–64 / 1–32 | `8` / `4` | só global | Limites de jobs |
 | `server.bootTimeoutSec` / `.requestTimeoutSec` | inteiros 1–600 | `60` / `30` | só global | Timeouts do servidor |
@@ -189,3 +190,23 @@ Use `opc config set review.structuredOutput tool` para enviar `format: json_sche
 
 A extração textual aceita apenas um objeto JSON no texto completo, na última cerca `json` ou como último objeto balanceado no nível superior da prosa. Arrays e valores primitivos são rejeitados, e nenhum erro do turno é convertido em sucesso por essa extração.
 O stop gate mantém seu contrato textual `ALLOW:`/`BLOCK:` e não envia `format` em nenhum dos modos. Falhas de infraestrutura permitem encerrar e incluem a causa mascarada (até 200 caracteres) em `systemMessage` e stderr.
+
+### Orquestração
+
+`orchestrate.planner` seleciona o modelo/alias do planner; `--planner` ou `-m` o sobrescreve.
+`orchestrate.maxSubtasks` limita o plano de 2 a 20 itens e `--max` o sobrescreve.
+`orchestrate.synthesizer` aceita `claude` ou um modelo e `--synthesizer` o sobrescreve.
+`jobs.maxParallel` limita as subtarefas simultâneas; `jobs.maxActive` conta o grupo como um job.
+
+`orchestrate.structuredOutput: "text"` pede um objeto JSON em uma única cerca `json`, sem
+enviar `format` ao OpenCode, e extrai/valida o objeto depois. É o padrão porque, no OpenCode
+1.18.32 através do gateway, o planner com `format: json_schema` retornou
+`StructuredOutputError` com `Model did not produce structured output`. O comportamento é o
+mesmo de `review.structuredOutput`: `tool` permanece disponível quando o ambiente suporta
+saída estruturada pelo protocolo.
+
+```bash
+opc config set orchestrate.structuredOutput text
+opc config set orchestrate.maxSubtasks 8
+opc config set orchestrate.synthesizer omniroute-personal/cmd/<modelo>
+```

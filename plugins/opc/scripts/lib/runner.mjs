@@ -195,9 +195,11 @@ export async function runTurn({
   hub,
   request,
   onProgress = () => {},
+  onSession = async () => {},
   onPermission = async () => {},
   onQuestion = async () => {},
   onRequestResolved = async () => {},
+  isCancelled = () => false,
   signal,
 } = {}) {
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -280,6 +282,8 @@ export async function runTurn({
     children.add(childID);
     lastPhase = 'subagent';
     progress({ phase: 'subagent', childSessionID: childID, message: `Sessão filha ${displayValue(childID)}` });
+    try { await onSession({ sessionID, childSessionIDs: [...children] }); }
+    catch (err) { finish('callback-failed', { detail: err }); return; }
     if (request.childPermission) {
       try {
         await applyPermissionPatch(api, childID, request.childPermission);
@@ -472,7 +476,11 @@ export async function runTurn({
 
   try {
     try {
-      if (!signal?.aborted) {
+      try { await onSession({ sessionID, childSessionIDs: [] }); }
+      catch (err) { finish('callback-failed', { detail: err }); }
+      // The owner may receive cancellation while session creation/publication is pending.
+      if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
+      if (!settled && !signal?.aborted) {
         await sendPrompt(api, sessionID, buildBody(request, messageID));
         promptAccepted = true;
       }
@@ -503,6 +511,11 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, assistantMessageIDs: [...assistantIDs], childSessionIDs: [...children] };
+    if (outcome.reason === 'cancelled' && !promptAccepted) {
+      // No turn was submitted: cleanup is best-effort and cannot turn cancellation into failure.
+      try { await api.abort(sessionID); } catch { /* The unused session may outlive a disconnected server. */ }
+      return { ...base, ...extractTurn([]), status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
+    }
     const safetyFailure = outcome.reason === 'child-permission-failed' || outcome.reason === 'callback-failed';
     if (safetyFailure) {
       const sessionAborts = [];
@@ -548,8 +561,10 @@ export async function runTurn({
       collected = extractTurn([]);
     }
     let structuredSource = collected.structured != null ? 'tool' : null;
-    if (outcome.reason === 'idle' && !collected.error && !forcedError && collected.structured == null && ['review', 'adversarial-review'].includes(request.kind)) {
-      collected.structured = extractTextJson(collected.finalText, validateReviewOutput);
+    // Validators return null on acceptance, matching extractTextJson's contract.
+    const textJson = request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : null);
+    if (outcome.reason === 'idle' && !collected.error && !forcedError && collected.structured == null && typeof textJson === 'function') {
+      collected.structured = extractTextJson(collected.finalText, textJson);
       if (collected.structured !== null) structuredSource = 'text';
     }
     collected = redactOutput({ ...collected, structuredSource });

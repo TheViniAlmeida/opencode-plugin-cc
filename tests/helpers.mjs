@@ -111,6 +111,9 @@ export function makeWorkspace(t, { git = true, name = 'ws' } = {}) {
     run('config', 'user.name', 'opc-test');
     run('config', 'user.email', 'opc-test@example.invalid');
     run('config', 'commit.gpgsign', 'false');
+    // Background auto-maintenance would add and remove .git/objects/maintenance.lock under the tests' snapshots.
+    run('config', 'maintenance.auto', 'false');
+    run('config', 'gc.auto', '0');
     run('add', '.');
     run('commit', '-q', '-m', 'init');
   }
@@ -529,3 +532,12 @@ export function parseFrontmatter(text) {
   }
   return { data, body: match[2] };
 }
+
+// ---- F4b: orchestration helpers (appended) ----
+// Reads the turn log written by the orchestration scenarios (tests/fixtures/orchestrate-turns.mjs).
+export function readTurnLog(env) {
+  const file = `${env.FAKE_OPENCODE_STATE}.turns.jsonl`;
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+// ---- end F4b ----
