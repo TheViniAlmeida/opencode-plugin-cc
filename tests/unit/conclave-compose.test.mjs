@@ -30,6 +30,15 @@ test('valida exclusividade e pool inexistente', () => {
   assert.throws(() => compose({ models: [DS, QW], pool: 'duo' }), usageCode('CONCLAVE_MODELS_AND_POOL'));
   assert.throws(() => compose({ pool: 'nope' }), usageCode('CONCLAVE_UNKNOWN_POOL'));
 });
+test('validação pré-servidor rejeita pool inexistente e seleções mutuamente exclusivas', () => {
+  assert.throws(() => validateConclaveOptions({ pool: 'ausente', config: baseConfig }), usageCode('CONCLAVE_UNKNOWN_POOL'));
+  assert.throws(() => validateConclaveOptions({ models: [], pool: 'duo', config: baseConfig }), usageCode('CONCLAVE_MODELS_AND_POOL'));
+  assert.throws(() => validateConclaveOptions({ models: [DS, QW], pool: '', config: baseConfig }), usageCode('CONCLAVE_MODELS_AND_POOL'));
+});
+test('rejeita seleções explicitamente vazias', () => {
+  assert.throws(() => validateConclaveOptions({ models: [] }), usageCode('CONCLAVE_EMPTY_SELECTION'));
+  assert.throws(() => validateConclaveOptions({ pool: '' }), usageCode('CONCLAVE_EMPTY_SELECTION'));
+});
 test('exige pelo menos dois membros distintos', () => {
   assert.throws(() => compose({ models: [DS] }), usageCode('CONCLAVE_TOO_FEW_MEMBERS'));
   assert.throws(() => compose({ models: [DS, DS] }), usageCode('CONCLAVE_TOO_FEW_MEMBERS'));
@@ -57,6 +66,24 @@ test('pula modelos negados, inválidos e duplicados com avisos', () => {
   assert.ok(out.warnings.some((w) => w.includes(EQ.slice(0, 12)) && /negado pela política/.test(w)));
   assert.ok(out.warnings.some((w) => w.includes('nope-model')));
   assert.ok(out.warnings.some((w) => /duplicado/.test(w)));
+});
+test('entrada de modelo vazia é registrada como ignorada com aviso', () => {
+  const out = compose({ models: ['', DS, QW] });
+  assert.ok(out.skipped.some((item) => item.entry === '' && /vazia|em branco/i.test(item.reason)));
+  assert.ok(out.warnings.some((warning) => /vazia|em branco/i.test(warning)));
+});
+test('erros de rounds e quorum limitam o eco do valor a 12 caracteres', () => {
+  const long = '12345678901234567890';
+  for (const invoke of [
+    () => validateConclaveOptions({ rounds: long }),
+    () => validateConclaveOptions({ quorum: long }),
+  ]) {
+    let error;
+    try { invoke(); } catch (caught) { error = caught; }
+    assert.ok(error instanceof Error);
+    assert.ok(error.message.includes(`${long.slice(0, 12)}…`));
+    assert.ok(!error.message.includes(long));
+  }
 });
 test('erro de poucos membros lista motivos sem ecoar entradas extensas', () => {
   const config = { ...baseConfig, policy: { models: { allow: [], deny: ['*kimi*', '*qwen*'] } } };

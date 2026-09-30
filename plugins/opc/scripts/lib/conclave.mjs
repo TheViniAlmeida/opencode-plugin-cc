@@ -153,7 +153,7 @@ function preview(value) {
 
 function checkRoundsValue(value, source) {
   if (!Number.isInteger(value) || value < 1 || value > 3) {
-    throw usage('CONCLAVE_INVALID_ROUNDS', `${source} deve ser um inteiro entre 1 e 3 (recebido ${value})`);
+    throw usage('CONCLAVE_INVALID_ROUNDS', `${source} deve ser um inteiro entre 1 e 3 (recebido ${preview(value)})`);
   }
 }
 
@@ -174,13 +174,24 @@ function resolveRounds(mode, flagRounds, configRounds) {
 
 export function validateConclaveOptions({ mode = 'opinion', models = null, pool = null, quorum = null, rounds = null, config = {} } = {}) {
   if (!CONCLAVE_MODES.includes(mode)) throw usage('CONCLAVE_INVALID_MODE', `modo inválido "${preview(mode)}" (esperado: ${CONCLAVE_MODES.join(', ')})`);
-  const hasModels = Array.isArray(models) && models.length > 0;
-  if (hasModels && pool) throw usage('CONCLAVE_MODELS_AND_POOL', '--models e --pool são mutuamente exclusivos');
+  const hasModels = models != null;
+  const hasPool = pool != null;
+  if (hasModels && hasPool) throw usage('CONCLAVE_MODELS_AND_POOL', '--models e --pool são mutuamente exclusivos');
+  if (hasModels && (!Array.isArray(models) || models.length === 0)) {
+    throw usage('CONCLAVE_EMPTY_SELECTION', '--models exige ao menos uma entrada');
+  }
+  if (hasPool && String(pool).trim() === '') throw usage('CONCLAVE_EMPTY_SELECTION', '--pool exige um nome');
+  if (hasPool) {
+    const poolName = pool;
+    if (!Array.isArray(config.conclave?.pools?.[poolName]) || config.conclave.pools[poolName].length === 0) {
+      throw usage('CONCLAVE_UNKNOWN_POOL', `pool do conclave "${preview(poolName)}" não está definido; informe --models a,b`);
+    }
+  }
   if (hasModels) {
     const distinct = new Set(models.map((m) => String(m).trim()).filter(Boolean));
     if (distinct.size < 2) throw usage('CONCLAVE_TOO_FEW_MEMBERS', 'um conclave exige pelo menos 2 membros (--models a,b)');
   }
-  if (quorum != null && (!Number.isInteger(quorum) || quorum < 2)) throw usage('CONCLAVE_INVALID_QUORUM', `--quorum deve ser um inteiro >= 2 (recebido ${quorum})`);
+  if (quorum != null && (!Number.isInteger(quorum) || quorum < 2)) throw usage('CONCLAVE_INVALID_QUORUM', `--quorum deve ser um inteiro >= 2 (recebido ${preview(quorum)})`);
   return { rounds: resolveRounds(mode, rounds, config.conclave?.rounds ?? null) };
 }
 
@@ -223,7 +234,7 @@ export function composeMembers({
   const conclaveCfg = config.conclave ?? {};
   let entries;
   let source;
-  if (Array.isArray(models) && models.length > 0) {
+  if (models != null) {
     entries = models; source = '--models';
   } else {
     const poolName = pool ?? conclaveCfg.defaultPool ?? 'default';
@@ -238,7 +249,12 @@ export function composeMembers({
   const seen = new Set();
   for (const raw of entries) {
     const entry = String(raw).trim();
-    if (!entry) continue;
+    if (!entry) {
+      const reason = 'a entrada está vazia ou em branco';
+      skipped.push({ entry: preview(raw), reason, denied: false });
+      warnings.push(`conclave: ignorando "${preview(raw)}": ${reason}`);
+      continue;
+    }
     let resolved;
     try {
       resolved = normalizeModelId(entry, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
@@ -276,7 +292,7 @@ export function composeMembers({
   if (accepted.length > LABEL_ALPHABET.length) throw usage('CONCLAVE_TOO_MANY_MEMBERS', `um conclave aceita no máximo ${LABEL_ALPHABET.length} membros`);
 
   const effectiveQuorum = quorum ?? conclaveCfg.quorum ?? 2;
-  if (!Number.isInteger(effectiveQuorum) || effectiveQuorum < 2 || effectiveQuorum > accepted.length) throw usage('CONCLAVE_INVALID_QUORUM', `quorum deve ser um inteiro entre 2 e ${accepted.length} (recebido ${effectiveQuorum})`);
+  if (!Number.isInteger(effectiveQuorum) || effectiveQuorum < 2 || effectiveQuorum > accepted.length) throw usage('CONCLAVE_INVALID_QUORUM', `quorum deve ser um inteiro entre 2 e ${accepted.length} (recebido ${preview(effectiveQuorum)})`);
   const effectiveJudge = resolveJudge(judge ?? conclaveCfg.judge ?? 'claude', { catalog, config, policy });
   if (effectiveJudge.type === 'model' && seen.has(effectiveJudge.full) && !allowJudgeMember) throw usage('CONCLAVE_JUDGE_IS_MEMBER', 'o juiz também é membro; informe --allow-judge-member para permitir');
   const members = shuffle(accepted, rng).map((m, i) => ({ label: LABEL_ALPHABET[i], ...m }));
