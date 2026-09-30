@@ -78,6 +78,16 @@ test('tool mode judge StructuredOutputError keeps raw text',async()=>{const judg
 test('judge prompt reports extra debate rounds',async()=>{const judge={type:'model',providerID:'omniroute-personal',modelID:'opencode-go/kimi-k3',full:KM};const h=harness(s=>s.role==='judge'?ok(synthesis(['A','B']),'ses_judge'):s.round===1?ok(answer(),`ses_${s.label}`):ok(debateAnswer(peerOf(s)),s.sessionID),{members:MEMBERS.slice(0,2),judge,mode:'debate',rounds:3});await h.run();assert.match(h.calls.find(c=>c.role==='judge').prompt,/debated for 2 more round\(s\)/);});
 test('question passes through verbatim',async()=>{const q='Is `rm -rf $(pwd)` "safe"? \'no\' — ção 🚀\nline2';const h=harness(s=>ok(answer(),`ses_${s.label}`));const p=await h.run(q);assert.ok(h.calls.every(c=>c.prompt.includes(q)));assert.equal(p.question,q);});
 
+test('the question stays literal in the package and in synthesisInput (A5)', async () => {
+  const h = harness((s) => ok(answer({ position: `As ${s.member.modelID} I agree` }), `ses_${s.label}`));
+  const pkg = await h.run('Is kimi-k3 better than qwen3.8-max here?');
+  assert.ok(pkg.synthesisInput);
+  assert.equal(pkg.question, 'Is kimi-k3 better than qwen3.8-max here?');
+  assert.equal(pkg.synthesisInput.question, 'Is kimi-k3 better than qwen3.8-max here?');
+  const { question, ...rest } = pkg.synthesisInput;
+  assert.doesNotMatch(JSON.stringify(rest), FORBIDDEN);
+});
+
 test('member and review strings are anonymized throughout package except question and composition', async () => {
   const reviewAnswer = { verdict:'needs-attention', summary:'Kimi review', findings:[{title:'Kimi issue',body:'DeepSeek body',recommendation:'Qwen fix',file:'src/a.js',line_start:1,severity:'high',confidence:.9}] };
   const h = harness((s) => ok(s.label === 'A' ? reviewAnswer : { ...reviewAnswer, verdict:'approve' }, `ses_${s.label}`), { mode:'review', judge:{type:'claude'} });

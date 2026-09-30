@@ -753,6 +753,7 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     synthesisInput: pkg.synthesisInput ? { ...pkg.synthesisInput, question: run.question } : null,
   }, run.knownNames);
   Object.assign(pkg, protectedPkg, { question: run.question, composition: pkg.composition });
+  if (pkg.synthesisInput) pkg.synthesisInput.question = run.question;
   if (pkg.judge?.type === 'model') pkg.judge.model = flags.judge.full;
   return pkg;
 }
