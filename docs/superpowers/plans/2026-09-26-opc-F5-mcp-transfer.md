@@ -13,6 +13,30 @@
 
 ---
 
+## Ajustes pós-F4c (30/09/2026, antes da execução)
+
+O plano foi escrito em 26/09, antes da implementação da F2 à F4c. As premissas sobre o código existente foram conferidas contra a `main` com a F4c mergeada, e os itens abaixo **prevalecem** sobre o texto das tarefas. Cerca de 35 premissas conferem sem ajuste (`main`/`loadCommand`/`listSubcommands`, `ExitCode`/`OpcError`/`toExitCode`, `redact`/`redactText`, `parseArgs`/`extractCwd`, estado "antes" de `resolveArgv`/`readRawArgs` descrito na Task 1, `JOB_ID_RE`/`newJobId`, `assertNotInsideServer` → exit 4, flags dos comandos, fake de permissões, helpers `testEnv`/`makeWorkspace`/`runCli`, âncora do `bin/opencode`, `OPC_COMPANION_TRANSCRIPT_PATH`).
+
+1. **Permissões precisam de servidor (Task 7).** `permissions list/reply` usam `existingServerApi` (`lib/jobs.mjs:466`, `commands/permissions.mjs:30-39`): sem servidor, `list` devolve `requests: []` e `reply` sai com `NO_SERVER` (exit 2). Antes dos testes de permissão, suba o servidor gerenciado com um comando que o inicia (por exemplo `opc_models` pelo MCP) ou use `startExternalFake` com `OPC_SERVER_URL`. Nenhum teste de recusa pode passar vazio: afirme que a requisição semeada aparece em `list` antes de exercitar a recusa.
+2. **`data` nem sempre é JSON.** `permissions reply/answer` aceitam `--json`, mas imprimem Markdown (`commands/permissions.mjs:68-70,83-92,101`). O envelope das ferramentas `opc_permission_reply`/`opc_question_answer` traz `data` como string. Documente isso na Decisão 6 e no catálogo; não mude o comando nesta fase.
+3. **Modelo padrão nos testes (Tasks 1 e 6).** `testEnv` não grava config e `DEFAULT_CONFIG.defaultModel` é `null`. O modelo do fake (`fake-provider/fake-model`) não está no catálogo, então `task/ask/plan` sem `--model` saem com `UNKNOWN_MODEL` (exit 2, `lib/routing.mjs:46-48`). Grave `writeGlobalConfig(env, { defaultProvider: F2A_PROVIDER, defaultModel: F2A_MODEL, policy: F2A_POLICY })` ou use `setupF2a`.
+4. **Ids de modelo reais do fixture (Tasks 1 e 6).** Em vez de `fixture-a/m` e `example-provider/example/model-a`, use `FIXTURE_MODELS`/`F2A_MODEL` (`tests/helpers.mjs:514`). O teste de política precisa negar um modelo que existe, porque `UNKNOWN_MODEL` vem antes da checagem de política (`lib/routing.mjs:51-65`). Conclave usa o cenário `conclave-opinion`. Nenhum caso fica atrás de `if (cli.code === 0)`: afirme o exit code esperado.
+5. **Subagent.** `build` é `mode: primary` no `agent.json` do fake e `subagent` o recusa (`commands/subagent.mjs:18,89`). Use `--agent general`.
+6. **`writeTestConfig`.** `saveGlobalConfig` não cria o diretório (`lib/config.mjs:403-405`). `writeTestConfig` vira um wrapper fino de `writeGlobalConfig(env, cfg)` (`tests/helpers.mjs:370`), que já faz `mkdir` e `chmod`.
+7. **`transfer.md` (Task 9, Step 7).** `tests/unit/commands-md.test.mjs:66-85` exige, em todo `.md` com heredoc, a frase de guarda do delimitador e a cerca fechada. Copie a frase exata de um comando existente (por exemplo `plugins/opc/commands/status.md:8`) antes do bloco bash.
+8. **`opc_orchestrate.maxSubtasks`.** Faixa `2..10` (`MAX_SUBTASKS_CAP = 10`, `lib/orchestrator.mjs:19`), não `2..20`.
+9. **`opc_conclave` sem `review`.** O modo `review` manda o diff a modelos de terceiros, e o `/opc:conclave` estima o tamanho e pergunta antes (`commands/conclave.md`, passo 2). Isso contraria a Decisão 3. Tire `review` do `enum` de `opc_conclave.mode` (fica `opinion | debate`), com um teste que recusa `mode: 'review'`.
+10. **Decisão 4, racional.** `status`, `result`, `cancel` e `config` também têm `disable-model-invocation` e estão expostos. A regra passa a ser: **expor só o que é somente leitura ou exige as mesmas confirmações do comando** (aprovador, `--confirmed-by-user`), e não "o que é invocável pelo modelo".
+11. **Testes ao vivo (Task 11).** Rotas por ambiente, como na F4c: `OPC_LIVE_MODEL`, `_2`, `_3`, via `tests/live/_f4a-lib.mjs` (`FAST`, `SECOND`, `THIRD`, `SKIP`), sem default hardcoded; as rotas `omniroute-personal/opencode-go/*` respondem 402. As saídas vão para `docs/phases/F5-live-output.md` via `appendSafeOutput`/`safeOutputText` (`tests/live/_f3-lib.mjs`), sanitizadas (id de provider neutro, caminhos como `<tmp>`/`~`), nunca em `/tmp` versionado.
+12. **README e CHANGELOG.** README: linha "Estado" (`README.md:7`), linha `servidor MCP, /opc:transfer | F5` do "Mapa do mínimo" (`:57`) e os links da lista "Documentação" (relatório F5). CHANGELOG em PT-BR: `### Adicionado — F5 (MCP e transfer)`, como as fases anteriores.
+13. **Formas de espera e falha no envelope.** Há duas formas de timeout de espera: `{ job, waitTimedOut: true }` (`commands/task.mjs:131`) e `WAIT_TIMEOUT` lançado por `status --wait` de grupo (`lib/jobs.mjs:540`), com `{"error": …}`. `cancel --json` com falha sai com exit 5 e `{ error, message, report }` em stdout (`commands/cancel.mjs:19-22`). O envelope trata as três: exit ≠ 0 com `data.error` preenche `error` no envelope; teste para cada uma.
+14. **Corrida no teste de espera.** O cenário `slow` segura o turno por cerca de 3000 ms. Use `waitTimeoutSec: 1` no teste de `wait_timeout`, não 2 s.
+15. **Redação.** Texto derivado de modelo, provider ou stderr no envelope (mensagem de erro, cauda de stderr, `data` não-JSON) passa por `safeOutputText`/`redactOutput` (`lib/redact.mjs:80-95`), não só `redactText`. `redact(JSON)` continua igual ao `ctx.json`.
+16. **Já aplicado.** `normalizeResumeFlag` já para no `--` (`commands/task.mjs:56-59`, comentário "MCP, F5"); a Task 1 acrescenta um teste que prova isso, sem reimplementar.
+17. **`main` com opções.** `main` também aceita `commandLoader` e `contextFactory` (`opc-companion.mjs:55`); use-as nos testes unitários do dispatcher, sem disco.
+18. **Sessão do Claude pelo MCP.** Segue `NÃO VALIDADO` (F2b-report); mantenha o fallback `status --all` na doc.
+19. **Herdados da F4c.** Prompts de modelo em inglês; prosa ao usuário em PT-BR; Conventional Commits sem atribuição; `makeWorkspace` já desliga a manutenção automática do git; testes com socket e subprocesso rodam fora do sandbox, pelo controlador; nada da `.ai-data` é commitado.
+
 ## Global Constraints
 
 - Node ≥ 20 (`engines: {"node": ">=20"}`); checagem em runtime com mensagem clara; CI em Node 20 e 22.
@@ -25,7 +49,7 @@
 - `always` nunca é enviado em `permission reply`.
 - Exit codes conforme a spec, §4.1: `0, 2, 3, 4, 5, 6, 7, 130`.
 - Namespace de comandos `/opc:`; executável `opc`; título das sessões com o prefixo `OPC: `.
-- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos `omniroute-personal/opencode-go/{deepseek-v4.1-flash,qwen3.8-max,kimi-k3}`.
+- Testes ao vivo só com `OPC_LIVE=1`, nunca no CI, sempre em diretório descartável; modelos por ambiente (`OPC_LIVE_MODEL`, `_2`, `_3`; Ajustes pós-F4c, item 11).
 - Licença Apache-2.0; `NOTICE` credita o `openai/codex-plugin-cc`; nada copiado do `swarm-code-plugin`.
 - **F5 (spec §13.3):** nada que exija o usuário (review com `disable-model-invocation`, revert/unrevert, `--stop-server`, config) é exposto via MCP sem as mesmas confirmações; **decisão desta fase: esses itens simplesmente não são expostos** (ver "Decisões").
 - **F5:** toda ferramenta MCP chama a mesma função da CLI (`main` do companion da F0 → `loadCommand` → `commands/<sub>.mjs#run`); o MCP não reimplementa regra.
