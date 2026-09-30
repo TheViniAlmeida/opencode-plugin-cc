@@ -1,6 +1,7 @@
 // Orchestration: decompose a task with a planner model, run subtasks across models, synthesize.
 // Composes runner + jobs through injected deps; never talks HTTP directly (spec §3.1).
 import { evaluate } from './policy.mjs';
+import { normalizeModelId } from './models.mjs';
 import { TIERS } from './routing.mjs';
 import { fillTemplate, projectContextBlock } from './prompts.mjs';
 import { truncateUtf8 } from './git.mjs';
@@ -273,4 +274,67 @@ export function buildSynthesizePrompt({ template, task, rationale, subtasks }) {
     RATIONALE: neutralizeTags(rationale),
     RESULTS: `<orchestration_results>\n${blocks.join('\n')}\n</orchestration_results>`,
   }, { strict: true });
+}
+
+// ---------------------------------------------------------------------------
+// Routing per subtask and model spreading
+// ---------------------------------------------------------------------------
+
+// tier → routing.tiers.<tier>; else routing.tasks.<kind>. Returns null when neither list is set,
+// so the caller can fall back to the generic resolution chain (spec §6).
+export function resolveSubtaskCandidates(subtask, { config, catalog }) {
+  const routing = config.routing ?? {};
+  const policy = config.policy ?? {};
+  const warnings = [];
+  let entries = null;
+  let source = null;
+  if (subtask.tier) {
+    const list = routing.tiers?.[subtask.tier];
+    if (Array.isArray(list) && list.length) {
+      entries = list;
+      source = `routing.tiers.${subtask.tier}`;
+    } else {
+      warnings.push(`subtask "${subtask.id}": routing.tiers.${subtask.tier} está vazia; usando routing.tasks.${subtask.kind}`);
+    }
+  }
+  if (!entries) {
+    const list = routing.tasks?.[subtask.kind];
+    if (Array.isArray(list) && list.length) {
+      entries = list;
+      source = `routing.tasks.${subtask.kind}`;
+    }
+  }
+  if (!entries) return null;
+  const candidates = [];
+  const reasons = [];
+  for (const entry of entries) {
+    let id;
+    try {
+      id = normalizeModelId(entry, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+    } catch (err) {
+      reasons.push(`${entry}: ${err.message}`);
+      continue;
+    }
+    const byProvider = evaluate('provider', id.providerID, policy);
+    const byModel = evaluate('model', id.full, policy);
+    if (!byProvider.allowed || !byModel.allowed) {
+      reasons.push(`${entry}: negado pela política (${(byProvider.allowed ? byModel.rule : byProvider.rule) ?? 'política'})`);
+      continue;
+    }
+    if (!candidates.some((c) => c.full === id.full)) candidates.push({ ...id, source });
+  }
+  for (const reason of reasons) warnings.push(`subtask "${subtask.id}": ignorado ${reason}`);
+  return { candidates, warnings, fallbackEligible: true, reasons, source };
+}
+
+// First candidate not yet used in the group; otherwise round robin. The rest keep their order
+// so fallback still walks the configured list.
+export function spreadCandidates(candidates, used, rr) {
+  if (candidates.length <= 1) return [...candidates];
+  let index = candidates.findIndex((c) => !used.has(c.full));
+  if (index === -1) {
+    index = rr.next % candidates.length;
+    rr.next += 1;
+  }
+  return [candidates[index], ...candidates.slice(0, index), ...candidates.slice(index + 1)];
 }
