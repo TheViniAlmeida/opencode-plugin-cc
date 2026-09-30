@@ -9,7 +9,7 @@ import { EventHub } from '../lib/sse.mjs';
 import { requiresUser } from '../lib/policy.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { redact, redactText, redactTurnOutput } from '../lib/redact.mjs';
-import { acquireSessionLock, appendJobLog, clearJobRequests, consumeJobInput, readJob, runJobTurn, serverContext, updateJob } from '../lib/jobs.mjs';
+import { acquireSessionLock, appendJobLog, consumeJobInput, readJob, runJobTurn, serverContext, updateJob } from '../lib/jobs.mjs';
 
 // F3: group and command workers live in their own command modules.
 // Later phases extend this single dispatch table.
@@ -62,7 +62,15 @@ export function createRequestBridge({ update, jobId, stateDir, api, profileKind,
     phase: 'waiting_permission',
     pendingRequest: [...(job.pendingRequest ?? []).filter((r) => r.id !== entry.id), entry],
   }));
-  const removePending = (id) => clearJobRequests(stateDir, jobId, [id]);
+  const removePending = (id) => update((job) => {
+    const pending = job.pendingRequest ?? [];
+    const remaining = pending.filter((request) => request.id !== id);
+    if (remaining.length === pending.length) return {};
+    if (job.status === 'waiting_permission' && remaining.length === 0) {
+      return { pendingRequest: null, status: 'running', phase: 'running' };
+    }
+    return { pendingRequest: remaining.length ? remaining : null };
+  });
   const arm = (id, onTimeout) => {
     timers.set(id, setTimeout(() => {
       timers.delete(id);
