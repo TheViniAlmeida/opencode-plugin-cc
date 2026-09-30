@@ -120,3 +120,45 @@ test('final group refresh refuses completion while a member remains active', asy
   });
   assert.equal(readJob(stateDir, group.id).status, 'failed');
 });
+
+test('an invalid plan after a completed planner fails the group and keeps the planner completed', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'orch', status: 'queued' }, [{ status: 'completed', role: 'planner', title: 'planner' }]);
+  const ctx = { stateDir, workspaceRoot: root, env: {}, config: {} };
+  const code = await runWorker(ctx, group, { task: 'audit', timeoutSec: 2 }, {
+    openApiImpl: async () => ({ api: {}, hub: {}, close() {} }),
+    discoveryLoader: async () => ({ agents: [] }),
+    orchestrationRunner: async () => ({ status: 'failed', errorCode: 'invalid_plan', errorMessage: 'invalid plan', summary: 'rejected' }),
+  });
+  assert.notEqual(code, 0);
+  assert.equal(readJob(stateDir, group.id).status, 'failed');
+  assert.equal(readJob(stateDir, members[0].id).status, 'completed');
+});
+
+test('an orchestration exception after a completed member fails the group', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group, members } = await createGroup(stateDir, { kind: 'orch', status: 'queued' }, [{ status: 'completed', role: 'planner', title: 'planner' }]);
+  const ctx = { stateDir, workspaceRoot: root, env: {}, config: {} };
+  const code = await runWorker(ctx, group, { task: 'audit', timeoutSec: 2 }, {
+    openApiImpl: async () => ({ api: {}, hub: {}, close() {} }),
+    discoveryLoader: async () => ({ agents: [] }),
+    orchestrationRunner: async () => { throw new Error('orchestration failed'); },
+  });
+  assert.notEqual(code, 0);
+  assert.equal(readJob(stateDir, group.id).status, 'failed');
+  assert.equal(readJob(stateDir, members[0].id).status, 'completed');
+});
+
+test('a requested cancellation remains cancelled when orchestration returns completed', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group } = await createGroup(stateDir, { kind: 'orch', status: 'queued' }, []);
+  await updateJob(stateDir, group.id, { cancelRequestedAt: new Date().toISOString() });
+  const ctx = { stateDir, workspaceRoot: root, env: {}, config: {} };
+  const code = await runWorker(ctx, group, { task: 'audit', timeoutSec: 2 }, {
+    openApiImpl: async () => ({ api: {}, hub: {}, close() {} }),
+    discoveryLoader: async () => ({ agents: [] }),
+    orchestrationRunner: async () => ({ status: 'completed', summary: 'done' }),
+  });
+  assert.notEqual(code, 0);
+  assert.equal(readJob(stateDir, group.id).status, 'cancelled');
+});

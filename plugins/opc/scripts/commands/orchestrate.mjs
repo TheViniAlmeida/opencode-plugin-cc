@@ -1,6 +1,6 @@
 // `opc orchestrate`: a group job with one coordinator worker.
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
-import { ExitCode, OpcError, UsageError, toExitCode } from '../lib/opc-error.mjs';
+import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, profileRules } from '../lib/context.mjs';
 import { resolveCandidates, runWithFallback, attemptRequest, describeStop, backoffFromEnv } from '../lib/routing.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
@@ -137,10 +137,15 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, disc
     conn = await openApiImpl(ctx, { withHub: true, respawn: false }); const discovery = await discoveryLoader(conn.api); const agentsIndex = new Map((discovery.agents ?? []).map((a) => [a.name, a]));
     deps = coordinatorDeps({ ctx, job, request, conn, discovery, agentsIndex, signal: controller.signal });
     const pkg = await orchestrationRunner({ ctx, task: request.task, flags: { write: request.write, maxSubtasks: request.maxSubtasks, synthesizer: request.synthesizer }, deps }); await deps.flush();
-    const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: () => ({ result: pkg, rendered: renderOrchestration(pkg, { jobId: job.id }), errorCode: pkg.errorCode, errorMessage: pkg.errorMessage, pendingRequest: null }) });
+    const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (computedGroup) => ({
+      ...(['completed', 'failed', 'cancelled'].includes(computedGroup.status) && computedGroup.status !== 'cancelled'
+        ? { status: computedGroup.status === 'failed' || pkg.status === 'failed' ? 'failed' : pkg.status === 'cancelled' ? 'cancelled' : computedGroup.status }
+        : {}),
+      result: pkg, rendered: renderOrchestration(pkg, { jobId: job.id }), errorCode: pkg.errorCode, errorMessage: pkg.errorMessage, pendingRequest: null,
+    }) });
     return exitCodeForJob(final);
   } catch (err) {
-    await deps?.flush().catch(() => {}); await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: () => ({ errorCode: err?.code ?? 'coordinator_error', errorMessage: redactText(err?.message ?? String(err)), pendingRequest: null }) });
-    appendJobLog(ctx.stateDir, job.id, `[opc] falha do coordenador: ${redactText(err?.message ?? err)}`); return toExitCode(err);
+    await deps?.flush().catch(() => {}); const final = await refreshGroup(ctx.stateDir, job.id, { final: true, decorate: (computedGroup) => ({ status: computedGroup.status === 'cancelled' ? 'cancelled' : 'failed', errorCode: err?.code ?? 'coordinator_error', errorMessage: redactText(err?.message ?? String(err)), pendingRequest: null }) });
+    appendJobLog(ctx.stateDir, job.id, `[opc] falha do coordenador: ${redactText(err?.message ?? err)}`); return exitCodeForJob(final);
   } finally { conn?.close(); process.off('SIGTERM', onSigterm); }
 }
