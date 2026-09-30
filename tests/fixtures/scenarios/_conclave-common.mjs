@@ -9,7 +9,9 @@ export function textOf(body) {
 }
 
 export function kindOf(body) {
-  const title = body?.format?.schema?.title ?? null;
+  const prompt = textOf(body);
+  const embeddedTitle = prompt.match(/"title"\s*:\s*"([^"]+)"/)?.[1];
+  const title = body?.format?.schema?.title ?? embeddedTitle ?? null;
   if (title === 'ConclaveMember') return 'member';
   if (title === 'ConclaveDebate') return 'debate';
   if (title === 'ConclaveSynthesis') return 'judge';
@@ -89,7 +91,16 @@ export function makeConclaveScenario(handlers = {}) {
       const handler = handlers[kind] ?? DEFAULTS[kind];
       const outcome = handler({ fake, sessionID, body, family: familyOf(body) });
       if (outcome === HANG) return;
-      fake.emitTurn(sessionID, { delayMs: 20, text: '', ...outcome });
+      const turn = { delayMs: 20, text: '', ...outcome };
+      if (!body?.format) {
+        const structuredError = turn.error?.name === 'StructuredOutputError';
+        if (!structuredError && turn.structured !== undefined) {
+          turn.text = `\`\`\`json\n${JSON.stringify(turn.structured)}\n\`\`\``;
+        }
+        delete turn.structured;
+        if (structuredError) delete turn.error;
+      }
+      fake.emitTurn(sessionID, turn);
     },
   };
 }
