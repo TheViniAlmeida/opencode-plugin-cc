@@ -306,7 +306,7 @@ export function composeMembers({
 // ---------------------------------------------------------------------------
 
 const GENERIC_NAME_WORDS = new Set([
-  'air', 'alpha', 'api', 'app', 'audio', 'auto', 'base', 'beta', 'big', 'chat', 'cli', 'cloud', 'code', 'coder',
+  'air', 'alpha', 'api', 'app', 'audio', 'auto', 'base', 'beta', 'big', 'chat', 'cli', 'cloud', 'cmd', 'code', 'coder',
   'codex', 'command', 'deep', 'default', 'dev', 'edge', 'embed', 'embedding', 'exp', 'experimental', 'fast', 'final',
   'flash', 'free', 'high', 'hyper', 'image', 'instant', 'instruct', 'large', 'latest', 'light', 'lite', 'local', 'low',
   'max', 'medium', 'micro', 'mini', 'model', 'models', 'nano', 'new', 'next', 'old', 'omni', 'online', 'open', 'plus',
@@ -316,7 +316,7 @@ const GENERIC_NAME_WORDS = new Set([
 
 const VENDOR_ALIASES = Object.freeze({
   claude: ['anthropic'], deepseek: ['deepseek'], gemini: ['google', 'deepmind'], gemma: ['google', 'deepmind'],
-  glm: ['zhipu', 'zhipuai'], gpt: ['openai', 'chatgpt'], grok: ['xai'], kimi: ['moonshot', 'moonshotai'],
+  glm: ['zhipu', 'zhipuai', 'zai'], gpt: ['openai', 'chatgpt'], grok: ['xai'], kimi: ['moonshot', 'moonshotai'],
   llama: ['meta'], minimax: ['minimax'], mistral: ['mistralai'], codestral: ['mistral', 'mistralai'],
   mixtral: ['mistral', 'mistralai'], phi: ['microsoft'], qwen: ['alibaba', 'tongyi'],
   yi: ['01ai'], baichuan: ['baichuan'], ernie: ['baidu'], doubao: ['bytedance'],
@@ -333,6 +333,8 @@ function familyWordsOf(text, participant = false) {
   return words;
 }
 
+const CODE_TOKEN = /^(?:v\d+(?:\.\d+)*|e2e|i18n|l10n|p2p|b2b|2fa|[23]d|(?:es|h|x|ipv|utf|sha|md|mp|base|int|uint|float)\d+)$/i;
+
 export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   const exact = new Set();
   const families = new Set();
@@ -340,13 +342,18 @@ export function buildKnownNames(catalog, { extraModels = [] } = {}) {
     const v = String(value ?? '').trim();
     if (v) exact.add(v);
   };
+  // A lone catalog token is specific when curated, or when it mixes letters and digits; numbers, versions
+  // and code tokens (`18`, `v0`, `e2e`, `utf8`) collide with ordinary prose and stay out.
+  const specificToken = (v) => CURATED_NAME_WORDS.has(v.toLowerCase())
+    || (/\p{L}/u.test(v) && /\p{N}/u.test(v) && !CODE_TOKEN.test(v));
   const addToken = (value, participant = false) => {
     const v = String(value ?? '').trim();
     const word = v.toLowerCase();
-    if (/\p{N}/u.test(v) || CURATED_NAME_WORDS.has(word) || (participant && v.length >= 3 && !GENERIC_NAME_WORDS.has(word))) addExact(v);
+    if (specificToken(v) || (participant && v.length >= 3 && !GENERIC_NAME_WORDS.has(word))) addExact(v);
   };
   const addProvider = (provider, participant = false) => {
-    addExact(provider);
+    const id = String(provider ?? '').trim();
+    if (participant || id.length >= 4 || CURATED_NAME_WORDS.has(id.toLowerCase())) addExact(id);
     for (const word of String(provider ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u)) addToken(word, participant);
     for (const word of familyWordsOf(provider, participant)) families.add(word);
   };

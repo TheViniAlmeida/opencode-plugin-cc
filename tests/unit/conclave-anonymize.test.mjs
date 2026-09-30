@@ -78,6 +78,21 @@ test('a large catalog preserves ordinary prose while redacting model identificat
   for (const phrase of ['Free Tools Small', 'For Coding', 'zero-shot-1', 'free-tools/small', 'free-tools']) assert.equal(anonymize(phrase, names), REDACTED_NAME);
 });
 
+test('short catalog providers, numbers, versions and code tokens never redact prose', () => {
+  const names = buildKnownNames(makeCatalog([
+    { providerID: 'nan', modelID: 'gemma4', full: 'nan/gemma4', name: 'Gemma 4' },
+    { providerID: 'bee', modelID: 'bee-buzz', full: 'bee/bee-buzz', name: 'Bee Buzz 1.0' },
+    { providerID: 'router', modelID: 'router/e2e', full: 'router/router/e2e', name: 'End-to-End Encrypted' },
+    { providerID: 'v0', modelID: 'v0-1.5-lg', full: 'v0/v0-1.5-lg', name: 'v0-1.5-lg' },
+    { providerID: 'acme', modelID: '18', full: 'acme/18', name: '18' },
+    { providerID: 'acme', modelID: 'utf8', full: 'acme/utf8', name: 'utf8' },
+  ], ['nan', 'bee', 'router', 'v0', 'acme']));
+  const prose = 'average() returns NaN (or nan) for an empty list; e2e tests on Node 18 and v0 of the API decode utf8 like a bee.';
+  assert.equal(anonymize(prose, names), prose);
+  assert.equal(anonymize('I am gemma4 via nan/gemma4', names), `I am ${REDACTED_NAME} via ${REDACTED_NAME}`);
+  assert.equal(anonymize('v0-1.5-lg', names), REDACTED_NAME);
+});
+
 test('only participants supply uncurated families and provider words', () => {
   const model = { providerID: 'acme-cloud', modelID: 'private-route/zeta-sonnet-9-pro', full: 'acme-cloud/private-route/zeta-sonnet-9-pro', name: 'Unrelated Display Phrase' };
   const catalogNames = buildKnownNames(makeCatalog([model], []));
