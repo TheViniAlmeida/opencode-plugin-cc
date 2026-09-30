@@ -541,3 +541,100 @@ export function readTurnLog(env) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 // ---- end F4b ----
+
+// ---- F5: MCP client, job id lookup, config seeding, CLI JSON ----
+import { spawn as spawnF5 } from 'node:child_process';
+import nodePathF5 from 'node:path';
+import { DEFAULT_CONFIG as F5_DEFAULT_CONFIG } from '../plugins/opc/scripts/lib/config.mjs';
+
+export const MCP_SERVER = nodePathF5.join(PLUGIN_ROOT, 'scripts', 'mcp-server.mjs');
+
+export function startMcpClient({ env, cwd, timeoutMs = 120000, nodeArgs = [] }) {
+  const child = spawnF5(process.execPath, [...nodeArgs, MCP_SERVER], { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  const messages = [];
+  const rawLines = [];
+  const waiters = [];
+  let stderr = '';
+  let buffer = '';
+  let nextId = 1;
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    let index = buffer.indexOf('\n');
+    while (index >= 0) {
+      const line = buffer.slice(0, index);
+      buffer = buffer.slice(index + 1);
+      rawLines.push(line);
+      let msg = null;
+      try { msg = JSON.parse(line); } catch { msg = null; }
+      if (msg) {
+        messages.push(msg);
+        for (const waiter of [...waiters]) {
+          if (waiter.predicate(msg)) {
+            waiters.splice(waiters.indexOf(waiter), 1);
+            waiter.resolve(msg);
+          }
+        }
+      }
+      index = buffer.indexOf('\n');
+    }
+  });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+  function waitFor(predicate, timeout = timeoutMs) {
+    const found = messages.find(predicate);
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve, reject) => {
+      const waiter = { predicate, resolve: (msg) => { clearTimeout(timer); resolve(msg); } };
+      const timer = setTimeout(() => {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        reject(new Error(`MCP wait timed out; stderr tail:\n${stderr.slice(-2000)}`));
+      }, timeout);
+      waiters.push(waiter);
+    });
+  }
+  function send(obj) { child.stdin.write(`${JSON.stringify(obj)}\n`); }
+  function request(method, params, { timeout = timeoutMs } = {}) {
+    const id = nextId++;
+    const pending = waitFor((msg) => msg.id === id && ('result' in msg || 'error' in msg), timeout);
+    send({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) });
+    return pending;
+  }
+  function notify(method, params) { send({ jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) }); }
+  async function initialize(protocolVersion = '2025-06-18') {
+    const response = await request('initialize', { protocolVersion, capabilities: {}, clientInfo: { name: 'opc-test', version: '0.0.0' } });
+    notify('notifications/initialized');
+    return response;
+  }
+  async function callTool(name, args = {}, { timeout = timeoutMs } = {}) {
+    const response = await request('tools/call', { name, arguments: args }, { timeout });
+    if (response.error) throw new Error(`tools/call ${name} → JSON-RPC ${response.error.code}: ${response.error.message}`);
+    return { isError: response.result.isError === true, envelope: JSON.parse(response.result.content[0].text), result: response.result };
+  }
+  async function close() { child.stdin.end(); return exited; }
+  return { child, messages, rawLines, request, notify, initialize, callTool, waitFor, close, exited, sendRaw: (value) => child.stdin.write(value), get stderr() { return stderr; } };
+}
+
+const F5_JOB_ID_RE = /^(task|review|ask|plan|sub|cmd|orch|conc|gate)-[0-9a-z]+-[0-9a-z]{6}$/;
+export function findJobId(value, kind = null) {
+  if (typeof value === 'string') return F5_JOB_ID_RE.test(value) && (kind === null || value.startsWith(`${kind}-`)) ? value : null;
+  if (Array.isArray(value)) { for (const item of value) { const id = findJobId(item, kind); if (id) return id; } return null; }
+  if (value && typeof value === 'object') { for (const item of Object.values(value)) { const id = findJobId(item, kind); if (id) return id; } }
+  return null;
+}
+
+export function writeTestConfig(env, patch = {}) {
+  const config = { ...F5_DEFAULT_CONFIG, ...patch, policy: { ...F5_DEFAULT_CONFIG.policy, ...(patch.policy ?? {}) } };
+  writeGlobalConfig(env, config);
+  return config;
+}
+
+export async function cliJson(args, { env, cwd, timeoutMs = 60000 }) {
+  const cut = args.indexOf('--');
+  const withJson = cut === -1 ? [...args, '--json'] : [...args.slice(0, cut), '--json', ...args.slice(cut)];
+  const r = await runCli(withJson, { env, cwd, timeoutMs });
+  let data = null;
+  try { data = JSON.parse(r.stdout); } catch { data = r.stdout.trim() || null; }
+  return { code: r.code, data, stderr: r.stderr };
+}

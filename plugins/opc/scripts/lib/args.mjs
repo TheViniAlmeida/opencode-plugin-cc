@@ -92,12 +92,19 @@ export async function readStdin(stream = process.stdin) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// Splits argv at the first "--": stdin flags only count before it; free text after it is never a flag.
+function splitAtTerminator(argv) {
+  const cut = argv.indexOf('--');
+  return cut === -1 ? { head: argv, tail: [] } : { head: argv.slice(0, cut), tail: argv.slice(cut) };
+}
+
 export async function resolveArgv(argv, { stdin = process.stdin } = {}) {
-  const index = argv.indexOf('--args-stdin');
+  const { head, tail } = splitAtTerminator(argv);
+  const index = head.indexOf('--args-stdin');
   if (index === -1) return [...argv];
-  const rest = argv.filter((token, i) => i !== index);
+  const rest = head.filter((_token, i) => i !== index);
   const content = await readStdin(stdin);
-  return [...rest, ...splitArgString(content)];
+  return [...rest, ...splitArgString(content), ...tail];
 }
 
 export function extractCwd(argv) {
@@ -353,9 +360,10 @@ export const RAW_ARGS_FLAG = '--raw-args-stdin';
 // flags with parsePromptArgs and returns the verbatim text (the flag itself stays in argv, so the
 // command's parseArgs spec must declare 'raw-args-stdin': { type: 'boolean' }). Otherwise text is null.
 export async function readRawArgs(argv, flagSpec, { stdin = process.stdin } = {}) {
-  if (!argv.includes(RAW_ARGS_FLAG)) return { argv: [...argv], text: null };
+  const { head, tail } = splitAtTerminator(argv);
+  if (!head.includes(RAW_ARGS_FLAG)) return { argv: [...argv], text: null };
   const { argv: flagArgv, prompt } = parsePromptArgs(await readStdin(stdin), flagSpec);
-  return { argv: [...argv, ...flagArgv], text: prompt };
+  return { argv: [...head, ...flagArgv, ...tail], text: prompt };
 }
 
 
