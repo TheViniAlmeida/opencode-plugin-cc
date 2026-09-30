@@ -397,3 +397,139 @@ export function anonymizeValue(value, knownNames) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, anonymizeValue(v, knownNames)]));
   return value;
 }
+
+// ---------------------------------------------------------------------------
+// Review clustering and verdict
+// ---------------------------------------------------------------------------
+
+const TITLE_STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'in', 'is', 'it', 'its', 'no', 'not', 'of', 'on',
+  'or', 'the', 'this', 'that', 'to', 'when', 'with',
+  'com', 'da', 'das', 'de', 'do', 'dos', 'e', 'em', 'na', 'nas', 'nos', 'o', 'os', 'para', 'por', 'que', 'sem', 'um', 'uma',
+]);
+
+function severityRank(severity) {
+  return SEVERITY_ORDER.indexOf(String(severity ?? '').toLowerCase());
+}
+
+export function titleTokens(title) {
+  return new Set(
+    String(title ?? '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '')
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((t) => t.length >= 2 && !TITLE_STOPWORDS.has(t)),
+  );
+}
+
+export function titleSimilarity(a, b) {
+  const A = titleTokens(a);
+  const B = titleTokens(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter += 1;
+  return inter / (A.size + B.size - inter);
+}
+
+const NO_FILE_VALUES = new Set(['', '-', 'n/a', 'na', 'none', '(none)', 'null', 'unknown', 'general', 'global', '*']);
+
+function normalizeFile(file) {
+  if (typeof file !== 'string') return null;
+  const normalized = file.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  return NO_FILE_VALUES.has(normalized.toLowerCase()) ? null : normalized;
+}
+
+function toLine(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 1 ? Math.floor(number) : null;
+}
+
+function lineRange(finding) {
+  const start = toLine(finding.line_start);
+  const end = toLine(finding.line_end);
+  if (start === null && end === null) return null;
+  const a = start ?? end;
+  const b = end ?? start;
+  return a <= b ? [a, b] : [b, a];
+}
+
+function rangesNear(r1, r2) {
+  if (!r1 && !r2) return true;
+  if (!r1 || !r2) return false;
+  return Math.max(r1[0], r2[0]) - Math.min(r1[1], r2[1]) <= CLUSTER_LINE_GAP;
+}
+
+function confidenceOf(finding) {
+  return typeof finding.confidence === 'number' && Number.isFinite(finding.confidence) ? finding.confidence : null;
+}
+
+export function clusterFindings(findingsByMember, { validCount = null } = {}) {
+  const labels = Object.keys(findingsByMember ?? {}).sort();
+  const n = validCount ?? labels.length;
+  const items = [];
+  for (const label of labels) {
+    for (const finding of findingsByMember[label] ?? []) {
+      if (!finding || typeof finding !== 'object') continue;
+      items.push({ label, finding, file: normalizeFile(finding.file), range: lineRange(finding), confidence: confidenceOf(finding), order: items.length });
+    }
+  }
+  const parent = items.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < items.length; i += 1) {
+    for (let j = i + 1; j < items.length; j += 1) {
+      const a = items[i];
+      const b = items[j];
+      if (a.file === null || b.file === null || a.file !== b.file) continue;
+      if (!rangesNear(a.range, b.range)) continue;
+      if (titleSimilarity(a.finding.title, b.finding.title) < CLUSTER_TITLE_THRESHOLD) continue;
+      parent[find(j)] = find(i);
+    }
+  }
+  const groups = new Map();
+  items.forEach((item, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(item);
+  });
+  const clusters = [...groups.values()].map((group) => {
+    const memberLabels = [...new Set(group.map((g) => g.label))].sort();
+    const best = [...group].sort((x, y) => ((y.confidence ?? -1) - (x.confidence ?? -1)) || (x.order - y.order))[0];
+    let severity = String(group[0].finding.severity ?? '').toLowerCase() || null;
+    for (const g of group) {
+      if (severityRank(g.finding.severity) > severityRank(severity)) severity = String(g.finding.severity).toLowerCase();
+    }
+    const ranges = group.map((g) => g.range).filter(Boolean);
+    const confidences = group.map((g) => g.confidence).filter((c) => c !== null);
+    const mean = confidences.length ? confidences.reduce((s, c) => s + c, 0) / confidences.length : null;
+    return {
+      id: null,
+      file: group[0].file,
+      line_start: ranges.length ? Math.min(...ranges.map((r) => r[0])) : null,
+      line_end: ranges.length ? Math.max(...ranges.map((r) => r[1])) : null,
+      severity,
+      title: String(best.finding.title ?? ''),
+      body: String(best.finding.body ?? ''),
+      recommendation: String(best.finding.recommendation ?? ''),
+      agreement: { k: memberLabels.length, n, text: `${memberLabels.length}/${n}` },
+      labels: memberLabels,
+      meanConfidence: mean === null ? null : Math.round(mean * 100) / 100,
+      bestLabel: best.label,
+      findings: group.map((g) => ({
+        label: g.label,
+        title: String(g.finding.title ?? ''),
+        severity: g.finding.severity ?? null,
+        confidence: g.confidence,
+        line_start: g.range ? g.range[0] : null,
+        line_end: g.range ? g.range[1] : null,
+      })),
+    };
+  });
+  clusters.sort((x, y) => (severityRank(y.severity) - severityRank(x.severity))
+    || (y.agreement.k - x.agreement.k)
+    || ((y.meanConfidence ?? -1) - (x.meanConfidence ?? -1))
+    || (x.file === null) - (y.file === null)
+    || String(x.file ?? '').localeCompare(String(y.file ?? ''))
+    || ((x.line_start ?? 0) - (y.line_start ?? 0))
+    || x.title.localeCompare(y.title));
+  clusters.forEach((c, i) => { c.id = `C${i + 1}`; });
+  return clusters;
+}
