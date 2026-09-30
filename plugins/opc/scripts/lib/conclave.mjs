@@ -298,3 +298,102 @@ export function composeMembers({
   const members = shuffle(accepted, rng).map((m, i) => ({ label: LABEL_ALPHABET[i], ...m }));
   return { mode, members, quorum: effectiveQuorum, rounds: effectiveRounds, judge: effectiveJudge, warnings, skipped };
 }
+
+// ---------------------------------------------------------------------------
+// Anonymization
+// ---------------------------------------------------------------------------
+
+const GENERIC_NAME_WORDS = new Set([
+  'air', 'alpha', 'api', 'app', 'audio', 'auto', 'base', 'beta', 'big', 'chat', 'cli', 'cloud', 'code', 'coder',
+  'codex', 'command', 'deep', 'default', 'dev', 'edge', 'embed', 'embedding', 'exp', 'experimental', 'fast', 'final',
+  'flash', 'free', 'high', 'hyper', 'image', 'instant', 'instruct', 'large', 'latest', 'light', 'lite', 'local', 'low',
+  'max', 'medium', 'micro', 'mini', 'model', 'models', 'nano', 'new', 'next', 'old', 'omni', 'online', 'open', 'plus',
+  'preview', 'pro', 'realtime', 'reasoner', 'reasoning', 'release', 'research', 'sdk', 'search', 'server', 'small',
+  'speech', 'stable', 'super', 'test', 'text', 'the', 'thinking', 'turbo', 'ultra', 'version', 'vision', 'web', 'with',
+]);
+
+const VENDOR_ALIASES = Object.freeze({
+  claude: ['anthropic'], deepseek: ['deepseek'], gemini: ['google', 'deepmind'], gemma: ['google', 'deepmind'],
+  glm: ['zhipu', 'zhipuai'], gpt: ['openai', 'chatgpt'], grok: ['xai'], kimi: ['moonshot', 'moonshotai'],
+  llama: ['meta'], minimax: ['minimax'], mistral: ['mistralai'], codestral: ['mistral', 'mistralai'],
+  phi: ['microsoft'], qwen: ['alibaba', 'tongyi'],
+});
+
+function familyWordsOf(text) {
+  const words = [];
+  for (const token of String(text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    const lead = token.match(/^\p{L}+/u)?.[0];
+    if (lead && lead.length >= 3 && !GENERIC_NAME_WORDS.has(lead)) words.push(lead);
+  }
+  return words;
+}
+
+export function buildKnownNames(catalog, { extraModels = [] } = {}) {
+  const exact = new Set();
+  const families = new Set();
+  const addExact = (value) => {
+    const v = String(value ?? '').trim();
+    if (v.length >= 3) exact.add(v);
+  };
+  const providers = new Set(catalog?.connected ?? []);
+  for (const m of [...(catalog?.models ?? []), ...extraModels]) {
+    if (!m?.modelID) continue;
+    if (m.providerID) providers.add(m.providerID);
+    addExact(m.full);
+    addExact(m.modelID);
+    const segments = String(m.modelID).split('/');
+    addExact(segments.at(-1));
+    for (const namespace of segments.slice(0, -1)) addExact(namespace);
+    addExact(m.name);
+    for (const w of familyWordsOf(segments.at(-1))) families.add(w);
+    for (const w of familyWordsOf(m.name)) families.add(w);
+  }
+  for (const p of providers) {
+    addExact(p);
+    for (const token of String(p).toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      if (token.length >= 3 && !GENERIC_NAME_WORDS.has(token)) exact.add(token);
+    }
+  }
+  for (const family of families) for (const vendor of VENDOR_ALIASES[family] ?? []) exact.add(vendor);
+  return { exact: [...exact], families: [...families] };
+}
+
+const compiledNames = new WeakMap();
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function compileNames(knownNames) {
+  const cacheable = knownNames && typeof knownNames === 'object';
+  if (cacheable && compiledNames.has(knownNames)) return compiledNames.get(knownNames);
+  const spec = Array.isArray(knownNames) ? { exact: knownNames, families: [] } : (knownNames ?? {});
+  const prepare = (list) => [...new Set((list ?? []).map((s) => String(s).trim()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length).map(escapeRegExp);
+  const exact = prepare(spec.exact);
+  const families = prepare(spec.families);
+  const before = '(?<![\\p{L}\\p{N}_])';
+  const after = '(?![\\p{L}\\p{N}_])';
+  const compiled = {
+    exact: exact.length ? new RegExp(`${before}(?:${exact.join('|')})${after}`, 'giu') : null,
+    family: families.length ? new RegExp(`${before}(?:${families.join('|')})(?:[\\p{L}\\p{N}_-]|\\.(?=[\\p{L}\\p{N}]))*`, 'giu') : null,
+  };
+  if (cacheable) compiledNames.set(knownNames, compiled);
+  return compiled;
+}
+
+export function anonymize(text, knownNames) {
+  if (typeof text !== 'string' || text === '') return typeof text === 'string' ? text : '';
+  const { exact, family } = compileNames(knownNames);
+  let out = text;
+  if (exact) out = out.replace(exact, REDACTED_NAME);
+  if (family) out = out.replace(family, REDACTED_NAME);
+  return out;
+}
+
+export function anonymizeValue(value, knownNames) {
+  if (typeof value === 'string') return anonymize(value, knownNames);
+  if (Array.isArray(value)) return value.map((v) => anonymizeValue(v, knownNames));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, anonymizeValue(v, knownNames)]));
+  return value;
+}
