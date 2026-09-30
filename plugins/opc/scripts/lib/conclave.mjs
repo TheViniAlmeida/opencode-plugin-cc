@@ -358,6 +358,15 @@ export function buildKnownNames(catalog, { extraModels = [] } = {}) {
   return { exact: [...exact], families: [...families] };
 }
 
+function mergeKnownNames(supplied, derived) {
+  const asLists = (names) => Array.isArray(names) ? { exact: names, families: [] } : (names ?? {});
+  const given = asLists(supplied);
+  return {
+    exact: [...new Set([...(given.exact ?? []), ...derived.exact])],
+    families: [...new Set([...(given.families ?? []), ...derived.families])],
+  };
+}
+
 const compiledNames = new WeakMap();
 
 function escapeRegExp(text) {
@@ -674,7 +683,7 @@ async function runJudge(run, finalResponses, review) {
   const prompt = fillTemplate(assets.prompts.judge, { QUESTION: question, MODE: flags.mode, LABELS: labels.join(', '), DEBATE_NOTE: flags.rounds > 1 ? ` and then debated for ${flags.rounds - 1} more round(s)` : '', RESPONSES: formatLabeled(finalResponses, knownNames, 'answer'), REVIEW_SUMMARY: review ? JSON.stringify(anonymizeValue(reviewForJudge(review), knownNames), null, 2) : 'Not a review conclave.', OUTPUT_CONTRACT: outputContract(run.structuredOutput, schema) }, { strict: true });
   emit({ type: 'judge-start', model: flags.judge.full });
   const turn = await safeTurn(deps, { role: 'judge', label: 'judge', round: null, member: flags.judge, sessionID: null, prompt, schema, title: 'OPC: conclave: judge' }); const check = checkTurn(turn, schema);
-  if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message } }; }
+  if (!check.ok) { run.warnings.push(`A síntese do juiz ${flags.judge.full} falhou (${check.errorType}); use a skill opc-conclave com synthesisInput`); emit({ type: 'judge-failed', errorType: check.errorType, message: check.message }); return { type: 'model', model: flags.judge.full, status: 'failed', sessionID: turn?.sessionID ?? null, error: { errorType: check.errorType, message: check.message, rawText: turn?.finalText ? truncateText(String(turn.finalText), RAW_TEXT_MAX_CHARS) : null } }; }
   emit({ type: 'judge-done', sessionID: turn.sessionID ?? null }); return { type: 'model', model: flags.judge.full, status: 'completed', sessionID: turn.sessionID ?? null, synthesis: turn.structured };
 }
 
@@ -694,7 +703,7 @@ export async function runConclave({ ctx = {}, question = '', flags, deps }) {
     flags,
     deps,
     assets: deps.assets ?? loadConclaveAssets(),
-    knownNames: deps.knownNames ?? derivedKnownNames,
+    knownNames: mergeKnownNames(deps.knownNames, derivedKnownNames),
     emit: deps.onEvent ?? (() => {}),
     maxParallel: flags.maxParallel ?? ctx.config?.jobs?.maxParallel ?? 4,
     projectContext: projectContextBlock(ctx.config?.project),
