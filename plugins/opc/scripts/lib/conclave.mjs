@@ -137,3 +137,148 @@ export function loadConclaveAssets(pluginRoot = DEFAULT_PLUGIN_ROOT) {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Composition
+// ---------------------------------------------------------------------------
+
+function usage(code, message, details) {
+  return new OpcError(code, message, { exitCode: ExitCode.USAGE, details });
+}
+
+function preview(value) {
+  const text = String(value ?? '');
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
+}
+
+function checkRoundsValue(value, source) {
+  if (!Number.isInteger(value) || value < 1 || value > 3) {
+    throw usage('CONCLAVE_INVALID_ROUNDS', `${source} deve ser um inteiro entre 1 e 3 (recebido ${value})`);
+  }
+}
+
+function resolveRounds(mode, flagRounds, configRounds) {
+  if (flagRounds != null) checkRoundsValue(flagRounds, '--rounds');
+  if (configRounds != null) checkRoundsValue(configRounds, 'conclave.rounds');
+  if (mode === 'review') {
+    if (flagRounds != null && flagRounds !== 1) throw usage('CONCLAVE_REVIEW_ROUNDS', '--mode review executa uma rodada; remova --rounds');
+    return 1;
+  }
+  if (mode === 'debate') {
+    const rounds = flagRounds ?? Math.max(2, configRounds ?? 2);
+    if (rounds < 2) throw usage('CONCLAVE_DEBATE_ROUNDS', '--mode debate exige --rounds 2 ou 3');
+    return rounds;
+  }
+  return flagRounds ?? configRounds ?? 1;
+}
+
+export function validateConclaveOptions({ mode = 'opinion', models = null, pool = null, quorum = null, rounds = null, config = {} } = {}) {
+  if (!CONCLAVE_MODES.includes(mode)) throw usage('CONCLAVE_INVALID_MODE', `modo inválido "${preview(mode)}" (esperado: ${CONCLAVE_MODES.join(', ')})`);
+  const hasModels = Array.isArray(models) && models.length > 0;
+  if (hasModels && pool) throw usage('CONCLAVE_MODELS_AND_POOL', '--models e --pool são mutuamente exclusivos');
+  if (hasModels) {
+    const distinct = new Set(models.map((m) => String(m).trim()).filter(Boolean));
+    if (distinct.size < 2) throw usage('CONCLAVE_TOO_FEW_MEMBERS', 'um conclave exige pelo menos 2 membros (--models a,b)');
+  }
+  if (quorum != null && (!Number.isInteger(quorum) || quorum < 2)) throw usage('CONCLAVE_INVALID_QUORUM', `--quorum deve ser um inteiro >= 2 (recebido ${quorum})`);
+  return { rounds: resolveRounds(mode, rounds, config.conclave?.rounds ?? null) };
+}
+
+function policyDenial(resolved, policy) {
+  const provider = evaluate('provider', resolved.providerID, policy ?? {});
+  if (!provider.allowed) return `provider negado pela política (${provider.rule ?? 'policy'})`;
+  const model = evaluate('model', resolved.full, policy ?? {});
+  if (!model.allowed) return `modelo negado pela política (${model.rule ?? 'policy'})`;
+  return null;
+}
+
+function shuffle(list, rng) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function resolveJudge(value, { catalog, config, policy }) {
+  if (value === 'claude') return { type: 'claude' };
+  let resolved;
+  try {
+    resolved = normalizeModelId(value, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+  } catch (err) {
+    throw usage('CONCLAVE_INVALID_JUDGE', `juiz inválido "${preview(value)}": ${err.message}`);
+  }
+  if (!catalog.connected.has(resolved.providerID)) throw usage('CONCLAVE_INVALID_JUDGE', `juiz inválido: o provider não está conectado`);
+  const denial = policyDenial(resolved, policy);
+  if (denial) throw new OpcError('POLICY_DENIED', `juiz do conclave: ${denial}`, { exitCode: ExitCode.POLICY });
+  return { type: 'model', providerID: resolved.providerID, modelID: resolved.modelID, full: resolved.full };
+}
+
+export function composeMembers({
+  models = null, pool = null, config = {}, catalog, policy = config.policy, quorum = null, rounds = null,
+  mode = 'opinion', judge = null, allowJudgeMember = false, rng = Math.random,
+} = {}) {
+  const { rounds: effectiveRounds } = validateConclaveOptions({ mode, models, pool, quorum, rounds, config });
+  const conclaveCfg = config.conclave ?? {};
+  let entries;
+  let source;
+  if (Array.isArray(models) && models.length > 0) {
+    entries = models; source = '--models';
+  } else {
+    const poolName = pool ?? conclaveCfg.defaultPool ?? 'default';
+    const list = conclaveCfg.pools?.[poolName];
+    if (!Array.isArray(list) || list.length === 0) throw usage('CONCLAVE_UNKNOWN_POOL', `pool do conclave "${preview(poolName)}" não está definido; informe --models a,b`);
+    entries = list; source = `pool:${poolName}`;
+  }
+
+  const warnings = [];
+  const skipped = [];
+  const accepted = [];
+  const seen = new Set();
+  for (const raw of entries) {
+    const entry = String(raw).trim();
+    if (!entry) continue;
+    let resolved;
+    try {
+      resolved = normalizeModelId(entry, { catalog, defaultProvider: config.defaultProvider, aliases: config.aliases ?? {} });
+    } catch (err) {
+      const reason = err.message.replaceAll(entry, preview(entry));
+      skipped.push({ entry: preview(entry), reason, denied: false });
+      warnings.push(`conclave: ignorando "${preview(entry)}": ${reason}`);
+      continue;
+    }
+    if (!catalog.connected.has(resolved.providerID)) {
+      const reason = 'o provider não está conectado';
+      skipped.push({ entry: preview(entry), reason, denied: false });
+      warnings.push(`conclave: ignorando "${preview(entry)}": ${reason}`);
+      continue;
+    }
+    const denial = policyDenial(resolved, policy);
+    if (denial) {
+      skipped.push({ entry: preview(entry), reason: denial, denied: true });
+      warnings.push(`conclave: ignorando "${preview(entry)}": ${denial}`);
+      continue;
+    }
+    if (seen.has(resolved.full)) {
+      warnings.push(`conclave: membro duplicado "${preview(entry)}" ignorado`);
+      continue;
+    }
+    seen.add(resolved.full);
+    accepted.push({ providerID: resolved.providerID, modelID: resolved.modelID, full: resolved.full, source });
+  }
+
+  const listing = skipped.map((s) => `${s.entry}: ${s.reason}`).join('; ');
+  if (accepted.length === 0 && skipped.length > 0 && skipped.every((s) => s.denied)) {
+    throw new OpcError('POLICY_DENIED', `conclave: todos os membros foram negados pela política (${listing})`, { exitCode: ExitCode.POLICY, details: { skipped } });
+  }
+  if (accepted.length < 2) throw usage('CONCLAVE_TOO_FEW_MEMBERS', `um conclave exige pelo menos 2 membros válidos; encontrados ${accepted.length}${listing ? ` (${listing})` : ''}`, { skipped });
+  if (accepted.length > LABEL_ALPHABET.length) throw usage('CONCLAVE_TOO_MANY_MEMBERS', `um conclave aceita no máximo ${LABEL_ALPHABET.length} membros`);
+
+  const effectiveQuorum = quorum ?? conclaveCfg.quorum ?? 2;
+  if (!Number.isInteger(effectiveQuorum) || effectiveQuorum < 2 || effectiveQuorum > accepted.length) throw usage('CONCLAVE_INVALID_QUORUM', `quorum deve ser um inteiro entre 2 e ${accepted.length} (recebido ${effectiveQuorum})`);
+  const effectiveJudge = resolveJudge(judge ?? conclaveCfg.judge ?? 'claude', { catalog, config, policy });
+  if (effectiveJudge.type === 'model' && seen.has(effectiveJudge.full) && !allowJudgeMember) throw usage('CONCLAVE_JUDGE_IS_MEMBER', 'o juiz também é membro; informe --allow-judge-member para permitir');
+  const members = shuffle(accepted, rng).map((m, i) => ({ label: LABEL_ALPHABET[i], ...m }));
+  return { mode, members, quorum: effectiveQuorum, rounds: effectiveRounds, judge: effectiveJudge, warnings, skipped };
+}
