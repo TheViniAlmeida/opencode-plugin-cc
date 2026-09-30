@@ -29,6 +29,21 @@ test('/opc:conclave is model-invocable and passes arguments through a quoted her
   assert.doesNotMatch(text, /opc conclave \$ARGUMENTS/);
 });
 
+test('/opc:conclave preview counts staged, unstaged, and untracked changes', () => {
+  const text = read('commands', 'conclave.md');
+  assert.match(text, /git status --porcelain/);
+  assert.match(text, /git diff --shortstat HEAD/);
+  assert.match(text, /mais de ~20 arquivos ou ~1500 linhas/);
+  assert.doesNotMatch(text, /git diff --shortstat`/);
+});
+
+test('/opc:conclave explains connection, timeout, and cancellation exits without success handling', () => {
+  const text = read('commands', 'conclave.md');
+  assert.ok(text.includes('**Exit 5:**') && text.includes('/opc:setup'));
+  assert.ok(text.includes('**Exit 6:**') && text.includes('/opc:status <id> --wait') && text.includes('/opc:result <id>'));
+  assert.ok(text.includes('**Exit 130:**') && text.includes('cancelado'));
+});
+
 test('opc-conclave skill covers the synthesis parts and forbids brand bias', () => {
   const text = read('skills', 'opc-conclave', 'SKILL.md');
   const fm = frontmatter(text);

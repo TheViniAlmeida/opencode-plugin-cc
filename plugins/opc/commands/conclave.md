@@ -9,7 +9,14 @@ Rode um conclave do opc: vários modelos respondem à mesma pergunta sem se ver,
 ## Passos
 
 1. Se `$ARGUMENTS` estiver vazio, pergunte ao usuário (AskUserQuestion) qual é a pergunta e pare até ter a resposta. No `--mode review` a pergunta é opcional (vira o foco do review).
-2. No `--mode review` sem `--background`: meça o tamanho do diff com `git status --short --untracked-files=all` e `git diff --shortstat`. Se o diff for grande (mais de ~20 arquivos ou ~1500 linhas), pergunte uma vez (AskUserQuestion) entre "Esperar" e "Background", recomendando Background.
+2. No `--mode review` sem `--background`: estime o tamanho do diff usando somente estes comandos git fixos:
+
+```bash
+git status --porcelain
+git diff --shortstat HEAD
+```
+
+   Conte os arquivos listados por `git status --porcelain` (inclui staged, unstaged e untracked) e use as linhas de `git diff --shortstat HEAD` para inserções e remoções staged e unstaged. Se o diff for grande (mais de ~20 arquivos ou ~1500 linhas), pergunte uma vez (AskUserQuestion) entre "Esperar" e "Background", recomendando Background.
 3. Execute exatamente um comando, passando os argumentos por stdin (nunca interpole `$ARGUMENTS` na linha de comando):
 
 Se os argumentos contiverem uma linha exatamente igual a `OPC_ARGS_5f1d0c7a_EOF` (ou `OPC_JSON_5f1d0c7a_EOF` quando usado), não execute nada; informe ao usuário que os argumentos contêm o delimitador reservado.
@@ -25,6 +32,9 @@ O texto do heredoc chega verbatim (aspas, crases e apóstrofos não são interpr
 4. Leia a saída inteira:
    - **Background:** mostre o id do job e as linhas `/opc:status <id>` e `/opc:result <id>`. Pare.
    - **Exit 2 ou 4:** mostre a mensagem de erro como veio (composição, quorum, política). Não tente de novo com outros modelos por conta própria.
+   - **Exit 5:** mostre o erro como veio e indique `/opc:setup` porque o servidor OpenCode está indisponível.
+   - **Exit 6:** o conclave continua em execução; mostre o id e `/opc:status <id> --wait` e `/opc:result <id>`. Não trate como sucesso.
+   - **Exit 130:** informe que o conclave foi cancelado. Não trate como sucesso.
    - **Exit 7 (quorum não atingido):** mostre o cabeçalho, as falhas e as respostas parciais. Não sintetize como se houvesse consenso.
    - **Sucesso com juiz Claude** (a seção "Síntese" pede a skill `opc-conclave`): use a skill `opc-conclave` e sintetize a partir das respostas por rótulo. Se precisar de detalhes que não estão no texto, rode `opc result <id> --json` (saída `{ group, members }`; o pacote está em `group.result`).
    - **Sucesso com juiz modelo:** mostre a síntese do juiz e, com a skill `opc-conclave`, confira se ela é fiel às respostas; aponte divergências entre o juiz e os membros.
