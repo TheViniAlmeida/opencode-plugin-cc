@@ -124,6 +124,15 @@ test('clusters are sorted by every comparator criterion in order', () => {
   ]);
 });
 
+test('cluster sort: file presence, file name and title break ties when every earlier criterion is equal', () => {
+  const byFile = clusterFindings({ A: [f(null, null, null, 'Global concern'), f('zzz.js', null, null, 'Local concern')] });
+  assert.deepEqual(byFile.map((c) => c.title), ['Local concern', 'Global concern']);
+  const byName = clusterFindings({ A: [f('z.js', 1, 1, 'Alpha issue'), f('a.js', 1, 1, 'Zulu issue')] });
+  assert.deepEqual(byName.map((c) => c.title), ['Zulu issue', 'Alpha issue']);
+  const byTitle = clusterFindings({ A: [f('same.js', 10, 10, 'Bravo'), f('same.js', 10, 10, 'Alpha')] });
+  assert.deepEqual(byTitle.map((c) => c.title), ['Alpha', 'Bravo']);
+});
+
 test('N comes from validCount when given', () => {
   assert.equal(clusterFindings({ A: [f('a.js', 1, 1, 'Something wrong')] }, { validCount: 4 })[0].agreement.text, '1/4');
 });
