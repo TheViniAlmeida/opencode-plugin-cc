@@ -27,13 +27,16 @@ test('subagent, orchestrate and conclave accept --background and --wait-timeout'
   const ws = makeWorkspace(t);
   for (const [head, scenario] of [
     [['subagent', '--agent', 'general'], 'ok'],
-    [['orchestrate'], 'ok'],
+    [['orchestrate'], 'decompose-ok'],
     [['conclave', '--models', `${FIXTURE_MODELS.fast},${FIXTURE_MODELS.strong}`], 'conclave-opinion'],
   ]) {
     const env = configuredEnv(t, { scenario });
     for (const mode of [['--background'], ['--wait-timeout', '1']]) {
       const r = await cliJson([...head, ...mode, '--', 'x'], { env, cwd: ws });
-      assert.equal(r.code, 0, `${head[0]} ${mode[0]} exits successfully: ${r.stderr}`);
+      // --wait-timeout ends with 0 (job finished) or 6 (wait expired, job continues and its id is printed), spec §exit codes.
+      const allowed = mode[0] === '--background' ? [0] : [0, 6];
+      assert.ok(allowed.includes(r.code), `${head[0]} ${mode[0]} exits with ${r.code}: ${r.stdout}${r.stderr}`);
+      if (r.code === 6) assert.ok(findJobId(r.data), `${head[0]} ${mode[0]} prints the job id on wait timeout`);
       assert.doesNotMatch(r.stderr, UNKNOWN_FLAG, `${head[0]} ${mode[0]}: ${r.stderr}`);
     }
   }
