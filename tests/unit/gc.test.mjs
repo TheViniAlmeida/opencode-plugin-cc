@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { makeTempDir, ORPHAN_SAFE_IDLE, trackTempDir } from '../helpers.mjs';
 import { findStaleStates, run } from '../../plugins/opc/scripts/commands/gc.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
@@ -184,7 +184,7 @@ test('findStaleStates: malformed server record is excluded with a reason and a l
 test('findStaleStates: excludes a live detached process when the identity matcher confirms it', async (t) => {
   const root = rootFor(t);
   const candidate = makeState(root, 'live-0123456789abcdef', 40);
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+  const child = spawn(process.execPath, ['-e', ORPHAN_SAFE_IDLE, String(process.pid)], { detached: true, stdio: 'ignore' });
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);

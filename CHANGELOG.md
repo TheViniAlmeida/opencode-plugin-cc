@@ -6,6 +6,11 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Corrigido — suíte de testes sempre termina
+
+- `scripts/run-tests.mjs` não fica mais pendurado quando um teste trava (por exemplo, no sandbox do Codex, onde `listen 127.0.0.1` dá `EPERM`). O runner passa `--test-timeout` (300 s por arquivo, fora do live) e `--test-force-exit`, e roda a suíte num grupo de processos próprio. Esse grupo é encerrado inteiro no timeout da execução (30 min; 6 h no live), em `SIGINT`/`SIGTERM`/`SIGHUP` (código 128 + sinal) e quando o processo pai morre. Os limites podem ser ajustados com `OPC_TEST_TIMEOUT_MS` e `OPC_TEST_RUN_TIMEOUT_MS`.
+- O sleeper dos testes (`spawnSleeper`, `ORPHAN_SAFE_IDLE` em `tests/helpers.mjs`) não segura mais o processo do arquivo e sai sozinho quando fica órfão. Antes, um `t.after` que lançava erro fazia o node:test pular o hook que o matava.
+
 ### Adicionado — F4c (conclave)
 
 - `/opc:conclave` e `opc conclave`: consulta paralela a N ≥ 2 modelos nos modos `opinion`, `debate` (2–3 rodadas anônimas na mesma sessão de cada membro) e `review` (review cruzado do diff com agrupamento de achados e concordância `k/N`).
