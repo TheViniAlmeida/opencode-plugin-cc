@@ -5,7 +5,7 @@ import { Readable, Writable } from 'node:stream';
 import { validateInput } from './mcp-schema.mjs';
 import { ExitCode, OpcError, toExitCode } from './opc-error.mjs';
 import { getProcessIdentity } from './process.mjs';
-import { redact, redactText } from './redact.mjs';
+import { redactOutput, safeOutputText } from './redact.mjs';
 import { loadState, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
 
 export const MAX_WAIT_SEC = 540;
@@ -247,7 +247,7 @@ export const TOOLS = Object.freeze([
     inputSchema: object({
       task: text('Descrição da tarefa, enviada sem alterações.'),
       planner: modelId('Modelo planejador.'),
-      maxSubtasks: int('Número máximo de subtarefas (--max).', 2, 20),
+      maxSubtasks: int('Número máximo de subtarefas (--max).', 2, 10),
       synthesizer: modelId('"claude" ou um modelo.'),
       write: bool('Permite subtarefas de edição (uma por vez).'),
       wait: WAIT,
@@ -260,13 +260,13 @@ export const TOOLS = Object.freeze([
   {
     name: 'opc_conclave',
     title: 'Executar conclave de modelos',
-    description: 'Faz a mesma pergunta a vários modelos em paralelo (opinião, debate ou revisão) e sintetiza as respostas. Segundo plano por padrão. Igual a /opc:conclave.',
+    description: 'Faz a mesma pergunta a vários modelos em paralelo (opinião ou debate) e sintetiza as respostas. Segundo plano por padrão. Igual a /opc:conclave.',
     annotations: STATEFUL,
     inputSchema: object({
       question: text('Pergunta, enviada sem alterações.'),
       models: { type: 'array', minItems: 2, maxItems: 8, items: modelId('Modelo.'), description: 'Membros (use isto ou pool).' },
       pool: ident('Nome do grupo configurado.'),
-      mode: { type: 'string', enum: ['opinion', 'review', 'debate'], description: 'Modo do conclave.' },
+      mode: { type: 'string', enum: ['opinion', 'debate'], description: 'Modo do conclave.' },
       rounds: int('Rodadas (debate exige pelo menos 2).', 1, 3),
       judge: modelId('"claude" ou um modelo.'),
       quorum: int('Mínimo de respostas válidas.', 2, 8),
@@ -365,6 +365,7 @@ export const TOOLS = Object.freeze([
       'comandos destrutivos, external_directory e caminhos sensíveis sempre exigem o usuário, qualquer que seja o aprovador.',
       'Defina confirmedByUser=true SOMENTE após o usuário aprovar explicitamente esta solicitação exata nesta conversa; nunca por conta própria.',
       'Agentes opc-worker e opc-rescue nunca devem chamar esta ferramenta.',
+      'A resposta pode entregar data como string Markdown.',
     ].join(' '),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: object({
@@ -383,7 +384,7 @@ export const TOOLS = Object.freeze([
   {
     name: 'opc_permissions_answer',
     title: 'Responder pergunta OpenCode',
-    description: 'Responde uma pergunta pendente, com uma entrada por questão na ordem (mesma codificação de /opc:permissions answer). Pergunte ao usuário quando a resposta for dele.',
+    description: 'Responde uma pergunta pendente, com uma entrada por questão na ordem (mesma codificação de /opc:permissions answer). Pergunte ao usuário quando a resposta for dele. A resposta pode entregar data como string Markdown.',
     annotations: STATEFUL,
     inputSchema: object({
       requestId: { type: 'string', pattern: '^que[A-Za-z0-9_]*$', maxLength: 200, description: 'ID da pergunta (que_…).' },
@@ -440,18 +441,26 @@ export function buildEnvelope({ exitCode, stdout = '', stderr = '', error = null
   const out = String(stdout).trim();
   if (out) {
     try {
-      envelope.data = redact(JSON.parse(out));
+      envelope.data = redactOutput(JSON.parse(out));
     } catch {
-      envelope.data = redactText(out);
+      envelope.data = safeOutputText(out);
     }
   }
   if (truncated) envelope.truncated = true;
   const isError = !NON_ERROR_EXITS.has(exitCode);
   if (error) {
-    envelope.error = { code: error.code ?? 'INTERNAL', message: redactText(String(error.message ?? error)) };
+    envelope.error = { code: error.code ?? 'INTERNAL', message: safeOutputText(error.message ?? error) };
   } else if (isError) {
-    const tail = redactText(String(stderr).trim()).slice(-2000);
-    if (tail) envelope.error = { code: 'COMMAND_FAILED', message: tail };
+    const commandError = envelope.data && typeof envelope.data === 'object' && envelope.data.error;
+    if (commandError) {
+      envelope.error = {
+        code: typeof commandError === 'object' ? commandError.code ?? 'COMMAND_FAILED' : 'COMMAND_FAILED',
+        message: safeOutputText(typeof commandError === 'object' ? commandError.message ?? JSON.stringify(commandError) : commandError),
+      };
+    } else {
+      const tail = safeOutputText(String(stderr).trim()).slice(-2000);
+      if (tail) envelope.error = { code: 'COMMAND_FAILED', message: tail };
+    }
   }
   return { envelope, isError };
 }
@@ -489,7 +498,7 @@ function maskInputEcho(message, input) {
   if (values.length === 0) return String(message);
   const pattern = values.sort((left, right) => right.length - left.length)
     .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return String(message).replace(new RegExp(pattern, 'gu'), (value) => `${value.slice(0, 12)}…`);
+  return String(message).replace(new RegExp(pattern, 'gu'), '***');
 }
 
 export function createToolCaller({ dispatch, env = process.env, defaultCwd = env.CLAUDE_PROJECT_DIR || process.cwd(), ppid = process.ppid, resolveSessionId = resolveClaudeSessionId, callTimeoutMs = CALL_TIMEOUT_MS, log = () => {} }) {

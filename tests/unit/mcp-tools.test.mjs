@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { test } from 'node:test';
 
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { validateInput } from '../../plugins/opc/scripts/lib/mcp-schema.mjs';
 import {
   ALLOWED_COMMANDS,
@@ -61,8 +59,7 @@ const CASES = [
 const byName = new Map(TOOLS.map((tool) => [tool.name, tool]));
 
 function tempDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-f5-tools-'));
-  return dir;
+  return trackTempDir(t, makeTempDir('opc-f5-tools-'));
 }
 
 function spyDispatch(result = { exitCode: 0, stdout: '{"ok":true}\n' }) {
@@ -128,6 +125,10 @@ test('schemas reject "always", flag-like identifiers and out-of-range waits', ()
   assert.ok(validateInput(byName.get('opc_task').inputSchema, { prompt: 'x', model: '--write' }).length > 0);
   assert.ok(validateInput(byName.get('opc_task').inputSchema, { prompt: 'x', wait: true, waitTimeoutSec: MAX_WAIT_SEC + 1 }).length > 0);
   assert.ok(validateInput(byName.get('opc_session_show').inputSchema, { sessionId: '-x' }).length > 0);
+  assert.ok(validateInput(byName.get('opc_conclave').inputSchema, { question: 'q?', mode: 'review' }).length > 0);
+  assert.deepEqual(validateInput(byName.get('opc_conclave').inputSchema, { question: 'q?', mode: 'debate' }), []);
+  assert.ok(validateInput(byName.get('opc_orchestrate').inputSchema, { task: 'x', maxSubtasks: 11 }).length > 0);
+  assert.deepEqual(validateInput(byName.get('opc_orchestrate').inputSchema, { task: 'x', maxSubtasks: 10 }), []);
   assert.throws(() => reply.toArgv({ requestId: 'per_1', reply: 'always' }), (e) => e.code === 'INVALID_ARGUMENTS' && e.exitCode === 2);
   assert.throws(() => byName.get('opc_session_new').toArgv({ title: '-oops' }), (e) => e.code === 'INVALID_ARGUMENTS');
 });
@@ -172,7 +173,7 @@ test('invalid arguments and bad cwd never reach the dispatcher', async (t) => {
   assert.equal(spy.calls.length, 0);
 });
 
-test('user-provided text is abbreviated in dispatcher error details', async (t) => {
+test('user-provided text is fully masked in dispatcher output and errors', async (t) => {
   const supplied = 'modelo-invalido-com-id-extenso';
   const callTool = createToolCaller({
     dispatch: spyDispatch({ throw: new OpcError('POLICY_DENIED', `Modelo negado: ${supplied}`, { exitCode: 4 }) }).dispatch,
@@ -181,8 +182,18 @@ test('user-provided text is abbreviated in dispatcher error details', async (t) 
   const result = await callTool(byName.get('opc_task'), { prompt: 'verificar', model: supplied });
   const envelope = JSON.parse(result.content[0].text);
   assert.equal(envelope.error.code, 'POLICY_DENIED');
-  assert.match(envelope.error.message, /modelo-inval…/);
+  assert.equal(envelope.error.message, 'Modelo negado: ***');
   assert.ok(!result.content[0].text.includes(supplied));
+  const short = 'abc';
+  const echoed = createToolCaller({ dispatch: spyDispatch({ exitCode: 7, stdout: `{"detail":"${short}"}`, stderr: `falhou: ${short}` }).dispatch,
+    env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null });
+  const echoedResult = await echoed(byName.get('opc_task'), { prompt: short });
+  assert.equal(JSON.parse(echoedResult.content[0].text).data.detail, '***');
+  assert.equal(JSON.parse(echoedResult.content[0].text).error.message, 'falhou: ***');
+  assert.ok(!echoedResult.content[0].text.includes(short));
+  const rejected = createToolCaller({ dispatch: spyDispatch().dispatch, env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null });
+  const invalidTool = { ...byName.get('opc_task'), toArgv: () => { throw new OpcError('INVALID_ARGUMENTS', `entrada: ${short}`, { exitCode: 2 }); } };
+  assert.equal(JSON.parse((await rejected(invalidTool, { prompt: short })).content[0].text).error.message, 'entrada: ***');
 });
 
 test('typed errors become isError envelopes with code and exit code; waiting states are not errors', async (t) => {
@@ -190,7 +201,7 @@ test('typed errors become isError envelopes with code and exit code; waiting sta
   const denied = createToolCaller({ dispatch: spyDispatch({ throw: new OpcError('POLICY_DENIED', 'modelo negado: x', { exitCode: 4 }) }).dispatch, env: {}, defaultCwd: cwd, resolveSessionId: () => null });
   const res = await denied(byName.get('opc_task'), { prompt: 'x', model: 'x/y' });
   assert.equal(res.isError, true);
-  assert.deepEqual(JSON.parse(res.content[0].text), { exitCode: 4, state: 'policy_denied', error: { code: 'POLICY_DENIED', message: 'modelo negado: x…' } });
+  assert.deepEqual(JSON.parse(res.content[0].text), { exitCode: 4, state: 'policy_denied', error: { code: 'POLICY_DENIED', message: 'modelo negado: ***' } });
   const waiting = createToolCaller({ dispatch: spyDispatch({ exitCode: 3, stdout: '{"status":"waiting_permission"}' }).dispatch, env: {}, defaultCwd: cwd, resolveSessionId: () => null });
   const w = await waiting(byName.get('opc_task'), { prompt: 'x', wait: true });
   assert.equal(w.isError, false);
@@ -220,6 +231,37 @@ test('buildEnvelope keeps raw text when stdout is not JSON and flags truncation'
 test('buildEnvelope redacts secret keys in the command JSON', () => {
   const { envelope } = buildEnvelope({ exitCode: 0, stdout: JSON.stringify({ provider: { options: { apiKey: 'sk-live-123456789' } } }) });
   assert.equal(envelope.data.provider.options.apiKey, '***');
+});
+
+test('buildEnvelope masks unregistered credential patterns in free text, messages and stderr', () => {
+  const token = 'sk-proj-synthetic12345678';
+  for (const result of [
+    buildEnvelope({ exitCode: 0, stdout: `output: ${token}` }),
+    buildEnvelope({ exitCode: 7, stdout: JSON.stringify({ message: `output: ${token}` }) }),
+    buildEnvelope({ exitCode: 7, stderr: `failure: ${token}` }),
+  ]) assert.ok(!JSON.stringify(result.envelope).includes(token));
+});
+
+test('nonzero command errors in JSON populate envelope.error for status wait and cancel', async (t) => {
+  for (const [tool, args, payload] of [
+    ['opc_job_status', { jobId: 'task-1', wait: true }, { error: { code: 'JOB_FAILED', message: 'job failed' } }],
+    ['opc_job_cancel', { jobId: 'task-1' }, { error: 'cannot cancel' }],
+  ]) {
+    const callTool = createToolCaller({ dispatch: spyDispatch({ exitCode: 7, stdout: JSON.stringify(payload) }).dispatch,
+      env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null });
+    const result = await callTool(byName.get(tool), args);
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(result.isError, true);
+    assert.deepEqual(envelope.data, payload);
+    assert.equal(envelope.error.code, payload.error.code ?? 'COMMAND_FAILED');
+    assert.equal(envelope.error.message, payload.error.message ?? payload.error);
+  }
+});
+
+test('permission reply and answer descriptions warn that data can be Markdown text', () => {
+  for (const name of ['opc_permissions_reply', 'opc_permissions_answer']) {
+    assert.match(byName.get(name).description, /data.*string Markdown/i);
+  }
 });
 
 test('createCaptureStream caps output and emptyStdin ends immediately', async () => {
