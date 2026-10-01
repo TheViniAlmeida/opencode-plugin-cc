@@ -35,7 +35,7 @@ function publicTool(tool) {
 }
 
 function preview(value) {
-  const text = String(value);
+  const text = redactText(String(value));
   return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 }
 
@@ -90,27 +90,37 @@ export function createMcpServer({ serverInfo, instructions = undefined, tools, c
 
 export function createLineSplitter({ maxLineChars = MAX_LINE_CHARS } = {}) {
   let buffer = '';
+  let discarding = false;
   return {
     push(chunk) {
-      buffer += chunk;
       const lines = [];
-      let index = buffer.indexOf('\n');
-      while (index >= 0) {
-        const line = buffer.slice(0, index).replace(/\r$/, '');
-        lines.push(line.length > maxLineChars ? null : line);
-        buffer = buffer.slice(index + 1);
-        index = buffer.indexOf('\n');
-      }
-      if (buffer.length > maxLineChars) {
-        buffer = '';
-        lines.push(null);
+      let start = 0;
+      while (start < chunk.length) {
+        const end = chunk.indexOf('\n', start);
+        if (!discarding) {
+          buffer += chunk.slice(start, end < 0 ? undefined : end);
+          if (end >= 0) {
+            const line = buffer.replace(/\r$/, '');
+            lines.push(line.length > maxLineChars ? null : line);
+            buffer = '';
+          } else if (buffer.length > maxLineChars + (buffer.endsWith('\r') ? 1 : 0)) {
+            buffer = '';
+            discarding = true;
+            lines.push(null);
+          }
+        }
+        if (end < 0) break;
+        discarding = false;
+        start = end + 1;
       }
       return lines;
     },
     flush() {
       const rest = buffer;
       buffer = '';
-      return rest.trim() ? [rest] : [];
+      const wasDiscarding = discarding;
+      discarding = false;
+      return !wasDiscarding && rest.trim() ? [rest] : [];
     },
   };
 }
@@ -120,33 +130,44 @@ export function serveStdio({ server, input, write, log = () => {} }) {
   let pending = Promise.resolve();
   const send = (response) => write(`${JSON.stringify(response)}\n`);
 
-  function processLine(line) {
-    if (line === null) {
-      send(errorResponse(null, JsonRpcErrorCode.PARSE_ERROR, `Mensagem excede ${MAX_LINE_CHARS} caracteres`));
-      return;
+  return new Promise((resolve, reject) => {
+    function queue(action) {
+      pending = pending.then(action);
+      pending.catch(reject);
     }
-    if (!line.trim()) return;
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      send(errorResponse(null, JsonRpcErrorCode.PARSE_ERROR, 'Erro de análise: JSON inválido'));
-      return;
-    }
-    pending = pending.then(() => server.handle(message)).then((response) => {
-      if (response) send(response);
-    }).catch((error) => log(`[opc] mcp: ${preview(redactText(String(error?.message ?? error)))}`));
-  }
 
-  return new Promise((resolve) => {
+    function processLine(line) {
+      if (line === null) {
+        queue(() => send(errorResponse(null, JsonRpcErrorCode.PARSE_ERROR, `Mensagem excede ${MAX_LINE_CHARS} caracteres`)));
+        return;
+      }
+      if (!line.trim()) return;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        queue(() => send(errorResponse(null, JsonRpcErrorCode.PARSE_ERROR, 'Erro de análise: JSON inválido')));
+        return;
+      }
+      queue(async () => {
+        let response;
+        try {
+          response = await server.handle(message);
+        } catch (error) {
+          log(`[opc] mcp: ${preview(error?.message ?? error)}`);
+          return;
+        }
+        if (response) send(response);
+      });
+    }
+
     input.setEncoding('utf8');
     input.on('data', (chunk) => {
       for (const line of splitter.push(chunk)) processLine(line);
     });
-    input.on('end', async () => {
+    input.on('end', () => {
       for (const line of splitter.flush()) processLine(line);
-      await pending;
-      resolve();
+      pending.then(resolve, reject);
     });
   });
 }

@@ -103,7 +103,36 @@ test('createLineSplitter handles partial chunks, CRLF and oversize lines', () =>
   assert.deepEqual(splitter.push(':1}\r\n{"b":2}\n'), ['{"a":1}', '{"b":2}']);
   assert.deepEqual(splitter.push('x'.repeat(11)), [null]);
   assert.deepEqual(splitter.push('tail'), []);
-  assert.deepEqual(splitter.flush(), ['tail']);
+  assert.deepEqual(splitter.flush(), []);
+});
+
+test('createLineSplitter drops the entire oversize line across chunks, then resumes', () => {
+  const splitter = createLineSplitter({ maxLineChars: 10 });
+  assert.deepEqual(splitter.push('123456'), []);
+  assert.deepEqual(splitter.push('78901'), [null]);
+  assert.deepEqual(splitter.push('still part of the same line'), []);
+  assert.deepEqual(splitter.push('\n{"ok":1}\n'), ['{"ok":1}']);
+  assert.deepEqual(splitter.flush(), []);
+});
+
+test('serveStdio dispatches only the valid line following a multi-chunk oversize line', async () => {
+  const input = new PassThrough();
+  const handled = [];
+  const written = [];
+  const server = { handle: async (message) => {
+    handled.push(message);
+    return { jsonrpc: '2.0', id: message.id, result: {} };
+  } };
+  const done = serveStdio({ server, input, write: (line) => written.push(JSON.parse(line)) });
+  input.write('x'.repeat(MAX_LINE_CHARS - 2));
+  input.write('xxxx');
+  input.write('{"jsonrpc":"2.0","id":1,"method":"ping"}');
+  input.end('\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n');
+  await done;
+  assert.deepEqual(handled, [{ jsonrpc: '2.0', id: 2, method: 'ping' }]);
+  assert.deepEqual(written.map((response) => [response.id, response.error?.code]), [
+    [null, JsonRpcErrorCode.PARSE_ERROR], [2, undefined],
+  ]);
 });
 
 test('serveStdio answers each line, reports parse errors with id null and ends with the input', async () => {
@@ -131,6 +160,38 @@ test('errorResponse masks registered secrets', () => {
   const response = errorResponse(1, JsonRpcErrorCode.INVALID_PARAMS, 'Valor inválido: fake-secret-123');
   assert.equal(response.error.code, JsonRpcErrorCode.INVALID_PARAMS);
   assert.equal(response.error.message, 'Valor inválido: ***');
+});
+
+test('unknown tool and method names redact registered secrets before previewing', async () => {
+  const secret = 'test-only-sensitive-tool-name';
+  registerSecret(secret);
+  const server = makeServer();
+  await initialized(server);
+  for (const request of [
+    { method: 'tools/call', params: { name: secret }, code: JsonRpcErrorCode.INVALID_PARAMS },
+    { method: secret, code: JsonRpcErrorCode.METHOD_NOT_FOUND },
+  ]) {
+    const response = await server.handle({ jsonrpc: '2.0', id: 42, method: request.method, params: request.params });
+    assert.equal(response.error.code, request.code);
+    assert.ok(!JSON.stringify(response).includes(secret.slice(0, 8)));
+    assert.match(response.error.message, /\*\*\*/);
+  }
+});
+
+test('serveStdio rejects when writing a response throws', async () => {
+  const input = new PassThrough();
+  const failure = new Error('test writer failed');
+  const done = serveStdio({ server: makeServer(), input, write: () => { throw failure; } });
+  input.end('{"jsonrpc":"2.0","id":1,"method":"ping"}\n');
+  await assert.rejects(done, (error) => error === failure);
+});
+
+test('serveStdio rejects when writing a parse error throws', async () => {
+  const input = new PassThrough();
+  const failure = new Error('test parse writer failed');
+  const done = serveStdio({ server: makeServer(), input, write: () => { throw failure; } });
+  input.end('{invalid json\n');
+  await assert.rejects(done, (error) => error === failure);
 });
 
 test('oversize complete lines do not reach JSON parsing', () => {
