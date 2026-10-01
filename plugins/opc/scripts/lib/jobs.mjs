@@ -685,6 +685,18 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   const attemptDeadline = performance.now() + exitWaitMs;
   let latest = readJob(ctx.stateDir, id);
   while (isActive(latest) && latest.attemptInFlight && (!job.pid || identityMatches({ pid: job.pid, startTime: job.pidStartTime }, workerMatcher(id)))) {
+    // A session published while we wait (cancel arrived during session creation) is aborted too,
+    // so the prompted turn ends instead of running to completion.
+    if (client && latest.sessionID && !report.aborted) {
+      try {
+        for (const sessionID of [latest.sessionID, ...(latest.childSessionIDs ?? [])]) {
+          if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
+        }
+        report.aborted = true;
+      } catch (err) {
+        appendJobLog(ctx.stateDir, id, `falha ao abortar a sessão publicada durante o cancelamento: ${short(redactText(err?.message ?? String(err)))}`);
+      }
+    }
     if (performance.now() >= attemptDeadline) {
       return { ok: false, code: 'CANCEL_FAILED', reason: 'Aguardando o registro da tentativa; intenção de cancelamento mantida.', job: latest, report };
     }
@@ -947,7 +959,10 @@ export async function runJobTurn({
       if (current.cancelRequestedAt || isTerminal(current)) return { status: 'cancelled' };
       const ids = index === 0 && baseTurnRequest.messageID ? () => baseTurnRequest.messageID : messageId;
       const turnRequest = attemptRequest({ ...baseTurnRequest, fallbackCfg }, candidate, { messageId: ids });
-      return runTurnImpl({ ...runTurnOptions, request: turnRequest });
+      // Persisted intent from `opc cancel` is honored once the session exists, before the prompt is sent.
+      const ownCancel = runTurnOptions.isCancelled;
+      const isCancelled = () => Boolean(ownCancel?.()) || Boolean(readJob(stateDir, job.id)?.cancelRequestedAt);
+      return runTurnImpl({ ...runTurnOptions, isCancelled, request: turnRequest });
     },
     onAttemptStart: async (candidate, index) => {
       await updateJob(stateDir, job.id, { model: candidate.full, phase: 'starting' });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGroup, createJob, updateJob, readJob, cancelJob, cancelGroup, recordAttempt } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { createGroup, createJob, updateJob, readJob, cancelJob, cancelGroup, recordAttempt, runJobTurn } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 test('F4b fix2: unpublished orchestration session defers cancellation and preserves attempt publication', async (t) => {
@@ -113,4 +113,41 @@ test('F4b gate: opc cancel of a deferred member says pending', async (t) => {
   assert.equal(code, 0);
   assert.equal(jsonOut[0].pending, true);
   assert.equal(jsonOut[0].status, 'running');
+});
+
+test('cancel during session creation aborts the session published while waiting and finishes cancelled', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-cancel-creating-'));
+  const job = await createJob(stateDir, { kind: 'task', status: 'running', attemptInFlight: true });
+  const aborted = [];
+  const api = {
+    abort: async (sessionID) => {
+      aborted.push(sessionID);
+      // The worker's turn ends once its session is aborted.
+      setTimeout(() => { void updateJob(stateDir, job.id, { attemptInFlight: false }); }, 20);
+      return true;
+    },
+    sessionStatus: async () => ({}),
+  };
+  setTimeout(() => { void updateJob(stateDir, job.id, { sessionID: 'ses_late', childSessionIDs: ['ses_child'] }); }, 60);
+  const result = await cancelJob({ stateDir }, job.id, { api, exitWaitMs: 2000 });
+  assert.notEqual(result.ok, false, JSON.stringify(result));
+  assert.deepEqual(aborted, ['ses_late', 'ses_child']);
+  assert.equal(result.report.aborted, true);
+  assert.equal(result.job.status, 'cancelled');
+});
+
+test('runJobTurn hands the turn an isCancelled that sees intent persisted after the attempt started', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-cancel-intent-'));
+  const job = await createJob(stateDir, { kind: 'task', status: 'running' });
+  const seen = [];
+  await runJobTurn({
+    stateDir, job: { ...job, request: {} }, baseTurnRequest: { model: { providerID: 'p', modelID: 'm' }, parts: [] },
+    runTurnImpl: async ({ isCancelled }) => {
+      seen.push(isCancelled());
+      await updateJob(stateDir, job.id, { cancelRequestedAt: new Date().toISOString() });
+      seen.push(isCancelled());
+      return { status: 'cancelled', sessionID: 'ses_x' };
+    },
+  });
+  assert.deepEqual(seen, [false, true]);
 });

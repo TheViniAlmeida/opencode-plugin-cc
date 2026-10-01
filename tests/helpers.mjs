@@ -231,7 +231,10 @@ export async function waitFor(predicate, { timeoutMs = 10000, intervalMs = 50, m
 }
 
 export function spawnSleeper(t) {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  // Unref + ORPHAN_SAFE_IDLE: if an earlier t.after throws, node:test skips this hook; the sleeper must neither
+  // keep the test file alive nor outlive it.
+  const child = spawn(process.execPath, ['-e', ORPHAN_SAFE_IDLE, String(process.pid)], { stdio: 'ignore' });
+  child.unref();
   t.after(() => {
     try {
       child.kill('SIGKILL');
@@ -655,3 +658,10 @@ export async function cliJson(args, { env, cwd, timeoutMs = 60000 }) {
   return { code: r.code, data, stderr: r.stderr };
 }
 // ---- end F5 ----
+
+// ---- Test-hang fix: idle child that exits once orphaned (appended) ----
+// Idle child script for "live foreign process" fixtures: exits as soon as its parent dies (ppid changes), so a
+// skipped t.after or a killed test runner never leaves it running forever. Pass the parent pid as the argument
+// after the script (`-e ORPHAN_SAFE_IDLE <pid>`): a parent that dies before the child starts is still caught.
+export const ORPHAN_SAFE_IDLE = 'const parent = Number(process.argv[1]) || process.ppid; setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 500);';
+// ---- end test-hang fix ----

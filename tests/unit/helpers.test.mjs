@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
 import { getProcessIdentity, identityMatches, spawnDetached, terminateProcessGroup } from '../../plugins/opc/scripts/lib/process.mjs';
-import { FAKE_BIN_DIR, deadPid, makeTempDir, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor, writeGlobalConfig, stopAllWorkspaces } from '../helpers.mjs';
+import { FAKE_BIN_DIR, ORPHAN_SAFE_IDLE, deadPid, makeTempDir, processAlive, readFakeState, registerStopper, requireStopped, trackEnv, trackTempDir, waitFor, writeGlobalConfig, stopAllWorkspaces } from '../helpers.mjs';
 
 test('waitFor uses a monotonic clock instead of Date.now', async () => {
   const original = Date.now;
@@ -204,4 +205,19 @@ test('generic child stoppers may resolve with the child exit code', async (outer
   registerStopper(t, async () => 0);
   await hooks[0]();
   assert.equal(fs.existsSync(dir), false);
+});
+
+test('ORPHAN_SAFE_IDLE: the idle child exits on its own once its parent dies', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-helper-'));
+  const pidFile = path.join(dir, 'idle.pid');
+  // The parent spawns the idle child, records its pid and dies without any cleanup.
+  const parent = `const c = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(ORPHAN_SAFE_IDLE)}, String(process.pid)], { stdio: 'ignore', detached: true });
+require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
+process.exit(0);`;
+  await new Promise((resolve, reject) => {
+    spawn(process.execPath, ['-e', parent], { stdio: 'ignore' }).once('error', reject).once('exit', resolve);
+  });
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } });
+  await waitFor(() => !processAlive(pid), { timeoutMs: 5000, message: 'orphaned idle child exited' });
 });
