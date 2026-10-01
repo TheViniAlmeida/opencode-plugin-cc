@@ -250,6 +250,7 @@ export function installSessionApi(fake) {
     }],
     ['GET', /^\/session\/(ses[^/]+)\/children$/, (m) => ok(Object.values(state.sessions).filter((s) => s.parentID === m[1]))],
     ['GET', /^\/session\/(ses[^/]+)\/diff$/, (m) => ok(state.diffs[m[1]] ?? [])],
+    ['GET', /^\/session\/(ses[^/]+)\/todo$/, () => ok([])],
     ['GET', /^\/permission$/, () => ok(Object.values(state.permissions))],
     ['POST', /^\/permission\/(per[^/]+)\/reply$/, (m, query, body) => {
       const extra = extraKeys(body, new Set(['reply', 'message']));
@@ -316,7 +317,7 @@ export function installSessionApi(fake) {
 export const SESSION_API_ROUTES = Object.freeze([
   'POST /session', 'GET /session', 'GET /session/status', 'GET /session/:id', 'PATCH /session/:id',
   'POST /session/:id/prompt_async', 'POST /session/:id/abort', 'GET /session/:id/message', 'GET /session/:id/message/:messageID',
-  'GET /session/:id/children', 'GET /session/:id/diff',
+  'GET /session/:id/children', 'GET /session/:id/diff', 'GET /session/:id/todo',
   'GET /permission', 'POST /permission/:id/reply',
   'GET /question', 'POST /question/:id/reply', 'POST /question/:id/reject',
 ]);

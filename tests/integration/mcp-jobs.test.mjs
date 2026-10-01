@@ -7,6 +7,8 @@ import { isActive, readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { EXIT_STATE } from '../../plugins/opc/scripts/lib/mcp-tools.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ensurePrivateDir, resolveWorkspaceRoot, updateState, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
+import { installSessionApi, SESSION_API_ROUTES } from '../fixtures/fake-session-api.mjs';
+import slowScenario from '../fixtures/scenarios/slow.mjs';
 import {
   cliJson, F2A_MODEL, F2A_POLICY, F2A_PROVIDER, findJobId, FIXTURE_MODELS,
   makeWorkspace, readFakeState, registerStopper, startMcpClient, testEnv,
@@ -14,6 +16,27 @@ import {
 } from '../helpers.mjs';
 
 const EVIL = '--write\n$(touch pwned) `touch pwned2` "double" \'single\' ção ✓';
+
+test('cenário lento permite uma janela estável para consultar e cancelar o job', async () => {
+  const previous = process.env.FAKE_SLOW_MS;
+  let delayMs;
+  try {
+    process.env.FAKE_SLOW_MS = '30000';
+    await slowScenario.onPromptAsync({ emitTurn: async (_sessionId, options) => { delayMs = options.delayMs; } }, 'ses_test');
+  } finally {
+    if (previous === undefined) delete process.env.FAKE_SLOW_MS;
+    else process.env.FAKE_SLOW_MS = previous;
+  }
+  assert.equal(delayMs, 30000);
+});
+
+test('fake oferece a rota de tarefas da sessão para comparar MCP e CLI', () => {
+  assert.ok(SESSION_API_ROUTES.includes('GET /session/:id/todo'));
+  const fake = { state: {}, persist() {}, emit() {} };
+  const api = installSessionApi(fake);
+  const session = fake.createSession({ title: 'MCP session' });
+  assert.deepEqual(api.handle('GET', `/session/${session.id}/todo`, new URLSearchParams(), null), { status: 200, body: [] });
+});
 
 function setup(t, scenario = 'ok', extraEnv = {}) {
   const env = testEnv(t, { scenario });
@@ -119,7 +142,7 @@ test('opc_job_result e opc_job_status coincidem com a CLI para o mesmo job', asy
 });
 
 test('espera de tarefa lenta tem limite e atende outras requisições', async (t) => {
-  const { env, ws, c } = setup(t, 'slow');
+  const { env, ws, c } = setup(t, 'slow', { FAKE_SLOW_MS: '30000' });
   await c.initialize();
   let settled = false;
   const waiting = c.callTool('opc_task', { prompt: 'slow work', wait: true, waitTimeoutSec: 1 })
@@ -209,7 +232,7 @@ test('ferramentas de sessão coincidem com os comandos da CLI', async (t) => {
   await c.initialize();
   const created = await c.callTool('opc_session_new', { title: 'MCP session' });
   assert.equal(created.envelope.exitCode, 0);
-  const sessionId = JSON.stringify(created.envelope.data).match(/\bses[_0-9A-Za-z]+/)?.[0];
+  const sessionId = created.envelope.data?.session?.id;
   assert.ok(sessionId);
   for (const [name, action] of [
     ['opc_session_show', 'show'], ['opc_session_children', 'children'],
@@ -217,11 +240,13 @@ test('ferramentas de sessão coincidem com os comandos da CLI', async (t) => {
   ]) {
     const mcp = await c.callTool(name, { sessionId });
     const cli = await cliJson(['session', action, sessionId], { env, cwd: ws });
+    assert.equal(cli.code, 0, name);
     assert.equal(mcp.envelope.exitCode, cli.code, name);
     assert.deepEqual(mcp.envelope.data, cli.data, name);
   }
   const listMcp = await c.callTool('opc_session_list');
   const listCli = await cliJson(['sessions'], { env, cwd: ws });
+  assert.equal(listCli.code, 0);
   assert.equal(listMcp.envelope.exitCode, listCli.code);
   assert.deepEqual(listMcp.envelope.data, listCli.data);
 });
