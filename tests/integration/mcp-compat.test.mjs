@@ -5,8 +5,8 @@ import { cliJson, findJobId, makeWorkspace, testEnv, writeGlobalConfig, F2A_PROV
 
 const UNKNOWN_FLAG = /unknown (flag|option)|flag desconhecida|opção desconhecida/i;
 
-function configuredEnv(t) {
-  const env = testEnv(t, { scenario: 'ok' });
+function configuredEnv(t, { scenario = 'ok' } = {}) {
+  const env = testEnv(t, { scenario });
   writeGlobalConfig(env, { defaultProvider: F2A_PROVIDER, defaultModel: F2A_MODEL, policy: F2A_POLICY });
   return env;
 }
@@ -33,7 +33,6 @@ test('subagent, orchestrate and conclave accept --background and --wait-timeout'
     const env = configuredEnv(t, { scenario });
     for (const mode of [['--background'], ['--wait-timeout', '1']]) {
       const r = await cliJson([...head, ...mode, '--', 'x'], { env, cwd: ws });
-      assert.equal(r.code, 0, `${head[0]} ${mode[0]} exits successfully: ${r.stderr}`);
       assert.equal(r.code, 0, `${head[0]} ${mode[0]} exits successfully: ${r.stderr}`);
       assert.doesNotMatch(r.stderr, UNKNOWN_FLAG, `${head[0]} ${mode[0]}: ${r.stderr}`);
     }
