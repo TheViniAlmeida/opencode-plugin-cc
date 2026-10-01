@@ -28,7 +28,7 @@ test('each violation is reported with its path', () => {
     '$.n: acima de 3',
     '$.tags: quantidade de itens inferior a 1',
     '$.flag: esperado boolean',
-    '$.extra…: propriedade desconhecida',
+    '$.extra: propriedade desconhecida',
   ]);
 });
 
@@ -44,6 +44,7 @@ test('remaining bounds, finite numbers, custom paths and unknown keys', () => {
   assert.deepEqual(validateInput({ type: 'number' }, Infinity), ['$: esperado number']);
   assert.deepEqual(validateInput({ type: 'string', minLength: 1 }, ''), ['$: comprimento inferior a 1']);
   assert.deepEqual(validateInput(SCHEMA, { id: 'per_1', reply: 'once', sensitiveUnknownProperty: true }), ['$.sensitiveUnk…: propriedade desconhecida']);
+  assert.deepEqual(validateInput(SCHEMA, { id: 'per_1', reply: 'once', shortKey1234: true }), ['$.shortKey1234: propriedade desconhecida']);
 });
 
 test('inherited keys do not satisfy required fields', () => {

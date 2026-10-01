@@ -35,7 +35,7 @@ export function validateInput(schema, value, where = '$') {
     }
     for (const [key, item] of Object.entries(value)) {
       if (Object.hasOwn(properties, key)) errors.push(...validateInput(properties[key], item, `${where}.${key}`));
-      else if (schema.additionalProperties === false) errors.push(`${where}.${key.slice(0, 12)}…: propriedade desconhecida`);
+      else if (schema.additionalProperties === false) errors.push(`${where}.${key.length > 12 ? `${key.slice(0, 12)}…` : key}: propriedade desconhecida`);
     }
   }
   return errors;
