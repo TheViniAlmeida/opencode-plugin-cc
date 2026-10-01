@@ -85,8 +85,22 @@ test('cancel without id: one active job is cancelled; several → exit 2', async
   const many = await opc(ctx, ['cancel']);
   assert.equal(many.code, 2);
   assert.match(many.stdout + many.stderr, new RegExp(`${a}[\\s\\S]*${b}|${b}[\\s\\S]*${a}`));
-  assert.equal((await opc(ctx, ['cancel', a])).code, 0);
-  assert.equal((await opc(ctx, ['cancel', b])).code, 0);
+  for (const id of [a, b]) {
+    const r = await opc(ctx, ['cancel', id]);
+    assert.equal(r.code, 0, `cancel ${id}: ${r.stdout}${r.stderr} ${JSON.stringify(jobIn(ctx.env, ctx.cwd, id))}`);
+  }
+});
+
+test('cancel right after a background start (session still being created) succeeds and the turn does not run to the end', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'slow' });
+  for (let i = 0; i < 3; i += 1) {
+    const id = await startBackground(ctx, `early-${i}`);
+    const r = await opc(ctx, ['cancel', id]);
+    assert.equal(r.code, 0, `cancel ${id}: ${r.stdout}${r.stderr} ${JSON.stringify(jobIn(ctx.env, ctx.cwd, id))}`);
+    const job = jobIn(ctx.env, ctx.cwd, id);
+    assert.equal(job.status, 'cancelled');
+    assert.doesNotMatch(JSON.stringify(job), /slow turn finished/, 'the slow turn must not complete');
+  }
 });
 
 test('cancel during a slow turn aborts the session and stops the worker', async (t) => {
