@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { isActive, readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { EXIT_STATE } from '../../plugins/opc/scripts/lib/mcp-tools.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ensurePrivateDir, resolveWorkspaceRoot, updateState, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
@@ -30,6 +30,56 @@ function jobIdIn(envelope, kind) {
   return findJobId(envelope.data, kind);
 }
 
+function assertJobParity(mcp, cli, jobId) {
+  assert.equal(mcp?.job?.id, jobId);
+  assert.equal(cli?.job?.id, jobId);
+  assert.equal(typeof mcp.job.status, 'string');
+  assert.ok(Object.hasOwn(mcp.job, 'result'));
+  assert.equal(mcp.job.status, cli.job.status);
+  assert.deepEqual(mcp.job.result, cli.job.result);
+  assert.equal(mcp.job.errorCode, cli.job.errorCode);
+}
+
+function assertActiveJob(data, jobId) {
+  assert.equal(data?.job?.id, jobId);
+  assert.ok(isActive(data.job), 'job deve permanecer ativo após wait_timeout');
+}
+
+function assertCancelledJob(data, jobId) {
+  assert.equal(data?.job?.id, jobId);
+  assert.equal(data.job.status, 'cancelled');
+}
+
+function assertReadOnlyPermissions(permissions) {
+  assert.ok(Array.isArray(permissions));
+  assert.deepEqual(permissions[0], { permission: '*', pattern: '*', action: 'deny' });
+  const readable = new Set(['read', 'glob', 'list', 'lsp', 'skill', 'todowrite']);
+  for (const rule of permissions) {
+    if (rule.action !== 'deny') {
+      assert.equal(rule.action, 'allow');
+      assert.ok(readable.has(rule.permission), `permissão não é somente leitura: ${rule.permission}`);
+    }
+  }
+}
+
+test('a paridade de status rejeita estado e outcome divergentes', () => {
+  const expected = { job: { id: 'ask-1', status: 'completed', result: { finalText: 'ok' }, errorCode: null } };
+  assert.throws(() => assertJobParity({ job: { ...expected.job, status: 'running' } }, expected, 'ask-1'), { name: 'AssertionError' });
+  assert.throws(() => assertJobParity({ job: { ...expected.job, result: { finalText: 'failed' } } }, expected, 'ask-1'), { name: 'AssertionError' });
+});
+
+test('a espera limitada exige job ativo antes de cancelar e cancelado depois', () => {
+  assert.throws(() => assertActiveJob({ job: { id: 'task-1', status: 'cancelled' } }, 'task-1'), { name: 'AssertionError' });
+  assert.throws(() => assertCancelledJob({ job: { id: 'task-1', status: 'running' } }, 'task-1'), { name: 'AssertionError' });
+});
+
+test('perfil somente leitura rejeita permissões de escrita posteriores', () => {
+  assert.throws(() => assertReadOnlyPermissions([
+    { permission: '*', pattern: '*', action: 'deny' },
+    { permission: 'edit', pattern: '*', action: 'allow' },
+  ]), { name: 'AssertionError' });
+});
+
 test('opc_task inicia job somente leitura e envia o prompt integralmente', async (t) => {
   const { env, ws, c } = setup(t);
   await c.initialize();
@@ -44,7 +94,7 @@ test('opc_task inicia job somente leitura e envia o prompt integralmente', async
   const prompt = requests.find((request) => request.method === 'POST' && /\/session\/[^/]+\/prompt_async$/.test(request.path));
   assert.ok(prompt?.body.parts.some((part) => typeof part.text === 'string' && part.text.includes(EVIL)));
   const created = requests.find((request) => request.method === 'POST' && request.path === '/session');
-  assert.deepEqual(created.body.permission[0], { permission: '*', pattern: '*', action: 'deny' });
+  assertReadOnlyPermissions(created.body.permission);
   assert.equal(fs.existsSync(path.join(ws, 'pwned')), false);
   assert.equal(fs.existsSync(path.join(ws, 'pwned2')), false);
 });
@@ -65,8 +115,7 @@ test('opc_job_result e opc_job_status coincidem com a CLI para o mesmo job', asy
   const statusMcp = await c.callTool('opc_job_status', { jobId });
   const statusCli = await cliJson(['status', jobId], { env, cwd: ws });
   assert.equal(statusMcp.envelope.exitCode, statusCli.code);
-  assert.equal(findJobId(statusMcp.envelope.data, 'ask'), jobId);
-  assert.equal(findJobId(statusCli.data, 'ask'), jobId);
+  assertJobParity(statusMcp.envelope.data, statusCli.data, jobId);
 });
 
 test('espera de tarefa lenta tem limite e atende outras requisições', async (t) => {
@@ -84,11 +133,14 @@ test('espera de tarefa lenta tem limite e atende outras requisições', async (t
   assert.equal(waited.isError, false);
   const jobId = jobIdIn(waited.envelope, 'task');
   assert.ok(jobId);
+  const active = await c.callTool('opc_job_status', { jobId });
+  assert.equal(active.envelope.exitCode, 0);
+  assertActiveJob(active.envelope.data, jobId);
   const cancelled = await c.callTool('opc_job_cancel', { jobId });
   assert.equal(cancelled.envelope.exitCode, 0);
   const status = await cliJson(['status', jobId], { env, cwd: ws });
   assert.equal(status.code, 0);
-  assert.match(JSON.stringify(status.data), /cancelled/);
+  assertCancelledJob(status.data, jobId);
 });
 
 test('recusa por política tem o mesmo código no MCP e na CLI', async (t) => {
