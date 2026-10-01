@@ -5,5 +5,13 @@
   "author": {
     "name": "TheViniAlmeida"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "opc": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"
+      ]
+    }
+  }
 }
