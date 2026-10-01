@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { TOOL_NAMES } from '../../plugins/opc/scripts/lib/mcp-tools.mjs';
-import { cliJson, makeWorkspace, MCP_SERVER, PLUGIN_ROOT, registerStopper, startMcpClient, testEnv } from '../helpers.mjs';
+import { cliJson, makeTempDir, makeWorkspace, MCP_SERVER, PLUGIN_ROOT, registerStopper, startMcpClient, testEnv, trackTempDir } from '../helpers.mjs';
 
 function setup(t, scenario = 'ok') {
   const env = testEnv(t, { scenario });
@@ -28,6 +29,32 @@ test('plugin.json declara o servidor MCP stdio por CLAUDE_PLUGIN_ROOT', () => {
   assert.equal(manifest.mcpServers.opc.args[0].replace('${CLAUDE_PLUGIN_ROOT}', PLUGIN_ROOT), MCP_SERVER);
 });
 
+test('manifesto ausente ou inválido impede a inicialização do servidor', (t) => {
+  const root = trackTempDir(t, makeTempDir('opc-mcp-manifest-'));
+  const scripts = path.join(root, 'scripts');
+  fs.mkdirSync(scripts);
+  fs.copyFileSync(MCP_SERVER, path.join(scripts, 'mcp-server.mjs'));
+  fs.symlinkSync(path.join(PLUGIN_ROOT, 'scripts', 'lib'), path.join(scripts, 'lib'), 'dir');
+  fs.symlinkSync(path.join(PLUGIN_ROOT, 'scripts', 'opc-companion.mjs'), path.join(scripts, 'opc-companion.mjs'));
+  const manifestDir = path.join(root, '.claude-plugin');
+  fs.mkdirSync(manifestDir);
+  const manifest = path.join(manifestDir, 'plugin.json');
+  fs.copyFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), manifest);
+  const valid = spawnSync(process.execPath, [path.join(scripts, 'mcp-server.mjs')], { input: '', encoding: 'utf8' });
+  assert.equal(valid.status, 0, `manifesto válido deve inicializar: ${valid.stderr}`);
+  fs.unlinkSync(manifest);
+
+  for (const [scenario, content] of [
+    ['ausente', null],
+    ['JSON inválido', '{'],
+    ['versão ausente', '{}'],
+  ]) {
+    if (content !== null) fs.writeFileSync(manifest, content);
+    const result = spawnSync(process.execPath, [path.join(scripts, 'mcp-server.mjs')], { input: '', encoding: 'utf8' });
+    assert.equal(result.status, 1, `manifesto ${scenario} deve impedir a inicialização`);
+  }
+});
+
 test('handshake: recusa antes de initialize, negociação, recursos, instruções e ping', async (t) => {
   const c = client(t, setup(t));
   const early = await c.request('tools/list');
@@ -36,7 +63,8 @@ test('handshake: recusa antes de initialize, negociação, recursos, instruçõe
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
   assert.equal(init.result.serverInfo.name, 'opc');
-  assert.match(init.result.serverInfo.version, /^\d+\.\d+\.\d+/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(init.result.serverInfo.version, manifest.version);
   assert.match(init.result.instructions, /confirmedByUser/);
   assert.deepEqual((await c.request('ping')).result, {});
 });

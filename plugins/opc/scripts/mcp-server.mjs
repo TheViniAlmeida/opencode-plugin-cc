@@ -17,12 +17,12 @@ const { createToolCaller, SERVER_INSTRUCTIONS, TOOLS } = await import('./lib/mcp
 const { main: dispatch } = await import('./opc-companion.mjs');
 
 function pluginVersion() {
-  try {
-    const manifest = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.claude-plugin', 'plugin.json');
-    return String(JSON.parse(readFileSync(manifest, 'utf8')).version ?? '0.0.0');
-  } catch {
-    return '0.0.0';
+  const manifestPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.claude-plugin', 'plugin.json');
+  const { version } = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (typeof version !== 'string' || !version.trim()) {
+    throw new Error(`Versão ausente ou inválida em ${manifestPath}`);
   }
+  return version;
 }
 
 const log = (line) => process.stderr.write(`${line}\n`);
