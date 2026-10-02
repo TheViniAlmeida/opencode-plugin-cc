@@ -196,6 +196,23 @@ test('serveStdio answers a ping while a slow request is still pending', async ()
   assert.deepEqual(written, [2, 1]);
 });
 
+test('serveStdio keeps protocol state order for requests sent in one chunk', async () => {
+  const input = new PassThrough();
+  const written = [];
+  const done = serveStdio({ server: makeServer(), input, write: (line) => written.push(JSON.parse(line)) });
+  input.end([
+    '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+    `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"${LATEST_PROTOCOL_VERSION}"}}`,
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+    '{"jsonrpc":"2.0","id":3,"method":"tools/list"}',
+  ].join('\n') + '\n');
+  await done;
+  const byId = new Map(written.map((response) => [response.id, response]));
+  assert.equal(byId.get(1).error.code, JsonRpcErrorCode.INVALID_REQUEST);
+  assert.ok(byId.get(2).result);
+  assert.ok(Array.isArray(byId.get(3).result.tools));
+});
+
 test('serveStdio rejects when writing a response throws', async () => {
   const input = new PassThrough();
   const failure = new Error('test writer failed');
