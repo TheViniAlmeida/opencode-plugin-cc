@@ -263,7 +263,7 @@ Sem mudança de comportamento da CLI quando o `argv` não tem `--`. A F0 já ent
 - Consumes: `main(rawArgv, { stdin, stdout, stderr, env, cwd, onError }) → Promise<number>` (F0 `opc-companion.mjs`: `resolveArgv` → `extractCwd` → `loadCommand(sub)` → `createContext` → `run(ctx, rest)`; erro → `onError?.(err)`, `renderError` em stderr, `{"error":…}` em stdout com `--json`, `toExitCode(err)`; desconhecido → `USAGE`, exit 2); `resolveArgv(argv, { stdin })`, `parseArgs(argv, spec)` (`--` já encerra as opções), `splitArgString(input)`, `readStdin(stream)` (F0 `args`); `RAW_ARGS_FLAG`, `parsePromptArgs(raw, flagSpec)`, `readRawArgs(argv, flagSpec, { stdin })` (F2a `args`); helpers `testEnv`, `makeWorkspace`, `runCli`, `stopAllServers`.
 - Produces: `resolveArgv` e `readRawArgs` que ignoram a flag de stdin depois de `--` (sem `--` no `argv`, comportamento idêntico ao da F0/F2a); helpers `MCP_SERVER`, `startMcpClient`, `findJobId`, `writeTestConfig`, `cliJson`.
 
-- [ ] **Step 1: Criar a branch da fase (com autorização do operador)**
+- [x] **Step 1: Criar a branch da fase (com autorização do operador)**
 
 Pedir autorização explícita no chat antes do primeiro comando git da fase (regras de git do mestre). Com o "sim":
 
@@ -271,7 +271,7 @@ Pedir autorização explícita no chat antes do primeiro comando git da fase (re
 git checkout main && git pull --ff-only && git checkout -b feat/opc-f5
 ```
 
-- [ ] **Step 2: Acrescentar os helpers da F5 ao fim de `tests/helpers.mjs`**
+- [x] **Step 2: Acrescentar os helpers da F5 ao fim de `tests/helpers.mjs`**
 
 Colar ao **fim** do arquivo (imports com alias para não colidir com os que já existem; `import` no meio do módulo é válido em ESM):
 
@@ -432,7 +432,7 @@ export async function cliJson(args, { env, cwd, timeoutMs = 60000 }) {
 }
 ```
 
-- [ ] **Step 3: Escrever os testes (os de `parseArgs` e do companion fixam o contrato da F0 e já passam; os de flag de stdin após `--` falham)**
+- [x] **Step 3: Escrever os testes (os de `parseArgs` e do companion fixam o contrato da F0 e já passam; os de flag de stdin após `--` falham)**
 
 `tests/unit/args-terminator.test.mjs`:
 
@@ -595,12 +595,12 @@ test('subagent, orchestrate and conclave accept --background and --wait-timeout'
 });
 ```
 
-- [ ] **Step 4: Rodar e ver falhar**
+- [x] **Step 4: Rodar e ver falhar**
 
 Run: `node --test tests/unit/args-terminator.test.mjs tests/unit/companion-dispatch.test.mjs tests/integration/mcp-compat.test.mjs`
 Expected: FAIL só nos 4 testes de flag de stdin do `args-terminator` (4 pass / 4 fail no arquivo): os dois "… ignores --args-stdin / --raw-args-stdin that appears after "--"" (o `resolveArgv` da F0 remove o token e lê o stdin; o `readRawArgs` da F2a lê o stdin — o `untouchedStdin` lança `stdin must not be read`) e os dois "… ahead of / keeps the tail last" (F0 e F2a anexam o que veio do stdin depois do tail). Os testes de `parseArgs`, o `companion-dispatch` (contrato da F0) e o `mcp-compat` (flags confirmadas em F2a/F3/F4b/F4c) já passam; se algum deles falhar, o defeito está na fase dona (F0, F2a, F3, F4b ou F4c) — parar e reportar ao operador em vez de contornar aqui.
 
-- [ ] **Step 5: Ajustar `resolveArgv` (F0) e `readRawArgs` (F2a) em `plugins/opc/scripts/lib/args.mjs`**
+- [x] **Step 5: Ajustar `resolveArgv` (F0) e `readRawArgs` (F2a) em `plugins/opc/scripts/lib/args.mjs`**
 
 Acréscimo mínimo, sem mudar assinatura nem o comportamento quando não há `--` no `argv` (os testes da F0 e da F2a continuam valendo). Substituir as duas funções por:
 
@@ -632,7 +632,7 @@ export async function readRawArgs(argv, flagSpec, { stdin = process.stdin } = {}
 
 (`splitAtTerminator` é privado; declarar antes de `resolveArgv`. `parseArgs` e `extractCwd` da F0 já tratam `--` e não mudam.)
 
-- [ ] **Step 6: Rodar os testes da tarefa e a suíte inteira**
+- [x] **Step 6: Rodar os testes da tarefa e a suíte inteira**
 
 Run: `node --test tests/unit/args-terminator.test.mjs tests/unit/companion-dispatch.test.mjs tests/integration/mcp-compat.test.mjs`
 Expected: PASS (13 testes).
@@ -640,7 +640,7 @@ Expected: PASS (13 testes).
 Run: `npm test`
 Expected: PASS — sem `--` no `argv` nada muda; todas as suítes de F0–F4c verdes (inclusive `args.test.mjs` da F0 e `args-prompt.test.mjs` da F2a).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add plugins/opc/scripts/lib/args.mjs tests/helpers.mjs tests/unit/args-terminator.test.mjs tests/unit/companion-dispatch.test.mjs tests/integration/mcp-compat.test.mjs
@@ -661,7 +661,7 @@ git commit -m "fix: ignore stdin argument flags after -- and pin the companion c
 
 Regras do protocolo implementadas (MCP 2025-06-18, transporte stdio): uma mensagem JSON-RPC por linha, sem `\n` interno; `initialize` negocia a versão (suportada → ecoa; senão responde a mais recente); `notifications/initialized` e demais notificações nunca têm resposta; `ping` → `{}`; antes do `initialize`, só `initialize`/`ping` são aceitos (`-32600`); `tools/list` sem paginação; `tools/call` com ferramenta inexistente → `-32602`; lotes (arrays) não são aceitos na 2025-06-18 → `-32600`; JSON inválido → `-32700` com `id: null`; respostas vindas do cliente são ignoradas; exceção interna → `-32603` com mensagem redigida.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```js
 import assert from 'node:assert/strict';
@@ -785,12 +785,12 @@ test('serveStdio answers each line, reports parse errors with id null and ends w
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `node --test tests/unit/mcp-protocol.test.mjs`
 Expected: FAIL com `Cannot find module '.../scripts/lib/mcp-protocol.mjs'`.
 
-- [ ] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-protocol.mjs`**
+- [x] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-protocol.mjs`**
 
 ```js
 // Minimal MCP server over stdio (JSON-RPC 2.0, newline-delimited), zero dependencies.
@@ -948,12 +948,12 @@ export function serveStdio({ server, input, write, log = () => {} }) {
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `node --test tests/unit/mcp-protocol.test.mjs`
 Expected: PASS (9 testes).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/opc/scripts/lib/mcp-protocol.mjs tests/unit/mcp-protocol.test.mjs
@@ -972,7 +972,7 @@ git commit -m "feat: add zero-dependency MCP stdio protocol core"
 - Consumes: nada.
 - Produces: `validateInput(schema, value, where = '$') → string[]` (cada erro no formato `<caminho>: <motivo>`), com suporte a `type` (`object|array|string|number|integer|boolean`), `enum`, `pattern` (flag `u`), `minLength`, `maxLength`, `minimum`, `maximum`, `items`, `minItems`, `maxItems`, `required`, `additionalProperties: false`. É o único validador usado pelo MCP (o cliente pode não validar).
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```js
 import assert from 'node:assert/strict';
@@ -1017,12 +1017,12 @@ test('required keys, wrong root type, item validation, integer and length checks
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `node --test tests/unit/mcp-schema.test.mjs`
 Expected: FAIL com `Cannot find module '.../scripts/lib/mcp-schema.mjs'`.
 
-- [ ] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-schema.mjs`**
+- [x] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-schema.mjs`**
 
 ```js
 // Validates tool arguments against the JSON Schema subset used by the opc MCP tools.
@@ -1070,12 +1070,12 @@ export function validateInput(schema, value, where = '$') {
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `node --test tests/unit/mcp-schema.test.mjs`
 Expected: PASS (3 testes).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/opc/scripts/lib/mcp-schema.mjs tests/unit/mcp-schema.test.mjs
@@ -1109,7 +1109,7 @@ Mapa das 25 ferramentas (o teste fixa o argv exato de cada uma):
 | `opc_job_status`, `opc_job_result`, `opc_job_cancel` | `status`, `result`, `cancel` | `status --wait --timeout-ms` |
 | `opc_permissions_list/reply/answer` | `permissions list/reply/answer` | `reply` ∈ {`once`,`reject`}; `confirmedByUser` → `--confirmed-by-user` |
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```js
 import assert from 'node:assert/strict';
@@ -1356,12 +1356,12 @@ test('server instructions state the confirmation rules', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `node --test tests/unit/mcp-tools.test.mjs`
 Expected: FAIL com `Cannot find module '.../scripts/lib/mcp-tools.mjs'`.
 
-- [ ] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-tools.mjs`**
+- [x] **Step 3: Implementar `plugins/opc/scripts/lib/mcp-tools.mjs`**
 
 ```js
 // opc MCP tools: each tool maps its arguments to the argv of an existing `opc` subcommand and runs it
@@ -1888,12 +1888,12 @@ export function createToolCaller({ dispatch, env = process.env, defaultCwd = env
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `node --test tests/unit/mcp-tools.test.mjs`
 Expected: PASS (13 testes).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/opc/scripts/lib/mcp-tools.mjs tests/unit/mcp-tools.test.mjs
@@ -1913,7 +1913,7 @@ git commit -m "feat: add opc MCP tool catalog mapped onto the CLI dispatcher"
 - Consumes: `createMcpServer`, `serveStdio` (Task 2); `TOOLS`, `createToolCaller`, `SERVER_INSTRUCTIONS` (Task 4); `main` do companion (F0, importado como `dispatch`); helpers `startMcpClient`, `cliJson`, `MCP_SERVER`, `PLUGIN_ROOT`, `testEnv`, `makeWorkspace`, `stopAllServers`.
 - Produces: processo MCP stdio `node ${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs`; `serverInfo = { name: 'opc', title, version: <plugin.json version> }`; sai com 0 quando o stdin fecha.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```js
 import assert from 'node:assert/strict';
@@ -2044,12 +2044,12 @@ test('the server exits 0 when its stdin closes', async (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `node --test tests/integration/mcp-server.test.mjs`
 Expected: FAIL — `plugin.json` sem `mcpServers` e o processo MCP inexistente (`Cannot find module .../mcp-server.mjs` no stderr; requisições com timeout).
 
-- [ ] **Step 3: Implementar `plugins/opc/scripts/mcp-server.mjs`**
+- [x] **Step 3: Implementar `plugins/opc/scripts/mcp-server.mjs`**
 
 ```js
 #!/usr/bin/env node
@@ -2098,7 +2098,7 @@ process.exit(0);
 
 Tornar executável (coerente com `bin/opc`): `chmod 755 plugins/opc/scripts/mcp-server.mjs`.
 
-- [ ] **Step 4: Declarar o servidor no `plugin.json`**
+- [x] **Step 4: Declarar o servidor no `plugin.json`**
 
 Acrescentar a chave preservando o restante do manifesto:
 
@@ -2117,12 +2117,12 @@ Resultado esperado no arquivo (demais chaves inalteradas):
   }
 ```
 
-- [ ] **Step 5: Rodar e ver passar**
+- [x] **Step 5: Rodar e ver passar**
 
 Run: `node --test tests/integration/mcp-server.test.mjs`
 Expected: PASS (8 testes). Em especial, os pares CLI × MCP têm `exitCode` e `data` idênticos.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add plugins/opc/scripts/mcp-server.mjs plugins/opc/.claude-plugin/plugin.json tests/integration/mcp-server.test.mjs
@@ -2143,7 +2143,7 @@ Os comportamentos já vêm das Tasks 1–5 e dos comandos de F2a–F4c; esta tar
 - Consumes: `readJob(stateDir, id)` (`jobs`); `EXIT_STATE` (Task 4); `getProcessIdentity`; `ensurePrivateDir`, `resolveWorkspaceRoot`, `updateState`, `workspaceStateDir`; helpers `startMcpClient`, `cliJson`, `findJobId`, `readFakeState`, `writeTestConfig`, `testEnv`, `makeWorkspace`, `stopAllServers`; cenários `ok` e `slow` (F2a).
 - Produces: evidência dos itens de aceite "cada ferramenta chama a mesma função" (execução, jobs, sessões) e dos itens 1 e 3 do Review Focus.
 
-- [ ] **Step 1: Escrever o teste**
+- [x] **Step 1: Escrever o teste**
 
 ```js
 import assert from 'node:assert/strict';
@@ -2331,12 +2331,12 @@ test('subagent, orchestrate and conclave behave exactly like their CLI commands'
 });
 ```
 
-- [ ] **Step 2: Rodar**
+- [x] **Step 2: Rodar**
 
 Run: `node --test tests/integration/mcp-jobs.test.mjs`
 Expected: PASS (8 testes). Falha → diagnosticar com `superpowers:systematic-debugging`; o `stderr` do cliente MCP (`c.stderr`) e o `jobs/<id>.log` do estado mostram o que o comando fez.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/integration/mcp-jobs.test.mjs
@@ -4570,3 +4570,51 @@ Reler cada mensagem antes do commit: sem `Co-Authored-By`, `Signed-off-by` ou "G
 **3. Consistência de tipos:** o `main(argv, { env, cwd, stdin, stdout, stderr, onError })` da F0 é importado como `dispatch` e usado igual nas Tasks 1 (teste do contrato), 4 (espião com a mesma forma) e 5 (`mcp-server.mjs`); `createToolCaller` recebe `dispatch` com esse formato; `findJobId(value, kind)`, `cliJson(args, { env, cwd })`, `writeTestConfig(env, patch)` e `startMcpClient({ env, cwd, timeoutMs, nodeArgs })` têm a mesma assinatura em todos os testes; `execute(ctx, { source, model })` do `transfer` devolve os campos que `renderTransfer` e os testes leem.
 
 **4. Review Focus:** cada uma das 5 linhas tem teste na tarefa dona (ver colchetes na seção).
+
+
+---
+
+## Progresso / achados (atualizado em 02/10/2026)
+
+**Estado:** F5 em andamento, branch `feat/opc-f5`. Tasks 1–6 de 11 concluídas, com todos os passos marcados acima. Suíte da branch: 1871 pass, 0 fail, 1 skipped (o cenário cross-UID, que exige root). A `main` trouxe os PRs #10 (execuções de teste sempre terminam) e #11 (cancelamento durante a criação da sessão), já mergeados e incorporados à branch.
+
+### Achados de revisão por task e resolução
+
+Cada task passou por revisão independente e por rodadas de correção até todos os achados ficarem `ADDRESSED`. Os commits de correção estão entre parênteses.
+
+| Task | Achado | Resolução |
+|---|---|---|
+| 1 | Teste de compatibilidade do `conclave` com um único modelo (exige ≥ 2 membros) e `configuredEnv` ignorando o cenário | Dois modelos do fixture e cenário repassado (`1ba556a`, `0a09904`) |
+| 1 | Faltavam testes de `normalizeResumeFlag` após `--` e do dispatcher com `commandLoader`/`contextFactory` injetados | Testes acrescentados (`1ba556a`) |
+| 1 | Cauda de stderr sem máscara no erro de timeout de `startMcpClient`; helper sem tratar `error`/saída do filho; bloco de helpers fora do delimitador F5 | Cauda redigida, falha rápida no `error`/`exit`, bloco F5 delimitado (`1ba556a`) |
+| 1 | Rodada 3 (controlador): `orchestrate` precisa de `decompose-ok`, e `--wait-timeout 1` pode sair com exit 6 (spec, códigos de saída) | Teste usa o fixture de orquestração e aceita exit 6 com job id (`fcef045`) |
+| 2 | Crítico: nome de ferramenta que é segredo registrado vazava o prefixo (truncava antes de redigir) | Redigir antes de truncar, com teste (`6329b22`) |
+| 2 | Linha acima do limite: o resto da mesma linha virava nova requisição; falha síncrona de `write` era engolida | Descarta até o próximo `\n`; a falha de escrita rejeita `serveStdio` (`6329b22`) |
+| 3 | `additionalProperties: false` devolvia `$.extra…` (sufixo em nome curto) | Caminho exato para nomes curtos (`fe6697a`) |
+| 4 | Crítico: `maskInputEcho` devolvia os 12 primeiros caracteres da entrada | Máscara integral (`7bdf8ec`) |
+| 4 | `opc_conclave.mode` admitia `review` (envia o diff a terceiros sem confirmação) | Enum só `opinion`/`debate`, com teste de rejeição (`7bdf8ec`) |
+| 4 | Envelope só com `redactText`; `data.error` sem `error`; `maxSubtasks` 2..20; faltava aviso de `data` em Markdown nas permissões | `redactOutput`/`safeOutputText`, `error` preenchido, faixa 2..10, descrições corrigidas (`7bdf8ec`) |
+| 5 | Versão fictícia `0.0.0` quando o `plugin.json` não podia ser lido (handshake enganoso) | Falha explícita e comparação da versão exata (`6497a6b`) |
+| 6 | Teste de paridade não comparava `status`/`result`/`errorCode`; teste de timeout não provava job ativo antes do cancel; permissão read-only checava só a primeira regra | Comparação completa, estado ativo antes do cancel, varredura de todas as regras (`eaa87eb`) |
+| 6 | Falhas 183 e 187 na suíte: cenário `slow` com prazo fixo e fake sem a rota `todo` | Prazo configurável e rota `todo` no fake (`10b9063`) |
+| 6 | Flake real restante (ping esperava atrás de `tools/call` longo) | Ver "Riscos e observações" (`ee35930`) |
+
+Observação aceita na Task 3: nomes desconhecidos com mais de 12 caracteres continuam truncados no caminho do erro (comportamento anterior à correção, sem vazamento de valor; não corrigido).
+
+### Pendências abertas
+
+- [ ] Task 7: regras do aprovador, confirmações e ausência de escrita de config pelo MCP.
+- [ ] Task 8: núcleo do transfer.
+- [ ] Task 9: `transfer`, `/opc:transfer` e `opencode import` no binário falso.
+- [ ] Task 10: skill e documentação (MCP e transfer): README, CHANGELOG, `docs/architecture.md`, `docs/commands.md`, `docs/troubleshooting.md`.
+- [ ] Task 11: portão. Inclui verificação ao vivo (`f5-mcp`, `f5-transfer`), procedimentos manuais do operador, relatório `docs/phases/F5-report.md` e registro das interfaces no mestre.
+- [ ] PR `feat/opc-f5` → `main`, com autorização do operador, e gravação dupla (`.ai-data` + colmeia).
+- [ ] Revisão da branch inteira da F5 antes do PR.
+
+### Riscos e observações
+
+- **Flake corrigido (Task 6).** `serveStdio` processava as requisições em série, então um `ping` esperava atrás de um `tools/call` longo e o teste `espera de tarefa lenta tem limite e atende outras requisições` falhava de forma intermitente. A correção (`ee35930`) serve as requisições de forma concorrente (`inFlight` no lugar da fila serial) e acrescenta teste unitário. Isso satisfaz o item 3 do "Review Focus" (um `ping` é respondido enquanto outra chamada espera). Após a correção: suíte 1871/0 e `mcp-jobs` 10/10. Três rodadas automáticas de correção não a resolveram (o implementador recebeu a falha sem nome nem diagnóstico); o supervisor parou após a terceira e o diagnóstico e a correção vieram do controlador.
+- **Roteador e modelos.** Implementador e revisor rodam no Codex pela rota `mix/gpt-6.1-sol` (a única rota 6.1 permitida), com fallback `gpt-6-<tier>` → `gpt-5.6-<tier>` quando o gateway recusa. Houve indisponibilidades 503 do roteador durante a execução.
+- **Janela ociosa.** Cerca de 4 h sem progresso em 01/10 (03:31–07:46), por falta de notificação e outages 503 do roteador.
+- **Sandbox.** Testes com socket e subprocesso falham no sandbox do implementador (`listen EPERM`); por isso a suíte completa é sempre rodada pelo controlador, fora dele, antes de cada marca de "concluída".
+- **Pendente de validação humana.** Uso real das ferramentas MCP numa sessão do Claude Code e retomada de sessão transferida com `opencode -s <id>` seguem `NÃO VALIDADO` até o portão (Task 11, passo 4).
