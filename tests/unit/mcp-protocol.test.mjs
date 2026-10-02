@@ -178,6 +178,24 @@ test('unknown tool and method names redact registered secrets before previewing'
   }
 });
 
+test('serveStdio answers a ping while a slow request is still pending', async () => {
+  const input = new PassThrough();
+  const written = [];
+  let release;
+  const server = { handle: async (message) => {
+    if (message.method === 'slow') await new Promise((resolve) => { release = resolve; });
+    return { jsonrpc: '2.0', id: message.id, result: {} };
+  } };
+  const done = serveStdio({ server, input, write: (line) => written.push(JSON.parse(line).id) });
+  input.write('{"jsonrpc":"2.0","id":1,"method":"slow"}\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(written, [2]);
+  release();
+  input.end();
+  await done;
+  assert.deepEqual(written, [2, 1]);
+});
+
 test('serveStdio rejects when writing a response throws', async () => {
   const input = new PassThrough();
   const failure = new Error('test writer failed');

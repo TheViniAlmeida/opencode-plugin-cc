@@ -127,13 +127,15 @@ export function createLineSplitter({ maxLineChars = MAX_LINE_CHARS } = {}) {
 
 export function serveStdio({ server, input, write, log = () => {} }) {
   const splitter = createLineSplitter();
-  let pending = Promise.resolve();
+  const inFlight = new Set();
   const send = (response) => write(`${JSON.stringify(response)}\n`);
 
   return new Promise((resolve, reject) => {
+    // Requests run concurrently so a long tools/call never blocks ping or other calls.
     function queue(action) {
-      pending = pending.then(action);
-      pending.catch(reject);
+      const task = Promise.resolve().then(action);
+      inFlight.add(task);
+      task.then(() => inFlight.delete(task), reject);
     }
 
     function processLine(line) {
@@ -167,7 +169,7 @@ export function serveStdio({ server, input, write, log = () => {} }) {
     });
     input.on('end', () => {
       for (const line of splitter.flush()) processLine(line);
-      pending.then(resolve, reject);
+      Promise.all(inFlight).then(resolve, reject);
     });
   });
 }
