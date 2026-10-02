@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 import {
   buildExport,
@@ -30,9 +30,7 @@ const EXPORT_SAMPLE = JSON.parse(fs.readFileSync(path.join(DATA, 'export-sample.
 const MODEL = { providerID: 'example-provider', modelID: 'example/model-a', full: 'example-provider/example/model-a' };
 
 function tempDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-f5-transfer-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return fs.realpathSync(dir);
+  return trackTempDir(t, makeTempDir('opc-f5-transfer-'));
 }
 
 function projectsRoot(t) {
@@ -45,7 +43,7 @@ function projectsRoot(t) {
 }
 
 async function sampleConversion() {
-  const { records } = await readTranscript(SAMPLE_JSONL);
+  const { records } = await readTranscript(SAMPLE_JSONL, { env: { OPC_TRANSFER_ALLOWED_ROOT: DATA } });
   return convertClaudeRecords(records, { now: 0 });
 }
 
@@ -87,11 +85,65 @@ test('resolveTranscriptPath refuses files outside the allowed root, including sy
   assert.equal(resolveTranscriptPath({ source: file, env: {}, cwd: home, home }), file);
 });
 
-test('erros de caminho exibem apenas um prefixo da origem fornecida', (t) => {
+test('erros de caminho não exibem dados pessoais da origem fornecida', (t) => {
   const { home, root } = projectsRoot(t);
   const source = path.join(root, 'um-arquivo-inexistente.jsonl');
   assert.throws(() => resolveTranscriptPath({ source, env: {}, cwd: home, home }), (error) =>
-    error.code === 'NOT_FOUND' && error.message.includes(`${source.slice(0, 12)}…`) && !error.message.includes(source));
+    error.code === 'NOT_FOUND' && !error.message.includes(home) && !error.message.includes(path.basename(home)));
+  const privateHome = path.join(home, 'alice');
+  assert.throws(() => resolveTranscriptPath({ source: path.join(privateHome, 'session.jsonl'), env: {}, cwd: home, home }), (error) =>
+    error.code === 'NOT_FOUND' && !error.message.includes('alice'));
+  assert.throws(() => resolveTranscriptPath({ source: '/home/alice/session.jsonl', env: {}, cwd: home, home }), (error) =>
+    error.code === 'NOT_FOUND' && !error.message.includes('alice'));
+});
+
+test('readTranscript refuses a symlink swapped after path resolution', async (t) => {
+  const { home, file } = projectsRoot(t);
+  const outside = path.join(home, 'outside.jsonl');
+  fs.writeFileSync(outside, '{"private":true}\n');
+  const resolved = resolveTranscriptPath({ source: file, env: {}, home });
+  fs.renameSync(file, path.join(path.dirname(file), 'parked.jsonl'));
+  fs.symlinkSync(outside, file);
+  await assert.rejects(readTranscript(resolved, { home, env: {} }), (error) => error.code === 'TRANSCRIPT_OUTSIDE_ALLOWED_ROOT');
+});
+
+test('readTranscript refuses a symlink swapped between validation and opening', async (t) => {
+  const { home, file } = projectsRoot(t);
+  const outside = path.join(home, 'outside.jsonl');
+  fs.writeFileSync(outside, '{"private":true}\n');
+  const originalOpen = fs.openSync;
+  fs.openSync = function (...args) {
+    fs.openSync = originalOpen;
+    fs.renameSync(file, path.join(path.dirname(file), 'parked.jsonl'));
+    fs.symlinkSync(outside, file);
+    return originalOpen.apply(this, args);
+  };
+  try {
+    await assert.rejects(readTranscript(file, { home, env: {} }), (error) =>
+      error.code === 'TRANSCRIPT_OUTSIDE_ALLOWED_ROOT' && !error.message.includes(file));
+  } finally {
+    fs.openSync = originalOpen;
+  }
+});
+
+test('readTranscript enforces the byte limit when the file grows during reading', async (t) => {
+  const { home, file } = projectsRoot(t);
+  const originalRead = fs.read;
+  fs.read = function (...args) {
+    fs.read = originalRead;
+    const writer = fs.openSync(file, 'r+');
+    try {
+      fs.writeSync(writer, Buffer.from('{}\n'), 0, 3, MAX_TRANSCRIPT_BYTES);
+    } finally {
+      fs.closeSync(writer);
+    }
+    return originalRead.apply(this, args);
+  };
+  try {
+    await assert.rejects(readTranscript(file, { home, env: {} }), (error) => error.code === 'TRANSCRIPT_TOO_LARGE');
+  } finally {
+    fs.read = originalRead;
+  }
 });
 
 test('parseJsonlLines counts invalid lines and ignores blanks', () => {
@@ -101,7 +153,7 @@ test('parseJsonlLines counts invalid lines and ignores blanks', () => {
 });
 
 test('convertClaudeRecords turns the sample transcript into user/assistant turns with tool summaries', async () => {
-  const { invalid } = await readTranscript(SAMPLE_JSONL);
+  const { invalid } = await readTranscript(SAMPLE_JSONL, { env: { OPC_TRANSFER_ALLOWED_ROOT: DATA } });
   const conversion = await sampleConversion();
   assert.equal(invalid, 1);
   assert.equal(conversion.title, 'Fixture transfer');
@@ -220,6 +272,9 @@ test('resolveTransferModel expands aliases, needs a full id and applies the poli
   assert.equal(resolveTransferModel({ flag: 'other/x', config }).full, 'other/x');
   assert.throws(() => resolveTransferModel({ config: { policy: {} } }), (e) => e.code === 'NO_MODEL' && e.exitCode === 2);
   assert.throws(() => resolveTransferModel({ flag: 'shortname', config }), (e) => e.code === 'MODEL_NEEDS_FULL_ID');
+  for (const invalid of ['/broken', 'provider/']) {
+    assert.throws(() => resolveTransferModel({ flag: invalid, config }), (e) => e.code === 'MODEL_NEEDS_FULL_ID');
+  }
   assert.throws(() => resolveTransferModel({ flag: 'blocked/m', config }), (e) => e.exitCode === 4);
   const denied = 'blocked/modelo-que-nao-pode-ser-exibido';
   assert.throws(() => resolveTransferModel({ flag: denied, config }), (error) =>
@@ -250,6 +305,8 @@ test('runImport returns the session id and maps failures to exit 7 / 5', async (
   await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
   const crash = fakeExec({ error: Object.assign(new Error('x'), { code: 1 }), stderr: 'Error: boom' });
   await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: crash.impl }), (e) => e.code === 'IMPORT_FAILED' && /saída 1/.test(e.message) && !e.message.includes('boom'));
+  const falseSuccess = fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: 'Imported session: ses_abc123\n' });
+  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: falseSuccess.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7);
   const missing = fakeExec({ error: Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' }) });
   await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: missing.impl }), (e) => e.code === 'OPENCODE_NOT_FOUND' && e.exitCode === 5);
 });
@@ -257,6 +314,7 @@ test('runImport returns the session id and maps failures to exit 7 / 5', async (
 test('detectOpencodeVersion enforces the minimum OpenCode version', async () => {
   assert.equal(await detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.18.32\n' }).impl }), '1.18.32');
   await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.17.9\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
+  await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: '1.18.32\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
 });
 
 test('writeExportFile writes a 0600 file inside a 0700 transfer directory', (t) => {

@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
 
 import { expandAlias, parseFullId } from './models.mjs';
 import { ExitCode, OpcError } from './opc-error.mjs';
@@ -58,6 +57,10 @@ function preview(value) {
   return `${String(value).slice(0, 12)}…`;
 }
 
+function previewPath() {
+  return '[caminho omitido]';
+}
+
 function expandHome(value, home) {
   if (value === '~') return home;
   if (value.startsWith('~/')) return path.join(home, value.slice(2));
@@ -69,34 +72,43 @@ function isInside(root, target) {
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
-export function resolveTranscriptPath({ source = null, env = process.env, cwd = process.cwd(), home = env.HOME || os.homedir() } = {}) {
+function resolveTranscriptDetails({ source = null, env = process.env, cwd = process.cwd(), home = env.HOME || os.homedir() } = {}) {
   const requested = source || env[TRANSCRIPT_PATH_ENV];
   if (!requested) {
     throw usage('NO_TRANSCRIPT', 'Não foi possível identificar a transcrição atual do Claude. Tente novamente com --source <valor>.');
   }
   const candidate = path.resolve(cwd, expandHome(String(requested), home));
-  if (path.extname(candidate) !== '.jsonl') throw usage('NOT_JSONL', `A origem da sessão do Claude precisa ser um arquivo .jsonl: ${preview(requested)}`);
+  if (path.extname(candidate) !== '.jsonl') throw usage('NOT_JSONL', `A origem da sessão do Claude precisa ser um arquivo .jsonl: ${previewPath()}`);
   let real;
   try {
     real = fs.realpathSync(candidate);
   } catch {
-    throw new OpcError('NOT_FOUND', `Arquivo da sessão do Claude não encontrado: ${preview(requested)}`, { exitCode: ExitCode.USAGE });
+    throw new OpcError('NOT_FOUND', `Arquivo da sessão do Claude não encontrado: ${previewPath()}`, { exitCode: ExitCode.USAGE });
   }
-  if (path.extname(real) !== '.jsonl') throw usage('NOT_JSONL', `A origem da sessão do Claude precisa apontar para um arquivo .jsonl: ${preview(requested)}`);
+  if (path.extname(real) !== '.jsonl') throw usage('NOT_JSONL', `A origem da sessão do Claude precisa apontar para um arquivo .jsonl: ${previewPath()}`);
   const rootInput = env[ALLOWED_ROOT_ENV] || path.join(home, '.claude', 'projects');
   let root;
   try {
     root = fs.realpathSync(rootInput);
   } catch {
-    throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', `A raiz permitida da transcrição não existe: ${preview(rootInput)}`, { exitCode: ExitCode.POLICY });
+    throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', `A raiz permitida da transcrição não existe: ${previewPath()}`, { exitCode: ExitCode.POLICY });
   }
   if (!isInside(root, real)) {
-    throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', `O opc importa sessões do Claude apenas da raiz permitida. Origem: ${preview(requested)}`, { exitCode: ExitCode.POLICY });
+    throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', `O opc importa sessões do Claude apenas da raiz permitida. Origem: ${previewPath()}`, { exitCode: ExitCode.POLICY });
   }
-  const stat = fs.statSync(real);
-  if (!stat.isFile()) throw usage('NOT_A_FILE', `A origem da sessão do Claude não é um arquivo regular: ${preview(requested)}`);
-  if (stat.size > MAX_TRANSCRIPT_BYTES) throw usage('TRANSCRIPT_TOO_LARGE', `O arquivo da sessão do Claude excede ${MAX_TRANSCRIPT_BYTES} bytes: ${preview(requested)}`);
-  return real;
+  let stat;
+  try {
+    stat = fs.statSync(real);
+  } catch {
+    throw new OpcError('NOT_FOUND', `Arquivo da sessão do Claude não encontrado: ${previewPath()}`, { exitCode: ExitCode.USAGE });
+  }
+  if (!stat.isFile()) throw usage('NOT_A_FILE', `A origem da sessão do Claude não é um arquivo regular: ${previewPath()}`);
+  if (stat.size > MAX_TRANSCRIPT_BYTES) throw usage('TRANSCRIPT_TOO_LARGE', `O arquivo da sessão do Claude excede ${MAX_TRANSCRIPT_BYTES} bytes: ${previewPath()}`);
+  return { real, stat };
+}
+
+export function resolveTranscriptPath(options = {}) {
+  return resolveTranscriptDetails(options).real;
 }
 
 export function parseJsonlLines(lines) {
@@ -116,11 +128,39 @@ export function parseJsonlLines(lines) {
   return { records, invalid };
 }
 
-export async function readTranscript(file) {
-  const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
-  const lines = [];
-  for await (const line of rl) lines.push(line);
-  return parseJsonlLines(lines);
+export async function readTranscript(file, options = {}) {
+  const { real, stat } = resolveTranscriptDetails({ ...options, source: file });
+  let fd;
+  try {
+    fd = fs.openSync(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    if (error.code === 'ELOOP') {
+      throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', 'A origem da sessão do Claude mudou durante a abertura.', { exitCode: ExitCode.POLICY });
+    }
+    throw new OpcError('NOT_FOUND', `Não foi possível abrir a sessão do Claude: ${previewPath()}`, { exitCode: ExitCode.USAGE });
+  }
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) {
+      throw new OpcError('TRANSCRIPT_OUTSIDE_ALLOWED_ROOT', 'A origem da sessão do Claude mudou durante a abertura.', { exitCode: ExitCode.POLICY });
+    }
+    if (opened.size > MAX_TRANSCRIPT_BYTES) throw usage('TRANSCRIPT_TOO_LARGE', `O arquivo da sessão do Claude excede ${MAX_TRANSCRIPT_BYTES} bytes: ${previewPath()}`);
+    const chunks = [];
+    let bytes = 0;
+    while (true) {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const bytesRead = await new Promise((resolve, reject) => {
+        fs.read(fd, buffer, 0, buffer.length, null, (error, count) => error ? reject(error) : resolve(count));
+      });
+      if (bytesRead === 0) break;
+      bytes += bytesRead;
+      if (bytes > MAX_TRANSCRIPT_BYTES) throw usage('TRANSCRIPT_TOO_LARGE', `O arquivo da sessão do Claude excede ${MAX_TRANSCRIPT_BYTES} bytes: ${previewPath()}`);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    return parseJsonlLines(Buffer.concat(chunks).toString('utf8').split(/\r\n|\n|\r/));
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function truncateText(text, max) {
@@ -402,7 +442,7 @@ export function resolveTransferModel({ flag = null, config }) {
     throw usage('NO_MODEL', 'Nenhum modelo para registrar na sessão transferida. Use --model <valor> ou configure defaultModel com /opc:setup.');
   }
   const full = expandAlias(String(raw), config.aliases ?? {});
-  if (!full.includes('/')) throw usage('MODEL_NEEDS_FULL_ID', `A transferência exige um ID de modelo completo (provider/model) ou alias: ${preview(raw)}`);
+  if (!full.includes('/') || full.startsWith('/') || full.endsWith('/')) throw usage('MODEL_NEEDS_FULL_ID', `A transferência exige um ID de modelo completo (provider/model) ou alias: ${preview(raw)}`);
   const { providerID, modelID } = parseFullId(full);
   for (const [kind, value] of [['provider', providerID], ['model', full]]) {
     try {
@@ -437,6 +477,7 @@ export async function detectOpencodeVersion({ opencodeBin = 'opencode', env = pr
   const r = await execFileResult(execFileImpl, opencodeBin, ['--version'], { env, timeout: 15000, encoding: 'utf8' });
   const missing = notFound(r.error);
   if (missing) throw missing;
+  if (r.error || r.code !== 0) throw new OpcError('UNSUPPORTED_VERSION', 'Não foi possível identificar a versão do OpenCode.', { exitCode: ExitCode.CONNECTION });
   const match = /(\d+\.\d+\.\d+)/.exec(r.stdout);
   if (!match) throw new OpcError('UNSUPPORTED_VERSION', 'Não foi possível identificar a versão do OpenCode.', { exitCode: ExitCode.CONNECTION });
   if (compareVersions(match[1], MIN_OPENCODE_VERSION) < 0) {
@@ -464,7 +505,7 @@ export async function runImport({ opencodeBin = 'opencode', file, cwd, env = pro
   const missing = notFound(r.error);
   if (missing) throw missing;
   const sessionID = parseImportOutput(r.stdout);
-  if (!sessionID) {
+  if (r.error || r.code !== 0 || !sessionID) {
     throw new OpcError('IMPORT_FAILED', `A importação pelo opencode falhou (saída ${r.code}).`, { exitCode: ExitCode.JOB_FAILED });
   }
   return { sessionID, exitCode: r.code };
