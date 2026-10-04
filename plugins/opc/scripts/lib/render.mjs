@@ -1237,3 +1237,18 @@ export function renderConclave(pkg) {
   lines.push(renderTable(['Rótulo', 'Modelo'], pkg.composition.map((c) => [c.label, c.model])));
   return safeOutputText(lines.join('\n'));
 }
+
+export function renderTransfer(result) {
+  const s = result.skipped;
+  const lines = [
+    '# opc transfer', '',
+    `Sessão OpenCode criada: \`${result.sessionID}\``,
+    `Título: ${result.title}`,
+    `Modelo registrado: ${result.model}`,
+    `Mensagens importadas: ${result.messages.total} (${result.messages.user} do usuário, ${result.messages.assistant} do assistente)`,
+    `Ignorados: ${s.meta} meta, ${s.sidechain} sidechain, ${s.command} comandos locais, ${s.thinking} blocos de raciocínio, ${s.other} outros, ${s.invalidLines} linhas inválidas`,
+  ];
+  for (const warning of result.warnings ?? []) lines.push(`Aviso: ${warning}`);
+  lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '');
+  return safeOutputText(lines.join('\n'));
+}

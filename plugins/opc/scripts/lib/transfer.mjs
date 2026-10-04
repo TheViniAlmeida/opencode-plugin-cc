@@ -249,7 +249,6 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
         for (const block of results) {
           turn.texts.push(truncateText(`[resultado da ferramenta: ${block.is_error ? 'erro' : 'sucesso'}] ${toolResultText(block.content)}`, maxToolChars));
         }
-        continue;
       }
       const texts = [];
       for (const block of content) {
@@ -259,7 +258,7 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
         else if (block?.type === 'document') texts.push('[documento omitido]');
       }
       if (texts.length > 0) pushUser(texts, createdAt);
-      else stats.skipped.command += 1;
+      else if (results.length === 0) stats.skipped.command += 1;
       continue;
     }
 

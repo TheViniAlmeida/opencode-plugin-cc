@@ -25,6 +25,11 @@ if (argv[0] === '--version' || argv[0] === '-v') {
   process.exit(0);
 }
 
+if (argv[0] === 'import') {
+  const { runFakeImport } = await import(pathToFileURL(path.join(here, '..', 'fake-import.mjs')).href);
+  process.exit(await runFakeImport(argv.slice(1)));
+}
+
 if (argv[0] !== 'serve') {
   process.stderr.write(`fake opencode: unsupported command ${argv.join(' ')}\n`);
   process.exit(2);

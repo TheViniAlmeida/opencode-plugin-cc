@@ -117,3 +117,119 @@ Enquanto a sessão de membro ou juiz está sendo criada, `attemptInFlight` permi
 adiado. A sessão é publicada antes do prompt; se o cancelamento chegou nesse intervalo, ela é
 abortada antes de enviar a pergunta. Falhas de persistência do coordenador são explícitas e
 encerram o grupo como `coordinator_error`.
+
+## Servidor MCP (F5)
+
+O plugin declara o servidor MCP stdio `opc` no `plugin.json`:
+
+```json
+"mcpServers": { "opc": { "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"] } }
+```
+
+O processo usa `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA` e `CLAUDE_PROJECT_DIR` do
+ambiente do Claude Code. O protocolo em `scripts/lib/mcp-protocol.mjs` usa JSON-RPC 2.0,
+uma mensagem por linha, sem dependências. Implementa **2025-06-18** e aceita
+`2025-03-26` e `2024-11-05` por negociação. `initialize`, `ping`, `tools/list` e
+`tools/call` são os métodos disponíveis; lotes JSON-RPC são recusados.
+
+### Fluxo de uma chamada
+
+```text
+Claude Code ──stdio──> mcp-server.mjs
+                        └─ mcp-protocol.mjs: initialize · ping · tools/list · tools/call
+                            └─ mcp-tools.mjs: valida inputSchema → monta argv
+                                └─ opc-companion.mjs: main(argv, io)
+                                    └─ commands/<sub>.mjs: run(ctx, argv) → lib/*
+```
+
+- **Mesmo despachante:** a ferramenta chama `main(argv, io)`, como `bin/opc`. Política,
+  aprovador, confirmações, limites de jobs e exit codes vêm dos comandos existentes.
+  Texto livre é colocado após `--` no argv, sem interpretação por shell.
+- **stdout reservado:** o servidor preserva o `write` original para os frames JSON-RPC
+  e desvia outras escritas de `process.stdout` para stderr.
+- **stdin isolado:** cada comando recebe stdin vazio, sem TTY, e stdout/stderr capturados
+  com limite de 200.000 caracteres por stream. Excesso no stdout produz `truncated: true`.
+- **Prazos:** chamadas comuns têm teto de 300 s. Os seis comandos longos com `wait: true`
+  têm teto MCP de `waitTimeoutSec + 300 s` (espera padrão 120 s, máximo 540 s).
+  `opc_job_status` com `wait` usa `timeoutSec + 60 s` (espera padrão 60 s, máximo 540 s).
+  Estouro do teto MCP retorna `MCP_CALL_TIMEOUT`; o comando pode continuar.
+- **Sessão do Claude:** se `OPC_COMPANION_SESSION_ID` estiver disponível, é reutilizada.
+  Caso contrário, o MCP procura em `claudeSessions` a entrada mais recente com PID igual
+  ao processo pai e `pidStartTime` conferido, e repassa o ID ao comando. Sem correspondência,
+  os jobs ficam sem sessão do Claude; use `/opc:status --all` para encontrá-los.
+  A associação numa sessão real do Claude Code segue **NÃO VALIDADO**.
+
+### Resultado
+
+`content[0].text` contém um JSON com o envelope do resultado:
+
+| Campo | Conteúdo |
+|---|---|
+| `exitCode` | Código do comando: 0, 2, 3, 4, 5, 6, 7 ou 130 |
+| `state` | `ok`, `usage_error`, `waiting_permission`, `policy_denied`, `connection_error`, `wait_timeout`, `job_failed`, `cancelled` |
+| `data` | Saída da CLI com `--json`, redigida; pode ser string quando a CLI imprime texto |
+| `error` | `{ code, message }`, redigido, quando houver erro capturado ou extraído da saída |
+| `truncated` | `true` quando stdout excedeu o limite de captura |
+
+`isError` é `false` para os códigos 0, 3 e 6. Isso inclui permissão pendente e fim da
+espera; o job pode continuar. `opc_permissions_reply` e `opc_permissions_answer` imprimem
+Markdown, portanto seu `data` pode ser string mesmo com sucesso. Resultados de grupos
+contêm `{ group, members }` em `data`, com a saída agregada em `group.result`.
+
+O timeout de espera pode trazer `{ job, waitTimedOut: true }` em `data` ou um erro
+`WAIT_TIMEOUT` no caso de grupos. A falha de cancelamento pode trazer
+`{ error, message, report }` em `data`, com exit 5. O envelope preserva essas saídas
+e os erros reportados pelo comando. Argumentos inválidos retornam exit 2 com
+`INVALID_ARGUMENTS` e `isError: true`; ferramenta inexistente é erro JSON-RPC `-32602`.
+
+### Ferramentas
+
+Há **25 ferramentas**. A exposição permite operações de consulta e ações com as mesmas
+confirmações do comando. As anotações MCP são indicações; a política do companion
+continua valendo. Consultas podem iniciar o servidor gerenciado ou reconciliar o estado
+dos jobs, conforme o comando equivalente.
+
+| Ferramenta | Comando equivalente | Operação e limites |
+|---|---|---|
+| `opc_models` | `/opc:models` | Consulta de modelos e política |
+| `opc_providers` | `/opc:providers` | Consulta de providers; `all` inclui catálogo completo |
+| `opc_agents` | `/opc:agents` | Consulta; filtro `primary`, `subagent` ou `all` |
+| `opc_catalog` | `/opc:catalog` | Consulta de `commands` ou `skills` |
+| `opc_config_get` | `/opc:config get` | Somente leitura; única ferramenta de config |
+| `opc_task` | `/opc:task` | Job em background; padrão somente leitura, `write`/`profile` conforme o comando |
+| `opc_ask` | `/opc:ask` | Job em background com perfil somente leitura |
+| `opc_plan` | `/opc:plan` | Job em background com perfil somente leitura |
+| `opc_subagent` | `/opc:subagent` | Grupo em background; 1–8 agentes |
+| `opc_orchestrate` | `/opc:orchestrate` | Grupo em background; `maxSubtasks` de 2 a 10; edição com `write: true` |
+| `opc_conclave` | `/opc:conclave` | Grupo em background; `mode` apenas `opinion` ou `debate`, sem `review` |
+| `opc_session_list` | `/opc:sessions` | Consulta; `all` inclui sessões sem prefixo `OPC:` |
+| `opc_session_show` | `/opc:session show` | Consulta de sessão e mensagens |
+| `opc_session_new` | `/opc:session new` | Cria sessão |
+| `opc_session_fork` | `/opc:session fork` | Bifurca sessão, opcionalmente numa mensagem |
+| `opc_session_summarize` | `/opc:session summarize` | Compacta sessão com modelo sujeito à política |
+| `opc_session_children` | `/opc:session children` | Consulta de sessões filhas |
+| `opc_session_diff` | `/opc:session diff` | Consulta de diff |
+| `opc_session_todo` | `/opc:session todo` | Consulta de tarefas |
+| `opc_job_status` | `/opc:status` | Consulta de jobs; `wait: true` exige `jobId` |
+| `opc_job_result` | `/opc:result` | Consulta do resultado final; grupos incluem membros |
+| `opc_job_cancel` | `/opc:cancel` | Cancela job ou grupo conforme o comando |
+| `opc_permissions_list` | `/opc:permissions list` | Consulta de permissões e perguntas pendentes |
+| `opc_permissions_reply` | `/opc:permissions reply` | `once`/`reject`; `confirmedByUser` só após aprovação explícita daquele pedido; `data` pode ser Markdown |
+| `opc_permissions_answer` | `/opc:permissions answer` | Respostas na ordem das perguntas; `data` pode ser Markdown |
+
+Com aprovador `user` (padrão), o Claude apresenta o pedido via AskUserQuestion antes
+de responder. Pedidos destrutivos, `external_directory` e caminhos sensíveis exigem
+o usuário com qualquer aprovador. `confirmedByUser: true` corresponde à confirmação
+do comando e só vale após aquela aprovação. `always` é recusado; `opc-worker` e
+`opc-rescue` devolvem os pedidos à conversa principal.
+
+### Comandos sem ferramenta MCP
+
+| Comando | Fluxo disponível |
+|---|---|
+| `/opc:session revert` / `unrevert` | Usuário vê o diff e confirma a sessão/mensagem |
+| `/opc:setup`, incluindo `--stop-server` e instalação | Comando do usuário, com suas confirmações |
+| `/opc:config set/unset/add/remove`, `opc config init` | Configuração pelo usuário; chaves travadas no terminal |
+| `/opc:review`, `/opc:adversarial-review`, `/opc:transfer` | Invocação pelo usuário (`disable-model-invocation`) |
+| `/opc:command` | Rota síncrona arbitrária fora da superfície MCP |
+| `/opc:attach`, `opc monitor`, `opc gc`, `/opc:rescue` | Terminal/usuário ou fluxo de agente |

@@ -178,6 +178,37 @@ test('convertClaudeRecords turns the sample transcript into user/assistant turns
   assert.equal(conversion.turns[1].completedAt, Date.parse('2026-09-26T10:00:05.000Z'));
 });
 
+test('convertClaudeRecords preserves prompts and attachments mixed with tool results', () => {
+  const records = [
+    { type: 'user', message: { content: 'Read the files.' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'main.mjs' } }] } },
+    { type: 'user', message: { content: [
+      { type: 'tool_result', content: 'File content' },
+      { type: 'text', text: 'Compare these attachments with the file.' },
+      { type: 'image' },
+      { type: 'tool_result', content: [{ type: 'text', text: 'Missing file' }], is_error: true },
+      { type: 'document' },
+    ] } },
+    { type: 'assistant', message: { content: 'Comparison complete.' } },
+  ];
+  const conversion = convertClaudeRecords(records, { now: 0 });
+  assert.deepEqual(conversion.turns.map((turn) => [turn.role, turn.texts]), [
+    ['user', ['Read the files.']],
+    ['assistant', [
+      '[chamada de ferramenta: Read] {"file_path":"main.mjs"}',
+      '[resultado da ferramenta: sucesso] File content',
+      '[resultado da ferramenta: erro] Missing file',
+    ]],
+    ['user', ['Compare these attachments with the file.', '[imagem omitida]', '[documento omitido]']],
+    ['assistant', ['Comparison complete.']],
+  ]);
+  assert.deepEqual(conversion.stats, { records: 4, skipped: { meta: 0, sidechain: 0, command: 0, thinking: 0, other: 0 } });
+  const exported = buildExport(conversion, { model: MODEL, directory: '/w', version: '1.18.32' });
+  assert.deepEqual(validateExportShape(exported), []);
+  assert.equal(exported.messages[1].info.parentID, exported.messages[0].info.id);
+  assert.equal(exported.messages[3].info.parentID, exported.messages[2].info.id);
+});
+
 test('long texts and tool payloads are truncated with an explicit marker', () => {
   assert.equal(truncateText('abc', 5), 'abc');
   assert.match(truncateText('x'.repeat(10), 4), /^xxxx\n…\[6 caracteres truncados\]$/);

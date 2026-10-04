@@ -152,3 +152,116 @@ test('servidor sai com código 0 ao fechar stdin', async (t) => {
   await c.initialize();
   assert.equal(await c.close(), 0);
 });
+
+test('EOF aguarda a drenagem de todos os frames mesmo com backpressure em stdout', { timeout: 10000 }, async (t) => {
+  const { spawn } = await import('node:child_process');
+  const env = testEnv(t);
+  const ws = makeWorkspace(t, { git: false });
+  const preloadDir = trackTempDir(t, makeTempDir('opc-mcp-backpressure-'));
+  const preload = path.join(preloadDir, 'observe-write.mjs');
+  fs.writeFileSync(preload, `
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, encoding, callback) => {
+  const ready = write(chunk, encoding, callback);
+  if (!ready) process.stderr.write('TEST_BACKPRESSURE\\n');
+  return ready;
+};
+`);
+  const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, MCP_SERVER], { env, cwd: ws, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const closed = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  let stdout = '';
+  let stderr = '';
+  let resumed = false;
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stdout.pause();
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+    if (!resumed && stderr.includes('TEST_BACKPRESSURE')) {
+      resumed = true;
+      setTimeout(() => child.stdout.resume(), 50);
+    }
+  });
+  const requests = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    ...Array.from({ length: 100 }, (_, i) => ({ jsonrpc: '2.0', id: i + 1, method: 'tools/list' })),
+  ];
+  child.stdin.end(requests.map((request) => JSON.stringify(request)).join('\n') + '\n');
+  const result = await closed;
+  assert.deepEqual(result, { code: 0, signal: null }, stderr);
+  assert.match(stderr, /TEST_BACKPRESSURE/, 'the test must observe an actual false write return');
+  assert.ok(Buffer.byteLength(stdout) > 1024 * 1024, 'responses must exceed pipe buffering');
+  assert.ok(stdout.endsWith('\n'), 'the final JSON frame is complete');
+  const frames = stdout.trimEnd().split('\n').map((line) => JSON.parse(line));
+  assert.equal(frames.length, requests.length, 'EOF must preserve every response');
+  assert.deepEqual(frames.map((frame) => frame.id).sort((a, b) => a - b), requests.map((request) => request.id));
+  for (const frame of frames) {
+    assert.equal(frame.jsonrpc, '2.0');
+    assert.equal(frame.error, undefined);
+    if (frame.id > 0) assert.deepEqual(frame.result.tools.map((tool) => tool.name), [...TOOL_NAMES]);
+  }
+});
+
+test('erro no callback de drenagem encerra MCP com código diferente de zero', (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t, { git: false });
+  const preloadDir = trackTempDir(t, makeTempDir('opc-mcp-write-error-'));
+  const preload = path.join(preloadDir, 'fail-flush.mjs');
+  fs.writeFileSync(preload, `
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, encoding, callback) => {
+  if (chunk === '') {
+    const done = typeof encoding === 'function' ? encoding : callback;
+    setImmediate(() => done?.(new Error('TEST_WRITE_FAILURE')));
+    return false;
+  }
+  return write(chunk, encoding, callback);
+};
+`);
+  const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, MCP_SERVER], {
+    env, cwd: ws, input: '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n', encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /falha no transporte stdio/);
+  assert.doesNotMatch(result.stderr, /TEST_WRITE_FAILURE/);
+  for (const line of result.stdout.trimEnd().split('\n')) assert.equal(JSON.parse(line).jsonrpc, '2.0');
+});
+
+test('erro assíncrono de stdout encerra MCP mesmo enquanto stdin continua aberto', { timeout: 5000 }, async (t) => {
+  const { spawn } = await import('node:child_process');
+  const env = testEnv(t);
+  const ws = makeWorkspace(t, { git: false });
+  const preloadDir = trackTempDir(t, makeTempDir('opc-mcp-stream-error-'));
+  const preload = path.join(preloadDir, 'fail-write.mjs');
+  fs.writeFileSync(preload, `
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, encoding, callback) => {
+  if (chunk !== '') {
+    setImmediate(() => process.stdout.emit('error', new Error('TEST_STREAM_FAILURE')));
+    return false;
+  }
+  return write(chunk, encoding, callback);
+};
+`);
+  const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, MCP_SERVER], { env, cwd: ws, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  child.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+  assert.deepEqual(await closed, { code: 1, signal: null });
+  assert.match(stderr, /falha no transporte stdio/);
+  assert.doesNotMatch(stderr, /TEST_STREAM_FAILURE/);
+  assert.equal(stdout, '');
+});

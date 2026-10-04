@@ -34,5 +34,23 @@ const server = createMcpServer({
   log,
 });
 
-await serveStdio({ server, input: process.stdin, write: protocolWrite, log });
-process.exit(0);
+// EOF finishes request handlers before queued pipe writes necessarily reach the
+// reader. Flush through the original writer: stdout.write now targets stderr.
+const outputFailure = new Promise((_, reject) => {
+  process.stdout.on('error', reject);
+});
+try {
+  await Promise.race([
+    (async () => {
+      await serveStdio({ server, input: process.stdin, write: protocolWrite, log });
+      await new Promise((resolve, reject) => {
+        protocolWrite('', (error) => error ? reject(error) : resolve());
+      });
+    })(),
+    outputFailure,
+  ]);
+  process.exit(0);
+} catch {
+  log('[opc] mcp: falha no transporte stdio.');
+  process.exit(1);
+}

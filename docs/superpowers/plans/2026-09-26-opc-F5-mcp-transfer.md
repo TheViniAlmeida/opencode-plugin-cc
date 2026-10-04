@@ -184,7 +184,7 @@ export const TRANSCRIPT_PATH_ENV /* 'OPC_COMPANION_TRANSCRIPT_PATH' */, ALLOWED_
 export const MAX_TRANSCRIPT_BYTES /* 64 MiB */, MAX_TEXT_CHARS /* 65536 */, MAX_TOOL_CHARS /* 2000 */, TITLE_PREFIX /* 'OPC: transfer: ' */, IMPORT_SUCCESS_RE, EXPORT_SHAPE
 export function resolveTranscriptPath({ source, env, cwd, home })      // → realpath; erros: NO_TRANSCRIPT/NOT_JSONL/NOT_FOUND/NOT_A_FILE/TRANSCRIPT_TOO_LARGE (exit 2), TRANSCRIPT_OUTSIDE_ALLOWED_ROOT (exit 4)
 export function parseJsonlLines(lines)              // → { records, invalid }
-export async function readTranscript(file)          // → { records, invalid }
+export async function readTranscript(file, { env, cwd, home } = {}) // → { records, invalid }; revalida a origem e limita os bytes efetivamente lidos
 export function truncateText(text, max)
 export function convertClaudeRecords(records, { maxTextChars, maxToolChars, now }) // → { turns:[{role, createdAt, completedAt?, texts[]}], title, claudeSessionId, stats:{records, skipped:{meta,sidechain,command,thinking,other}} }
 export function createIdGenerator({ now, randomBytes }) // → nextId(prefix, 'ascending'|'descending')
@@ -200,7 +200,7 @@ export async function runImport({ opencodeBin, file, cwd, env, timeoutMs, execFi
 // (sem shellQuote próprio: o comando usa `shellQuote` de lib/args.mjs, F3)
 
 // scripts/commands/transfer.mjs
-export async function execute(ctx, { source = null, model = null }) // → { sessionID, title, model, source, workspaceRoot, messages:{total,user,assistant}, skipped:{…, invalidLines}, resumeCommand, warnings[] }
+export async function execute(ctx, { source = null, model = null }) // → { sessionID, title, model, workspaceRoot, messages:{total,user,assistant}, skipped:{…, invalidLines}, resumeCommand, warnings[] }; caminho do transcript omitido da saída pública
 export async function run(ctx, argv)                // flags: --source, --model/-m, --json, --cwd
 
 // scripts/lib/render.mjs (acréscimo)
@@ -4618,3 +4618,27 @@ Observação aceita na Task 3: nomes desconhecidos com mais de 12 caracteres con
 - **Janela ociosa.** Cerca de 4 h sem progresso em 01/10 (03:31–07:46), por falta de notificação e outages 503 do roteador.
 - **Sandbox.** Testes com socket e subprocesso falham no sandbox do implementador (`listen EPERM`); por isso a suíte completa é sempre rodada pelo controlador, fora dele, antes de cada marca de "concluída".
 - **Pendente de validação humana.** Uso real das ferramentas MCP numa sessão do Claude Code e retomada de sessão transferida com `opencode -s <id>` seguem `NÃO VALIDADO` até o portão (Task 11, passo 4).
+
+
+## Continuação local — 03/10/2026 (America/Belem)
+
+Tasks 7–10 implementadas e revisadas. A Task 8 deixou de depender da revisão automática
+que falhou com HTTP 400 (modelo não aceito na autenticação). A continuação preservou o
+código já commitado e fechou a revisão com testes locais. A Task 11 tem testes, relatório
+e interfaces no mestre; o portão permanece parcial até inferência MCP e procedimentos
+manuais do Claude/TUI. Nenhum commit, push, PR ou merge nesta continuação.
+
+Correções adicionais verificadas:
+
+- GC: restauração das permissões em `try/finally` antes do cleanup; elimina o `EACCES` reproduzido em Node 24.
+- Transfer: resultados de ferramentas misturados a texto/imagem/documento preservam o novo turno do usuário; ordem, conteúdo e vínculos cobertos pela regressão.
+- MCP: drenagem pela escrita original antes de encerrar no EOF e tratamento de erros de stdout; 101 frames com backpressure preservados.
+- Aceite MCP: cancela apenas grupos ativos e neutraliza nomes de provider/modelo no relatório; três rodadas fake cobrem o caminho completo.
+
+O round trip real de transferência passou em OpenCode 1.18.34, com HOME/XDG isolados,
+transcript sintético e modelo apenas como metadado (sem inferência). Não é uma validação
+da retomada interativa nem de uma conversa real do Claude.
+
+Estado, evidências, validações e pendências atuais: `docs/phases/F5-report.md`.
+Os commits/publicação e a gravação em colmeia continuam pendentes; as ferramentas
+Mnemosyne de `myprojects` não estão disponíveis nesta sessão.

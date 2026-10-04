@@ -149,18 +149,23 @@ test('findStaleStates: unreadable state root fails closed; unreadable child is e
     return;
   }
   chmodSync(stateRoot, 0o000);
-  t.after(() => { if (existsSync(stateRoot)) chmodSync(stateRoot, 0o700); });
-  const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: false }, out() {}, err() {} };
-  await assert.rejects(run(ctx, []), (err) => err.exitCode === 5 && /Não foi possível ler/.test(err.message));
-  chmodSync(stateRoot, 0o700);
+  try {
+    const ctx = { dataDir: root, stateDir: null, stdin: { isTTY: false }, out() {}, err() {} };
+    await assert.rejects(run(ctx, []), (err) => err.exitCode === 5 && /Não foi possível ler/.test(err.message));
+  } finally {
+    chmodSync(stateRoot, 0o700);
+  }
 
   const candidate = makeState(root, 'unreadable-0123456789abcdef', 40);
   const nested = join(candidate, 'jobs');
   chmodSync(nested, 0o000);
-  t.after(() => { if (existsSync(nested)) chmodSync(nested, 0o700); });
-  const result = findStaleStates(root, { olderThanMs: 1 });
-  assert.equal(result.length, 0);
-  assert.match(result.skipped[0].reason, /Não foi possível/);
+  try {
+    const result = findStaleStates(root, { olderThanMs: 1 });
+    assert.equal(result.length, 0);
+    assert.match(result.skipped[0].reason, /Não foi possível/);
+  } finally {
+    chmodSync(nested, 0o700);
+  }
 });
 
 test('findStaleStates: malformed server record is excluded with a reason and a live partial record stays live', (t) => {
