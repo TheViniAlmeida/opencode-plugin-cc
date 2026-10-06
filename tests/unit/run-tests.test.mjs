@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import {
   collectTestFiles, nodeTestArgs, nodeVersionExitCode, runNodeTest, runTimeoutMs, RUN_TIMEOUT_MS,
-  supportsTestConcurrency, supportsTestForceExit, supportsTestTimeout, TEST_TIMEOUT_MS,
+  supportsTestConcurrency, supportsTestPreload, supportsTestTimeout, TEST_PRELOAD, TEST_TIMEOUT_MS,
 } from '../../scripts/run-tests.mjs';
 import { makeTempDir, processAlive, removeTempDir, waitFor } from '../helpers.mjs';
 
@@ -63,26 +63,48 @@ test('Node CLI version guard returns exit 2 below major 20', () => {
   assert.equal(nodeVersionExitCode('v20.0.0'), 0);
 });
 
-test('test timeout and force-exit flags are gated by Node version', () => {
+test('test timeout and preload flags are gated by Node version', () => {
   assert.equal(supportsTestTimeout('20.10.0'), false);
   assert.equal(supportsTestTimeout('20.11.0'), true);
-  assert.equal(supportsTestForceExit('20.13.1'), false);
-  assert.equal(supportsTestForceExit('v20.14.0'), true);
-  assert.equal(supportsTestForceExit('22.0.0'), true);
+  assert.equal(supportsTestPreload('20.5.1'), false);
+  assert.equal(supportsTestPreload('v20.6.0'), true);
+  assert.equal(supportsTestPreload('22.0.0'), true);
 });
 
-test('nodeTestArgs caps each file and forces exit; live runs serially and keeps its own per-test caps', () => {
+test('nodeTestArgs caps each file and preloads the grace exit; live runs serially and keeps its own per-test caps', () => {
   assert.deepEqual(nodeTestArgs(undefined, { version: '22.22.1', env: {} }), [
-    '--test', '--test-concurrency=4', `--test-timeout=${TEST_TIMEOUT_MS}`, '--test-force-exit',
+    '--test', '--test-concurrency=4', `--test-timeout=${TEST_TIMEOUT_MS}`, `--import=${TEST_PRELOAD}`,
   ]);
   // --test-timeout bounds a whole file under process isolation: it would cut the 30-60 min live tests.
   assert.deepEqual(nodeTestArgs('live', { version: '22.22.1', env: { OPC_TEST_TIMEOUT_MS: '5000' } }), [
-    '--test', '--test-concurrency=1', '--test-force-exit',
+    '--test', '--test-concurrency=1', `--import=${TEST_PRELOAD}`,
   ]);
-  assert.deepEqual(nodeTestArgs('unit', { version: '20.9.0', env: {} }), ['--test']);
+  assert.deepEqual(nodeTestArgs('unit', { version: '20.9.0', env: {} }), ['--test', `--import=${TEST_PRELOAD}`]);
+  assert.deepEqual(nodeTestArgs('unit', { version: '20.5.0', env: {} }), ['--test']);
   assert.ok(nodeTestArgs('unit', { version: '22.22.1', env: { OPC_TEST_TIMEOUT_MS: '5000' } }).includes('--test-timeout=5000'));
   assert.ok(nodeTestArgs('unit', { version: '22.22.1', env: { OPC_TEST_TIMEOUT_MS: 'x' } })
     .includes(`--test-timeout=${TEST_TIMEOUT_MS}`));
+});
+
+test('the preload ends a file that leaks a handle and keeps every result and failure', async (t) => {
+  const root = makeTempDir('opc-rt-');
+  t.after(() => removeTempDir(root));
+  const tests = Array.from({ length: 40 }, (_, i) => `test('case ${i}', () => {});`).join('\n');
+  fs.writeFileSync(path.join(root, 'leaky.test.mjs'), `import test from 'node:test';
+test('leaks a handle', () => { setInterval(() => {}, 1000); });
+test('fails', () => { throw new Error('expected failure'); });
+${tests}
+`);
+  // Without NODE_TEST_CONTEXT the nested run reports on its own instead of to this test's runner.
+  const { NODE_TEST_CONTEXT, ...cleanEnv } = process.env;
+  const child = spawn(process.execPath, [...nodeTestArgs('unit', { env: {} }), '--test-reporter=tap', 'leaky.test.mjs'], { cwd: root, env: cleanEnv });
+  t.after(() => child.kill('SIGKILL'));
+  let out = '';
+  child.stdout.on('data', (chunk) => { out += chunk; });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.equal(code, 1);
+  assert.match(out, /^# tests 42$/m);
+  assert.match(out, /^# fail 1$/m);
 });
 
 test('runTimeoutMs defaults per kind and honors a positive integer override', () => {

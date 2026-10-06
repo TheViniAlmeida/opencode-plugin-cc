@@ -31,6 +31,10 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - `scripts/run-tests.mjs` não fica mais pendurado quando um teste trava (por exemplo, no sandbox do Codex, onde `listen 127.0.0.1` dá `EPERM`). O runner passa `--test-timeout` (300 s por arquivo, fora do live) e `--test-force-exit`, e roda a suíte num grupo de processos próprio. Esse grupo é encerrado inteiro no timeout da execução (30 min; 6 h no live), em `SIGINT`/`SIGTERM`/`SIGHUP` (código 128 + sinal) e quando o processo pai morre. Os limites podem ser ajustados com `OPC_TEST_TIMEOUT_MS` e `OPC_TEST_RUN_TIMEOUT_MS`.
 - O sleeper dos testes (`spawnSleeper`, `ORPHAN_SAFE_IDLE` em `tests/helpers.mjs`) não segura mais o processo do arquivo e sai sozinho quando fica órfão. Antes, um `t.after` que lançava erro fazia o node:test pular o hook que o matava.
 
+### Corrigido — runner de testes não perde resultados
+
+- `scripts/run-tests.mjs` deixou de passar `--test-force-exit`: com ele, o Node 22/24 às vezes encerrava o processo do arquivo antes de entregar todos os resultados ao runner (por exemplo, `tests/unit/policy-profiles.test.mjs` reportava 43, 46 ou 63 casos com exit 0). O runner agora usa `--import` com `scripts/test-exit-after-grace.mjs` (Node ≥ 20.6), que 3 s depois do fim dos testes do arquivo chama `process.exit()` somente se algum handle vazado ainda prende o processo. Todos os resultados são entregues e uma falha continua dando exit 1. A entrada anterior sobre `--test-force-exit` é histórica.
+
 ### Adicionado — F4c (conclave)
 
 - `/opc:conclave` e `opc conclave`: consulta paralela a N ≥ 2 modelos nos modos `opinion`, `debate` (2–3 rodadas anônimas na mesma sessão de cada membro) e `review` (review cruzado do diff com agrupamento de achados e concordância `k/N`).
