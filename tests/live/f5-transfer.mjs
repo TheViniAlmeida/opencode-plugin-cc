@@ -1,4 +1,4 @@
-// Real import/export round trip, with synthetic history and isolated OpenCode storage.
+// Real import followed by session and message API checks, with isolated OpenCode storage.
 // No provider request is made. OPC_LIVE_MODEL is recorded as session metadata only.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,7 +13,7 @@ const MODEL = process.env.OPC_LIVE_MODEL?.trim();
 const SKIP = process.env.OPC_LIVE !== '1' ? 'OPC_LIVE!=1' : !MODEL && 'Informe OPC_LIVE_MODEL (provider/model).';
 const REPORT = path.join(REPO_ROOT, 'docs/phases/F5-live-output.md');
 
-test('F5 live: isolated transfer, session list and export preserve synthetic history', { skip: SKIP, timeout: 600_000 }, async (t) => {
+test('F5 live: isolated transfer and session API preserve synthetic history', { skip: SKIP, timeout: 600_000 }, async (t) => {
   const root = trackTempDir(t, makeTempDir('opc-live-f5-transfer-'));
   fs.chmodSync(root, 0o700);
   const ws = makeWorkspace(t, { git: false, name: 'f5-transfer' });
@@ -68,8 +68,8 @@ test('F5 live: isolated transfer, session list and export preserve synthetic his
   assert.equal(info.title, `OPC: transfer: live transfer ${marker}`);
   assert.equal(info.location.directory, ws);
   const messages = (await request(`/api/session/${sessionID}/message?order=asc&limit=50`)).data;
-  const exported = { info, messages };
-  assert.deepEqual(validateExportShape(exported), []);
+  const sessionData = { info, messages };
+  assert.deepEqual(validateExportShape(sessionData), []);
   assert.equal(messages.length, 5);
   const texts = messages.flatMap((message) => [message.text, ...(message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text)].filter(Boolean));
   assert.ok(texts.includes(`Remember the code word ${marker}.`));
@@ -77,6 +77,6 @@ test('F5 live: isolated transfer, session list and export preserve synthetic his
   assert.ok(texts.some((text) => text.includes('Read') && text.includes('notes.md')));
   assert.ok(texts.some((text) => text.includes('resultado da ferramenta') && text.includes(marker)));
   const evidence = { sessionID, messages: messages.length, sessionLoaded: true, importShapeValid: true, storage: 'isolated', providerRequests: 0 };
-  appendSafeOutput(REPORT, `### Transfer: round trip com armazenamento isolado\n\n\`\`\`json\n${JSON.stringify(evidence, null, 2)}\n\`\`\`\n\n`, env.OPC_DATA_DIR);
+  appendSafeOutput(REPORT, `### Transfer: importação e consulta de sessão com armazenamento isolado\n\n\`\`\`json\n${JSON.stringify(evidence, null, 2)}\n\`\`\`\n\n`, env.OPC_DATA_DIR);
   t.diagnostic(JSON.stringify(evidence));
 });

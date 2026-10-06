@@ -354,25 +354,35 @@ function fakeExec(result) {
 
 test('runImport returns the session id and maps failures to exit 7 / 5', async () => {
   const ok = fakeExec({ stdout: 'Imported session: ses_abc123\n', stderr: '[autotitle] Module loaded\n' });
-  assert.deepEqual(await runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env: {}, execFileImpl: ok.impl }), { sessionID: 'ses_abc123', exitCode: 0 });
+  const env = { PATH: '/configured/bin', OPENCODE_SERVER_PASSWORD: 'old-placeholder' };
+  const password = 'YOUR_API_KEY_HERE';
+  assert.deepEqual(await runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env, password, execFileImpl: ok.impl }), { sessionID: 'ses_abc123', exitCode: 0 });
   assert.deepEqual(ok.calls[0].args, ['session', 'import', '--server', 'http://127.0.0.1:4096', '--directory', '/w', '/f.json']);
   assert.equal(ok.calls[0].options.cwd, '/w');
+  assert.deepEqual(ok.calls[0].options.env, { PATH: '/configured/bin', OPENCODE_SERVER_PASSWORD: password });
+  assert.equal(env.OPENCODE_SERVER_PASSWORD, 'old-placeholder');
+  assert.ok(!ok.calls[0].args.includes(password));
   const withoutServer = fakeExec({ stdout: 'Imported session: ses_abc123\n' });
   await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: withoutServer.impl }), (e) => e.code === 'SERVER_URL_REQUIRED');
   assert.equal(withoutServer.calls.length, 0);
+  const withoutPassword = fakeExec({ stdout: 'Imported session: ses_abc123\n' });
+  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env: {}, execFileImpl: withoutPassword.impl }), (e) => e.code === 'SERVER_PASSWORD_REQUIRED');
+  assert.equal(withoutPassword.calls.length, 0);
+  const args = { serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', password };
   const soft = fakeExec({ stdout: 'Failed to read session data\n' });
-  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
+  await assert.rejects(runImport({ ...args, execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
   const crash = fakeExec({ error: Object.assign(new Error('x'), { code: 1 }), stderr: 'Error: boom' });
-  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', execFileImpl: crash.impl }), (e) => e.code === 'IMPORT_FAILED' && /saída 1/.test(e.message) && !e.message.includes('boom'));
+  await assert.rejects(runImport({ ...args, execFileImpl: crash.impl }), (e) => e.code === 'IMPORT_FAILED' && /saída 1/.test(e.message) && !e.message.includes('boom'));
   const falseSuccess = fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: 'Imported session: ses_abc123\n' });
-  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', execFileImpl: falseSuccess.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7);
+  await assert.rejects(runImport({ ...args, execFileImpl: falseSuccess.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7);
   const missing = fakeExec({ error: Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' }) });
-  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', execFileImpl: missing.impl }), (e) => e.code === 'OPENCODE_NOT_FOUND' && e.exitCode === 5);
+  await assert.rejects(runImport({ ...args, execFileImpl: missing.impl }), (e) => e.code === 'OPENCODE_NOT_FOUND' && e.exitCode === 5);
 });
 
 test('detectOpencodeVersion enforces the minimum OpenCode version', async () => {
   assert.equal(await detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: 'opencode v2.0.22\n' }).impl }), '2.0.22');
-  await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.18.34\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
+  await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.18.34\n' }).impl }), (e) =>
+    e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5 && e.message.includes('server.opencodeBin') && e.message.includes('OPC_OPENCODE_BIN'));
   await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: '1.18.32\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
 });
 

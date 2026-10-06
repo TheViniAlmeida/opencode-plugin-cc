@@ -400,7 +400,7 @@ export async function detectOpencodeVersion({ opencodeBin = 'opencode', env = pr
   const match = /(\d+\.\d+\.\d+)/.exec(r.stdout);
   if (!match) throw new OpcError('UNSUPPORTED_VERSION', 'Não foi possível identificar a versão do OpenCode.', { exitCode: ExitCode.CONNECTION });
   if (compareVersions(match[1], MIN_OPENCODE_VERSION) < 0) {
-    throw new OpcError('UNSUPPORTED_VERSION', `A versão do OpenCode é anterior à mínima exigida (${MIN_OPENCODE_VERSION}).`, { exitCode: ExitCode.CONNECTION });
+    throw new OpcError('UNSUPPORTED_VERSION', `OpenCode ${match[1]} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`, { exitCode: ExitCode.CONNECTION });
   }
   return match[1];
 }
@@ -419,11 +419,15 @@ export function parseImportOutput(stdout) {
   return match ? match[1] : null;
 }
 
-export async function runImport({ opencodeBin = 'opencode', serverUrl, file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
+export async function runImport({ opencodeBin = 'opencode', serverUrl, password, file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
   if (typeof serverUrl !== 'string' || !serverUrl) {
     throw new OpcError('SERVER_URL_REQUIRED', 'A importação requer a URL do servidor gerenciado.', { exitCode: ExitCode.CONNECTION });
   }
-  const r = await execFileResult(execFileImpl, opencodeBin, ['session', 'import', '--server', serverUrl, '--directory', cwd, file], { cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
+  if (typeof password !== 'string' || !password) {
+    throw new OpcError('SERVER_PASSWORD_REQUIRED', 'A importação requer a senha do servidor gerenciado.', { exitCode: ExitCode.CONNECTION });
+  }
+  const childEnv = { ...env, OPENCODE_SERVER_PASSWORD: password };
+  const r = await execFileResult(execFileImpl, opencodeBin, ['session', 'import', '--server', serverUrl, '--directory', cwd, file], { cwd, env: childEnv, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
   const missing = notFound(r.error);
   if (missing) throw missing;
   const sessionID = parseImportOutput(r.stdout);

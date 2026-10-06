@@ -45,7 +45,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   try {
     const server = await ensureServer(serverContext(ctx));
     imported = await runImport({ file, cwd: ctx.workspaceRoot,
-      env: { ...ctx.env, OPENCODE_SERVER_PASSWORD: server.password }, serverUrl: server.url, opencodeBin });
+      env: ctx.env, password: server.password, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {
       throw new OpcError('IMPORT_FAILED', 'O OpenCode informou um ID de sessão diferente do exportado.', { exitCode: ExitCode.JOB_FAILED });
     }
