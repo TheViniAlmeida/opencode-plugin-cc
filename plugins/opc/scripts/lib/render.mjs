@@ -810,7 +810,7 @@ export function renderTodos(todos, { sessionID = null } = {}) {
   return f3Finish([heading, '', f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))]);
 }
 
-export function renderRevertPreview({ action, sessionID, messageID = null, affected = [], rawDiff = null, command }) {
+export function renderRevertPreview({ action, sessionID, messageID = null, affected = null, rawDiff = null, notice = null, command }) {
   affected = maskDeep(affected);
   sessionID = safeOutputText(sessionID);
   messageID = messageID === null ? null : safeOutputText(messageID);
@@ -818,9 +818,8 @@ export function renderRevertPreview({ action, sessionID, messageID = null, affec
   const lines = [`# opc: confirmação necessária (${action})`, ''];
   if (action === 'revert') {
     lines.push(`Sessão ${sessionID} · a partir da mensagem ${messageID}.`);
-    lines.push('O revert remove do histórico as mensagens a partir dessa e restaura os arquivos abaixo ao estado anterior:', '');
-    if (affected.length) lines.push(...diffBody(affected, F3_MAX_INLINE_DIFF));
-    else lines.push('(nenhuma alteração de arquivo registrada para essas mensagens; só o histórico muda)');
+    lines.push('O revert remove do histórico as mensagens a partir dessa e pode restaurar arquivos ao estado anterior.', '');
+    if (notice) lines.push(safeOutputText(notice));
   } else {
     lines.push(`Sessão ${sessionID} · revert ativo a partir de ${messageID ?? '-'}.`);
     lines.push('O unrevert devolve as mensagens e reaplica nos arquivos o diff abaixo:', '');

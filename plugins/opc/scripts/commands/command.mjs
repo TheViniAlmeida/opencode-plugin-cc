@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
@@ -12,9 +11,9 @@ import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderCommandResult, renderPermissionRequest } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
-import { toPermissionRequest, toQuestion } from '../lib/opencode-v2.mjs';
 import { parseFullId } from '../lib/models.mjs';
 import { safeOutputText } from '../lib/redact.mjs';
+import { runTurn } from '../lib/runner.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
 const SPEC = {
@@ -25,31 +24,6 @@ const SPEC = {
     'raw-args-stdin': { type: 'boolean' },
   }, allowPositionals: true,
 };
-
-export function textFromParts(parts) {
-  return (parts ?? []).filter((part) => part.type === 'text' && !part.synthetic && !part.ignored)
-    .map((part) => part.text ?? '').join('\n').trim();
-}
-
-export async function waitCommandResult(api, sessionID, baselineIDs, { timeoutMs, pollMs = 100, getExecutionError = () => null } = {}) {
-  const deadline = performance.now() + timeoutMs;
-  while (performance.now() < deadline) {
-    const messages = await api.messages(sessionID, { limit: 1000 });
-    const fresh = messages.filter((message) => !baselineIDs.has(message.id));
-    const idle = fresh.findLast((message) => message.type === 'idle');
-    if (idle) {
-      const assistants = fresh.filter((message) => message.type === 'assistant');
-      const assistantError = assistants.findLast((message) => message.error)?.error;
-      const error = idle.outcome === 'succeeded' ? assistantError ?? null
-        : getExecutionError() ?? assistantError ?? { type: 'execution.failed', message: idle.outcome === 'interrupted' ? 'Comando interrompido.' : 'A execução do comando falhou.' };
-      return { finalText: assistants.map((message) => textFromParts(message.content)).filter(Boolean).join('\n').trim(), error };
-    }
-    await sleep(Math.min(pollMs, Math.max(1, deadline - performance.now())));
-  }
-  const error = new Error('Tempo esgotado aguardando o resultado do comando.');
-  error.code = 'TIMEOUT';
-  throw error;
-}
 
 export function safeFailureMessage(value, rawArguments = '') {
   // remove the raw arguments before masking: masking first can split them so they no longer match
@@ -154,35 +128,22 @@ export async function runWorker(ctx, job, request = job.request) {
     const bridge = createRequestBridge({ update: (patch) => updater.update(patch), jobId: job.id, stateDir, api,
       profileKind: request.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
       log: (line) => appendJobLog(stateDir, job.id, line) });
-    const bridgeError = (kind) => (err) => appendJobLog(stateDir, job.id, `[opc] falha na ponte de ${kind}: ${safeMessage(err.message)}`);
-    const onEvent = (event) => {
-      const data = event?.data ?? {};
-      if (event?.type === 'form.created' && data.form?.sessionID !== session.id) return;
-      if (event?.type === 'session.execution.failed' && data.sessionID === session.id) executionError = data.error;
-      if (event?.type === 'permission.asked') bridge.onPermission(toPermissionRequest(data)).catch(bridgeError('permissões'));
-      else if (event?.type === 'form.created' && data.form) {
-        const question = toQuestion(data.form);
-        if (question) bridge.onQuestion(question).catch(bridgeError('perguntas'));
-      }
-      else if (event?.type === 'permission.replied') bridge.onResolved({ type: 'permission', requestID: data.requestID, sessionID: data.sessionID, outcome: data.reply }).catch(bridgeError('permissões'));
-      else if (event?.type === 'form.replied' || event?.type === 'form.cancelled') bridge.onResolved({ type: 'question', requestID: data.id, sessionID: data.sessionID, outcome: event.type === 'form.replied' ? 'replied' : 'rejected' }).catch(bridgeError('perguntas'));
-    };
-    const untrack = hub.track(session.id, onEvent);
-    const offForms = hub.onAny?.((event) => { if (event?.type === 'form.created') onEvent(event); }) ?? (() => {});
     let outcome = null;
     let failure = null;
-    let executionError = null;
     try {
-      const baselineIDs = new Set((await api.messages(session.id, { limit: 1000 })).map((message) => message.id));
-      await api.runCommand(session.id, { name: request.command, text: request.arguments ?? '' });
-      outcome = await waitCommandResult(api, session.id, baselineIDs,
-        { timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000, getExecutionError: () => executionError });
+      outcome = await runTurn({ api, hub,
+        request: { sessionID: session.id, model: selected, agent: request.agent ?? 'build',
+          command: { name: request.command, text: request.arguments ?? '' },
+          timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000 },
+        onPermission: (permission) => bridge.onPermission(permission),
+        onQuestion: (question) => bridge.onQuestion(question),
+        onRequestResolved: (resolved) => bridge.onResolved(resolved),
+      });
     } catch (err) {
       failure = err;
-      if (err.code === 'TIMEOUT') await api.interrupt(session.id).catch(() => {});
-    } finally { untrack(); offForms(); bridge.dispose(); await updater.flush(); }
+    } finally { bridge.dispose(); await updater.flush(); }
     const latest = readJob(stateDir, job.id);
-    const error = outcome?.error ?? null;
+    const error = outcome?.error ?? (outcome?.status === 'failed' ? { type: outcome.errorType, message: outcome.errorMessage } : null);
     let patch;
     if (latest?.status === 'cancelled') patch = { status: 'cancelled' };
     else if (failure) patch = { status: 'failed', errorCode: failure.code === 'TIMEOUT' ? 'timeout' : (failure.code ?? 'error'), errorType: failure.code ?? failure.name, errorMessage: safeMessage(failure.message) };

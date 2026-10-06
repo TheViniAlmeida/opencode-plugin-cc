@@ -26,6 +26,12 @@ export function presentConclaveResult(ctx, job, asJson) {
   return exitCodeForJob(job);
 }
 
+export async function composeFromDiscovery(api, selectedModels, options) {
+  const [providers, availableModels, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers, models: availableModels, defaultModel });
+  return composeMembers({ ...options, models: selectedModels, catalog });
+}
+
 export async function run(ctx, argv) {
   const raw = await readRawArgs(argv, SPEC.flags, { stdin: ctx.stdin });
   const { flags, positionals } = parseArgs(raw.argv, SPEC);
@@ -40,9 +46,7 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   try {
-    const [providers, models, defaultModel] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel()]);
-    const catalog = buildCatalog({ providers, models, defaultModel });
-    const composition = composeMembers({ models, pool: flags.pool ?? null, config: ctx.config, catalog, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
+    const composition = await composeFromDiscovery(conn.api, models, { pool: flags.pool ?? null, config: ctx.config, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
     for (const warning of composition.warnings) ctx.err(`[opc] aviso: ${warning}\n`);
     const common = { summary: (question || `review ${target?.label ?? ''}`).trim().slice(0, 120), permissionProfile: 'read-only' };
     const memberFields = composition.members.map((m) => ({ ...common, kind: 'conclave-member', title: `OPC: conclave: membro ${m.label}`, role: `member:${m.label}`, model: m.full }));

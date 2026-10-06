@@ -5,7 +5,7 @@ import { openApi, loadDiscovery, resolveModel, requireAgent, profileRules } from
 import { assertId } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../lib/render.mjs';
-import { readSessionMessages } from '../lib/session-messages.mjs';
+import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
 import { maskDeep, safeOutputText } from '../lib/redact.mjs';
 
 const SPEC = {
@@ -27,7 +27,7 @@ const SPEC = {
 };
 
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
-export const PREVIEW_TRUNCATION_NOTICE = 'Prévia limitada às 50 primeiras mensagens do usuário a partir do alvo; o revert pode afetar mais arquivos.';
+export const REVERT_SCOPE_NOTICE = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo. A reversão pode alterar arquivos; confira o estado da sessão e do workspace antes de confirmar.';
 
 async function actionNew(ctx, api, { flags }) {
   const policy = ctx.config.policy ?? {};
@@ -86,7 +86,6 @@ async function actionDiff(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
-const MAX_DIFF_MESSAGES = 50;
 const DEFAULT_SUMMARIZE_TIMEOUT_SEC = 600;
 
 export async function withSessionGuard(ctx, api, sessionID, fn) {
@@ -102,11 +101,11 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
 }
 
 export async function collectAffectedDiff(api, sessionID, messageID) {
-  const messages = (await readSessionMessages(api, sessionID)) ?? [];
+  const messages = await readTurnMessages(api, sessionID, messageID);
   if (!messages.some((message) => message.id === messageID)) {
     throw new UsageError('UNKNOWN_MESSAGE', 'a mensagem <valor> não pertence à sessão <valor>');
   }
-  return (await api.diff(sessionID)) ?? [];
+  return null;
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
@@ -117,16 +116,16 @@ async function actionRevert(ctx, api, { flags, sessionID, rest }) {
   return withSessionGuard(ctx, api, sessionID, async () => {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
     if (!flags['confirmed-by-user']) {
-      const command = 'opc session revert <valor> <valor> --confirmed-by-user';
-      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, command, ...(affected.previewTruncated ? { previewTruncated: true, notice: PREVIEW_TRUNCATION_NOTICE } : {}), ...(affected.listBugNotice ? { notice: affected.listBugNotice } : {}) }));
-      else ctx.out(`${renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command })}${affected.previewTruncated ? `\n${PREVIEW_TRUNCATION_NOTICE}\n` : ''}${affected.listBugNotice ? `\n${affected.listBugNotice}\n` : ''}`);
+      const command = `opc session revert ${sessionID} ${messageID} --confirmed-by-user`;
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
+      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
       return ExitCode.USAGE;
     }
     await api.revertStage(sessionID, { messageID });
     await api.revertCommit(sessionID);
     const session = await api.getSession(sessionID);
     if (flags.json) ctx.json(maskDeep({ confirmed: true, action: 'revert', session }));
-    else ctx.out(renderSession(session, { note: 'Reversão aplicada. Para desfazer: opc session unrevert <valor> --confirmed-by-user' }));
+    else ctx.out(renderSession(session, { note: `Reversão aplicada. Para desfazer: opc session unrevert ${sessionID} --confirmed-by-user` }));
     return ExitCode.OK;
   });
 }
@@ -136,7 +135,7 @@ async function actionUnrevert(ctx, api, { flags, sessionID }) {
     const current = await api.getSession(sessionID);
     if (!current.revert) throw new UsageError('NOT_REVERTED', 'a sessão <valor> não tem reversão ativa; nada a desfazer');
     if (!flags['confirmed-by-user']) {
-      const command = 'opc session unrevert <valor> --confirmed-by-user';
+      const command = `opc session unrevert ${sessionID} --confirmed-by-user`;
       const rawDiff = current.revert.diff ?? null;
       if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
       else ctx.out(renderRevertPreview({ action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));

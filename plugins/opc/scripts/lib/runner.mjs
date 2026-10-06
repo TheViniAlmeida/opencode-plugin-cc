@@ -145,11 +145,12 @@ export async function runTurn({
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const statusPollMs = request.statusPollMs ?? DEFAULT_STATUS_POLL_MS;
   const idleWaitMs = request.idleWaitMs ?? DEFAULT_IDLE_WAIT_MS;
-  const messageID = request.messageID ?? newMessageId();
+  let messageID = request.messageID ?? newMessageId();
   const progress = (event) => { try { onProgress(event); } catch { /* Progress is advisory. */ } };
   const model = modelFor(request);
   const wantedAgent = request.agent ?? request.newSession?.agent ?? 'build';
   let sessionID = request.sessionID ?? null;
+  let commandBaseline = null;
   try {
     if (sessionID) {
       const current = await api.getSession(sessionID);
@@ -244,7 +245,8 @@ export async function runTurn({
       for (const req of (await api.listQuestions(id)) ?? []) if (req) await handleQuestion(req);
     }
     if (statuses?.[sessionID]) return;
-    const turn = turnMessages(await readTurnMessages(api, sessionID, messageID), messageID);
+    const listed = request.command ? await readSessionMessages(api, sessionID, { limit: commandBaseline.size + 1000 }) : await readTurnMessages(api, sessionID, messageID);
+    const turn = request.command ? listed.filter((message) => !commandBaseline.has(message.id)) : turnMessages(listed, messageID);
     for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     const idle = turn.find((message) => message.type === 'idle');
     if (idle?.outcome === 'succeeded') finish('idle');
@@ -332,7 +334,10 @@ export async function runTurn({
       if (!settled) {
         const text = (request.parts ?? []).filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('\n');
         const promptText = request.format?.type === 'json_schema' ? `${text}\n\n${jsonInstruction(request.format.schema)}` : text;
-        await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
+        if (request.command) {
+          commandBaseline = new Set((await readSessionMessages(api, sessionID, { limit: 1_000_000 })).map((message) => message.id));
+          await api.runCommand(sessionID, request.command);
+        } else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
         promptAccepted = true;
       }
     } catch (err) {
@@ -381,8 +386,13 @@ export async function runTurn({
     }
     let collected;
     try {
-      const messages = await readTurnMessages(api, sessionID, messageID);
-      if (outcome.reason === 'idle' && !messages.some((message) => message?.id === messageID)) {
+      const messages = request.command
+        ? await readSessionMessages(api, sessionID, { limit: commandBaseline.size + 1000 })
+        : await readTurnMessages(api, sessionID, messageID);
+      const commandMessages = request.command ? messages.filter((message) => !commandBaseline.has(message.id)) : null;
+      if (request.command) messageID = commandMessages.find((message) => message.type === 'user')?.id ?? messageID;
+      base.messageID = messageID;
+      if (outcome.reason === 'idle' && !(request.command ? commandMessages.some((message) => message.type === 'user') : messages.some((message) => message?.id === messageID))) {
         return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'TurnMessageNotFound', errorCode: 'TURN_MESSAGE_NOT_FOUND', errorMessage: 'A mensagem do turno não foi encontrada na sessão.', error: { name: 'TurnMessageNotFound', data: { message: 'A mensagem do turno não foi encontrada na sessão.' } } };
       }
       const childMessages = [];
@@ -390,8 +400,9 @@ export async function runTurn({
       let diffs = [];
       try { diffs = (await api.diff(sessionID)) ?? []; }
       catch (err) { if (isServerDown(err)) throw err; }
-      collected = extractTurn(turnMessages(messages, messageID), { childMessages, diffs });
-      for (const message of turnMessages(messages, messageID)) if (message.type === 'assistant') rememberAssistant(message.id);
+      const turn = request.command ? commandMessages.slice(commandMessages.findIndex((message) => message.type === 'user') + 1) : turnMessages(messages, messageID);
+      collected = extractTurn(turn, { childMessages, diffs });
+      for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     } catch (err) {
       if (!safetyFailure) { if (isServerDown(err)) return serverLost(); throw err; }
       collected = extractTurn([]);

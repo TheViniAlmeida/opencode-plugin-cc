@@ -22,7 +22,7 @@ test('cenário lento permite uma janela estável para consultar e cancelar o job
   let delayMs;
   try {
     process.env.FAKE_SLOW_MS = '30000';
-    await slowScenario.onPromptAsync({ emitTurn: async (_sessionId, options) => { delayMs = options.delayMs; } }, 'ses_test');
+    await slowScenario.onPrompt({ emitTurn: async (_sessionId, options) => { delayMs = options.delayMs; } }, 'ses_test');
   } finally {
     if (previous === undefined) delete process.env.FAKE_SLOW_MS;
     else process.env.FAKE_SLOW_MS = previous;
@@ -30,12 +30,12 @@ test('cenário lento permite uma janela estável para consultar e cancelar o job
   assert.equal(delayMs, 30000);
 });
 
-test('fake oferece a rota de tarefas da sessão para comparar MCP e CLI', () => {
-  assert.ok(SESSION_API_ROUTES.includes('GET /session/:id/todo'));
+test('fake V2 não oferece tarefas da sessão', () => {
+  assert.ok(!SESSION_API_ROUTES.some((route) => route.includes('todo')));
   const fake = { state: {}, persist() {}, emit() {} };
   const api = installSessionApi(fake);
   const session = fake.createSession({ title: 'MCP session' });
-  assert.deepEqual(api.handle('GET', `/session/${session.id}/todo`, new URLSearchParams(), null), { status: 200, body: [] });
+  assert.equal(api.handle('GET', `/api/session/${session.id}/todo`, new URLSearchParams(), null), null);
 });
 
 function setup(t, scenario = 'ok', extraEnv = {}) {
@@ -75,12 +75,12 @@ function assertCancelledJob(data, jobId) {
 
 function assertReadOnlyPermissions(permissions) {
   assert.ok(Array.isArray(permissions));
-  assert.deepEqual(permissions[0], { permission: '*', pattern: '*', action: 'deny' });
-  const readable = new Set(['read', 'glob', 'list', 'lsp', 'skill', 'todowrite']);
+  assert.deepEqual(permissions[0], { action: '*', resource: '*', effect: 'deny' });
+  const readable = new Set(['read', 'grep', 'glob', 'webfetch', 'websearch']);
   for (const rule of permissions) {
-    if (rule.action !== 'deny') {
-      assert.equal(rule.action, 'allow');
-      assert.ok(readable.has(rule.permission), `permissão não é somente leitura: ${rule.permission}`);
+    if (rule.effect !== 'deny') {
+      assert.equal(rule.effect, 'allow');
+      assert.ok(readable.has(rule.action), `permissão não é somente leitura: ${rule.action}`);
     }
   }
 }
@@ -98,8 +98,8 @@ test('a espera limitada exige job ativo antes de cancelar e cancelado depois', (
 
 test('perfil somente leitura rejeita permissões de escrita posteriores', () => {
   assert.throws(() => assertReadOnlyPermissions([
-    { permission: '*', pattern: '*', action: 'deny' },
-    { permission: 'edit', pattern: '*', action: 'allow' },
+    { action: '*', resource: '*', effect: 'deny' },
+    { action: 'edit', resource: '*', effect: 'allow' },
   ]), { name: 'AssertionError' });
 });
 
@@ -114,10 +114,10 @@ test('opc_task inicia job somente leitura e envia o prompt integralmente', async
   const done = await c.callTool('opc_job_status', { jobId, wait: true, timeoutSec: 60 });
   assert.equal(done.envelope.exitCode, 0);
   const requests = readFakeState(env).requests;
-  const prompt = requests.find((request) => request.method === 'POST' && /\/session\/[^/]+\/prompt_async$/.test(request.path));
-  assert.ok(prompt?.body.parts.some((part) => typeof part.text === 'string' && part.text.includes(EVIL)));
-  const created = requests.find((request) => request.method === 'POST' && request.path === '/session');
-  assertReadOnlyPermissions(created.body.permission);
+  const prompt = requests.find((request) => request.method === 'POST' && /\/api\/session\/[^/]+\/prompt$/.test(request.path));
+  assert.ok(prompt?.body.text.includes(EVIL));
+  const created = requests.find((request) => request.method === 'POST' && request.path === '/api/session');
+  assertReadOnlyPermissions(created.body.permissions);
   assert.equal(fs.existsSync(path.join(ws, 'pwned')), false);
   assert.equal(fs.existsSync(path.join(ws, 'pwned2')), false);
 });
@@ -202,7 +202,7 @@ test('proteção contra recursão recusa ferramentas de jobs como na CLI', async
   }
   let requests = [];
   try { requests = readFakeState(env).requests ?? []; } catch { requests = []; }
-  assert.equal(requests.filter((request) => request.method === 'POST' && request.path === '/session').length, 0);
+  assert.equal(requests.filter((request) => request.method === 'POST' && request.path === '/api/session').length, 0);
 });
 
 test('jobs MCP herdam a sessão Claude registrada pelo processo pai', async (t) => {
@@ -236,7 +236,7 @@ test('ferramentas de sessão coincidem com os comandos da CLI', async (t) => {
   assert.ok(sessionId);
   for (const [name, action] of [
     ['opc_session_show', 'show'], ['opc_session_children', 'children'],
-    ['opc_session_diff', 'diff'], ['opc_session_todo', 'todo'],
+    ['opc_session_diff', 'diff'],
   ]) {
     const mcp = await c.callTool(name, { sessionId });
     const cli = await cliJson(['session', action, sessionId], { env, cwd: ws });

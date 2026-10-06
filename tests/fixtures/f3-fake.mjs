@@ -119,8 +119,8 @@ export const F3_SESSION_ROUTES = {
   },
   'POST /api/session/:id/compact': (fake, { params, body = {} }) => {
     if (!fake.state.sessions[params.id]) return notFound();
-    if (!body.providerID || !body.modelID) return bad('Modelo obrigatório');
-    fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: body.providerID, modelID: body.modelID, agent: 'compaction' }));
+    const selected = fake.state.sessions[params.id].model;
+    fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
     persist(fake);
     return { status: 204 };
   },
