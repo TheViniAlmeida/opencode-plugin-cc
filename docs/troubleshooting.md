@@ -13,7 +13,7 @@ OPC_ARGS_5f1d0c7a_EOF
 ### OpenCode não encontrado
 
 - Sintoma: `opencode: não encontrado`, exit 5.
-- Solução: `npm install -g opencode-ai` e rode `/opc:setup` novamente.
+- Solução: instale o OpenCode 2.0.22 ou mais novo conforme a documentação oficial (<https://opencode.ai>). Se o binário não estiver no PATH, aponte `server.opencodeBin` (ou a variável `OPC_OPENCODE_BIN`) para ele e rode `/opc:setup` novamente.
 
 ### Versão antiga (`UNSUPPORTED_VERSION`)
 
@@ -79,16 +79,6 @@ O V2 não oferece saída por `json_schema`. O opc pede um objeto em cerca `json`
 
 ## Orquestração
 
-### Planner falhou com `planner_structured_output`
-
-Mantenha ou configure `orchestrate.structuredOutput` como `text`. Nesse modo o planner recebe
-o contrato de retornar um único JSON em cerca `json`, sem `format: json_schema`; o opc extrai e
-valida o objeto. `tool` não tem efeito no V2 e é convertido para `text` com aviso.
-
-```bash
-opc config set orchestrate.structuredOutput text
-```
-
 ### Planner falhou com `planner_failed` em modo `text`
 
 O turno do planner falhou ou a resposta não trouxe um objeto JSON extraível. O texto recebido
@@ -133,11 +123,15 @@ Resultado automatizado do §15 item 12: um `opencode run` concorrente e um job d
 
 ## Diff de sessão vazio
 
-Se o diff da sessão estiver vazio, consulte uma mensagem específica com `opc session diff <sessionID> --message <messageID>`.
+Se o diff da sessão estiver vazio, o OpenCode 2 não oferece diff por mensagem, então não há como detalhar por mensagem. Confira o estado do workspace com o git.
 
-## Listagem de mensagens indisponível
+## `SNAPSHOT_DISABLED` no revert
 
-Se `GET /api/session/:id/message` falhar na listagem, `opc session show` informa `messagesUnavailable: true` e mantém diff e filhas disponíveis. Para a prévia de revert, o opc busca a mensagem alvo diretamente; como não consegue enumerar os turnos posteriores, avisa que a prévia cobre apenas aquela mensagem. Se o alvo não existir, retorna `UNKNOWN_MESSAGE`.
+O OpenCode só registra diff e revert com snapshots ligados. Com `"snapshot": false` na config do OpenCode, o diff da sessão fica vazio e a reversão não restauraria nada, então `opc session revert` recusa com `SNAPSHOT_DISABLED`. Para usar o revert, ligue `snapshot` na config do OpenCode ou só no servidor gerenciado (`server.configOverride` do opc).
+
+## Listagem de mensagens falhou
+
+Se a listagem de mensagens da sessão falhar, `opc session show` e `opc session revert` falham com o erro da API; não há modo degradado. No `revert`, uma mensagem que não pertence à sessão retorna `UNKNOWN_MESSAGE`. Tente de novo e, se persistir, consulte `server.log`.
 
 ## `/opc:attach --pane` não abre
 
@@ -196,7 +190,8 @@ consenso criado pelo juiz.
   de `~/.claude/projects`. Use um transcript dessa raiz; `OPC_TRANSFER_ALLOWED_ROOT`
   é destinado aos testes.
 - **`NO_MODEL` ou `MODEL_NEEDS_FULL_ID`:** forneça `--model <provider/model>` ou um
-  alias configurado. A transferência exige ID completo após expandir o alias e
+  alias configurado, ou defina `defaultModel` no opc (ou `model` na configuração do
+  OpenCode). O opc não usa o modelo padrão do servidor como fallback. A transferência exige ID completo após expandir o alias e
   respeita a política de provider/modelo.
 - **`EMPTY_TRANSCRIPT`:** não restou texto transferível após filtrar meta, sidechains,
   raciocínio e comandos locais. Confira a origem indicada.

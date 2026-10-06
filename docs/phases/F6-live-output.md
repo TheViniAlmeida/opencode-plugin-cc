@@ -18,6 +18,10 @@ com porta e senha próprias. A senha fica só no ambiente de execução.
 | `tests/live/f4c-opinion.mjs` | PASSOU (1/1) | Rodado com `OPC_LIVE_POOL` dos dois modelos; 2 de 3 execuções válidas |
 | `tests/live/f5-mcp.mjs` | PASSOU (1/1) | Descoberta MCP e conclave de dois modelos; 2 de 3 execuções válidas |
 | `tests/live/f5-transfer.mjs` | PASSOU (1/1) | Importação com armazenamento isolado; nenhuma requisição ao provider |
+| `tests/live/f2a-ask-plan.mjs` | PASSOU | Rodada após as correções de revisão |
+| `tests/live/f3-sessions.mjs` | PASSOU (1/1) | Com snapshots ligados no servidor gerenciado do teste; `session diff` lista o arquivo alterado |
+| `tests/live/f3-session-shapes.mjs` | PASSOU (1/1) | Captura de formas com revert só por stage |
+| `tests/live/f3-command.mjs` | PASSOU | `/opc:command` após a paginação de mensagens |
 | Serves do operador antes/depois | PASSOU | Mesmos PIDs e portas (13371, 13373, 13374, 34975) antes e depois |
 
 ## Achados do portão
@@ -40,6 +44,23 @@ com porta e senha próprias. A senha fica só no ambiente de execução.
 4. **Servidor órfão no teste de transfer (corrigido).** `f5-transfer.mjs` não registrava o próprio ambiente para
    limpeza e deixava um `opencode serve` vivo (ppid 1) depois de remover o diretório temporário. O teste agora usa
    `trackEnv`; a reexecução passou sem órfãos.
+
+5. **Limite e paginação de mensagens (corrigido).** `GET /api/session/:id/message` recusa `limit` acima de 200.
+   A primeira página usa `order=asc&limit=N`; as seguintes, só `limit` e `cursor` (cursor com `order` retorna 400
+   `InvalidCursorError`). O opc pagina mensagens e sessões por cursor, com teto de páginas e detecção de laço
+   (`lib/api.mjs`). Antes, `/opc:command` caía num `TypeError` com baseline nulo.
+6. **`/compact` exige corpo (corrigido).** Sem `{}` no corpo, o V2 recusa. A resposta é a mensagem de compactação
+   (`type: compaction`, `delivery: steer`); se ela é assíncrona segue A CONFIRMAR.
+7. **Revert em duas etapas (corrigido).** `revert/stage` restaura arquivos e deixa o revert pendente;
+   `DELETE /revert` o desfaz; `revert/commit` apaga as mensagens e não tem volta. O opc agora chama só o stage, e
+   `unrevert` continua possível.
+8. **Snapshots desligados na config do operador.** Com `"snapshot": false`, o diff da sessão vem vazio e o revert
+   não restaura nada. O opc recusa o revert com `SNAPSHOT_DISABLED` e avisa no diff. Os testes ao vivo de sessão
+   ligam snapshots só no servidor gerenciado do teste (`server.configOverride`).
+9. **Pacote npm `opencode-ai` ainda é V1.** O `/opc:setup` deixou de sugerir `npm install -g opencode-ai`.
+10. **Modelo padrão do servidor não é fallback.** `/api/model/default` aponta para um modelo gratuito do provider
+    `opencode`; usá-lo em silêncio mandaria prompts a um provider não escolhido. Sem modelo explícito ou declarado na
+    config do OpenCode, o erro é `NO_MODEL`.
 
 ## Evidência sanitizada
 

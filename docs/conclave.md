@@ -64,25 +64,21 @@ Invariantes e limites:
 
 | Valor | Comportamento |
 |---|---|
-| `text` (padrão) | O prompt pede um único objeto JSON numa cerca `json`; o opc o extrai e valida localmente contra o schema |
-| `tool` | Envia `format: json_schema` ao OpenCode |
+| `text` (padrão e único aceito) | O prompt pede um único objeto JSON numa cerca `json`; o opc o extrai e valida localmente contra o schema |
 
-`text` é o padrão porque, no gateway usado pelo projeto, `format: json_schema` retornou
-`StructuredOutputError` com `Model did not produce structured output`. Em modo `text`, texto
-sem objeto JSON vira `MissingStructuredOutput`; em `tool`, uma falha do protocolo é
-`StructuredOutputError`. Um objeto JSON que não atende ao schema vira
-`InvalidStructuredOutput` em ambos os modos.
+O OpenCode V2 não oferece `json_schema`; um valor antigo `tool` na configuração é convertido
+para `text` com aviso. Texto sem objeto JSON vira `MissingStructuredOutput`; um objeto JSON que
+não atende ao schema vira `InvalidStructuredOutput`.
 
 Alguns modelos devolvem os valores no formato do schema. O opc aceita dois casos, e só quando o
 resultado valida: valores dentro de `properties` (`{"title": …, "properties": {…}}`) e palavras-chave
 do schema (`$schema`, `$id`, `title`, `type`, `description`) ao lado dos valores. O texto bruto do
-turno não é alterado. No review em modo `tool`, o prompt da F2b pede cerca `json`; o conclave
-acrescenta uma instrução explícita que substitui essa parte pela saída estruturada.
+turno não é alterado.
 
 ## Quorum e falhas
 
 Um membro é descartado da rodada e listado em **Falhas** se o turno falhar, expirar
-`conclave.memberTimeoutSec`, retornar `StructuredOutputError`, `MissingStructuredOutput`,
+`conclave.memberTimeoutSec`, retornar `MissingStructuredOutput`,
 `InvalidStructuredOutput` ou, numa rodada posterior, `MissingSession`. O texto bruto de uma
 falha de saída estruturada pode aparecer em `rawText`, limitado a 4 KB. Não há fallback de
 modelo para membros; o membro descartado não retorna nas rodadas seguintes.
@@ -188,7 +184,7 @@ opc conclave --models omniroute-personal/cmd/deepseek/deepseek-v4-flash,omnirout
 ```
 
 <details>
-<summary>Saída real (opinião, 30/09/2026, OpenCode 1.18.32)</summary>
+<summary>Exemplo de saída (opinião, capturada em 30/09/2026, antes da migração para o OpenCode V2)</summary>
 
 ````markdown
 # opc conclave · opinion
@@ -301,7 +297,7 @@ opc conclave --models omniroute-personal/cmd/deepseek/deepseek-v4-flash,omnirout
 ```
 
 <details>
-<summary>Saída real (debate, 30/09/2026, OpenCode 1.18.32)</summary>
+<summary>Exemplo de saída (debate, capturada em 30/09/2026, antes da migração para o OpenCode V2)</summary>
 
 ````markdown
 # opc conclave · debate
@@ -442,7 +438,7 @@ opc conclave --models omniroute-personal/cmd/deepseek/deepseek-v4-flash,omnirout
 ```
 
 <details>
-<summary>Saída real (review, 30/09/2026, OpenCode 1.18.32)</summary>
+<summary>Exemplo de saída (review, capturada em 30/09/2026, antes da migração para o OpenCode V2)</summary>
 
 ````markdown
 # opc conclave · review
@@ -568,7 +564,6 @@ Juiz: Claude. Sintetize com a skill `opc-conclave` a partir das respostas acima,
 | Menos de 2 membros válidos | Entradas negadas, inexistentes, desconectadas ou duplicadas | Leia os avisos no stderr e ajuste `--models` ou a pool |
 | Exit 7 com `QUORUM_NOT_MET` | Falhas ou timeout reduziram as respostas válidas | Veja **Falhas**, ajuste `conclave.memberTimeoutSec` ou os membros |
 | `MissingStructuredOutput` em `text` | A resposta não trouxe um objeto JSON extraível | Mantenha `text`, reformule a tarefa ou troque o membro |
-| `StructuredOutputError` em `tool` | O gateway não produziu a saída do protocolo | Use `conclave.structuredOutput text` ou outro ambiente compatível |
 | `InvalidStructuredOutput` | O JSON existe, mas não satisfaz o schema | Troque o membro ou reformule o pedido |
 | `MissingSession` | Uma rodada posterior não recebeu a sessão da anterior | Execute novamente; se persistir, preserve as falhas e investigue o servidor |
 | Juiz falhou | O turno do juiz modelo falhou | Use a skill `opc-conclave` com `synthesisInput` ou escolha outro juiz |

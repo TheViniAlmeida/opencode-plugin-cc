@@ -184,7 +184,7 @@ Uma execução offline de forma sem servidor retornou `SERVER_DOWN`/exit 5, como
 ### Saída estruturada de revisões
 
 `review.structuredOutput` controla `/opc:review` e `/opc:adversarial-review`.
-O padrão `text` pede um objeto JSON em uma única cerca `json`, conforme o esquema descrito no prompt. OpenCode V2 não aceita `format: json_schema`; valores antigos `tool` são convertidos para `text` com aviso.
+O padrão `text` pede um objeto JSON em uma única cerca `json`, conforme o esquema descrito no prompt. OpenCode V2 não oferece saída por `json_schema`; valores antigos `tool` são convertidos para `text` com aviso.
 
 `opc config unset review.structuredOutput` restaura o padrão `text` quando não há uma substituição no workspace.
 

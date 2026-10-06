@@ -16,5 +16,6 @@ OPC_ARGS_5f1d0c7a_EOF
 
 Regras:
 - Apresente a saída ao usuário sem resumir. Em `show`, preserve os IDs de mensagem (são eles que `fork` e `revert` usam).
-- Código de saída 2 com "confirmação necessária" (`revert`/`unrevert`) **não é erro**: siga a skill `opc-result-handling`. Mostre o diff afetado e pergunte com AskUserQuestion ("Reverter" / "Cancelar"; em `unrevert`, "Desfazer o revert" / "Cancelar"). Só com a resposta afirmativa, confirme pelo mesmo heredoc: o corpo é a linha impressa **sem** o prefixo `opc session` (subcomando, IDs, `--part` se houver e `--confirmed-by-user`, sem alterar nada). Nunca passe IDs na linha de comando do `opc`.
+- Código de saída 2 com "confirmação necessária" (`revert`/`unrevert`) **não é erro**: siga a skill `opc-result-handling`. Mostre a prévia impressa (no `revert`, o aviso de escopo do OpenCode 2; no `unrevert`, o diff do revert ativo, quando houver) e pergunte com AskUserQuestion ("Reverter" / "Cancelar"; em `unrevert`, "Desfazer o revert" / "Cancelar"). Só com a resposta afirmativa, confirme pelo mesmo heredoc: o corpo é a linha impressa **sem** o prefixo `opc session` (subcomando, IDs e `--confirmed-by-user`, sem alterar nada). Nunca passe IDs na linha de comando do `opc`.
 - Nunca acrescente `--confirmed-by-user` por conta própria, nem reaproveite uma confirmação anterior para outra sessão ou mensagem.
+- `SNAPSHOT_DISABLED` no `revert` não é falha do opc: a config do OpenCode tem `"snapshot": false`. Mostre a mensagem e não tente de novo.

@@ -14,6 +14,13 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - `structuredOutput: tool` não produz saída estruturada no V2; o opc usa `text` e valida o JSON localmente.
 - O `PATCH` de permissões substitui a lista; a troca de perfil no `--resume` é permitida.
 - Catálogos omitem `settings`, que pode conter chave de provider.
+- O modelo padrão do servidor (`/api/model/default`, em geral gratuito do provider `opencode`) não é mais fallback de execução; sem `--model`, rota, `defaultModel` ou `model` declarado na configuração do OpenCode, o erro é `NO_MODEL`.
+- O boot do servidor gerenciado espera o evento `model.updated` (até 30 s) antes de resolver modelos, porque o V2 carrega providers do gateway depois do boot.
+- `/opc:setup` não oferece mais `npm install -g opencode-ai` (o pacote npm ainda publica o V1); orienta a instalação oficial do 2.0.22+ ou `server.opencodeBin`.
+- `session fork` usa `--before <messageID>`; `revert --part` e `diff --message` deixaram de existir.
+- No conclave, JSON inválido no texto falha como `InvalidStructuredOutput` (com o caminho do erro); prosa sem JSON continua `MissingStructuredOutput`.
+- `session revert` aplica só o stage do V2: os arquivos voltam e o revert fica pendente até `unrevert` (o commit, que apaga as mensagens sem volta, não é chamado). Com `"snapshot": false` na config do OpenCode, recusa com `SNAPSHOT_DISABLED`, e `session diff` avisa que o diff fica vazio.
+- Leitura de mensagens e sessões paginada por cursor (no máximo 200 por página, como exige o V2); `session summarize` envia o corpo `{}` exigido por `/compact`.
 
 ### Adicionado — F5 (MCP e transfer)
 

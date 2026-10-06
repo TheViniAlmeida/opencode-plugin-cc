@@ -57,7 +57,6 @@ coordenador; planner, `worker:<n>` e sintetizador são membros visíveis em `/op
 
 | Situação | Resultado |
 |---|---|
-| `StructuredOutputError` do planner (modo `tool`) | `planner_structured_output`, grupo falha |
 | Falha do turno do planner ou nenhum objeto JSON extraído (modo `text`) | `planner_failed`, grupo falha |
 | Plano inválido, inclusive saída estruturada que não é objeto | `invalid_plan`, grupo falha |
 | Nenhuma subtarefa concluiu | `all_subtasks_failed`, grupo falha |
@@ -65,9 +64,9 @@ coordenador; planner, `worker:<n>` e sintetizador são membros visíveis em `/op
 | Cancelamento do grupo | Sessões são abortadas, pendentes são canceladas, exit 130 |
 | Erro de persistência do coordenador | `coordinator_error`, grupo falha |
 
-O planner usa `orchestrate.structuredOutput: "text"` por padrão: pede um único objeto JSON em
-uma cerca `json` e o opc o extrai e valida. Isso evita o `StructuredOutputError` observado no
-OpenCode 1.18.32 pelo gateway quando `format: json_schema` era enviado. O modo `tool` é opt-in.
+O planner usa `orchestrate.structuredOutput: "text"`, o único valor aceito: pede um único objeto
+JSON em uma cerca `json` e o opc o extrai e valida localmente. O OpenCode V2 não oferece
+`json_schema`; um valor antigo `tool` na configuração é convertido para `text` com aviso.
 
 ```bash
 # Leitura, síntese pelo Claude
