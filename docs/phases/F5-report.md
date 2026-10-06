@@ -3,7 +3,7 @@
 - **Data:** 03/10/2026 (America/Belem).
 - **Branch:** `feat/opc-f5`; continuação após `441c8ff`, com commit, push e PR em rascunho autorizados pelo operador.
 - **Ambiente:** Linux; Node 22.22.1 e 24.21.0; OpenCode 1.18.34; Claude Code 2.1.287 instalado.
-- **Estado:** implementação das Tasks 1–10 concluída; portão da Task 11 parcial, com aceite no Claude Code, inferência real pelo MCP e retomada interativa pendentes.
+- **Estado:** PR #12 mergeado na `main` em 06/10/2026 (`64000ec`). Implementação das Tasks 1–10 concluída; portão da Task 11 parcial, com aceite no Claude Code, inferência real pelo MCP e retomada interativa NÃO VALIDADO.
 
 ## 1. Suíte de testes
 
@@ -15,7 +15,15 @@ O comando de cada versão é `<node> scripts/run-tests.mjs`, equivalente ao scri
 | Node 22.22.1, código final | PASSOU | 1939 testes, 1938 pass, 0 fail, 1 skipped; 207,1 s |
 | Node 24.21.0, código final | PASSOU | 1939 testes, 1938 pass, 0 fail, 1 skipped; 142,7 s |
 | Node 20 | NÃO VALIDADO | Versão não disponível localmente; continua na matriz do CI |
-| CI remoto | A CONFIRMAR | Acompanhar os checks do PR em rascunho; resultados locais acima |
+| CI remoto | PASSOU | Checks do PR #12 passaram em Node 20 e 22 no commit `a9a0422`; Node 20 não foi rodado localmente |
+
+**Limitação do runner (histórica, corrigida).** Nas rodadas desta fase, o `--test-force-exit` do runner às vezes
+encerrava o processo do arquivo antes de entregar todos os resultados (por exemplo,
+`tests/unit/policy-profiles.test.mjs` reportava 43, 46 ou 63 casos com exit 0; reproduzido no Node 24.21.0).
+Foi corrigida depois do merge, em `bd53bf4` (branch `fix/test-runner-lost-results`): o runner passa
+`--import=scripts/test-exit-after-grace.mjs` no lugar da flag, e o processo só é encerrado à força 3 s depois do fim
+dos testes se um handle vazado o prender. Evidência: 63/63 em 8/8 rodadas e suíte completa com 1940 testes, 1939 pass,
+0 fail, 1 skipped, em duas rodadas. Os números das tabelas acima são anteriores à correção.
 
 O skip preexistente é o cenário cross-UID, que exige fixture com outro proprietário.
 O runner não inclui `tests/live/` nesta suíte. Sem `OPC_LIVE=1`, os dois testes novos da F5 são pulados explicitamente (2 skipped, 0 fail).

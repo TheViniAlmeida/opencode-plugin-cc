@@ -4574,9 +4574,9 @@ Reler cada mensagem antes do commit: sem `Co-Authored-By`, `Signed-off-by` ou "G
 
 ---
 
-## Progresso / achados (atualizado em 02/10/2026)
+## Progresso / achados (atualizado em 06/10/2026)
 
-**Estado:** F5 em andamento, branch `feat/opc-f5`. Tasks 1–6 de 11 concluídas, com todos os passos marcados acima. Suíte da branch: 1871 pass, 0 fail, 1 skipped (o cenário cross-UID, que exige root). A `main` trouxe os PRs #10 (execuções de teste sempre terminam) e #11 (cancelamento durante a criação da sessão), já mergeados e incorporados à branch.
+**Estado (06/10/2026):** F5 mergeada na `main` pelo PR #12 (`64000ec`). Tasks 1–11 concluídas; o portão da Task 11 ficou parcial (ver Pendências). Os itens abaixo, até "Continuação local", são o registro de 02/10/2026, quando eram Tasks 1–6 de 11, com todos os passos marcados acima. Suíte da branch: 1871 pass, 0 fail, 1 skipped (o cenário cross-UID, que exige root). A `main` trouxe os PRs #10 (execuções de teste sempre terminam) e #11 (cancelamento durante a criação da sessão), já mergeados e incorporados à branch.
 
 ### Achados de revisão por task e resolução
 
@@ -4603,13 +4603,24 @@ Observação aceita na Task 3: nomes desconhecidos com mais de 12 caracteres con
 
 ### Pendências abertas
 
-- [ ] Task 7: regras do aprovador, confirmações e ausência de escrita de config pelo MCP.
-- [ ] Task 8: núcleo do transfer.
-- [ ] Task 9: `transfer`, `/opc:transfer` e `opencode import` no binário falso.
-- [ ] Task 10: skill e documentação (MCP e transfer): README, CHANGELOG, `docs/architecture.md`, `docs/commands.md`, `docs/troubleshooting.md`.
-- [ ] Task 11: portão. Inclui verificação ao vivo (`f5-mcp`, `f5-transfer`), procedimentos manuais do operador, relatório `docs/phases/F5-report.md` e registro das interfaces no mestre.
-- [ ] PR `feat/opc-f5` → `main`, com autorização do operador, e gravação dupla (`.ai-data` + colmeia).
-- [ ] Revisão da branch inteira da F5 antes do PR.
+- [x] Task 7: regras do aprovador, confirmações e ausência de escrita de config pelo MCP.
+- [x] Task 8: núcleo do transfer.
+- [x] Task 9: `transfer`, `/opc:transfer` e `opencode import` no binário falso.
+- [x] Task 10: skill e documentação (MCP e transfer): README, CHANGELOG, `docs/architecture.md`, `docs/commands.md`, `docs/troubleshooting.md`.
+- [x] Task 11: portão (parcial). Feitos: `f5-transfer` ao vivo, relatório `docs/phases/F5-report.md` e interfaces no mestre.
+- [x] PR `feat/opc-f5` → `main` (#12, mergeado em 06/10/2026; checks passaram em Node 20 e 22).
+- [x] Revisão da branch inteira da F5 antes do PR.
+
+Restam (NÃO VALIDADO):
+
+- [ ] Aceite MCP ao vivo com dois modelos (`tests/live/f5-mcp.mjs`, `OPC_LIVE_MODEL` e `OPC_LIVE_MODEL_2`).
+- [ ] Contrato completo da API ao vivo (`tests/live/contract.mjs`).
+- [ ] Bloqueio observado em 06/10/2026: a config global do OpenCode do operador passou a usar permissões V2 e o OpenCode 1.18.34 (V1) a rejeita (`V2 permissions are not supported by OpenCode V1`); os dois itens ao vivo acima dependem de uma config V1 válida ou de suporte do opc ao OpenCode V2 (`opencode2` 2.0.22 instalado, compatibilidade A CONFIRMAR).
+- [ ] Procedimentos manuais do operador no Claude Code/TUI: ferramentas MCP, associação de jobs à sessão, confirmação de permissões e retomada com `opencode -s <id>`.
+- [ ] macOS e Windows.
+- [ ] Gravação na colmeia (`PENDENTE-COLMEIA`; a `.ai-data` já tem o registro local).
+
+A limitação do runner (resultados perdidos com `--test-force-exit`) não é pendência da F5: foi corrigida em `bd53bf4`, na branch `fix/test-runner-lost-results`.
 
 ### Riscos e observações
 

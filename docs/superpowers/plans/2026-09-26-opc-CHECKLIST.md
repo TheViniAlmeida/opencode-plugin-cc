@@ -286,7 +286,7 @@ Ao vivo: pool `deepseek-v4.1-flash`, `qwen3.8-max`, `kimi-k3` + 1 extra
 
 Ao vivo: rodízio
 
-Estado (02/10/2026): em andamento, Tasks 1–6 de 11 concluídas (suíte 1871 pass / 0 fail / 1 skipped). Tasks 7–11 pendentes. Achados de revisão e pendências: seção "Progresso / achados" do plano da F5.
+Estado (06/10/2026): mergeada na `main` pelo PR #12; Tasks 1–11 concluídas, com o portão parcial (itens abaixo seguem NÃO VALIDADO). Achados de revisão e pendências: seção "Progresso / achados" do plano da F5 e `docs/phases/F5-report.md`.
 
 - [x] Task 1: Contrato do companion, argumentos só antes de `--` e compatibilidade dos comandos longos
 - [x] Task 2: Núcleo do protocolo MCP (JSON-RPC 2.0 por stdio)
@@ -294,16 +294,19 @@ Estado (02/10/2026): em andamento, Tasks 1–6 de 11 concluídas (suíte 1871 pa
 - [x] Task 4: Catálogo de ferramentas MCP, mapeamento para argv e envelope
 - [x] Task 5: `mcp-server.mjs`, declaração no plugin e handshake
 - [x] Task 6: Execução, jobs e sessões pelo MCP
-- [ ] Task 7: Regras do aprovador, confirmações, sem escrita de config
-- [ ] Task 8: Núcleo do transfer
-- [ ] Task 9: `transfer`, `/opc:transfer` e `opencode import` no binário falso
-- [ ] Task 10: Skill e documentação (MCP e transfer)
-- [ ] Task 11: Portão da F5
-  - [ ] ao vivo: `f5-mcp` (listar modelos, conclave via MCP) e `f5-transfer`
-  - [ ] **manual (operador):** Claude usando as ferramentas MCP numa sessão real; sessão transferida retomada com `opencode -s <id>` (§15, item 10)
-  - [ ] docs `architecture` (MCP), `commands` (transfer), README · relatório · CHANGELOG
-  - [ ] **[PAUSA-APROVAÇÃO]** push + PR · aviso · gravação dupla
-- [ ] **Marco: integração máxima entregue** — data: ____
+- [x] Task 7: Regras do aprovador, confirmações, sem escrita de config
+- [x] Task 8: Núcleo do transfer
+- [x] Task 9: `transfer`, `/opc:transfer` e `opencode import` no binário falso
+- [x] Task 10: Skill e documentação (MCP e transfer)
+- [x] Task 11: Portão da F5 (parcial; ver itens)
+  - [x] ao vivo: `f5-transfer` (round trip com OpenCode 1.18.34, armazenamento isolado)
+  - [ ] ao vivo: `f5-mcp` (listar modelos, conclave via MCP com dois modelos, `OPC_LIVE_MODEL`/`OPC_LIVE_MODEL_2`) — NÃO VALIDADO
+  - [ ] ao vivo: contrato completo da API (`tests/live/contract.mjs`) — NÃO VALIDADO
+  - [ ] **manual (operador):** ferramentas MCP numa sessão real do Claude Code, associação de jobs à sessão, confirmação de permissões e sessão transferida retomada com `opencode -s <id>` (§15, item 10) — NÃO VALIDADO
+  - [ ] macOS e Windows — NÃO VALIDADO
+  - [x] docs `architecture` (MCP), `commands` (transfer), README · relatório · CHANGELOG
+  - [x] **[PAUSA-APROVAÇÃO]** push + PR (#12, mergeado em 06/10/2026) · aviso · gravação dupla (colmeia: PENDENTE-COLMEIA)
+- [ ] **Marco: integração máxima entregue** — F5 mergeada em 06/10/2026 (PR #12); marco completo só com os itens NÃO VALIDADO acima. Data: ____
 
 ---
 
@@ -369,4 +372,6 @@ Acompanhar durante a execução; detalhes no "Registro de reconciliação" do me
 | 30/09/2026 | F4b e F4c mergeadas | PRs #8 e #9 |
 | 01/10/2026 | Correções avulsas mergeadas | PRs #10 (execuções de teste sempre terminam) e #11 (cancelamento durante a criação da sessão) |
 | 01/10/2026 | F5: Tasks 1–6 concluídas | branch `feat/opc-f5`; flake do `ping` no `serveStdio` corrigido (concorrência) |
-| | F5 mergeada | pendente: Tasks 7–11, portão e PR |
+| 03/10/2026 | F5: Tasks 7–11 concluídas | portão parcial; relatório `docs/phases/F5-report.md` |
+| 06/10/2026 | F5 mergeada | PR #12 (merge `64000ec`); última fase do plano; portão parcial, itens NÃO VALIDADO seguem no checklist |
+| 06/10/2026 | Correção do runner de testes | `bd53bf4` na branch `fix/test-runner-lost-results`: sem `--test-force-exit`, saída após período de graça |
