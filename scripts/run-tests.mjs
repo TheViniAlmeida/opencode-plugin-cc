@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const KINDS = Object.freeze(['unit', 'integration', 'live']);
@@ -18,6 +18,7 @@ export const TEST_TIMEOUT_MS = 300_000;
 export const RUN_TIMEOUT_MS = Object.freeze({ default: 30 * 60_000, live: 6 * 60 * 60_000 });
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const KILL_GRACE_MS = 5000;
+export const TEST_PRELOAD = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'test-exit-after-grace.mjs')).href;
 const ORPHAN_POLL_MS = 1000;
 
 function walk(dir, out) {
@@ -63,8 +64,8 @@ export function supportsTestTimeout(version = process.versions.node) {
   return nodeAtLeast(version, 20, 11);
 }
 
-export function supportsTestForceExit(version = process.versions.node) {
-  return nodeAtLeast(version, 20, 14);
+export function supportsTestPreload(version = process.versions.node) {
+  return nodeAtLeast(version, 20, 6);
 }
 
 function positiveInt(value, fallback) {
@@ -79,8 +80,8 @@ export function nodeTestArgs(kind, { version = process.versions.node, env = proc
   if (!live && supportsTestTimeout(version)) {
     args.push(`--test-timeout=${positiveInt(env.OPC_TEST_TIMEOUT_MS, TEST_TIMEOUT_MS)}`);
   }
-  // Exit once the tests are done even if a leaked handle (a child whose t.after was skipped) keeps the loop alive.
-  if (supportsTestForceExit(version)) args.push('--test-force-exit');
+  // Exit once the tests are done even if a leaked handle keeps the loop alive, without losing results (see the preload).
+  if (supportsTestPreload(version)) args.push(`--import=${TEST_PRELOAD}`);
   return args;
 }
 
@@ -100,7 +101,7 @@ function killGroup(child, signal) {
 // Runs node --test in its own process group, so a run timeout, a signal, or the death of our parent (a sandbox
 // or agent that gave up on us) takes down every test process instead of leaving the tree running forever.
 // Limits: being a separate group, a SIGKILL sent to the caller's group no longer reaches the suite (it still ends
-// on its own through --test-force-exit and the per-file cap for unit/integration; live relies on its tests' own
+// on its own through the exit-after-grace preload and the per-file cap for unit/integration; live relies on its tests' own
 // timeouts); on Windows only the direct child is killed and the parent watchdog never fires (ppid does not change).
 export function runNodeTest(args, { env, cwd, timeoutMs, pollMs = ORPHAN_POLL_MS }) {
   return new Promise((resolve) => {
