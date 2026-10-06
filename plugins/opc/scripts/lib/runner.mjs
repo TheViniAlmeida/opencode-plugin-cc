@@ -332,11 +332,12 @@ export async function runTurn({
       if (!settled) {
         const text = (request.parts ?? []).filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('\n');
         const promptText = request.format?.type === 'json_schema' ? `${text}\n\n${jsonInstruction(request.format.schema)}` : text;
-        await sendPrompt(api, sessionID, { id: messageID, text: promptText });
+        await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
         promptAccepted = true;
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
+      else if (request.agentModeFallback && err?.code === 'BAD_REQUEST' && isAgentModeRefusal(err)) throw err;
       else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada.' } } });
       else throw err;
     }
@@ -419,7 +420,7 @@ export async function runTurn({
   }
 }
 // --- F3: subagents ------------------------------------------------------------------
-export const SUBAGENT_MECHANISMS = Object.freeze(['child-session', 'subtask']);
+export const SUBAGENT_MECHANISMS = Object.freeze(['child-session', 'subagent-tool']);
 
 export function isAgentModeRefusal(errOrResult) {
   if (!errOrResult) return false;
@@ -432,39 +433,39 @@ export function isAgentModeRefusal(errOrResult) {
 
 export function extractTaskOutput(messages) {
   for (let i = (messages?.length ?? 0) - 1; i >= 0; i -= 1) {
-    const parts = messages[i]?.parts ?? [];
+    const parts = messages[i]?.content ?? [];
     for (let j = parts.length - 1; j >= 0; j -= 1) {
       const part = parts[j];
-      if (part.type === 'tool' && part.tool === 'task' && part.state?.status === 'completed' && typeof part.state.output === 'string') {
-        return part.state.output;
+      if (part.type === 'tool' && part.name === 'subagent' && part.state?.status === 'completed') {
+        return (part.state.content ?? []).filter((content) => content.type === 'text' && typeof content.text === 'string').map((content) => content.text).join('\n');
       }
     }
   }
   return '';
 }
 
-// Runs one subagent member. Default: a child session with the agent (spec §13.3 F3).
-// If OpenCode refuses a subagent-mode agent as session agent (§15 item 7), falls back to a
-// `subtask` part sent to a carrier child session (one carrier per member: one prompt per session).
+// Runs one subagent member. An agent-mode refusal falls back to a carrier session
+// that invokes the V2 subagent tool with the member's model and permissions.
 export async function dispatchSubagent({
   api, hub, parentSessionID, member, prompt, rules, mechanism = 'child-session', allowFallback = true,
   timeoutMs, fallbackCfg, onSession = () => {}, onProgress = () => {}, onPermission = async () => {},
   onQuestion = async () => {}, onRequestResolved = async () => {}, signal, runTurnImpl = runTurn,
 }) {
+  if (mechanism === 'subtask') mechanism = 'subagent-tool';
   if (!SUBAGENT_MECHANISMS.includes(mechanism)) {
-    const value = String(mechanism ?? '');
-    const shown = value.length > 12 ? `${value.slice(0, 12)}…` : value;
-    throw new UsageError('INVALID_MECHANISM', `Mecanismo inválido: ${shown} (use ${SUBAGENT_MECHANISMS.join(' ou ')})`);
+    throw new UsageError('INVALID_MECHANISM', `Mecanismo inválido: ${String(mechanism ?? '').slice(0, 12)}… (use ${SUBAGENT_MECHANISMS.join(' ou ')})`);
   }
   // onRequestResolved is forwarded to runTurn so the F2a request bridge (bridge.onResolved) releases pending requests.
   const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, signal };
   const baseRequest = { model: member.model, variant: member.variant, timeoutMs, fallbackCfg };
+  const model = modelFor(baseRequest);
 
-  const viaSubtask = async (fellBack) => {
+  const viaSubagentTool = async (fellBack) => {
     const carrier = await api.createSession({
       parentID: parentSessionID,
-      title: `${member.title} (subtask)`,
-      permission: [...rules, { permission: 'task', pattern: member.agent, action: 'allow' }],
+      title: `${member.title} (subagent)`,
+      model,
+      permissions: [...rules, { action: 'subagent', resource: member.agent, effect: 'allow' }],
     });
     await onSession(carrier.id);
     const result = await runTurnImpl({
@@ -473,22 +474,23 @@ export async function dispatchSubagent({
         ...baseRequest,
         sessionID: carrier.id,
         messageID: newMessageId(),
-        parts: [{ type: 'subtask', prompt, description: member.title, agent: member.agent, model: member.model }],
+        parts: [{ type: 'text', text: `Use the subagent tool with agent "${member.agent}" to do the task below, then reply with the subagent's final answer only.\n\n${prompt}` }],
+        agents: [member.agent],
       },
     });
     let finalText = result.finalText;
-    // task tool output is model-derived raw text: read through the list-bug-aware reader and mask it like runTurn's finalText
+    // Tool output is model-derived raw text; use the V2 reader and mask it like runTurn's finalText.
     if (!finalText && result.status === 'completed') finalText = safeOutputText(extractTaskOutput(await readSessionMessages(api, carrier.id)));
-    return { ...result, finalText, mechanism: 'subtask', fellBack, carrierSessionID: carrier.id };
+    return { ...result, finalText, mechanism: 'subagent-tool', fellBack, carrierSessionID: carrier.id };
   };
 
-  if (mechanism === 'subtask') return viaSubtask(false);
+  if (mechanism === 'subagent-tool') return viaSubagentTool(false);
 
   let child;
   try {
-    child = await api.createSession({ parentID: parentSessionID, title: member.title, agent: member.agent, permission: rules });
+    child = await api.createSession({ parentID: parentSessionID, title: member.title, agent: member.agent, model, permissions: rules });
   } catch (err) {
-    if (allowFallback && isAgentModeRefusal(err)) return viaSubtask(true);
+    if (allowFallback && isAgentModeRefusal(err)) return viaSubagentTool(true);
     throw err;
   }
   await onSession(child.id);
@@ -496,12 +498,12 @@ export async function dispatchSubagent({
   try {
     result = await runTurnImpl({
       ...common,
-      request: { ...baseRequest, sessionID: child.id, messageID: newMessageId(), agent: member.agent, parts: [{ type: 'text', text: prompt }] },
+      request: { ...baseRequest, sessionID: child.id, messageID: newMessageId(), agent: member.agent, agentModeFallback: allowFallback, parts: [{ type: 'text', text: prompt }] },
     });
   } catch (err) {
-    if (allowFallback && isAgentModeRefusal(err)) return viaSubtask(true);
+    if (allowFallback && isAgentModeRefusal(err)) return viaSubagentTool(true);
     throw err;
   }
-  if (result.status === 'failed' && allowFallback && isAgentModeRefusal(result)) return viaSubtask(true);
+  if (result.status === 'failed' && allowFallback && isAgentModeRefusal(result)) return viaSubagentTool(true);
   return { ...result, mechanism: 'child-session', fellBack: false };
 }

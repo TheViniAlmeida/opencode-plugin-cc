@@ -3,55 +3,8 @@ import assert from 'node:assert/strict';
 import { newMessageId, phaseFromPart, runTurn, turnMessages, extractTurn, toolErrorSummary } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { ConnectionError, RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
+import { memoryV2 } from './_memory-v2.mjs';
 
-function memoryV2({ promptFailsOnce } = {}) {
-  const handlers = new Map();
-  const anyHandlers = new Set();
-  let resolveCreated, resolvePrompt;
-  let active = true;
-  const messages = new Map();
-  const sessions = new Map();
-  const api = {
-    calls: [], promptCalls: [], messageReadsBeforeEnd: 0,
-    created: new Promise((resolve) => { resolveCreated = resolve; }),
-    promptSettled: new Promise((resolve) => { resolvePrompt = resolve; }),
-    async createSession(body) { this.createdBody = body; sessions.set('ses_mem1', body); resolveCreated('ses_mem1'); return { id: 'ses_mem1' }; },
-    async getSession(id) { const body = sessions.get(id) ?? this.createdBody; return { id, model: body.model, agent: body.agent, permissions: body.permissions }; },
-    async setPermissions(id, rules) { this.calls.push(['setPermissions', id, rules]); },
-    async setModel(id, model) { this.calls.push(['setModel', id, model]); },
-    async setAgent(id, agent) { this.calls.push(['setAgent', id, agent]); },
-    async prompt(id, body) {
-      this.promptCalls.push(body);
-      if (promptFailsOnce && this.promptCalls.length === 1) throw new RequestError(promptFailsOnce, 'timeout');
-      resolvePrompt();
-    },
-    lastPromptId() { return this.promptCalls.at(-1)?.id; },
-    messagesFor(id, list) { messages.set(id, list); },
-    async messages(id) { if (active) this.messageReadsBeforeEnd++; return messages.get(id) ?? []; },
-    async sessionStatus() { return active ? { ses_mem1: { type: 'busy' } } : {}; },
-    async children() { return []; },
-    async listPermissions() { return []; },
-    async listQuestions() { return []; },
-    async interrupt() { return true; },
-    async diff() { return []; },
-  };
-  const hub = {
-    track(id, handler) { handlers.set(id, handler); return () => handlers.delete(id); },
-    onReconnect() { return () => {}; },
-    onAny(handler) { anyHandlers.add(handler); return () => anyHandlers.delete(handler); },
-  };
-  const emit = (event) => {
-    for (const handler of anyHandlers) handler(event);
-    if (['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted'].includes(event.type)) active = false;
-    if (event.type === 'session.created' && event.data?.parentID && handlers.has(event.data.parentID)) {
-      handlers.set(event.data.sessionID, handlers.get(event.data.parentID));
-      const parent = sessions.get(event.data.parentID) ?? api.createdBody;
-      sessions.set(event.data.sessionID, { model: parent.model, agent: parent.agent, permissions: structuredClone(parent.permissions) });
-    }
-    handlers.get(event.data?.sessionID)?.(event);
-  };
-  return { api, hub, emit };
-}
 
 test('V2 turn completes on execution.succeeded and reads idle-bounded messages', async () => {
   const { api, hub, emit } = memoryV2();

@@ -52,7 +52,7 @@ async function workerFixture(t, dispatch) {
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: teste' }, [{ title: 'membro' }]);
   const ctx = { stateDir, config: {}, json: () => {} };
   const api = { createSession: async () => ({ id: 'ses_parent' }), abort: async () => false };
-  const request = { members: [{ agent: 'general', full: 'p/model' }], mechanism: 'child-session', rules: [], prompt: 'teste' };
+  const request = { members: [{ agent: 'general', full: 'p/model', model: { providerID: 'p', modelID: 'model' } }], mechanism: 'child-session', rules: [{ action: '*', resource: '*', effect: 'deny' }], prompt: 'teste' };
   await runWorker(ctx, group, request, {
     openApi: async () => ({ api, close() {} }),
     createBridge: () => ({ dispose() {} }),
@@ -111,11 +111,16 @@ test('I3: prévia de 250 mensagens localiza mensagem 10 fora da última página'
   assert.equal(preview.previewTruncated, true);
 });
 
-test('LIVE-1: directory é string em sessões seed, criadas, filhas e forks', () => {
-  const fake = { state: {}, emit() {} };
+test('LIVE-1: location.directory é string em sessões seed, criadas, filhas e forks', () => {
+  const fake = { state: {}, emit() {}, createSession(body, directory) {
+    const id = `ses_${Object.keys(this.state.sessions).length + 1}`;
+    const session = { ...body, id, location: { directory } };
+    this.state.sessions[id] = session;
+    return session;
+  } };
   seedSession(fake);
   createSessionRecord(fake);
   createSessionRecord(fake, { parentID: SEED.session }, '/workspace');
-  F3_SESSION_ROUTES['POST /session/:id/fork'](fake, { params: { id: SEED.session } });
-  for (const session of Object.values(fake.state.sessions)) assert.equal(typeof session.directory, 'string');
+  F3_SESSION_ROUTES['POST /api/session/:id/fork'](fake, { params: { id: SEED.session } });
+  for (const session of Object.values(fake.state.sessions)) assert.equal(typeof session.location.directory, 'string');
 });

@@ -70,6 +70,10 @@ export async function run(ctx, argv) {
     }
   } else prompt = raw.text ?? positionals.join(' ');
   if (!prompt.trim()) throw new UsageError('NO_PROMPT', 'informe o prompt dos subagentes (texto ou --prompt-file)');
+  if (flags.mechanism === 'subtask') {
+    ctx.err('Aviso: --mechanism subtask foi renomeado para subagent-tool.\n');
+    flags.mechanism = 'subagent-tool';
+  }
   if (!SUBAGENT_MECHANISMS.includes(flags.mechanism)) throw new UsageError('INVALID_MECHANISM', `--mechanism deve ser ${SUBAGENT_MECHANISMS.join(' ou ')}`);
   const pairs = pairAgentsAndModels(splitList(flags.agent), splitList(flags.model));
   const variant = flags.variant ?? flags.effort ?? null;
@@ -126,6 +130,8 @@ export async function runWorker(ctx, groupJob, request, {
 } = {}) {
   const { stateDir } = ctx;
   const req = request;
+  const mechanism = req.mechanism === 'subtask' ? 'subagent-tool' : req.mechanism;
+  if (req.mechanism === 'subtask') appendJobLog(stateDir, groupJob.id, '[opc] aviso: mecanismo subtask foi renomeado para subagent-tool');
   const memberIds = groupJob.memberIds ?? [];
   const now = () => new Date().toISOString();
   let chain = Promise.resolve();
@@ -137,7 +143,9 @@ export async function runWorker(ctx, groupJob, request, {
   try {
     conn = await makeConnection(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
-    const parent = await api.createSession({ title: groupJob.title, permission: req.rules });
+    const firstModel = req.members[0];
+    const parent = await api.createSession({ title: groupJob.title, permissions: req.rules,
+      model: { providerID: firstModel.model.providerID, id: firstModel.model.modelID, ...(firstModel.variant ? { variant: firstModel.variant } : {}) } });
     const coordinator = { pid: process.pid, pidStartTime: getProcessIdentity(process.pid)?.startTime ?? null };
     await updateJob(stateDir, groupJob.id, { status: 'running', startedAt: now(), sessionID: parent.id });
     for (const id of memberIds) await updateJob(stateDir, id, { parentSessionID: parent.id, pid: coordinator.pid, pidStartTime: coordinator.pidStartTime });
@@ -159,7 +167,7 @@ export async function runWorker(ctx, groupJob, request, {
         let res;
         try {
           res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
-            mechanism: req.mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
+            mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
             onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.interrupt(sessionID).catch(() => {}); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
             onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
@@ -175,7 +183,7 @@ export async function runWorker(ctx, groupJob, request, {
           ...(wasCancelled ? { errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' } : {
             errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
           }),
-          childSessionIDs: res.childSessionIDs ?? [], pendingRequest: null, result: memberResult(res, spec, req.mechanism) });
+          childSessionIDs: res.childSessionIDs ?? [], pendingRequest: null, result: memberResult(res, spec, mechanism) });
         appendJobLog(stateDir, groupJob.id, `${tag} ${status}`);
       } catch (err) {
         const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
