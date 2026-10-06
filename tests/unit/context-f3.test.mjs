@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadDiscovery, requireAgent, resolveModel, profileRules } from '../../plugins/opc/scripts/lib/context.mjs';
 import { DEFAULT_CONFIG } from '../../plugins/opc/scripts/lib/config.mjs';
-import { F3_PROVIDERS, F3_MODEL_CATALOG, F3_AGENTS, F3_OPENCODE_CONFIG, F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
+import { F3_PROVIDERS, F3_MODEL_CATALOG, F3_AGENTS, F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
 
 const config = { ...DEFAULT_CONFIG, ...F3_TEST_CONFIG };
 const ctx = { config, err: () => {} };
+const DEFAULT_MODEL = { providerID: 'omniroute-personal', id: 'opencode-go/deepseek-v4.1-flash' };
 const discovery = await loadDiscovery({ providers: async () => F3_PROVIDERS, models: async () => F3_MODEL_CATALOG,
-  getConfigSources: async () => F3_OPENCODE_CONFIG, agents: async () => F3_AGENTS });
+  defaultModel: async () => DEFAULT_MODEL, agents: async () => F3_AGENTS });
 const policy = config.policy;
 
 test('loadDiscovery uses V2 catalogs and reaches model selection', async () => {
@@ -15,11 +16,12 @@ test('loadDiscovery uses V2 catalogs and reaches model selection', async () => {
   const api = {
     providers: async () => { calls.push('providers'); return F3_PROVIDERS; },
     models: async () => { calls.push('models'); return F3_MODEL_CATALOG; },
-    getConfigSources: async () => { calls.push('config'); return F3_OPENCODE_CONFIG; },
+    defaultModel: async () => { calls.push('default'); return DEFAULT_MODEL; },
     agents: async () => { calls.push('agents'); return F3_AGENTS; },
   };
   const found = await loadDiscovery(api);
-  assert.deepEqual(calls.sort(), ['agents', 'config', 'models', 'providers']);
+  assert.deepEqual(calls.sort(), ['agents', 'default', 'models', 'providers']);
+  assert.equal(found.opencodeConfig.model, F3_MODELS.deepseek);
   assert.equal(resolveModel(ctx, found, 'task', 'fast').full, F3_MODELS.deepseek);
   assert.equal(found.catalog.byFull.get(F3_MODELS.deepseek).variants.includes('high'), true);
 });

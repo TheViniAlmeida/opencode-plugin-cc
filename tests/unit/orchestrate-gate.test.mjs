@@ -26,16 +26,11 @@ function fixture(t, { mode = 'text', slow = false } = {}) {
   };
   const routes = installSessionApi(fake);
   const handle = async (method, route, body, options) => {
-    const v2Body = route === '/api/session' && method === 'POST'
-      ? { ...body, permissions: body.permissions.map((rule) => ({ action: rule.permission, resource: rule.pattern, effect: rule.action })) }
-      : body;
-    const response = await routes.handle(method, route, new URLSearchParams(options?.query), v2Body);
+    const response = await routes.handle(method, route, new URLSearchParams(options?.query), body);
     if ((response.status ?? 200) >= 400) throw new RequestError('BAD_REQUEST', 'requisição recusada', { details: { body: response.body } });
     return response.body?.data ?? response.body;
   };
   const api = createApi({ get: (route, options) => handle('GET', route, undefined, options), post: (route, body) => handle('POST', route, body), patch: (route, body) => handle('PATCH', route, body) });
-  // jobs.mjs cancellation still calls the V1 alias until its later migration task.
-  api.abort = api.interrupt;
   const hub = { track(_id, fn) { listeners.add(fn); return () => listeners.delete(fn); }, onReconnect() { return () => {}; } };
   const full = FIXTURE_MODELS.fast;
   const [providerID, ...modelParts] = full.split('/');
@@ -103,7 +98,7 @@ for (const target of ['group', 'member']) {
     const exitCode = await worker;
     assert.equal(result.ok, true);
     assert.equal(target === 'group' ? result.deferred : result.report.deferred, true);
-    assert.equal(fake.state.messages[delayedSession.id].filter((m) => m.info.role === 'user').length, 0);
+    assert.equal(fake.state.messages[delayedSession.id].filter((m) => m.type === 'user').length, 0);
     assert.ok(fake.state.aborts.includes(delayedSession.id));
     const saved = readJob(ctx.stateDir, member.id);
     assert.equal(saved.status, 'cancelled');

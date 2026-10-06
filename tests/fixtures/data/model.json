@@ -78,6 +78,10 @@
       "apiKey": "YOUR_API_KEY_HERE",
       "baseURL": "https://example.invalid/v1",
       "provider": "omniroute-personal"
+    },
+    "limit": {
+      "context": 262144,
+      "output": 32768
     }
   },
   {

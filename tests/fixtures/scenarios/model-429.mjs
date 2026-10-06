@@ -11,6 +11,6 @@ export default {
       });
       return;
     }
-    fake.emitTurn(sessionID, successTurn(fake.state.sessions[sessionID]));
+    fake.emitTurn(sessionID, successTurn(fake.state.sessions[sessionID], body));
   },
 };

@@ -208,6 +208,7 @@ export function installSessionApi(fake) {
       if (existing) return ok(promptResponse(existing));
       const user = message('user', { id: body.id ?? id('msg'), text: body.text, delivery: body.delivery ?? 'steer' });
       state.messages[session.id].push(user);
+      (state.prompts ??= []).push({ sessionID: session.id, model: structuredClone(session.model ?? null), agent: session.agent ?? null });
       fake.setStatus(session.id, { type: 'busy' });
       persist();
       setImmediate(() => {
@@ -228,6 +229,7 @@ export function installSessionApi(fake) {
       const limit = Number(q.get('limit'));
       return ok(limit > 0 ? ordered.slice(0, limit) : ordered);
     }],
+    ['GET', /^\/api\/session\/(ses[^/]+)\/diff$/, (m) => (state.sessions[m[1]] ? ok(state.diffs[m[1]] ?? []) : missing())],
     ['GET', /^\/api\/session\/(ses[^/]+)\/permission$/, (m) => ok(Object.values(state.permissions).filter((r) => r.sessionID === m[1]))],
     ['POST', /^\/api\/session\/(ses[^/]+)\/permission\/(per[^/]+)\/reply$/, (m, _q, body) => {
       const request = state.permissions[m[2]];
@@ -285,7 +287,7 @@ export function installSessionApi(fake) {
 export const SESSION_API_ROUTES = Object.freeze([
   'POST /api/session', 'GET /api/session', 'GET /api/session/active', 'GET /api/session/:id', 'PATCH /api/session/:id',
   'POST /api/session/:id/model', 'POST /api/session/:id/agent', 'POST /api/session/:id/prompt',
-  'POST /api/session/:id/interrupt', 'GET /api/session/:id/message', 'GET /api/session/:id/permission',
+  'POST /api/session/:id/interrupt', 'GET /api/session/:id/message', 'GET /api/session/:id/diff', 'GET /api/session/:id/permission',
   'POST /api/session/:id/permission/:requestID/reply', 'GET /api/session/:id/form',
   'POST /api/session/:id/form/:formID/reply', 'DELETE /api/session/:id/form/:formID',
 ]);

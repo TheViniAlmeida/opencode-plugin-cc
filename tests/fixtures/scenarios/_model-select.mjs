@@ -20,6 +20,8 @@ export function reviewStructured() {
   return { verdict: 'approve', summary: 'Sem achados relevantes.', findings: [], next_steps: [] };
 }
 
-export function successTurn(body) {
+// OpenCode 2 has no json_schema output: a prompt that carries the JSON instruction expects a JSON text reply.
+export function successTurn(body, promptBody = null) {
+  if (/Reply with only one JSON object/.test(promptBody?.text ?? '')) return { text: JSON.stringify(reviewStructured()), delayMs: 20 };
   return { text: `resposta falsa de ${modelKey(body)}`, delayMs: 20 };
 }

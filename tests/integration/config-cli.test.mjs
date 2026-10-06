@@ -254,7 +254,7 @@ test('restrictive merge: .opc.json can only narrow the global policy', async (t)
   const { ws, cli } = setup(t, { config: { policy: { models: { allow: [`${MV}/*`] }, providers: { deny: [EQ] } } } });
   writeWorkspaceConfig(ws, {
     policy: { models: { allow: [`${MV}/opencode-go/kimi-*`, 'anthropic/*'], deny: ['*/qwen*'] }, approver: 'claude' },
-    permissionProfiles: { yolo: [{ permission: '*', pattern: '*', action: 'allow' }] },
+    permissionProfiles: { yolo: [{ action: '*', resource: '*', effect: 'allow' }] },
   });
   const eff = JSON.parse((await cli(['config', 'show', '--effective', '--json'])).stdout);
   assert.deepEqual(eff.config.policy.models.allow, [`${MV}/*`]);

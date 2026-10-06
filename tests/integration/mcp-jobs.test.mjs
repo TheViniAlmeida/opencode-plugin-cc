@@ -14,6 +14,7 @@ import {
   makeWorkspace, readFakeState, registerStopper, startMcpClient, testEnv,
   writeGlobalConfig, writeTestConfig,
 } from '../helpers.mjs';
+import { promptBodies, promptText } from '../f2b-helpers.mjs';
 
 const EVIL = '--write\n$(touch pwned) `touch pwned2` "double" \'single\' ção ✓';
 
@@ -76,7 +77,7 @@ function assertCancelledJob(data, jobId) {
 function assertReadOnlyPermissions(permissions) {
   assert.ok(Array.isArray(permissions));
   assert.deepEqual(permissions[0], { action: '*', resource: '*', effect: 'deny' });
-  const readable = new Set(['read', 'grep', 'glob', 'webfetch', 'websearch']);
+  const readable = new Set(['read', 'grep', 'glob', 'skill', 'question', 'webfetch', 'websearch']);
   for (const rule of permissions) {
     if (rule.effect !== 'deny') {
       assert.equal(rule.effect, 'allow');
@@ -114,8 +115,8 @@ test('opc_task inicia job somente leitura e envia o prompt integralmente', async
   const done = await c.callTool('opc_job_status', { jobId, wait: true, timeoutSec: 60 });
   assert.equal(done.envelope.exitCode, 0);
   const requests = readFakeState(env).requests;
-  const prompt = requests.find((request) => request.method === 'POST' && /\/api\/session\/[^/]+\/prompt$/.test(request.path));
-  assert.ok(prompt?.body.text.includes(EVIL));
+  const [prompt] = promptBodies(env);
+  assert.ok(promptText(prompt).includes(EVIL));
   const created = requests.find((request) => request.method === 'POST' && request.path === '/api/session');
   assertReadOnlyPermissions(created.body.permissions);
   assert.equal(fs.existsSync(path.join(ws, 'pwned')), false);
@@ -240,7 +241,7 @@ test('ferramentas de sessão coincidem com os comandos da CLI', async (t) => {
   ]) {
     const mcp = await c.callTool(name, { sessionId });
     const cli = await cliJson(['session', action, sessionId], { env, cwd: ws });
-    assert.equal(cli.code, 0, name);
+    assert.equal(cli.code, 0, `${name}: ${cli.stderr}${JSON.stringify(cli.data)}`);
     assert.equal(mcp.envelope.exitCode, cli.code, name);
     assert.deepEqual(mcp.envelope.data, cli.data, name);
   }

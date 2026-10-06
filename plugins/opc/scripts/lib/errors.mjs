@@ -8,6 +8,7 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     'provider.no-route': 'Modelo indisponível.',
     'provider.auth': 'Falha de autenticação do provedor.',
     'provider.rate-limit': 'Limite de requisições do provedor atingido.',
+    'provider.transport': 'Falha de transporte do provedor.',
     aborted: 'Turno cancelado.',
     'permission.rejected': 'Permissão recusada.',
     'execution.failed': 'A execução falhou.',
@@ -32,6 +33,7 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     case 'RetryCapExceeded':
     case 'Timeout':
     case 'provider.rate-limit':
+    case 'provider.transport':
       return as('recoverable');
     case 'provider.no-route':
     case 'aborted':

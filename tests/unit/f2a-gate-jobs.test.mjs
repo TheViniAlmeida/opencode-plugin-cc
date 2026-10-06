@@ -35,19 +35,25 @@ test('gate 1: worker consumes private input once and sends the raw prompt', asyn
   let sent;
   const api = {
     async createSession() { return { id: 'ses_gate' }; },
-    async promptAsync(id, body) { assert.equal(existsSync(input), false); sent = body; },
+    async prompt(id, body) { assert.equal(existsSync(input), false); sent = body; },
     async sessionStatus() { return {}; },
     async children() { return []; },
     async listPermissions() { return []; },
     async listQuestions() { return []; },
-    async messages() { return [{ info: { role: 'assistant', parentID: sent.messageID, time: { completed: 1 } }, parts: [{ type: 'text', text: secret }] }]; },
+    async messages() {
+      return [
+        { id: sent.id, type: 'user', text },
+        { id: 'msg_gate_assistant', type: 'assistant', content: [{ type: 'text', text: secret }], tokens: {}, cost: 0 },
+        { id: 'msg_gate_idle', type: 'idle', outcome: 'succeeded' },
+      ];
+    },
     async diff() { return []; },
   };
   const hub = { async start() {}, stop() {}, track() { return () => {}; }, onReconnect() { return () => {}; } };
   assert.equal(await runWorker({ stateDir: dir, workspaceRoot: dir }, ['--job-id', job.id], {
     ensureServer: async () => ({ url: 'http://unused.invalid' }), createApi: () => api, createHub: () => hub, scheduleExit: () => {},
   }), 0, readJob(dir, job.id).errorMessage);
-  assert.equal(sent.parts[0].text, text);
+  assert.equal(sent.text, text);
   assert.equal(existsSync(input), false);
   assert.equal(readFileSync(join(dir, 'jobs', `${job.id}.json`), 'utf8').includes(secret), false);
 });
@@ -149,13 +155,14 @@ test('gate 1 round 3: failed input write persists a terminal job before rethrowi
   assert.equal(existsSync(join(dir, 'jobs', `${record.id}.input.json`)), false);
 });
 
-for (const failure of ['patch', 'bridge']) {
+// V2 children inherit the parent permissions, so there is no child permission patch to fail any more.
+// The remaining safety failures (request bridge, resync) must still abort and confirm every tracked session.
+for (const failure of ['resync', 'bridge']) {
   test(`gate 3: worker persists abort confirmation after ${failure} failure`, async (t) => {
     const dir = trackTempDir(t, makeTempDir());
     const job = await createJob(dir, { kind: 'task', request: {
       parts: [{ type: 'text', text: 'test' }], model: { providerID: 'fake', modelID: 'fake' },
-      profileKind: 'read-only', idleWaitMs: 10,
-      childPermission: failure === 'patch' ? [{ permission: '*', pattern: '*', action: 'deny' }] : null,
+      profileKind: 'read-only', idleWaitMs: 10, statusPollMs: 20, childPermission: null,
     } });
     let handler;
     const hub = { async start() {}, stop() {}, track(_id, fn) { handler = fn; return () => {}; }, onReconnect() { return () => {}; } };
@@ -163,13 +170,15 @@ for (const failure of ['patch', 'bridge']) {
     const aborts = [];
     const api = {
       async createSession() { return { id: 'ses_parent' }; },
-      async promptAsync() {
-        handler({ type: 'session.created', properties: { info: { id: 'ses_child', parentID: 'ses_parent' } } });
-        if (failure === 'bridge') handler({ type: 'permission.asked', properties: { id: 'per_gate', sessionID: 'ses_child', permission: 'bash' } });
+      async prompt() {
+        handler({ type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_parent' } });
+        if (failure === 'bridge') handler({ type: 'permission.asked', data: { id: 'per_gate', sessionID: 'ses_child', action: 'shell', resources: ['ls'] } });
       },
-      async patchSession() { throw new Error('falha no PATCH'); },
+      async children() { return []; },
+      async listPermissions() { if (failure === 'resync') throw new Error('falha na listagem'); return []; },
+      async listQuestions() { return []; },
       async replyPermission() { throw new Error('falha na ponte'); },
-      async abort(id) { aborts.push(id); delete statuses[id]; return true; },
+      async interrupt(id) { aborts.push(id); delete statuses[id]; return true; },
       async sessionStatus() { return statuses; },
       async messages() { return []; },
       async diff() { return []; },
@@ -180,7 +189,7 @@ for (const failure of ['patch', 'bridge']) {
     });
     const stored = readJob(dir, job.id);
     assert.equal(stored.status, 'failed');
-    assert.equal(stored.errorCode, failure === 'patch' ? 'CHILD_PERMISSION_FAILED' : 'CALLBACK_FAILED');
+    assert.equal(stored.errorCode, failure === 'resync' ? 'RESYNC_FAILED' : 'CALLBACK_FAILED');
     assert.equal(stored.result.abortConfirmed, true);
     assert.deepEqual(aborts, ['ses_child', 'ses_parent']);
     assert.deepEqual(stored.result.sessionAborts.map(({ idle }) => idle), [true, true]);

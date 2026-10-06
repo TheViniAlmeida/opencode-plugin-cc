@@ -97,6 +97,8 @@ async function workerFixture(t, { structuredOutput = 'text', wrapped = false } =
   };
   const api = createApi({ get: (route, options) => handle('GET', route, undefined, options), post: (route, body) => handle('POST', route, body), patch: (route, body) => handle('PATCH', route, body) });
   api.providers = async () => fixtureData('provider.json');
+  api.models = async () => fixtureData('model.json');
+  api.defaultModel = async () => ({ id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' });
   const hub = { track(_id, fn) { listeners.add(fn); return () => listeners.delete(fn); }, onReconnect() { return () => {}; } };
   const ctx = { stateDir: dir, workspaceRoot: dir, cwd: dir, config: { conclave: { structuredOutput, memberTimeoutSec: 2 }, jobs: { maxParallel: 2 } } };
   const request = { question: 'Should we add a log?', mode: 'opinion', rounds: 1, quorum: 2, members: MEMBERS, judge: { type: 'model', ...MEMBERS[2] } };

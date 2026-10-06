@@ -72,7 +72,9 @@ test('F4b fix2: a published orchestration session still requires confirmed abort
   const { members: [member] } = await createGroup(stateDir, { kind: 'orch' }, [{
     kind: 'orch', status: 'running', attemptInFlight: true, sessionID: 'ses_published',
   }]);
-  const result = await cancelJob({ stateDir }, member.id, { api: { abort: async () => false }, exitWaitMs: 1 });
+  // V2 interrupt() resolves {interrupted:false} for an idle session; confirmation comes from the session going idle.
+  const api = { interrupt: async () => true, sessionStatus: async () => ({ ses_published: { type: 'busy' } }) };
+  const result = await cancelJob({ stateDir }, member.id, { api, exitWaitMs: 1, idleWaitMs: 1 });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'CANCEL_FAILED');
   assert.equal(result.report.deferred, undefined);
@@ -120,7 +122,7 @@ test('cancel during session creation aborts the session published while waiting 
   const job = await createJob(stateDir, { kind: 'task', status: 'running', attemptInFlight: true });
   const aborted = [];
   const api = {
-    abort: async (sessionID) => {
+    interrupt: async (sessionID) => {
       aborted.push(sessionID);
       // The worker's turn ends once its session is aborted.
       setTimeout(() => { void updateJob(stateDir, job.id, { attemptInFlight: false }); }, 20);

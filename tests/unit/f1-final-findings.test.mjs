@@ -42,10 +42,11 @@ function harness(t) {
 function fakeFetch(t, { status = 200, failPath = null } = {}) {
   return t.mock.method(globalThis, 'fetch', async (url) => {
     const route = new URL(url).pathname;
-    const data = route === '/global/health' ? { healthy: true, version: '1.18.32' }
-      : route === '/provider' ? fixtureData('provider.json')
-      : route === '/agent' ? fixtureData('agent.json')
-      : route === '/config' ? { share: 'disabled' } : [];
+    const data = route === '/api/info' ? { version: '2.0.22', pid: 1, urls: [], paths: {} }
+      : route === '/api/provider' ? { data: fixtureData('provider.json') }
+      : route === '/api/model' ? { data: fixtureData('model.json') }
+      : route === '/api/agent' ? { data: fixtureData('agent.json') }
+      : route === '/api/config' ? [{ type: 'document', info: { share: 'disabled' } }] : { data: [] };
     const code = route === failPath ? status : 200;
     return { ok: code < 400, status: code, text: async () => JSON.stringify(code >= 500 ? { error: 'falha simulada' } : data) };
   });
@@ -134,7 +135,7 @@ test('loadDraft rejects malformed structure and setup apply restarts cleanly', a
 });
 
 test('setup commit refuses incomplete applicable steps before contacting a server and retains draft', async (t) => {
-  const fetchMock = fakeFetch(t, { status: 503, failPath: '/global/health' });
+  const fetchMock = fakeFetch(t, { status: 503, failPath: '/api/info' });
   const { dataDir, cli } = harness(t);
   const draft = { ...buildDraft({ hasGlobal: false }), completed: ['defaultVariant'], values: { defaultVariant: null } };
   saveDraft(dataDir, draft);
@@ -184,14 +185,14 @@ test('concurrent setup commits serialize bootstrap under the config lock', async
 });
 
 for (const [name, argv, failPath] of [
-  ['providers', ['providers', '--json'], '/provider'], ['models', ['models', '--json'], '/provider'],
-  ['agents', ['agents', '--json'], '/agent'], ['catalog commands', ['catalog', 'commands', '--json'], '/command'],
-  ['catalog skills', ['catalog', 'skills', '--json'], '/skill'], ['config validate', ['config', 'validate', '--json'], '/provider'],
-  ['config set', ['config', 'set', 'defaultProvider', 'example', '--json'], '/provider'],
-  ['setup models', ['setup', 'models', '--provider', 'example', '--json'], '/provider'],
-  ['setup apply', ['setup', 'apply', '{}', '--json'], '/provider'], ['setup commit', ['setup', 'commit', '--json'], '/provider'],
-  ['setup diagnose', ['setup', '--json'], '/global/health'],
-  ['setup state', ['setup', '--json'], '/provider'],
+  ['providers', ['providers', '--json'], '/api/provider'], ['models', ['models', '--json'], '/api/provider'],
+  ['agents', ['agents', '--json'], '/api/agent'], ['catalog commands', ['catalog', 'commands', '--json'], '/api/command'],
+  ['catalog skills', ['catalog', 'skills', '--json'], '/api/skill'], ['config validate', ['config', 'validate', '--json'], '/api/provider'],
+  ['config set', ['config', 'set', 'defaultProvider', 'example', '--json'], '/api/provider'],
+  ['setup models', ['setup', 'models', '--provider', 'example', '--json'], '/api/provider'],
+  ['setup apply', ['setup', 'apply', '{}', '--json'], '/api/provider'], ['setup commit', ['setup', 'commit', '--json'], '/api/provider'],
+  ['setup diagnose', ['setup', '--json'], '/api/info'],
+  ['setup state', ['setup', '--json'], '/api/provider'],
 ]) test(`F1 ${name}: HTTP 503 exits 5`, async (t) => {
   fakeFetch(t, { status: 503, failPath });
   const { dataDir, cli } = harness(t);

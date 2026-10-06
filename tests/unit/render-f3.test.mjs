@@ -28,16 +28,23 @@ test('renderSessions: table with status, escaped title, empty state', () => {
 
 test('renderSession: fields, revert marker and message table', () => {
   const out = renderSession(
-    { id: 'ses_a', title: 'OPC: x', directory: '/ws', agent: 'build', model: { id: 'm', providerID: 'p' }, parentID: 'ses_p', time: { created: 0, updated: 0 }, revert: { messageID: 'msg_3' } },
-    { status: 'idle', messages: [{ info: { id: 'msg_1', role: 'user', agent: 'build' }, parts: [{ type: 'text', text: 'hello\nworld' }] }], note: 'Nota X.' },
+    { id: 'ses_a', title: 'OPC: x', location: { directory: '/ws' }, agent: 'build', model: { id: 'm', providerID: 'p' }, parentID: 'ses_p', time: { created: 0, updated: 0 }, revert: { messageID: 'msg_3' } },
+    { status: 'idle', messages: [
+      { id: 'msg_1', type: 'user', time: { created: 0 }, text: 'hello\nworld' },
+      { id: 'msg_2', type: 'assistant', time: { created: 1 }, agent: 'build', model: { id: 'm', providerID: 'p' }, content: [{ type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'answer\nline' }] },
+    ], note: 'Nota X.' },
   );
   assert.match(out, /# Sessão ses_a/);
+  assert.match(out, /Diretório: \/ws/);
   assert.match(out, /Modelo: p\/m/);
   assert.match(out, /Pai: ses_p/);
   assert.match(out, /Revert ativo: a partir de msg_3/);
   assert.match(out, /opc session unrevert ses_a --confirmed-by-user/);
-  assert.match(out, /msg_1/);
+  assert.match(out, /Mensagens \(2\)/);
+  assert.match(out, /\| 1 \| msg_1 \| user \|/);
   assert.match(out, /hello world/);
+  assert.match(out, /\| 2 \| msg_2 \| assistant \| build · p\/m \| answer line \|/);
+  assert.doesNotMatch(out, /hidden/);
   assert.match(out, /Nota X\./);
 });
 
@@ -61,21 +68,21 @@ test('renderTodos lists status, priority and content', () => {
   assert.match(renderTodos([]), /Nenhum todo/);
 });
 
-test('renderRevertPreview shows files, patch and the exact confirmation command', () => {
+test('renderRevertPreview shows the scope notice and the exact confirmation command', () => {
+  const notice = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo.';
   const out = renderRevertPreview({
-    action: 'revert', sessionID: 'ses_a', messageID: 'msg_3',
-    affected: [{ file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '+BETA\n' }],
+    action: 'revert', sessionID: 'ses_a', messageID: 'msg_3', affected: null, notice,
     command: 'opc session revert ses_a msg_3 --confirmed-by-user',
   });
   assert.match(out, /confirmação necessária \(revert\)/);
-  assert.match(out, /notes\.txt/);
-  assert.match(out, /\+BETA/);
+  assert.match(out, /a partir da mensagem msg_3/);
+  assert.match(out, /não fornece um diff restrito/);
   assert.match(out, /Nada foi alterado/);
   assert.match(out, /opc session revert ses_a msg_3 --confirmed-by-user/);
   const un = renderRevertPreview({ action: 'unrevert', sessionID: 'ses_a', messageID: 'msg_3', rawDiff: '+BETA\n', command: 'opc session unrevert ses_a --confirmed-by-user' });
   assert.match(un, /unrevert/);
   assert.match(un, /\+BETA/);
-  assert.match(renderRevertPreview({ action: 'revert', sessionID: 's', messageID: 'm', affected: [], command: 'c' }), /nenhuma alteração de arquivo/i);
+  assert.doesNotMatch(renderRevertPreview({ action: 'revert', sessionID: 's', messageID: 'm', affected: null, command: 'c' }), /diff restrito/);
 });
 
 test('renderPendingLines: iterates the pendingRequest list (permission and question reply lines, memberId)', () => {

@@ -8,7 +8,7 @@ import { MAX_TRANSCRIPT_BYTES } from '../../plugins/opc/scripts/lib/transfer.mjs
 import { checkImportShape } from '../fixtures/fake-import.mjs';
 import {
   cliJson, makeTempDir, makeWorkspace, PLUGIN_ROOT, readFakeState, REPO_ROOT,
-  runCli, stateDirFor, testEnv, trackTempDir, writeTestConfig, startExternalFake,
+  runCli, stateDirFor, testEnv, trackTempDir, trackWorkspace, writeTestConfig, startExternalFake,
 } from '../helpers.mjs';
 
 const SAMPLE = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'claude-transcript-sample.jsonl');
@@ -65,10 +65,10 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(Object.hasOwn(r.data, 'source'), false);
   assert.doesNotMatch(r.stdout + r.stderr, /List the files|Now add a --verbose|session\.jsonl|\[tool call:/);
   assert.ok(imp.texts.includes('List the files in src and explain main.mjs.'));
-  assert.ok(imp.texts.includes('Now add a --verbose flag. Keep `$(echo hi)` and "quotes" intact: ção ✓'));
+  // A V2 user message carries a single text, so the omitted-image marker is appended to the same message.
+  assert.ok(imp.texts.includes('Now add a --verbose flag. Keep `$(echo hi)` and "quotes" intact: ção ✓\n\n[imagem omitida]'));
   assert.ok(imp.texts.includes('[chamada de ferramenta: Bash] {"command":"ls src"}'));
   assert.ok(imp.texts.includes('[resultado da ferramenta: sucesso] main.mjs\nutil.mjs'));
-  assert.ok(imp.texts.includes('[imagem omitida]'));
   assert.ok(!imp.texts.some((text) => text.includes('Sidechain prompt') || text.includes('Plan the listing.')));
   assert.equal(readFakeState(env).bootAttempts, 1, 'import uses the managed V2 server');
 });
@@ -106,6 +106,7 @@ test('transfer uses the SessionStart source and default model alias and renders 
 test('transfer resolves relative source and --cwd using ctx.env and ctx.cwd', async (t) => {
   const { env, root, source } = setup(t);
   const cwd = path.dirname(source);
+  trackWorkspace(t, cwd); // the V2 import boots the managed server for --cwd, so cleanup must stop it
   const r = await cliJson(['transfer', '--cwd', cwd, '--source', 'session.jsonl', '-m', MODEL], { env, cwd: root });
   assert.equal(r.code, 0, r.stderr);
   assert.equal(imports(env)[0].cwd, cwd);

@@ -66,12 +66,16 @@ test('cancel + failed final state write ends failed with STATE_WRITE_FAILED and 
   assert.match(cancellationLog, /cancelamento solicitado/i);
 });
 
-test('read-only profile rejects permissions and questions immediately', async (t) => {
+test('read-only profile rejects permissions immediately and routes questions to the bridge', async (t) => {
+  // V2 read-only profile allows the `question` action (READ_ONLY_ALLOW), so a form is a legitimate pending request.
   const h = await harness(t, { profileKind: 'read-only' });
   await h.bridge.onPermission(perm('per_1'));
-  await h.bridge.onQuestion({ id: 'frm_1', sessionID: 'ses_1', questions: [] });
-  assert.deepEqual(h.calls, [['reply', 'ses_1', 'per_1', { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' }], ['rejectQuestion', 'ses_1', 'frm_1']]);
+  assert.deepEqual(h.calls, [['reply', 'ses_1', 'per_1', { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' }]]);
   assert.equal(h.job.status, 'running');
+  await h.bridge.onQuestion({ id: 'frm_1', sessionID: 'ses_1', questions: [] });
+  assert.equal(h.calls.length, 1, 'the question is not auto-rejected');
+  assert.equal(h.job.status, 'waiting_permission');
+  assert.deepEqual(h.job.pendingRequest.map((r) => [r.type, r.id]), [['question', 'frm_1']]);
   h.bridge.dispose();
 });
 

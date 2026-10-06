@@ -12,7 +12,8 @@
   {
     "id": "docs",
     "name": "docs",
-    "description": "Update the docs for a module"
+    "description": "Update the docs for a module",
+    "model": "omniroute-personal/opencode-go/qwen3.8-max"
   },
   {
     "id": "gitlab:list-mrs",

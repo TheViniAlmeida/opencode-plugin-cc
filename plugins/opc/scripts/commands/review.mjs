@@ -73,6 +73,9 @@ export function emitReviewResult(ctx, job, { json }) {
     const structured = job.result?.structured ?? null;
     ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered: renderReviewJob(job) });
   } else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
+  // OpenCode 2 has no structured output: a completed turn whose text is not a valid review JSON degrades to the raw text and exits 7.
+  const structured = job.result?.structured ?? null;
+  if (job.status === 'completed' && (structured === null || validateReviewOutput(structured) !== null)) return ExitCode.JOB_FAILED;
   return exitCodeForJob(job);
 }
 

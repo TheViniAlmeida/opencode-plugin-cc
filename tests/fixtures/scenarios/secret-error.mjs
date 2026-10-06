@@ -4,7 +4,8 @@ export default {
     const value = process.env.FAKE_ERROR_TEXT ?? 'fixture-error';
     fake.emitTurn(sessionID, {
       text: '',
-      error: { type: 'provider.transport', message: `Falha do provider: ${String(value).slice(0, 12)}…` },
+      // The type and message carry the caller-provided text into the job record and log, so the CLI must mask it at runtime.
+      error: { type: `provider.error-${value}`, message: `provider failed: ${value}` },
       delayMs: 20,
     });
   },

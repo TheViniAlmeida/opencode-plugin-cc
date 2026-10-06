@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { F2A_MODEL_ID, F2A_PROVIDER, jobIdFrom, jobIn, opc, requestsTo, setupF2a } from '../helpers.mjs';
+import { promptBodies } from '../f2b-helpers.mjs';
 
 test('task foreground: V2 prompt prints final text and creates an explicit session', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
@@ -14,9 +15,9 @@ test('task foreground: V2 prompt prints final text and creates an explicit sessi
   assert.ok(post.body.permissions.length > 0);
   assert.deepEqual(post.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID });
   assert.match(post.body.title, /^OPC: task: say hello$/);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
-  assert.match(prompt.body.id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
-  assert.equal(prompt.body.text, 'say hello');
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  assert.match(prompt.id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  assert.equal(prompt.text, 'say hello');
   const job = jobIn(ctx.env, ctx.cwd, jobIdFrom(r.stderr));
   assert.equal(job.status, 'completed');
   assert.equal(job.phase, 'done');
@@ -44,9 +45,9 @@ test('--model with slashes reaches the V2 session; --effort is sent as variant',
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: `--model ${F2A_PROVIDER}/${F2A_MODEL_ID} --effort high check` });
   assert.equal(r.code, 0, r.stderr);
   const [session] = requestsTo(ctx.env, 'POST', '/api/session');
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
   assert.deepEqual(session.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID, variant: 'high' });
-  assert.equal(prompt.body.text, 'check');
+  assert.equal(prompt.text, 'check');
 });
 
 test('invalid --effort is refused before any session (exit 2)', async (t) => {
@@ -86,8 +87,8 @@ test('<project_context> from the workspace config is prepended to the prompt', a
   writeFileSync(join(ctx.cwd, '.opc.json'), JSON.stringify({ project: { goal: 'Ship opc', scope: ['plugins/', 'tests/'], taskTypes: ['ask', 'plan'] } }));
   const r = await opc(ctx, ['ask', '--raw-args-stdin'], { stdin: 'where is the runner?' });
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
-  const text = prompt.body.text;
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  const text = prompt.text;
   assert.ok(text.startsWith('<project_context>\ngoal: Ship opc\nscope: plugins/, tests/\ntask types: ask, plan\n</project_context>\n\n'), text.slice(0, 200));
   assert.ok(text.endsWith('Question:\nwhere is the runner?\n'), text.slice(-200));
 });
@@ -102,9 +103,9 @@ test('ask and plan are read-only: --write is refused (exit 2); templates are app
   const [post] = requestsTo(ctx.env, 'POST', '/api/session');
   assert.ok(post.body.permissions.length > 0);
   assert.match(post.body.title, /^OPC: plan: add a cache$/);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
-  assert.match(prompt.body.text, /\*\*Files\*\*/);
-  assert.match(prompt.body.text, /Task:\nadd a cache/);
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  assert.match(prompt.text, /\*\*Files\*\*/);
+  assert.match(prompt.text, /Task:\nadd a cache/);
 });
 
 test('large output (>1 MB): printed whole, job log stays under 5 MB', async (t) => {

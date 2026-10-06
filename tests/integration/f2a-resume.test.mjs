@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PLUGIN_ROOT, jobIdFrom, jobIn, opc, requestsTo, setupF2a, waitFor } from '../helpers.mjs';
+import { promptBodies } from '../f2b-helpers.mjs';
 
 test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
@@ -17,8 +18,8 @@ test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) =
   assert.equal(requestsTo(ctx.env, 'POST', `/api/session/${a.sessionID}/prompt`).length, 2);
   const third = await opc(ctx, ['task', '--resume', a.id]);
   assert.equal(third.code, 0, third.stderr);
-  const prompts = requestsTo(ctx.env, 'POST', `/api/session/${a.sessionID}/prompt`);
-  assert.equal(prompts.at(-1).body.text, readFileSync(join(PLUGIN_ROOT, 'prompts', 'continue.md'), 'utf8'));
+  // The fake masks free-form text in request records; promptBodies reads the stored user message instead.
+  assert.equal(promptBodies(ctx.env).at(-1).text, readFileSync(join(PLUGIN_ROOT, 'prompts', 'continue.md'), 'utf8'));
   assert.equal(jobIn(ctx.env, ctx.cwd, jobIdFrom(third.stderr)).summary, 'continue');
 });
 

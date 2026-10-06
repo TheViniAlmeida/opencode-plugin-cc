@@ -70,8 +70,8 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   assert.deepEqual(cfg.policy.agents, { allow: [], deny: ['work-*'] });
   assert.equal(cfg.policy.approver, 'user');
   assert.deepEqual(cfg.project, { goal: 'Plugin Claude Code para OpenCode', scope: ['src/', 'tests/'], taskTypes: ['ask', 'review'] });
-  assert.equal(cfg.aliases.fast, `${MV}/opencode-go/qwen3.8-flash`);
-  assert.equal(cfg.aliases.strong, `${MV}/opencode-go/qwen3.8-max`);
+  assert.equal(cfg.aliases.fast, `${MV}/opencode-go/deepseek-v4.1-flash`);
+  assert.equal(cfg.aliases.strong, `${MV}/opencode-go/kimi-k3`);
   assert.match(r.stderr, / 1\) omniroute-personal/);
 });
 

@@ -118,24 +118,35 @@ test('f3 fake: revert stage sets a diff, commit marks it, delete clears it', asy
   assert.equal(restored.body.revert, undefined);
 });
 
-test('f3 fake: compact requires providerID and modelID', async (t) => {
+test('f3 fake: compact uses the session model and appends a compaction message', async (t) => {
   const { call } = await boot(t);
-  assert.equal((await call('POST', `/api/session/${SEED.session}/compact`, {})).status, 400);
-  const res = await call('POST', `/api/session/${SEED.session}/compact`, { providerID: 'omniroute-personal', modelID: 'opencode-go/qwen3.8-max' });
+  assert.equal((await call('POST', '/api/session/ses_missing/compact')).status, 404);
+  const switched = await call('POST', `/api/session/${SEED.session}/model`, { model: { providerID: 'omniroute-personal', id: 'opencode-go/qwen3.8-max' } });
+  assert.equal(switched.status, 204);
+  const res = await call('POST', `/api/session/${SEED.session}/compact`);
   assert.equal(res.status, 204);
-  const msgs = await call('GET', `/api/session/${SEED.session}/message`);
-  assert.equal(msgs.body[0].agent, 'compaction');
+  const msgs = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
+  const compaction = msgs.body.findLast((m) => m.type === 'assistant');
+  assert.equal(compaction.agent, 'compaction');
+  assert.equal(compaction.model.id, 'opencode-go/qwen3.8-max');
 });
 
-test('f3 fake: command requires command and string arguments, answers synchronously', async (t) => {
+test('f3 fake: command requires name and string text, answers through the turn', async (t) => {
   const { call } = await boot(t);
-  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { command: 'echo' })).status, 400);
-  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { command: 'nope', arguments: '' })).status, 400);
-  const res = await call('POST', `/api/session/${SEED.session}/command`, { command: 'echo', arguments: 'a b' });
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { name: 'echo' })).status, 400);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { name: 'nope', text: '' })).status, 400);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { command: 'echo', arguments: 'a b' })).status, 400);
+  const res = await call('POST', `/api/session/${SEED.session}/command`, { name: 'echo', text: 'a b' });
   assert.equal(res.status, 204);
-  const messages = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
-  assert.equal(messages.body.at(-1).model.id, 'opencode-go/deepseek-v4.1-flash');
-  assert.equal(messages.body.at(-1).content[0].text, 'COMANDO echo ARGUMENTOS[a b…]');
+  let answer;
+  for (let attempt = 0; attempt < 100 && !answer; attempt += 1) {
+    const messages = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
+    answer = messages.body.findLast((m) => m.type === 'assistant' && m.content?.[0]?.text?.startsWith('COMANDO'));
+    if (!answer) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(answer, 'the command turn must answer');
+  assert.equal(answer.model.id, 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(answer.content[0].text, 'COMANDO echo ARGUMENTOS[a b]');
 });
 
 test('f3 fake: diff (with and without messageID) and catalogs', async (t) => {

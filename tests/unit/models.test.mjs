@@ -52,7 +52,7 @@ test('buildCatalog: connected set, models with full ids, variants, providers sum
   assert.ok(!catalog.connected.has('openai'));
   const kimi = catalog.byFull.get(`${MV}/opencode-go/kimi-k3`);
   assert.deepEqual(kimi.variants, ['low', 'medium', 'high']);
-  assert.equal(kimi.limit.context, null);
+  assert.deepEqual(kimi.limit, { context: 262144, output: 32768 });
   assert.equal(kimi.connected, true);
   const mv = catalog.providers.find((p) => p.id === MV);
   assert.equal(mv.modelCount, 7);

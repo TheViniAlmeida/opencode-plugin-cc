@@ -1,5 +1,6 @@
 // Shared behaviour of the F4b fake scenarios. Runs inside the fake OpenCode process.
 import { appendFileSync } from 'node:fs';
+import { redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
 
 export function turnLogPath(stateFile = process.env.FAKE_OPENCODE_STATE) {
   return `${stateFile}.turns.jsonl`;
@@ -36,7 +37,7 @@ export function makeOrchestrateScenario({ plan = null, plannerText = null, failS
         } else {
           await fake.emitTurn(sessionID, { text: `RESULT[${turn.subtaskId ?? turn.role}] by ${model}` });
         }
-        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), prompt: `${turn.text.slice(0, 12)}…` })}\n`, { mode: 0o600 });
+        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), prompt: redactText(turn.text) })}\n`, { mode: 0o600 });
       }, delay);
     },
   };

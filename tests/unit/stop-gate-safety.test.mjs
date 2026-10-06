@@ -175,8 +175,9 @@ test('F4a I2: stop-gate request preserves route candidates and fallback eligibil
   let submitted;
   await runStopHook(ctx, {
     connectApiFn: async () => ({ api: {
-      providers: async () => ({ connected: ['p'], all: [{ id: 'p', models: { first: { id: 'first' }, second: { id: 'second' } } }] }),
-      getConfig: async () => ({}),
+      providers: async () => [{ id: 'p', name: 'p', activation: 'enabled' }],
+      models: async () => [{ id: 'first', modelID: 'first', providerID: 'p', variants: [] }, { id: 'second', modelID: 'second', providerID: 'p', variants: [] }],
+      defaultModel: async () => null,
     } }),
     submitTurnJobFn: async (_ctx, { request }) => { submitted = request; return { id: 'gate-routed' }; },
     waitForJobFn: async () => ({ status: 'completed', result: { finalText: 'ALLOW: certo' } }),

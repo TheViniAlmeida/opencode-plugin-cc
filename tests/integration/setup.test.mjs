@@ -169,7 +169,7 @@ test('.opc.json that widens allow or sets locked keys is ignored with warnings',
   fs.writeFileSync(path.join(env.OPC_DATA_DIR, 'config.json'), JSON.stringify({ policy: { models: { allow: ['prov-a/*'] } } }));
   fs.writeFileSync(path.join(ws, '.opc.json'), JSON.stringify({
     policy: { models: { allow: ['prov-b/*'] }, approver: 'claude' },
-    permissionProfiles: { yolo: [{ permission: '*', pattern: '*', action: 'allow' }] },
+    permissionProfiles: { yolo: [{ action: '*', resource: '*', effect: 'allow' }] },
     server: { configOverride: { share: 'auto' } },
   }));
   const { code, report } = await setupJson(env, ws);

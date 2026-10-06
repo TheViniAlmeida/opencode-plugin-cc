@@ -23,9 +23,9 @@ const agent = (id, mode, extra = {}) => ({ id, name: id, mode, hidden: false, de
 export const F3_AGENTS = [agent('build', 'primary'), agent('plan', 'primary'), agent('general', 'subagent'), agent('explore', 'subagent'), agent('work-secret', 'subagent'), agent('pinned-sub', 'subagent')];
 export const F3_COMMANDS = [
   { id: 'echo', name: 'echo', description: 'Echo the arguments' },
-  { id: 'sub-echo', name: 'sub-echo', description: 'Echo in a subtask' },
-  { id: 'pinned-model', name: 'pinned-model', description: 'Pins a denied model' },
-  { id: 'pinned-agent', name: 'pinned-agent', description: 'Pins a denied agent' },
+  { id: 'sub-echo', name: 'sub-echo', description: 'Echo in a subtask', agent: 'general', subtask: true },
+  { id: 'pinned-model', name: 'pinned-model', description: 'Pins a denied model', model: F3_MODELS.denied },
+  { id: 'pinned-agent', name: 'pinned-agent', description: 'Pins a denied agent', agent: 'work-secret' },
 ];
 export const F3_OPENCODE_CONFIG = [{ type: 'document', path: '<workspace>/opencode.json', info: {} }];
 export const F3_TEST_CONFIG = { defaultProvider: 'omniroute-personal', defaultModel: F3_MODELS.deepseek,
@@ -64,10 +64,10 @@ export function seedSession(fake) {
     assistantMessage(SEED.session, SEED.m4, SEED.m3, 'second answer', { created: t0 + 4000 }),
     { id: 'msg_00000000000500000000000005', type: 'idle', time: { created: t0 + 4001 }, outcome: 'succeeded' }];
   fake.state.messages[SEED.userSession] = [];
-  const alpha = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1,2 @@\n original\n+ALPHA\n' };
+  const alpha = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: `@@ -1 +1,2 @@\n original\n+ALPHA\n${injected ? `+${injected}\n` : ''}` };
   const beta = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1,2 +1,3 @@\n original\n ALPHA\n+BETA\n' };
   const extra = { file: 'extra.txt', status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+new file\n' };
-  fake.state.f3.diffs[SEED.session] = [{ file: 'notes.txt', status: 'modified', additions: 2, deletions: 0, patch: '@@ -1 +1,3 @@\n original\n+ALPHA\n+BETA\n' }];
+  fake.state.f3.diffs[SEED.session] = [{ file: 'notes.txt', status: 'modified', additions: 2, deletions: 0, patch: `@@ -1 +1,3 @@\n original\n+ALPHA\n+BETA\n${injected ? `+${injected}\n` : ''}` }];
   fake.state.f3.messageDiffs[SEED.session] = { [SEED.m1]: [alpha], [SEED.m3]: [beta, extra] };
   persist(fake);
 }

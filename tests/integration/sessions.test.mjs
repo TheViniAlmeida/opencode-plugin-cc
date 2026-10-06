@@ -23,8 +23,8 @@ test('sessions: default lists only root OPC sessions of the workspace', async (t
   assert.equal(out.filtered, true);
   const text = await runCli(['sessions'], { env, cwd });
   assert.match(text.stdout, /# Sessões OPC/);
-  assert.match(text.stdout, /ses_seed/);
-  assert.doesNotMatch(text.stdout, /ses_user/);
+  assert.ok(text.stdout.includes(SEED.session));
+  assert.ok(!text.stdout.includes(SEED.userSession));
 });
 
 test('sessions --all shows every session; --limit trims', async (t) => {
@@ -36,39 +36,45 @@ test('sessions --all shows every session; --limit trims', async (t) => {
   assert.equal(one.total, 2);
 });
 
-test('sessions --refresh disposes the instance', async (t) => {
+// OpenCode 2 has no instance/dispose: --refresh only rereads the session list.
+const refreshRequests = (env) => fakeRequests(env).filter((r) => /dispose/.test(r.path));
+const listRequests = (env) => fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session');
+
+test('sessions --refresh only rereads the list (no instance dispose in OpenCode 2)', async (t) => {
   const { cwd, env } = await setup(t);
   const res = await runCli(['sessions', '--refresh', '--json'], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
-  assert.equal(fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/instance/dispose').length, 1);
+  assert.deepEqual(JSON.parse(res.stdout).sessions.map((s) => s.id), [SEED.session]);
+  assert.equal(refreshRequests(env).length, 0);
+  assert.equal(fakeRequests(env).filter((r) => r.method !== 'GET').length, 0);
+  assert.equal(listRequests(env).length, 1);
 });
 
-test('sessions --refresh is refused while a job is active', async (t) => {
+test('sessions --refresh is not refused while a job is active', async (t) => {
   const { cwd, env } = await setup(t);
   const stateDir = await stateDirFor(env, cwd);
   ensurePrivateDir(stateDir);
-  const job = await createJob(stateDir, { kind: 'task', title: 'active', status: 'running', workspaceRoot: cwd });
-  const res = await runCli(['sessions', '--refresh'], { env, cwd });
-  assert.equal(res.code, 2);
-  assert.match(res.stdout + res.stderr, new RegExp(job.id));
-  assert.equal(fakeRequests(env).filter((r) => r.path === '/instance/dispose').length, 0);
+  await createJob(stateDir, { kind: 'task', title: 'active', status: 'running', workspaceRoot: cwd });
+  const res = await runCli(['sessions', '--refresh', '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).sessions.map((s) => s.id), [SEED.session]);
+  assert.equal(refreshRequests(env).length, 0);
 });
 
-test('sessions --refresh sees a job registered while it waits for server.lock', async (t) => {
+test('sessions --refresh waits for server.lock and is not refused by a job registered meanwhile', async (t) => {
   const { cwd, env } = await setup(t);
   const boot = await runCli(['sessions', '--json'], { env, cwd });
   assert.equal(boot.code, 0, boot.stderr);
   const stateDir = await stateDirFor(env, cwd);
   const release = await acquireLock(serverLockPath(stateDir), { timeoutMs: 1000, purpose: 'test-refresh-race' });
   try {
-    const pending = runCli(['sessions', '--refresh'], { env, cwd });
+    const pending = runCli(['sessions', '--refresh', '--json'], { env, cwd });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const job = await createJob(stateDir, { kind: 'task', title: 'registered while refresh waits', status: 'running', workspaceRoot: cwd });
+    await createJob(stateDir, { kind: 'task', title: 'registered while refresh waits', status: 'running', workspaceRoot: cwd });
     release();
     const res = await pending;
-    assert.equal(res.code, 2);
-    assert.match(res.stdout + res.stderr, new RegExp(job.id));
-    assert.equal(fakeRequests(env).filter((r) => r.path === '/instance/dispose').length, 0);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(refreshRequests(env).length, 0);
   } finally {
     release();
   }

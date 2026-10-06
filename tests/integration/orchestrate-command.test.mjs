@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, readFakeState, writeGlobalConfig, waitFor, jobsIn, jobIn } from '../helpers.mjs';
+import { promptBodies, promptText } from '../f2b-helpers.mjs';
 
 const P = 'omniroute-personal/opencode-go/';
 const M1 = `${P}deepseek-v4.1-flash`; const M2 = `${P}qwen3.8-max`; const M3 = `${P}kimi-k3`;
@@ -26,10 +27,10 @@ for (const mode of ['text', 'tool']) {
     const result = await runCli(['orchestrate', '--json', 'Audit'], { env, cwd: ws, timeoutMs: 120000 });
     assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.equal(JSON.parse(result.stdout).orchestration.subtasks.length, 3);
-    const request = readFakeState(env).requests.find((r) => r.method === 'POST' && /\/api\/session\/[^/]+\/prompt$/.test(r.path));
+    const [request] = promptBodies(env);
     assert.ok(request);
-    assert.equal(Object.hasOwn(request.body, 'format'), false);
-    assert.match(request.body.text, /Reply with only one JSON object/);
+    assert.equal(Object.hasOwn(request, 'format'), false);
+    assert.match(promptText(request), /Reply with only one JSON object/);
   });
 }
 
@@ -41,7 +42,7 @@ test('C1: cancel group aborts an in-flight member and returns a cancelled group'
   // Observe the server, not the member metadata: this fails the original early-ID bug.
   const sessionID = await waitFor(() => {
     const state = readFakeState(env);
-    return Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-ask: ') && state.statuses?.[s.id]?.type === 'busy')?.id;
+    return Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-ask: ') && state.statuses?.[s.id]?.type === 'running')?.id;
   }, { timeoutMs: 20000, message: 'active worker session' });
   const member = jobsIn(env, ws).find((m) => m.groupId === jobId && m.role.startsWith('worker:'));
   assert.ok(member?.attemptInFlight);

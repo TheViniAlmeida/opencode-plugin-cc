@@ -4,7 +4,7 @@ import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 
 function recordingClient() {
   const calls = [];
-  return { calls, get: async (path, opts) => { calls.push({ method: 'GET', path, opts }); return path.endsWith('/active') ? { ses_a: { type: 'running' } } : path.endsWith('/permission') || path.endsWith('/form') ? [] : { path }; } };
+  return { calls, get: async (path, opts) => { calls.push({ method: 'GET', path, opts }); return path.endsWith('/active') ? { ses_a: { type: 'running' } } : path.endsWith('/permission') || path.endsWith('/form') || path.endsWith('/agent') ? [] : { path }; } };
 }
 
 test('read methods map to V2 routes and retry on ServerDown', async () => {

@@ -37,14 +37,15 @@ test('promptModels and requestsTo read the fake state', (t) => {
   fs.writeFileSync(env.FAKE_OPENCODE_STATE, JSON.stringify({
     boots: [],
     requests: [
-      { method: 'POST', path: '/session', body: {} },
-      { method: 'POST', path: '/session/ses_1/prompt_async', body: { model: { providerID: 'p', modelID: 'a/b' } } },
-      { method: 'POST', path: '/session/ses_1/abort', body: null },
+      { method: 'POST', path: '/api/session', body: {} },
+      { method: 'POST', path: '/api/session/ses_1/prompt', body: { text: 'x' } },
+      { method: 'POST', path: '/api/session/ses_1/interrupt', body: null },
     ],
+    prompts: [{ sessionID: 'ses_1', model: { providerID: 'p', id: 'a/b' } }],
   }));
   assert.deepEqual(promptModels(env), ['p/a/b']);
-  assert.equal(requestsTo(env, 'POST', /\/abort$/).length, 1);
-  assert.equal(requestsTo(env, 'POST', '/session').length, 1);
+  assert.equal(requestsTo(env, 'POST', /\/interrupt$/).length, 1);
+  assert.equal(requestsTo(env, 'POST', '/api/session').length, 1);
 });
 
 test('waitFor (F0) resolves with the first truthy value and rejects on timeout', async () => {

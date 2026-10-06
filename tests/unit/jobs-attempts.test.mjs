@@ -198,7 +198,7 @@ test('runJobTurn cancelled before the first attempt records no attempt and retur
     stateDir, job: readJob(stateDir, job.id), config: CONFIG, baseTurnRequest: BASE,
     runTurnImpl: async () => { calls += 1; return okTurn(BASE); },
   });
-  assert.equal(calls, 0, 'must issue no prompt_async request');
+  assert.equal(calls, 0, 'must issue no prompt request');
   assert.deepEqual(out.result, { status: 'cancelled' });
   assert.equal(out.stopReason, 'cancelled');
   assert.deepEqual(readJob(stateDir, job.id).attempts, []);
@@ -234,14 +234,14 @@ for (const mode of ['intent', 'cancel-false', 'signal']) {
     if (mode === 'signal') ac.abort();
     else if (mode === 'intent') await updateJob(stateDir, job.id, { cancelRequestedAt: new Date().toISOString() });
     else {
-      const cancelled = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+      const cancelled = await cancelJob({ stateDir }, job.id, { api: { interrupt: async () => { aborts++; return false; } } });
       assert.notEqual(cancelled.ok, false);
       assert.equal(cancelled.job.status, 'cancelled');
       assert.ok(cancelled.job.cancelRequestedAt);
     }
     const outcome = await running;
     assert.equal(outcome.result.status, 'cancelled');
-    assert.equal(calls, 1, 'zero new prompt_async after cancellation');
+    assert.equal(calls, 1, 'zero new prompt after cancellation');
     assert.equal(aborts, 0, 'finished session must not be aborted');
     assert.ok(performance.now() - start < 800, 'must wake before the backoff ends');
   });
@@ -259,7 +259,7 @@ test('F4a C2: cancel during backoff holds even when a late progress update overw
   while (readJob(stateDir, job.id).phase !== 'fallback') await new Promise((r) => setTimeout(r, 5));
   // a queued progress update from the finished turn lands after the backoff started
   await updateJob(stateDir, job.id, { phase: 'running', sessionID: 'ses_a' });
-  const cancelled = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+  const cancelled = await cancelJob({ stateDir }, job.id, { api: { interrupt: async () => { aborts++; return false; } } });
   assert.notEqual(cancelled.ok, false);
   assert.equal(cancelled.job.status, 'cancelled');
   const outcome = await running;
@@ -281,7 +281,7 @@ test('F4a I1: cancel racing with completion waits for the final attempt to be pe
   });
   await started;
   const cancelling = cancelJob({ stateDir }, job.id, { api: {
-    abort: async () => { setTimeout(() => finishTurn(okTurn(BASE)), 30); return true; },
+    interrupt: async () => { setTimeout(() => finishTurn(okTurn(BASE)), 30); return true; },
     sessionStatus: async () => ({}),
   }, exitWaitMs: 500 });
   await Promise.all([running, cancelling]);
@@ -301,7 +301,9 @@ for (const status of ['completed', 'failed']) {
       ...(status === 'failed' ? { errorType: 'AbortUnconfirmed', errorClass: 'fatal' } : {}),
     });
     let aborts = 0;
-    const outcome = await cancelJob({ stateDir }, job.id, { api: { abort: async () => { aborts++; return false; } } });
+    // V2 interrupt() resolves {interrupted:false} for an idle session; an unconfirmed abort is a session that never goes idle.
+    const api = { interrupt: async () => { aborts++; return true; }, sessionStatus: async () => ({ ses_a: { type: 'busy' } }) };
+    const outcome = await cancelJob({ stateDir }, job.id, { api, idleWaitMs: 1 });
     assert.equal(aborts, status === 'completed' ? 0 : 1);
     assert.equal(outcome.job.attempts.length, 1);
     assert.equal(outcome.job.status, status === 'completed' ? 'cancelled' : 'queued');
@@ -316,8 +318,9 @@ for (const errorType of ['CallbackFailed', 'ChildPermissionFailed']) {
     const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a', childSessionIDs: ['ses_child'] });
     await recordAttempt(stateDir, job.id, { model: 'p/a', sessionID: 'ses_a', status: 'failed', errorClass: 'fatal', errorType, abortConfirmed: false });
     const aborted = [];
-    const outcome = await cancelJob({ stateDir }, job.id, { api: { abort: async (id) => { aborted.push(id); return false; } } });
-    assert.deepEqual(aborted, ['ses_a'], 'abort is attempted again instead of skipped');
+    const api = { interrupt: async (id) => { aborted.push(id); return true; }, sessionStatus: async () => ({ ses_a: { type: 'busy' } }) };
+    const outcome = await cancelJob({ stateDir }, job.id, { api, idleWaitMs: 1 });
+    assert.deepEqual(aborted, ['ses_a', 'ses_child'], 'abort is attempted again (parent and child) instead of skipped');
     assert.equal(outcome.ok, false);
   });
 }
@@ -337,7 +340,7 @@ test('F4a I1: a pending attempt keeps cancellation intent if publication exceeds
   const job = await createJob(stateDir, { kind: 'ask', sessionID: 'ses_a' });
   await updateJob(stateDir, job.id, { attemptInFlight: true });
   const pending = await cancelJob({ stateDir }, job.id, {
-    api: { abort: async () => true, sessionStatus: async () => ({}) }, exitWaitMs: 1,
+    api: { interrupt: async () => true, sessionStatus: async () => ({}) }, exitWaitMs: 1,
   });
   assert.equal(pending.ok, false);
   assert.ok(pending.job.cancelRequestedAt);

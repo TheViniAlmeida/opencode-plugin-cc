@@ -20,11 +20,11 @@ test('C1: renderizadores mascaram títulos, tarefas, prévias e patches antes de
   const registered = 'registered-' + 'gate-value';
   registerSecret(registered);
   const text = `${token} ${registered}`;
-  const session = { id: 'ses_gate', title: text, directory: text, agent: text, model: text };
+  const session = { id: 'ses_gate', title: text, location: { directory: text }, agent: text, model: text };
   const outputs = [
     renderSessions([session], { statusMap: { ses_gate: { type: text } } }),
-    renderSession(session, { messages: [{ info: { id: 'msg_gate', role: 'user' }, parts: [{ type: 'text', text }] }] }),
-    renderSession({ id: 'ses_gate' }, { messages: [{ info: {}, parts: [{ type: 'text', text: `${'x '.repeat(47)}${token}` }] }] }),
+    renderSession(session, { messages: [{ id: 'msg_gate', type: 'user', time: { created: 0 }, text }] }),
+    renderSession({ id: 'ses_gate' }, { messages: [{ id: 'msg_long', type: 'assistant', content: [{ type: 'text', text: `${'x '.repeat(47)}${token}` }] }] }),
     renderTodos([{ content: text, status: text, priority: text }]),
     renderTodos([{ content: `${'x '.repeat(77)}${token}` }]),
     renderSessionDiff([{ file: text, status: text, patch: `+${text}` }]),
@@ -51,7 +51,7 @@ async function workerFixture(t, dispatch) {
   const stateDir = trackTempDir(t, makeTempDir('opc-gate-worker-'));
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: teste' }, [{ title: 'membro' }]);
   const ctx = { stateDir, config: {}, json: () => {} };
-  const api = { createSession: async () => ({ id: 'ses_parent' }), abort: async () => false };
+  const api = { createSession: async () => ({ id: 'ses_parent' }), interrupt: async () => { throw new Error('cancelamento recusado'); } };
   const request = { members: [{ agent: 'general', full: 'p/model', model: { providerID: 'p', modelID: 'model' } }], mechanism: 'child-session', rules: [{ action: '*', resource: '*', effect: 'deny' }], prompt: 'teste' };
   await runWorker(ctx, group, request, {
     openApi: async () => ({ api, close() {} }),
@@ -97,18 +97,16 @@ test('I1: cancelamento recusado seguido de conclusão mantém membro completed',
   assert.equal(group.status, 'completed');
 });
 
-test('I3: prévia de 250 mensagens localiza mensagem 10 fora da última página', async () => {
-  const messages = Array.from({ length: 250 }, (_, i) => ({ info: { id: `msg_${i + 1}`, role: 'user' } }));
-  const reads = [];
+test('I3: prévia de 250 mensagens localiza mensagem 240 além da primeira página de 200', async () => {
+  const messages = Array.from({ length: 250 }, (_, i) => ({ id: `msg_${i + 1}`, type: 'user', time: { created: i }, text: `m${i + 1}` }));
+  const limits = [];
   const api = {
-    messages: async (_id, { limit }) => messages.slice(-limit),
-    message: async (_id, id) => { reads.push(id); return messages.find((m) => m.info.id === id); },
-    diff: async (_id, { messageID }) => [{ file: 'notes.txt', patch: `+${messageID}` }],
+    messages: async (_id, { limit }) => { limits.push(limit); return messages.slice(0, limit); },
+    diff: async () => { throw new Error('a prévia do revert não consulta o diff agregado'); },
   };
-  const preview = await collectAffectedDiff(api, 'ses_gate', 'msg_10');
-  assert.deepEqual(reads, ['msg_10']);
-  assert.ok(preview.some((d) => d.patch.includes('msg_10')));
-  assert.equal(preview.previewTruncated, true);
+  assert.equal(await collectAffectedDiff(api, 'ses_gate', 'msg_240'), null);
+  assert.deepEqual(limits, [200, 400]);
+  await assert.rejects(collectAffectedDiff(api, 'ses_gate', 'msg_999'), (error) => error.code === 'UNKNOWN_MESSAGE' && error.exitCode === 2);
 });
 
 test('LIVE-1: location.directory é string em sessões seed, criadas, filhas e forks', () => {

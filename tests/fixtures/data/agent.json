@@ -61,7 +61,11 @@
     "mode": "subagent",
     "hidden": false,
     "description": "Writes and updates documentation in PT-BR.",
-    "permissions": []
+    "permissions": [],
+    "model": {
+      "providerID": "omniroute-personal",
+      "id": "opencode-go/qwen3.8-max"
+    }
   },
   {
     "id": "work-deploy",

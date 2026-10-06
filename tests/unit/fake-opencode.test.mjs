@@ -104,7 +104,7 @@ test('scenarios override routes and setup', async (t) => {
   const { fake } = await withFake(t, { scenario: 'auth-401' });
   assert.equal((await fetch(`${fake.url}/api/info`, { headers: auth })).status, 401);
   const old = await loadScenario('old-version');
-  assert.equal(old.version, '1.17.9');
+  assert.equal(old.version, '1.18.34');
   await assert.rejects(loadScenario('../evil'), /Nome de cenário inválido/);
 });
 
@@ -114,7 +114,7 @@ test('fake binary: --version and serve announce the listening line', async (t) =
   const version = await runProcess(bin, ['--version'], { env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'ok' } });
   assert.equal(version.stdout.trim(), 'opencode v2.0.22');
   const oldVersion = await runProcess(bin, ['--version'], { env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'old-version' } });
-  assert.equal(oldVersion.stdout.trim(), 'opencode v1.17.9');
+  assert.equal(oldVersion.stdout.trim(), 'opencode v1.18.34');
   const failing = await runProcess(bin, ['serve', '--port', '1', '--hostname', '127.0.0.1'], {
     env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'eaddrinuse', FAKE_OPENCODE_STATE: path.join(dir, 's.json') },
   });

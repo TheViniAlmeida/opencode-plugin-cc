@@ -242,7 +242,8 @@ const SetupOnboarding = {
   probeBinary(d, command, args, env) {
     const r = d.spawnSync(command, args, { env, encoding: 'utf8', shell: false, timeout: 15000 });
     if (r.error || r.status !== 0) return { installed: false, version: null };
-    return { installed: true, version: String(r.stdout).trim().split('\n')[0] || null };
+    const line = String(r.stdout).trim().split('\n')[0] || null;
+    return { installed: true, version: /\d+\.\d+\.\d+[^\s]*/.exec(line ?? '')?.[0] ?? line };
   },
 
   async discovery(d, ctx) {

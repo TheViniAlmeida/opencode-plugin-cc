@@ -5,8 +5,9 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   PLUGIN_ROOT, testEnv, makeWorkspace, runCli, stopAllServers, FIXTURE_MODELS as M, writeGlobalConfig,
-  requestsTo, parseFrontmatter, jobsIn,
+  parseFrontmatter, jobsIn,
 } from '../helpers.mjs';
+import { promptBodies, promptText } from '../f2b-helpers.mjs';
 
 const AGENT_BODY = parseFrontmatter(fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', 'opc-worker.md'), 'utf8')).body;
 const BLOCKS = [...AGENT_BODY.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]);
@@ -53,16 +54,16 @@ test('worker-prescribed command passes hostile text intact', async (t) => {
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.ok(r.stdout.trim().length > 0, 'result printed on stdout');
   assert.equal(fs.existsSync(path.join(ws, 'pwned')), false, 'nothing was executed by the shell');
-  const prompts = requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/);
+  const prompts = promptBodies(env);
   assert.equal(prompts.length, 1, 'exactly one opc turn');
-  assert.ok(JSON.stringify(prompts[0].body.parts).includes(JSON.stringify(HOSTILE).slice(1, -1)), 'prompt reached OpenCode verbatim');
+  assert.ok(promptText(prompts[0]).includes(HOSTILE), 'prompt reached OpenCode verbatim');
 });
 
 test('worker-prescribed plan command runs one read-only turn', async (t) => {
   const { env, ws } = setup(t);
   const r = await bash(fill(PROMPT_TEMPLATE, { sub: 'plan', flags: `--model ${M.fast}`, prompt: 'Plan adding a CONTRIBUTING.md file' }), { env, cwd: ws });
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/).length, 1);
+  assert.equal(promptBodies(env).length, 1);
   assert.equal(jobsIn(env, ws)[0].kind, 'plan');
 });
 
@@ -102,5 +103,5 @@ test('F4a I4: worker review flag shell metacharacters never execute', async (t) 
   const r = await bash(fill(REVIEW_TEMPLATE, { flags }), { env, cwd: ws });
   assert.equal(fs.existsSync(path.join(ws, 'pwned')), false);
   assert.equal(r.code, 2, 'literal invalid git ref is rejected by opc');
-  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/).length, 0);
+  assert.equal(promptBodies(env).length, 0);
 });

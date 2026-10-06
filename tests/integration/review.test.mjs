@@ -108,7 +108,7 @@ test('adversarial-review treats whitespace-only focus as absent', async (t) => {
 test('review --json stays JSON when the read-only bridge rejects a permission request', async (t) => {
   // Review is read-only: the bridge rejects permission requests and questions at once, so the job
   // never waits; the --json output must still be a single JSON object.
-  const { cwd, env } = setup(t, { scenario: 'permission-ask' });
+  const { cwd, env } = setup(t, { scenario: 'review-permission-ask' });
   makeDirty(cwd);
   const result = await runCli(['review', '--wait', '--json'], { env, cwd });
   assert.equal(result.code, 0, result.stdout + result.stderr);

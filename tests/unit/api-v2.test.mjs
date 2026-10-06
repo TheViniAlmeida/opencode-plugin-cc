@@ -17,7 +17,7 @@ test('client sends the directory header, unwraps data and refuses the SPA', asyn
   const seen = [];
   const client = createClient({ baseUrl: 'http://x', password: 'pw', directory: '/w', fetchImpl: fakeFetch({ 'GET /api/info': { body: { version: '2.0.22' } }, 'GET /api/agent': { body: { data: [{ id: 'build' }] } } }, seen) });
   const api = createApi(client);
-  assert.deepEqual(await api.agents(), [{ id: 'build' }]);
+  assert.deepEqual((await api.agents()).map((agent) => [agent.name, agent.native]), [['build', true]]);
   assert.equal(seen[0].headers['x-opencode-directory'], '/w');
   assert.equal((await api.info()).version, '2.0.22');
   await assert.rejects(client.get('/global/health'), { code: 'NOT_JSON' });

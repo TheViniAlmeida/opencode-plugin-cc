@@ -24,7 +24,7 @@ async function runningMembers(env, cwd, groupId) {
   }, { timeoutMs: 20000, intervalMs: 300 });
 }
 
-const aborts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/abort$/.test(r.path)).map((r) => r.path);
+const aborts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/interrupt$/.test(r.path)).map((r) => r.path);
 
 test('grupo em segundo plano → status --wait agregado → resultado de todos os membros', async (t) => {
   const { cwd, env } = await setup(t);
@@ -72,7 +72,7 @@ test('cancelar um membro aborta apenas sua sessão; os demais concluem', async (
   const target = members[1];
   const cancel = await runCli(['cancel', target.id], { env, cwd });
   assert.equal(cancel.code, 0, cancel.stdout + cancel.stderr);
-  assert.deepEqual(aborts(env), [`/session/${target.sessionID}/abort`]);
+  assert.deepEqual(aborts(env), [`/api/session/${target.sessionID}/interrupt`]);
   const waited = JSON.parse((await runCli(['status', group.id, '--wait', '--poll-interval-ms', '200', '--json'], { env, cwd })).stdout);
   assert.equal(waited.group.status, 'completed');
   assert.deepEqual(waited.members.map((m) => m.status), ['completed', 'cancelled', 'completed']);
@@ -86,7 +86,7 @@ test('cancelar o grupo aborta cada membro ativo e termina cancelado', async (t) 
   const res = await runCli(['cancel', group.id, '--json'], { env, cwd });
   assert.equal(res.code, 0, res.stdout + res.stderr);
   assert.deepEqual(JSON.parse(res.stdout).cancelledMembers.sort(), members.map((m) => m.id).sort());
-  for (const m of members) assert.ok(aborts(env).includes(`/session/${m.sessionID}/abort`));
+  for (const m of members) assert.ok(aborts(env).includes(`/api/session/${m.sessionID}/interrupt`));
   const status = JSON.parse((await runCli(['status', group.id, '--json'], { env, cwd })).stdout);
   assert.equal(status.group.status, 'cancelled');
   assert.ok(status.members.every((m) => m.status === 'cancelled'));
