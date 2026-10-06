@@ -25,7 +25,7 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `defaultAgent` | string \| null | `null` | global + workspace | Agente padrão de sessão |
 | `aliases` | model-map | `{}` | global + workspace | Apelidos para IDs completos, um nível |
 | `reviewModel` | modelref \| null | `null` | global + workspace | Modelo de review |
-| `review.structuredOutput` | `text` \| `tool` | `text` | global + workspace | `text`: JSON na resposta; `tool`: ferramenta de saída estruturada |
+| `review.structuredOutput` | `text` | `text` | global + workspace | `text`: JSON na resposta; valor antigo `tool` é convertido para `text` com aviso |
 | `stopGate.enabled` | boolean | `false` | só global | Liga o stop gate (F2b) |
 | `stopGate.model` | modelref \| null | `null` | global + workspace | Modelo do stop gate |
 | `project.goal` | string \| null | `null` | global + workspace | Objetivo enviado no contexto do projeto |
@@ -56,10 +56,11 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `orchestrate.planner` | modelref \| null | `null` | global + workspace | Planejador |
 | `orchestrate.maxSubtasks` | inteiro 2–20 | `5` | global + workspace | Máximo de subtarefas |
 | `orchestrate.synthesizer` | modelref-or-claude | `claude` | global + workspace | Sintetizador |
-| `orchestrate.structuredOutput` | `text` \| `tool` | `text` | global + workspace | Contrato de saída do planner |
+| `orchestrate.structuredOutput` | `text` | `text` | global + workspace | Contrato de saída do planner |
 | `delegation.auto` | boolean | `false` | só global | Lembrete de delegação (F4a) |
 | `jobs.maxActive` / `.maxParallel` | inteiros 1–64 / 1–32 | `8` / `4` | só global | Limites de jobs |
 | `server.bootTimeoutSec` / `.requestTimeoutSec` | inteiros 1–600 | `60` / `30` | só global | Timeouts do servidor |
+| `server.opencodeBin` | string | `opencode` | travada, só global | Caminho do binário OpenCode V2; `OPC_OPENCODE_BIN` tem prioridade |
 | `server.configOverride` | object | `{"share":"disabled"}` | travada, só global | Conteúdo de config do servidor |
 
 Exemplo mínimo global:
@@ -183,9 +184,8 @@ Uma execução offline de forma sem servidor retornou `SERVER_DOWN`/exit 5, como
 ### Saída estruturada de revisões
 
 `review.structuredOutput` controla `/opc:review` e `/opc:adversarial-review`.
-O padrão `text` pede somente um objeto JSON em uma única cerca `json`, conforme o esquema descrito no prompt, sem enviar `format` ao OpenCode. Assim, a leitura normal de mensagens continua disponível no OpenCode 1.18.32.
+O padrão `text` pede um objeto JSON em uma única cerca `json`, conforme o esquema descrito no prompt. OpenCode V2 não aceita `format: json_schema`; valores antigos `tool` são convertidos para `text` com aviso.
 
-Use `opc config set review.structuredOutput tool` para enviar `format: json_schema` e ler as mensagens individualmente. Se os eventos SSE se perderem e a sessão estiver idle sem assistente conhecido, o runner aguarda 10 segundos e consulta novamente; se continuar assim, termina com `NO_ASSISTANT_MESSAGE`.
 `opc config unset review.structuredOutput` restaura o padrão `text` quando não há uma substituição no workspace.
 
 A extração textual aceita apenas um objeto JSON no texto completo, na última cerca `json` ou como último objeto balanceado no nível superior da prosa. Arrays e valores primitivos são rejeitados, e nenhum erro do turno é convertido em sucesso por essa extração.
@@ -198,12 +198,7 @@ O stop gate mantém seu contrato textual `ALLOW:`/`BLOCK:` e não envia `format`
 `orchestrate.synthesizer` aceita `claude` ou um modelo e `--synthesizer` o sobrescreve.
 `jobs.maxParallel` limita as subtarefas simultâneas; `jobs.maxActive` conta o grupo como um job.
 
-`orchestrate.structuredOutput: "text"` pede um objeto JSON em uma única cerca `json`, sem
-enviar `format` ao OpenCode, e extrai/valida o objeto depois. É o padrão porque, no OpenCode
-1.18.32 através do gateway, o planner com `format: json_schema` retornou
-`StructuredOutputError` com `Model did not produce structured output`. O comportamento é o
-mesmo de `review.structuredOutput`: `tool` permanece disponível quando o ambiente suporta
-saída estruturada pelo protocolo.
+`orchestrate.structuredOutput: "text"` pede um objeto JSON em uma única cerca `json` e valida o objeto depois. O V2 não oferece saída estruturada por ferramenta; `tool` é convertido para `text` com aviso.
 
 ```bash
 opc config set orchestrate.structuredOutput text
@@ -224,12 +219,9 @@ todo modelo citado continua passando pela política (`policy.*`).
 | `conclave.rounds` | inteiro 1–3 | `1` | Rodadas de `opinion`; `debate` usa pelo menos 2 |
 | `conclave.quorum` | inteiro ≥ 2 | `2` | Respostas válidas mínimas por rodada; não pode exceder os membros |
 | `conclave.memberTimeoutSec` | inteiro | `900` | Limite de cada turno de membro ou juiz; ao expirar, aborta a sessão e descarta o membro |
-| `conclave.structuredOutput` | `"text"` ou `"tool"` | `"text"` | `text` pede JSON em cerca e valida localmente; `tool` envia `format: json_schema` |
+| `conclave.structuredOutput` | `"text"` | `"text"` | Pede JSON em cerca e valida localmente; `tool` antigo é convertido com aviso |
 
-`text` é o padrão porque, no gateway usado pelo projeto, `format: json_schema` retornou
-`StructuredOutputError` com `Model did not produce structured output`. Em `text`, ausência de
-objeto JSON é `MissingStructuredOutput`; em `tool`, falha de formato é
-`StructuredOutputError`. JSON fora do schema é `InvalidStructuredOutput` nos dois modos.
+Sem um objeto JSON extraível, o resultado é `MissingStructuredOutput`. JSON fora do schema é `InvalidStructuredOutput`.
 
 Relacionadas: `jobs.maxParallel` limita turnos simultâneos e `jobs.maxActive` conta cada
 conclave como uma vaga — somente o job-grupo conta.

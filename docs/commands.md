@@ -62,7 +62,7 @@ Lista commands ou skills expostos pelo servidor. Para commands, inclui a decisã
 
 ## Saídas e segurança
 
-Use `--json` em integrações. O portão F1 verificou as respostas JSON de providers, modelos e onboarding e não encontrou credenciais. Evite passar segredo como argumento ou gravá-lo na configuração.
+Use `--json` em integrações. Providers, modelos e catálogo omitem o objeto `settings`, inclusive no JSON, porque o V2 pode incluir `settings.apiKey`. Evite passar segredo como argumento ou gravá-lo na configuração.
 
 ## Execução (F2a)
 
@@ -73,7 +73,7 @@ Todo turno roda num **worker destacado** (`opc task-worker`), registrado como jo
 | Código | Quando |
 | --- | --- |
 | 0 | Sucesso |
-| 2 | Uso inválido, id ausente/ambíguo, limite de jobs, sessão ocupada ou troca de perfil não suportada no resume |
+| 2 | Uso inválido, id ausente/ambíguo, limite de jobs ou sessão ocupada |
 | 3 | Job em `waiting_permission`, com pedido de permissão ou pergunta pendente |
 | 4 | Negado por política, aprovador ou recursão (`OPC_INSIDE_SERVER=1`) |
 | 5 | Falha de conexão/servidor |
@@ -317,7 +317,6 @@ opc sessions --all --limit 10 --json
 | `summarize` | `summarize <sessionID> [--model m] [--timeout s]` | Resume sincronamente; o timeout padrão é 600 s. |
 | `children` | `children <sessionID>` | Lista sessões filhas. |
 | `diff` | `diff <sessionID> [--message messageID]` | Mostra diff da sessão ou de uma mensagem. |
-| `todo` | `todo <sessionID>` | Lista tarefas da sessão. |
 
 IDs de sessão, mensagem e parte são validados antes de conectar. `revert`, `unrevert` e `summarize` recusam a sessão ocupada por job ou ativa no servidor. A resolução de modelo de `new` e `summarize` segue a política; uma recusa de política retorna exit 4.
 
@@ -331,14 +330,13 @@ OPC_ARGS_5f1d0c7a_EOF
 
 Para `unrevert`, o corpo é `unrevert ses_<id> --confirmed-by-user`. Nunca acrescente a flag sem a confirmação daquela ação e daquele alvo.
 
-Em OpenCode 1.18.32, o endpoint de diff da sessão pode devolver uma lista vazia. Sem `--message`, o opc então tenta o diff de cada mensagem de usuário e informa `source: "per-message"`; se as mensagens não puderem ser listadas, use `--message <id>`.
+O diff da sessão pode estar vazio. Use `--message <id>` para consultar uma mensagem específica quando necessário.
 
 ```bash
 opc session new --title "investigar login" --model fast
 opc session show ses_<id>
 opc session fork ses_<id> msg_<id>
 opc session diff ses_<id>
-opc session todo ses_<id>
 ```
 
 Saída real (portão F3, 29/09/2026):
@@ -441,7 +439,7 @@ Sessão: ses_<id> · modelo omniroute-personal/cmd/moonshotai/Kimi-K2.6 · agent
 Sem `sessionID`, usa a sessão do job mais recente da sessão atual do Claude; sem job, abre o seletor da TUI. A linha normal lê a senha do arquivo privado e a entrega somente por variável de ambiente:
 
 ```bash
-OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode attach http://127.0.0.1:<porta> -s ses_<id> --dir '<workspace>'
+OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode --server http://127.0.0.1:<porta> -s ses_<id>
 ```
 
 No servidor gerenciado, `attach.secret` é modo 600 e contém apenas a senha vigente. `--pane` requer tmux, cria `attach-pane.sh` modo 700 e lê o segredo dentro do pane; senha nenhuma é posta em argv. Fora do tmux, retorna exit 2. Em servidor externo (`OPC_SERVER_URL`), a linha usa `OPC_SERVER_PASSWORD` e `--pane` é recusado porque o opc não grava o segredo externo.
@@ -623,7 +621,7 @@ Para retomar no terminal:
 
 ### Ferramentas MCP
 
-O servidor MCP `opc` expõe 25 ferramentas `opc_*`, usando o mesmo despachante da CLI.
+O servidor MCP `opc` expõe 24 ferramentas `opc_*`, usando o mesmo despachante da CLI.
 Consultas e ações seguem a política e as confirmações do comando equivalente;
 `opc_config_get` permite apenas leitura. `opc_conclave` aceita `opinion` e `debate`;
 review fica no slash command. A [arquitetura](architecture.md#servidor-mcp-f5) contém o

@@ -14,7 +14,7 @@ test('F5 MCP acceptance harness completes all three fixture runs without cancell
     OPC_LIVE: '1',
     OPC_LIVE_MODEL: 'omniroute-personal/opencode-go/deepseek-v4.1-flash',
     OPC_LIVE_MODEL_2: 'omniroute-personal/opencode-go/qwen3.8-max',
-    OPC_F5_LIVE_REPORT: report,
+    OPC_F6_LIVE_REPORT: report,
   } });
   // A nested test runner must start a fresh harness rather than inherit its parent's IPC context.
   delete env.NODE_TEST_CONTEXT;

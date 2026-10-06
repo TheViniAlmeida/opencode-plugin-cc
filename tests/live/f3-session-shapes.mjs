@@ -13,7 +13,7 @@ import { startFake } from '../fixtures/fake-opencode.mjs';
 const READ_PATHS = {
   session: ['id', 'title', 'directory', 'time.updated'], fork: ['id', 'title'], reverted: ['id', 'revert.messageID', 'revert.diff'],
   unreverted: ['id'], message: ['info.id', 'info.role', 'parts'], diff: ['file', 'status', 'additions', 'deletions', 'patch'],
-  todo: ['content', 'status', 'priority'], command: ['name', 'template', 'hints'], summarized: [''],
+  command: ['name', 'template', 'hints'], summarized: [''],
 };
 const ENDPOINTS = Object.keys(READ_PATHS);
 async function capture(api, sid, model) {
@@ -23,11 +23,11 @@ async function capture(api, sid, model) {
   const reverted = await api.revert(fork.id, { messageID: forkUser.info.id });
   const unreverted = await api.unrevert(fork.id);
   const summarized = await api.summarize(fork.id, { providerID: model.providerID, modelID: model.modelID, timeoutMs: 600000 });
-  const [session, diff, todo, commands] = await Promise.all([api.getSession(sid), api.diff(sid), api.todo(sid), api.commands()]);
-  return { session, fork, reverted, unreverted, summarized, message: messages[0], diff: diff[0] ?? null, todo: todo[0] ?? null, command: commands[0] ?? null };
+  const [session, diff, commands] = await Promise.all([api.getSession(sid), api.diff(sid), api.commands()]);
+  return { session, fork, reverted, unreverted, summarized, message: messages[0], diff: diff[0] ?? null, command: commands[0] ?? null };
 }
 
-test('F3 contract: OpenCode real vs fake para fork/revert/unrevert/summarize/diff/todo/command', { skip: SKIP, timeout: 40 * 60_000 }, async (t) => {
+test('F3 contract: OpenCode real vs fake para fork/revert/unrevert/summarize/diff/command', { skip: SKIP, timeout: 40 * 60_000 }, async (t) => {
   const { root, ws, env, dataDir, stateDir } = liveWorkspace(t);
   const created = await opc(['session', 'new', '--title', 'contract', '--model', MODELS.deepseek, '--write', '--json'], { env, cwd: ws });
   assert.equal(created.code, 0, created.stderr);

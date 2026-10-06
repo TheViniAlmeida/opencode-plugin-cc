@@ -6,6 +6,15 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Alterado — F6 (OpenCode V2)
+
+- OpenCode ≥ 2.0.22 é obrigatório; a API V1 não é suportada. O binário pode ser escolhido por `server.opencodeBin` ou `OPC_OPENCODE_BIN`.
+- `session todo` e a ferramenta MCP `opc_session_todo` foram removidos porque o V2 não oferece tarefas de sessão.
+- `/opc:attach` abre `opencode --server <url> -s <sessionID>` com a senha em `OPENCODE_SERVER_PASSWORD`.
+- `structuredOutput: tool` não produz saída estruturada no V2; o opc usa `text` e valida o JSON localmente.
+- O `PATCH` de permissões substitui a lista; a troca de perfil no `--resume` é permitida.
+- Catálogos omitem `settings`, que pode conter chave de provider.
+
 ### Adicionado — F5 (MCP e transfer)
 
 - Servidor MCP stdio `opc`, sem dependências, com 25 ferramentas `opc_*` que usam o mesmo despachante da CLI. Negociação das versões `2025-06-18`, `2025-03-26` e `2024-11-05`; jobs longos em background por padrão e espera limitada a 540 s.

@@ -83,9 +83,9 @@ if (!LIVE) {
     const record = JSON.parse(fs.readFileSync(serverJson, 'utf8'));
     assert.equal(fs.statSync(serverJson).mode & 0o777, 0o600);
     const client = createClient({ baseUrl: record.url, password: record.password, directory: ws });
-    const health = await client.get('/global/health');
-    console.log(`[live] health: healthy=${health.healthy} version=${health.version}`);
-    assert.equal(health.healthy, true);
+    const health = await client.get('/api/info');
+    console.log(`[live] health: version=${health.version}`);
+    assert.match(health.version, /^2\./);
 
     const second = await opc(['setup', '--json'], { env, cwd: ws });
     const r2 = parseJsonOutput(second.stdout);

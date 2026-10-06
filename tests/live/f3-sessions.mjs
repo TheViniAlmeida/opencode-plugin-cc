@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { SKIP, MODELS, liveWorkspace, opc, record, note, fileLines, userText } from './_f3-lib.mjs';
 
-test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, children', { skip: SKIP, timeout: 60 * 60_000 }, async (t) => {
+test('F3 live: session new, fork, revert/unrevert, diff, summarize, children', { skip: SKIP, timeout: 60 * 60_000 }, async (t) => {
   const { ws, env, dataDir } = liveWorkspace(t);
   const notes = join(ws, 'notes.txt');
   const run = async (title, args, opts = {}) => { const res = await opc(args, { env, cwd: ws, ...opts }); record(title, res, dataDir); return res; };
@@ -46,13 +46,6 @@ test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, childr
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
   assert.equal(JSON.parse((await opc(['session', 'show', sid, '--json'], { env, cwd: ws })).stdout).session.revert, undefined);
   res = await run('session diff (após unrevert; observação)', ['session', 'diff', sid, '--json']);
-  res = await run('task todowrite', ['task', '--resume', sid, '--write', '--model', MODELS.deepseek, 'Use the todowrite tool to create a todo list with exactly two items: "check alpha" and "check beta". Then reply DONE.']);
-  assert.equal(res.code, 0, res.stderr);
-  res = await run('session todo', ['session', 'todo', sid, '--json']);
-  const todos = JSON.parse(res.stdout).todos;
-  assert.ok(Array.isArray(todos));
-  note('contagem de tarefas (critério: >= 1)', { count: todos.length }, dataDir);
-  assert.ok(todos.length >= 1, 'o modelo deve criar ao menos uma tarefa');
   const before = JSON.parse((await opc(['session', 'show', sid, '--limit', '200', '--json'], { env, cwd: ws })).stdout).messages.length;
   res = await run('session summarize', ['session', 'summarize', sid, '--model', MODELS.qwen, '--json']);
   assert.equal(res.code, 0, res.stderr);

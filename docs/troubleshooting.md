@@ -17,8 +17,8 @@ OPC_ARGS_5f1d0c7a_EOF
 
 ### Versão antiga (`UNSUPPORTED_VERSION`)
 
-- Sintoma: exit 5, versão anterior ao mínimo 1.18.0.
-- Solução: atualize o OpenCode. Se um servidor antigo estiver registrado, o próximo setup detecta a troca e o substitui quando não houver jobs ativos.
+- Sintoma: exit 5, versão anterior ao mínimo 2.0.22.
+- Solução: instale OpenCode V2 e configure `server.opencodeBin` ou `OPC_OPENCODE_BIN` se o primeiro binário no PATH for antigo. Sem jobs ativos, o próximo setup substitui o servidor registrado.
 
 ### Boot lento ou falho (`BOOT_FAILED`)
 
@@ -32,11 +32,11 @@ O portão ao vivo registrou o primeiro setup em cerca de 42 s; não foi publicad
 
 - Porta divergente ou `EADDRINUSE`: a tentativa é encerrada e outra porta é testada, até três vezes.
 - `AUTH_FAILED` (401): encerre o servidor do workspace com `/opc:setup --stop-server` e execute o setup novamente. Em attach, confira `OPC_SERVER_PASSWORD`.
-- Processo vivo sem resposta a `/global/health` em 2 s: o próximo comando o substitui. Registro morto é descartado sem sinalizar processos não pertencentes ao opc.
+- Processo vivo sem resposta a `/api/info` em 2 s: o próximo comando o substitui. Registro morto é descartado sem sinalizar processos não pertencentes ao opc.
 
 ### Servidor órfão e encerramento
 
-O opc só sinaliza uma identidade que corresponda a `opencode serve --port <porta>` e ao start time registrado. Servidores iniciados manualmente não são tocados. Use `/opc:setup --stop-server`; com jobs ativos, `--force` exige confirmação explícita do usuário. A sequência é dispose, SIGTERM e, após 3 s, SIGKILL no grupo.
+O opc só sinaliza uma identidade que corresponda a `opencode serve --port <porta>` e ao start time registrado. Servidores iniciados manualmente não são tocados. Use `/opc:setup --stop-server`; com jobs ativos, `--force` exige confirmação explícita do usuário. A sequência é SIGTERM e, após 3 s, SIGKILL no grupo.
 
 ### Sessões bloqueadas (`share-auto`)
 
@@ -73,9 +73,9 @@ Variáveis de diagnóstico: `OPC_REAP_GRACE_MS` (padrão 60000), `OPC_REAP_CANCE
 
 O stop gate nunca bloqueia por infraestrutura. O `systemMessage` traz o código e a causa redigida, limitada; corrija a causa e tente a próxima parada. Casos conhecidos: OpenCode ausente ou que não sobe, modelo negado pela política, limite de jobs, timeout, resposta fora de `ALLOW:`/`BLOCK:` e erro de preparação do companion. `stop_hook_active: true` é uma permissão deliberada para evitar laço após um bloqueio.
 
-## Review estruturado e OpenCode 1.18.32
+## Saída estruturada no OpenCode V2
 
-Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/message` pode retornar 400 `Expected OutputFormatJsonSchema`; a leitura por mensagem individual funciona. Por isso `review.structuredOutput` é `text` por padrão: nenhum `format` é enviado, o modelo retorna um objeto em cerca `json` e o opc faz extração e validação estritas. `tool` é opt-in e usa schema/per-message reads com espera limitada.
+O V2 não oferece saída por `json_schema`. O opc pede um objeto em cerca `json` e valida localmente. As chaves `review.structuredOutput`, `orchestrate.structuredOutput` e `conclave.structuredOutput` usam `text`; valor antigo `tool` é tratado como `text` com aviso.
 
 ## Orquestração
 
@@ -83,7 +83,7 @@ Em 1.18.32, após `prompt_async` com `format.json_schema`, `GET /session/:id/mes
 
 Mantenha ou configure `orchestrate.structuredOutput` como `text`. Nesse modo o planner recebe
 o contrato de retornar um único JSON em cerca `json`, sem `format: json_schema`; o opc extrai e
-valida o objeto. `tool` é opt-in para ambientes onde o formato estruturado do OpenCode funciona.
+valida o objeto. `tool` não tem efeito no V2 e é convertido para `text` com aviso.
 
 ```bash
 opc config set orchestrate.structuredOutput text
@@ -131,13 +131,13 @@ O OpenCode guarda sessões em storage compartilhado. A TUI (`opencode`) e o serv
 
 Resultado automatizado do §15 item 12: um `opencode run` concorrente e um job do opc terminaram com exit 0; o log do servidor não continha `SQLITE_BUSY` nem `database is locked`. A observação de visibilidade da sessão não-OPC no servidor do plugin foi `false` antes e depois de `opc sessions --all --refresh --json`. Isso é uma observação, não prova de sincronização da TUI. A checagem manual TUI × opc é `NÃO VALIDADO`.
 
-## Diff de sessão vazio no OpenCode 1.18.32
+## Diff de sessão vazio
 
-Em 1.18.32, `GET /session/:id/diff` pode devolver uma lista vazia porque o resumo de diff da sessão não foi calculado. O opc usa como fallback `GET /session/:id/diff?messageID=…` para cada mensagem de usuário e indica `source: "per-message"`. Se a listagem de mensagens também estiver indisponível, use `opc session diff <sessionID> --message <messageID>`.
+Se o diff da sessão estiver vazio, consulte uma mensagem específica com `opc session diff <sessionID> --message <messageID>`.
 
 ## Listagem de mensagens indisponível
 
-Em algumas respostas estruturadas do OpenCode 1.18.32, `GET /session/:id/message` falha na listagem. `opc session show` informa `messagesUnavailable: true` e mantém diff e filhas disponíveis. Para a prévia de revert, o opc busca a mensagem alvo diretamente; como não consegue enumerar os turnos posteriores, avisa que a prévia cobre apenas aquela mensagem. Se o alvo não existir, retorna `UNKNOWN_MESSAGE`.
+Se `GET /api/session/:id/message` falhar na listagem, `opc session show` informa `messagesUnavailable: true` e mantém diff e filhas disponíveis. Para a prévia de revert, o opc busca a mensagem alvo diretamente; como não consegue enumerar os turnos posteriores, avisa que a prévia cobre apenas aquela mensagem. Se o alvo não existir, retorna `UNKNOWN_MESSAGE`.
 
 ## `/opc:attach --pane` não abre
 
@@ -158,7 +158,6 @@ provider, cancelamento ou saída inválida. Ajuste os membros, o quorum ou
 ### Saída estruturada ausente ou inválida
 
 - `MissingStructuredOutput` em `conclave.structuredOutput: "text"`: o turno terminou, mas a resposta não trouxe um objeto JSON extraível. O modo `text` pede uma única cerca `json` e valida localmente.
-- `StructuredOutputError` em `conclave.structuredOutput: "tool"`: o gateway não produziu a saída do protocolo `format: json_schema`. Use `text`, que é o padrão por esse motivo, ou um ambiente compatível.
 - `InvalidStructuredOutput`: havia JSON, mas ele não atende ao schema esperado. Reformule a tarefa ou troque o membro; a falha não recebe fallback automático.
 - `MissingSession`: uma rodada posterior não recebeu a sessão criada na rodada anterior. Reexecute e, se persistir, preserve as falhas para investigar o servidor.
 
@@ -203,7 +202,7 @@ consenso criado pelo juiz.
   raciocínio e comandos locais. Confira a origem indicada.
 - **`IMPORT_FAILED`:** o processo falhou, não imprimiu `Imported session: <id>` ou
   informou um ID diferente do exportado. A mensagem não expõe stdout/stderr brutos
-  do OpenCode. Confira `opencode --version` e `opencode import --help`; antes de
+  do OpenCode. Confira `opencode --version` e `opencode session import --help`; antes de
   repetir, consulte as sessões no mesmo workspace, pois a importação pode ter
   produzido uma sessão mesmo sem confirmação de sucesso.
 - **Sessão transferida ausente em `opencode session list`:** a lista é por projeto;

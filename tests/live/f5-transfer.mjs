@@ -11,7 +11,7 @@ import { appendSafeOutput, safeOutputText } from './_f3-lib.mjs';
 
 const MODEL = process.env.OPC_LIVE_MODEL?.trim();
 const SKIP = process.env.OPC_LIVE !== '1' ? 'OPC_LIVE!=1' : !MODEL && 'Informe OPC_LIVE_MODEL (provider/model).';
-const REPORT = path.join(REPO_ROOT, 'docs/phases/F5-live-output.md');
+const REPORT = path.join(REPO_ROOT, 'docs/phases/F6-live-output.md');
 
 test('F5 live: isolated transfer and session API preserve synthetic history', { skip: SKIP, timeout: 600_000 }, async (t) => {
   const root = trackTempDir(t, makeTempDir('opc-live-f5-transfer-'));

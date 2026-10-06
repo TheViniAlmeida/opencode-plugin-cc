@@ -6,7 +6,7 @@
 Claude Code ──(slash command / hook)──> bin/opc ──> opc-companion.mjs ──> commands/<sub>.mjs
                                                                          │
                                                          scripts/lib/*.mjs (núcleo)
-                                                                         │ HTTP + SSE (API v1)
+                                                                         │ HTTP + SSE (API V2 `/api/*`)
                                                                          ▼
                                                   opencode serve (127.0.0.1:<porta>, senha)
 ```
@@ -43,13 +43,13 @@ OPC_ARGS_5f1d0c7a_EOF
 3. Reaproveita registro cuja identidade, health e versão conferem; registro inválido é descartado sem sinal.
 4. Escolhe porta livre em `127.0.0.1`, inicia `opencode serve` destacado e registra stdout/stderr em `server.log`.
 5. Aguarda `listening on` na porta pedida ou health; tenta até três portas, confirma versão mínima e grava `server.json` atomicamente em modo 600.
-6. Aquece `/agent` e verifica `/config`: `share: auto` bloqueia sessões; defaults de modelo negados viram aviso.
+6. Aquece `/api/agent` e consulta `/api/config`; a versão é conferida em `/api/info`.
 
 Resultado ao vivo do portão: primeiro setup em aproximadamente 42 s, porta 40405 e health positivo; reaproveitamento em aproximadamente 8,6 s; encerramento em aproximadamente 3,5 s com fallback para SIGKILL previsto. O reaproveitamento lento inclui a checagem de mundo e aquecimento; investigação fica para F1.
 
 ## Encerramento e eventos
 
-`stopServer` tenta `POST /global/dispose`, SIGTERM no grupo e, após 3 s, SIGKILL; a identidade é conferida antes de cada sinal. SSE usa `GET /event?directory=…`, liveness de 30 s e reconexão com esperas de 0,5/1/2/4/8 s.
+`stopServer` envia SIGTERM ao grupo e, após 3 s, SIGKILL se necessário; a identidade é conferida antes de cada sinal. SSE usa `GET /api/event`, eventos por sessão e heartbeat em comentário; liveness de 30 s e reconexão com esperas de 0,5/1/2/4/8 s.
 
 ## Segurança
 
@@ -62,7 +62,7 @@ Resultado ao vivo do portão: primeiro setup em aproximadamente 42 s, porta 4040
 
 Um grupo é um job com `role: "group"` e `memberIds`; cada membro tem `groupId` e `role: "member:<n>"`. Apenas o grupo conta em `jobs.maxActive` e na poda. Membros herdam a identidade do processo do coordenador, mas o matcher de worker não confunde o membro com esse processo; cancelar um membro aborta somente sua sessão.
 
-`opc task-worker --job-id <grupo>` escolhe o worker por `kind`: `sub` delega para `subagent.mjs` e `cmd` para `command.mjs`. Para subagentes, o coordenador abre um único `EventHub`, cria a sessão pai e executa os membros com `runWithConcurrency(memberIds, jobs.maxParallel, …)`. Cada membro chama `dispatchSubagent`: normalmente cria uma sessão filha com o agente; se o servidor a recusar, usa uma sessão portadora e uma parte `subtask`.
+`opc task-worker --job-id <grupo>` escolhe o worker por `kind`: `sub` delega para `subagent.mjs` e `cmd` para `command.mjs`. Para subagentes, o coordenador abre um único `EventHub`, cria a sessão pai e executa os membros com `runWithConcurrency(memberIds, jobs.maxParallel, …)`. Cada membro chama `dispatchSubagent`: usa a ferramenta `subagent` do V2; a filha herda modelo e permissões da sessão pai.
 
 Cada membro cria sua própria ponte de pedidos da F2a. A atualização do membro também recalcula o grupo: pedidos pendentes ficam identificados por `memberId`; ao resolver um pedido, o turno correspondente retoma. Um membro isolado não vira `worker_lost`; quando a reconciliação perde o grupo, os membros ativos também são perdidos.
 
@@ -184,7 +184,7 @@ e os erros reportados pelo comando. Argumentos inválidos retornam exit 2 com
 
 ### Ferramentas
 
-Há **25 ferramentas**. A exposição permite operações de consulta e ações com as mesmas
+As ferramentas atuais estão listadas abaixo. A exposição permite operações de consulta e ações com as mesmas
 confirmações do comando. As anotações MCP são indicações; a política do companion
 continua valendo. Consultas podem iniciar o servidor gerenciado ou reconciliar o estado
 dos jobs, conforme o comando equivalente.
@@ -209,7 +209,6 @@ dos jobs, conforme o comando equivalente.
 | `opc_session_summarize` | `/opc:session summarize` | Compacta sessão com modelo sujeito à política |
 | `opc_session_children` | `/opc:session children` | Consulta de sessões filhas |
 | `opc_session_diff` | `/opc:session diff` | Consulta de diff |
-| `opc_session_todo` | `/opc:session todo` | Consulta de tarefas |
 | `opc_job_status` | `/opc:status` | Consulta de jobs; `wait: true` exige `jobId` |
 | `opc_job_result` | `/opc:result` | Consulta do resultado final; grupos incluem membros |
 | `opc_job_cancel` | `/opc:cancel` | Cancela job ou grupo conforme o comando |
