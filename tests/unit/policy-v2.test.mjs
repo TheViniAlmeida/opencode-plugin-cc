@@ -21,7 +21,7 @@ test('read-only V2 rules and ordering', () => {
 
 test('write V2 rules ask for destructive shell', () => {
   const rules = buildPermissionRules('write', { policy: {} });
-  assert.ok(rules.some((x) => x.action === 'shell' && x.resource === 'rm -rf*' && x.effect === 'ask'));
+  assert.ok(rules.some((x) => x.action === 'shell' && x.resource === 'rm *' && x.effect === 'ask'));
 });
 
 test('requiresUser consumes a recorded V2 shell request', () => {

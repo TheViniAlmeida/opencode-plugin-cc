@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
@@ -28,6 +29,26 @@ const SPEC = {
 export function textFromParts(parts) {
   return (parts ?? []).filter((part) => part.type === 'text' && !part.synthetic && !part.ignored)
     .map((part) => part.text ?? '').join('\n').trim();
+}
+
+export async function waitCommandResult(api, sessionID, baselineIDs, { timeoutMs, pollMs = 100, getExecutionError = () => null } = {}) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const messages = await api.messages(sessionID, { limit: 1000 });
+    const fresh = messages.filter((message) => !baselineIDs.has(message.id));
+    const idle = fresh.findLast((message) => message.type === 'idle');
+    if (idle) {
+      const assistants = fresh.filter((message) => message.type === 'assistant');
+      const assistantError = assistants.findLast((message) => message.error)?.error;
+      const error = idle.outcome === 'succeeded' ? assistantError ?? null
+        : getExecutionError() ?? assistantError ?? { type: 'execution.failed', message: idle.outcome === 'interrupted' ? 'Comando interrompido.' : 'A execução do comando falhou.' };
+      return { finalText: assistants.map((message) => textFromParts(message.content)).filter(Boolean).join('\n').trim(), error };
+    }
+    await sleep(Math.min(pollMs, Math.max(1, deadline - performance.now())));
+  }
+  const error = new Error('Tempo esgotado aguardando o resultado do comando.');
+  error.code = 'TIMEOUT';
+  throw error;
 }
 
 export function safeFailureMessage(value, rawArguments = '') {
@@ -137,6 +158,7 @@ export async function runWorker(ctx, job, request = job.request) {
     const onEvent = (event) => {
       const data = event?.data ?? {};
       if (event?.type === 'form.created' && data.form?.sessionID !== session.id) return;
+      if (event?.type === 'session.execution.failed' && data.sessionID === session.id) executionError = data.error;
       if (event?.type === 'permission.asked') bridge.onPermission(toPermissionRequest(data)).catch(bridgeError('permissões'));
       else if (event?.type === 'form.created' && data.form) {
         const question = toQuestion(data.form);
@@ -147,16 +169,20 @@ export async function runWorker(ctx, job, request = job.request) {
     };
     const untrack = hub.track(session.id, onEvent);
     const offForms = hub.onAny?.((event) => { if (event?.type === 'form.created') onEvent(event); }) ?? (() => {});
-    let response = null;
+    let outcome = null;
     let failure = null;
+    let executionError = null;
     try {
-      response = await api.runCommand(session.id, { name: request.command, text: request.arguments ?? '' });
+      const baselineIDs = new Set((await api.messages(session.id, { limit: 1000 })).map((message) => message.id));
+      await api.runCommand(session.id, { name: request.command, text: request.arguments ?? '' });
+      outcome = await waitCommandResult(api, session.id, baselineIDs,
+        { timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000, getExecutionError: () => executionError });
     } catch (err) {
       failure = err;
-      if (err.code === 'TIMEOUT') await api.abort(session.id).catch(() => {});
+      if (err.code === 'TIMEOUT') await api.interrupt(session.id).catch(() => {});
     } finally { untrack(); offForms(); bridge.dispose(); await updater.flush(); }
     const latest = readJob(stateDir, job.id);
-    const error = response?.info?.error ?? null;
+    const error = outcome?.error ?? null;
     let patch;
     if (latest?.status === 'cancelled') patch = { status: 'cancelled' };
     else if (failure) patch = { status: 'failed', errorCode: failure.code === 'TIMEOUT' ? 'timeout' : (failure.code ?? 'error'), errorType: failure.code ?? failure.name, errorMessage: safeMessage(failure.message) };
@@ -165,11 +191,11 @@ export async function runWorker(ctx, job, request = job.request) {
       patch = { status: 'failed', errorClass: classified.errorClass, errorType: classified.errorType, errorMessage: safeMessage(classified.message) };
     } else patch = { status: 'completed' };
     const resultError = error
-      ? { name: safeMessage(error.name ?? 'Error'), message: safeMessage(error.data?.message ?? error.message ?? '') }
+      ? { name: safeMessage(error.type ?? error.name ?? 'Error'), message: safeMessage(error.data?.message ?? error.message ?? '') }
       : (failure ? { name: safeMessage(failure.code ?? 'Error'), message: safeMessage(failure.message) } : null);
     const result = { status: patch.status, command: request.command, argumentsPreview: request.argumentsPreview ?? previewArguments(rawArguments),
       argumentsBytes: request.argumentsBytes ?? Buffer.byteLength(rawArguments), sessionID: session.id, model: request.model,
-      agent: request.agent ?? null, finalText: safeOutputText(textFromParts(response?.parts)), error: resultError };
+      agent: request.agent ?? null, finalText: safeOutputText(outcome?.finalText ?? ''), error: resultError };
     await updateJob(stateDir, job.id, { ...patch, phase: patch.status, completedAt: now(), pendingRequest: null,
       result, rendered: renderCommandResult(result) });
     return exitCodeForJob(patch);

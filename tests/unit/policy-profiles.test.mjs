@@ -55,7 +55,7 @@ test('custom: read-only base + custom rules + invariants; shell allow brings des
   assert.deepEqual(rules.slice(0, 6), [
     r('*', '*', 'deny'), r('read', '*', 'allow'), r('glob', '*', 'allow'), r('skill', '*', 'allow'), r('question', '*', 'allow'), r('shell', 'npm test', 'allow'),
   ]);
-  assert.ok(rules.some((x) => x.action === 'shell' && x.resource === 'rm -rf*' && x.effect === 'ask'));
+  assert.ok(rules.some((x) => x.action === 'shell' && x.resource === 'rm *' && x.effect === 'ask'));
   assert.deepEqual(rules.at(-1), r('browser', '*', 'deny'));
   const docs = buildPermissionRules('custom:docs', { policy, permissionProfiles });
   assert.ok(!docs.some((x) => x.action === 'shell'));

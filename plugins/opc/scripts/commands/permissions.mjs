@@ -39,7 +39,23 @@ const trackedSessions = (jobs) => [...new Set(jobs.flatMap((job) => [job.session
 
 async function workspaceSessionIDs(api) {
   const sessions = await api.listSessions();
-  return sessions.filter((session) => session.title?.startsWith('OPC: ')).map((session) => session.id);
+  const children = new Map();
+  for (const session of sessions) {
+    if (!session.parentID) continue;
+    const siblings = children.get(session.parentID) ?? [];
+    siblings.push(session.id);
+    children.set(session.parentID, siblings);
+  }
+  const included = new Set(sessions.filter((session) => session.title?.startsWith('OPC: ')).map((session) => session.id));
+  const queue = [...included];
+  for (const parentID of queue) {
+    for (const childID of children.get(parentID) ?? []) {
+      if (included.has(childID)) continue;
+      included.add(childID);
+      queue.push(childID);
+    }
+  }
+  return sessions.filter((session) => included.has(session.id)).map((session) => session.id);
 }
 
 async function findPending(api, id, kind, knownSessionID) {

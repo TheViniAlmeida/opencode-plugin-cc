@@ -4,7 +4,7 @@ const r = (action, resource, effect) => ({ action, resource, effect });
 const SENSITIVE = ['*.env', '**/.ssh/**'].flatMap((p) => ['read', 'grep', 'glob'].map((perm) => r(perm, p, 'deny')));
 const INVARIANTS_HEAD = [r('external_directory', '*', 'deny'), ...SENSITIVE, r('subagent', 'work-*', 'deny'), r('gitlab_*', '*', 'deny')];
 const DESTRUCTIVE = [
-  'rm -rf*', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
+  'rm *', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
   'git reset --hard*', 'git clean -f*', 'git branch -D*', 'git tag -d*', 'docker rm*',
   'docker rmi*', 'docker volume rm*', 'docker system prune*', 'docker compose down -v*',
   'kubectl delete*', 'mkfs*', 'dd *of=*', 'shred*', 'truncate -s 0*', 'find * -delete*',

@@ -106,7 +106,7 @@ export function assertCommandUsable(commandInfo, policy, agentsByName = new Map(
 // ---- F2a: permission profiles, invariants, approver (spec §8) ----
 
 export const BUILTIN_DESTRUCTIVE_BASH = Object.freeze([
-  'rm -rf*', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
+  'rm *', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
   'git reset --hard*', 'git clean -f*', 'git branch -D*', 'git tag -d*', 'docker rm*',
   'docker rmi*', 'docker volume rm*', 'docker system prune*', 'docker compose down -v*',
   'kubectl delete*', 'mkfs*', 'dd *of=*', 'shred*', 'truncate -s 0*', 'find * -delete*',

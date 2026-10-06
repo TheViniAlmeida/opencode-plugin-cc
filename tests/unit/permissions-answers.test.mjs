@@ -27,7 +27,7 @@ test('permissions list falls back with recorded requests when the server is down
   let job = await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws' });
   job = await updateJob(stateDir, job.id, {
     status: 'waiting_permission',
-    pendingRequest: [{ id: 'per_local', type: 'permission', permission: 'bash', patterns: ['echo ok'], sessionID: 'ses_local' }],
+    pendingRequest: [{ id: 'per_local', type: 'permission', permission: 'shell', patterns: ['echo ok'], sessionID: 'ses_local' }],
   });
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json: (value) => { ctx.output = JSON.stringify(value); } };
   await list(ctx, {}, () => ({
@@ -45,7 +45,7 @@ test('permissions list falls back with recorded requests when the server is down
 test('permissions list with no registered server still reports recorded requests', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
   await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws', status: 'waiting_permission', pendingRequest: [
-    { id: 'per_saved_123456789', type: 'permission', permission: 'bash', patterns: ['echo saved'], sessionID: 'ses_saved123456789' },
+    { id: 'per_saved_123456789', type: 'permission', permission: 'shell', patterns: ['echo saved'], sessionID: 'ses_saved123456789' },
   ] });
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json: (value) => { ctx.output = JSON.stringify(value); } };
   await list(ctx, {});
@@ -58,7 +58,7 @@ test('reply masks the supplied id and keeps follow-up line when bridge clears th
   const pendingId = 'per_562c642c123456789';
   const sessionID = 'ses_session123456789';
   const job = await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws', status: 'waiting_permission', sessionID, pendingRequest: [
-    { id: pendingId, type: 'permission', permission: 'bash', patterns: ['echo ok'], sessionID },
+    { id: pendingId, type: 'permission', permission: 'shell', patterns: ['echo ok'], sessionID },
   ] });
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
   const api = {
@@ -75,9 +75,9 @@ test('permissions reply masks the supplied id and reports sibling identifiers', 
   const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
   const ids = ['per_562c642c123456789', 'per_89ab0345123456789'];
   const sessionID = 'ses_session123456789';
-  await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws', status: 'waiting_permission', sessionID, pendingRequest: ids.map((id) => ({ id, type: 'permission', permission: 'bash', patterns: ['echo ok'], sessionID })) });
+  await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws', status: 'waiting_permission', sessionID, pendingRequest: ids.map((id) => ({ id, type: 'permission', permission: 'shell', patterns: ['echo ok'], sessionID })) });
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
-  const api = { async listPermissions() { return ids.map((id) => ({ id, permission: 'bash', sessionID })); }, async replyPermission() {} };
+  const api = { async listPermissions() { return ids.map((id) => ({ id, permission: 'shell', sessionID })); }, async replyPermission() {} };
   await run(ctx, ['reply', ids[0], 'reject'], { getApi: () => api });
   assert.ok(!ctx.output.includes(ids[0]), ctx.output);
   assert.ok(ctx.output.includes(ids[1]), ctx.output);
@@ -114,4 +114,19 @@ test('permissions list discovers pending requests in every OPC workspace session
   await list(ctx, { json: true }, () => api);
   assert.deepEqual(seen, ['ses_first', 'ses_second']);
   assert.deepEqual(ctx.output.requests.map((request) => request.id), ['per_ses_first', 'per_ses_second']);
+});
+
+test('permissions list and reply discover a child session without an OPC title or local job', async () => {
+  const ctx = { stateDir: '/missing-state', config: { policy: { approver: 'claude' } }, out: (value) => { ctx.output = value; }, json: (value) => { ctx.output = value; } };
+  const calls = [];
+  const api = {
+    async listSessions() { return [{ id: 'ses_parent', title: 'OPC: task' }, { id: 'ses_child', title: 'general', parentID: 'ses_parent' }, { id: 'ses_other', title: 'unrelated' }]; },
+    async listPermissions(id) { calls.push(id); return id === 'ses_child' ? [{ id: 'per_child', sessionID: id, permission: 'shell', patterns: ['ls'] }] : []; },
+    async listQuestions() { return []; },
+    async replyPermission(id, requestID, body) { assert.deepEqual([id, requestID, body.reply], ['ses_child', 'per_child', 'once']); },
+  };
+  await list(ctx, { json: true }, () => api);
+  assert.deepEqual(calls, ['ses_parent', 'ses_child']);
+  assert.deepEqual(ctx.output.requests.map((request) => request.id), ['per_child']);
+  await run(ctx, ['reply', 'per_child', 'once'], { getApi: () => api });
 });

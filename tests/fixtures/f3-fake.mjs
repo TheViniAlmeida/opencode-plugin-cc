@@ -13,7 +13,7 @@ export const SEED = Object.freeze({
   m3: 'msg_00000000000300000000000003', m4: 'msg_00000000000400000000000004',
 });
 const model = (value) => { const [providerID, ...rest] = value.split('/'); return { providerID, id: rest.join('/') }; };
-export const F3_PROVIDERS = [{ id: 'omniroute-personal', name: 'OmniRoute pessoal', activation: 'configured' }, { id: 'omniroute-work', name: 'OmniRoute trabalho', activation: 'configured' }];
+export const F3_PROVIDERS = [{ id: 'omniroute-personal', name: 'OmniRoute pessoal', activation: 'enabled' }, { id: 'omniroute-work', name: 'OmniRoute trabalho', activation: 'enabled' }];
 export const F3_MODEL_CATALOG = Object.values(F3_MODELS).map((value) => {
   const selected = model(value);
   return { id: value, modelID: selected.id, providerID: selected.providerID, name: selected.id,
@@ -125,14 +125,16 @@ export const F3_SESSION_ROUTES = {
     return { status: 204 };
   },
   'POST /api/session/:id/command': (fake, { params, body = {} }) => {
-    if (typeof body.command !== 'string' || typeof body.arguments !== 'string') return bad('Comando e argumentos obrigatórios');
-    if (!F3_COMMANDS.some((c) => c.name === body.command)) return bad('Comando não encontrado');
+    if (typeof body.name !== 'string' || typeof body.text !== 'string') return bad('Comando e argumentos obrigatórios');
+    if (!F3_COMMANDS.some((c) => c.name === body.name)) return bad('Comando não encontrado');
     if (!fake.state.sessions[params.id]) return notFound();
-    const session = fake.state.sessions[params.id];
-    const { providerID, id: modelID } = session.model;
-    const reply = assistantMessage(params.id, nextId(fake, 'msg'), null, `COMANDO ${body.command} ARGUMENTOS[${String(body.arguments).slice(0, 12)}…]`, { providerID, modelID });
-    fake.state.messages[params.id].push(userMessage(params.id, nextId(fake, 'msg'), `/${body.command} ${body.arguments}`), reply);
+    fake.state.messages[params.id].push(userMessage(params.id, nextId(fake, 'msg'), `/${body.name} ${body.text}`));
+    fake.setStatus(params.id, { type: 'busy' });
     persist(fake);
+    setTimeout(() => {
+      const error = process.env.FAKE_COMMAND_ERROR === '1' ? { type: 'ProviderAuthError', message: 'Falha de autenticação do provider.' } : undefined;
+      fake.emitTurn(params.id, { text: `COMANDO ${body.name} ARGUMENTOS[${body.text}]`, error }).catch(() => {});
+    }, Number(process.env.FAKE_COMMAND_DELAY_MS ?? 0));
     return { status: 204 };
   },
 };
