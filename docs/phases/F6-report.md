@@ -3,13 +3,13 @@
 - **Data:** 06/10/2026 (America/Belem).
 - **Branch:** `feat/opc-f6-opencode-v2`.
 - **Contrato:** OpenCode ≥ 2.0.22; somente `/api/*`.
-- **Estado do portão:** **NÃO VALIDADO**. A documentação foi atualizada; a suíte completa e o aceite ao vivo ainda precisam ser concluídos fora do sandbox.
+- **Estado do portão:** **NÃO VALIDADO**. O controlador informou suíte completa com 0 falhas fora do sandbox; o aceite ao vivo e manual continua pendente.
 
 | Item | Evidência | Resultado |
 |---|---|---|
 | Referências V1 removidas dos docs públicos principais | `tests/unit/docs-f6.test.mjs`: 3/3; busca pelos termos proibidos sem ocorrência | PASSOU |
 | Ferramentas MCP documentadas conforme catálogo atual | Teste de documentação compara a tabela com `TOOL_NAMES` (24 ferramentas) | PASSOU |
-| `npm test` sem falhas | `node scripts/run-tests.mjs` retornou 1 neste sandbox; testes que abrem sockets falham em `listen EPERM`; o runner resumiu muitas falhas só no nível de arquivo | NÃO VALIDADO |
+| Suíte completa sem falhas | O controlador informou `GATE: PASS`, 0 falhas na suíte, fora do sandbox, antes desta rodada de correções. Neste sandbox, testes com socket podem falhar em `listen EPERM`. A suíte com as correções desta rodada requer nova execução fora do sandbox. | PASSOU na revisão anterior; nova rodada NÃO VALIDADA |
 | `npm run scan-secrets` | `scan-secrets: nenhum achado` | PASSOU |
 | `git diff --check` | Saída vazia, exit 0 | PASSOU |
 | Contrato V2 ao vivo e paridade com fake | Não executado neste sandbox | NÃO VALIDADO |

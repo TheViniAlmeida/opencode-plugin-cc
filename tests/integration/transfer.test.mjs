@@ -11,6 +11,7 @@ import {
   cliJson, makeTempDir, makeWorkspace, PLUGIN_ROOT, readFakeState, REPO_ROOT,
   runCli, stateDirFor, testEnv, trackTempDir, trackWorkspace, writeTestConfig, startExternalFake,
 } from '../helpers.mjs';
+import { readServerRecord } from '../../plugins/opc/scripts/lib/server.mjs';
 
 const SAMPLE = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'claude-transcript-sample.jsonl');
 const MODEL = 'example-provider/example/model-a';
@@ -62,7 +63,8 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.deepEqual(r.data.skipped, { meta: 1, sidechain: 1, command: 1, thinking: 1, other: 1, invalidLines: 1 });
   assert.equal(r.data.model, MODEL);
   assert.equal(r.data.workspaceRoot, ws);
-  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && opencode -s ${r.data.sessionID}`);
+  const server = readServerRecord(stateDirFor(env, ws));
+  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(server.url)} -s ${r.data.sessionID}`);
   assert.deepEqual(r.data.warnings, []);
   assert.equal(Object.hasOwn(r.data, 'source'), false);
   assert.doesNotMatch(r.stdout + r.stderr, /List the files|Now add a --verbose|session\.jsonl|\[tool call:/);
@@ -100,7 +102,7 @@ test('transfer uses the SessionStart source and default model alias and renders 
   const r = await runCli(['transfer'], { env: { ...env, OPC_COMPANION_TRANSCRIPT_PATH: source }, cwd: ws });
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^# opc transfer\n/);
-  assert.match(r.stdout, /opencode -s ses_[0-9A-Za-z]+/);
+  assert.match(r.stdout, /opencode --server http:\/\/127\.0\.0\.1:\d+ -s ses_[0-9A-Za-z]+/);
   assert.match(r.stdout, /4 \(2 do usuário, 2 do assistente\)/);
   assert.doesNotMatch(r.stdout + r.stderr, /Origem:|session\.jsonl|Now add a --verbose/);
   assert.equal(imports(env).length, 1);

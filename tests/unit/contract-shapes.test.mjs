@@ -74,17 +74,19 @@ test('live collection prunes real and fake agent responses identically before di
     PROBES, EVENT_TYPES, shapeOf, performance,
     EventHub: class {
       onAny(callback) { this.callback = callback; }
-      async start() { for (const type of EVENT_TYPES) this.callback({ id: 'synthetic', type, properties: {} }); }
+      async start() { for (const type of EVENT_TYPES) this.callback({ id: 'synthetic', type, data: {} }); }
       stop() {}
     },
   });
-  const client = (unknown) => ({ request: async (_method, endpoint) => endpoint === '/agent'
-    ? [{ ...agentItem, options: { [unknown]: true } }] : {} });
+  const client = (unknown) => ({ request: async (_method, endpoint) => endpoint === '/api/agent'
+    ? [{ ...agentItem, id: 'synthetic-agent', permissions: [{ action: 'read', resource: '*', effect: 'allow' }], options: { [unknown]: true } }]
+    : endpoint === '/api/info' ? { version: '2.0.22', pid: 1, urls: [], paths: {} }
+      : endpoint === '/api/session/active' ? {} : [] });
   const real = await collect(client('alice'), {});
   const fake = await collect(client('bob'), {});
   const probe = PROBES.find((entry) => entry.name === 'agent');
   assert.deepEqual(diffShapes(real.agent, fake.agent, probe.used, probe.optionalUsed), []);
-  assert.deepEqual(real.agent, shapeOf([{ ...agentItem, options: { alice: true } }], 'agent'));
+  assert.deepEqual(real.agent, shapeOf([{ ...agentItem, id: 'synthetic-agent', permissions: [{ action: 'read', resource: '*', effect: 'allow' }], options: { alice: true } }], 'agent'));
   assert.deepEqual(fake.agent, real.agent);
   assert.equal(lookup(real.agent, '[].name'), 'string');
   assert.deepEqual(lookup(fake.agent, '[].options'), { '*': 'boolean' });

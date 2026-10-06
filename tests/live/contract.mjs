@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Contract check: records the real shapes of the endpoints/events opc uses and diffs them against the fake.
 // Run: OPC_LIVE=1 node tests/live/contract.mjs [--write]   (exit 1 on divergence in used fields)
-// Probe registry: PROBES/EVENT_TYPES live in tests/fixtures/contract-shapes.mjs; each phase APPENDS entries there
-// (and to the fake) for the endpoints it starts using. This file is the only contract runner.
+// Probe registry: PROBES/EVENT_TYPES live in tests/fixtures/contract-shapes.mjs.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,7 +65,7 @@ try {
     if (d.length) report.divergences[probe.name] = d;
   }
   for (const type of EVENT_TYPES) {
-    const d = diffShapes(real[`event:${type}`], fakeShapes[`event:${type}`], ['id', 'type', 'properties']);
+    const d = diffShapes(real[`event:${type}`], fakeShapes[`event:${type}`], ['id', 'type', 'data']);
     if (d.length) report.divergences[`event:${type}`] = d;
   }
   const snapshotDir = path.join(REPO_ROOT, 'tests', 'fixtures', 'contract');

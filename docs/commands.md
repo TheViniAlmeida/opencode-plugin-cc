@@ -552,7 +552,7 @@ Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).
 ## `/opc:transfer`
 
 Converte uma conversa do Claude Code para uma nova sessão OpenCode, retomável no
-terminal com `opencode -s <id>`. O slash command é invocado pelo usuário
+terminal com `opencode --server <url> -s <id>` e `OPENCODE_SERVER_PASSWORD` no ambiente. O slash command é invocado pelo usuário
 (`disable-model-invocation: true`); não há ferramenta MCP de transfer.
 
 ```text
@@ -567,7 +567,7 @@ opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json
   no uso normal.
 - **Modelo:** `--model` (ID completo `provider/model` ou alias) → `defaultModel` →
   `NO_MODEL`. Provider e modelo passam pela política. A transferência não consulta o
-  catálogo nem inicia `opencode serve`; a existência do modelo é conferida pelo OpenCode
+  catálogo; inicia o servidor gerenciado para importar a sessão. A existência do modelo é conferida pelo OpenCode
   ao retomar. O modelo original do Claude não é preservado.
 - **Conversão:** cada prompt real vira uma mensagem `user`; o texto do assistente até
   o próximo prompt vira uma mensagem `assistant`. Chamadas e resultados de ferramentas
@@ -580,9 +580,10 @@ opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json
   sintética de usuário para manter o encadeamento.
 - **Importação:** a conversão gera IDs novos e valida a estrutura do formato
   `opencode export`. O JSON temporário é gravado com modo 600 em `<estado>/transfer/`
-  (diretório 700), importado com `opencode import <arquivo>` no workspace e removido
+  (diretório 700), importado com `opencode session import --server <url> --directory <workspace> <arquivo>` no servidor gerenciado e removido
   ao fim da tentativa. O sucesso exige exit 0 e a linha `Imported session: <id>` com
-  o mesmo ID exportado.
+  o mesmo ID exportado. O comando de retomada usa a URL desse servidor e exige
+  `OPENCODE_SERVER_PASSWORD` no ambiente do terminal.
 - **Título e saída:** a sessão tem prefixo `OPC: transfer:`. A saída mostra ID, título,
   modelo, contagem de mensagens/itens ignorados e comando para retomar. O resumo passa
   por redação; o conteúdo do histórico é preservado no arquivo importado.
@@ -616,7 +617,7 @@ Ignorados: 0 meta, 0 sidechain, 0 comandos locais, 0 blocos de raciocínio, 1 ou
 
 Para retomar no terminal:
 
-    cd '<workspace>' && opencode -s ses_EXAMPLE
+    cd '<workspace>' && opencode --server http://127.0.0.1:4096 -s ses_EXAMPLE
 ```
 
 ### Ferramentas MCP

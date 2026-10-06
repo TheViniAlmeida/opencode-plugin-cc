@@ -61,7 +61,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
     workspaceRoot: ctx.workspaceRoot,
     messages: { total: user + assistant, user, assistant },
     skipped: { ...conversion.stats.skipped, invalidLines: invalid },
-    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && opencode -s ${imported.sessionID}`,
+    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && opencode --server ${shellQuote(server.url)} -s ${imported.sessionID}`,
     warnings: [],
   });
 }

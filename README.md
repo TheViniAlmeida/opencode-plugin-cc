@@ -92,7 +92,7 @@ do usuário. Veja o [catálogo e o formato dos resultados](docs/architecture.md#
 Para levar a conversa atual para o OpenCode, use `/opc:transfer` e depois
 `opencode --server <url> -s <id>` no terminal, com `OPENCODE_SERVER_PASSWORD` no ambiente. A [referência de comandos](docs/commands.md#opctransfer)
 explica a conversão, os limites e os erros. O uso real no Claude e a retomada interativa
-da sessão transferida ainda precisam de validação no portão F5.
+da sessão transferida ainda precisam de validação no portão F6.
 
 ## Documentação
 

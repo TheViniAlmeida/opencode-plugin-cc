@@ -207,5 +207,5 @@ consenso criado pelo juiz.
   produzido uma sessão mesmo sem confirmação de sucesso.
 - **Sessão transferida ausente em `opencode session list`:** a lista é por projeto;
   execute dentro do workspace da transferência. Para retomar, use a linha
-  `cd … && opencode -s <id>` retornada. A retomada interativa ainda depende da
+  `cd … && opencode --server <url> -s <id>` retornada, com `OPENCODE_SERVER_PASSWORD` no ambiente. A retomada interativa ainda depende da
   validação do portão F5.
