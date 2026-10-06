@@ -24,7 +24,7 @@ async function startServer(t, handler) {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const url = new URL(req.url, 'http://x');
-    seen.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), auth: req.headers.authorization, body: Buffer.concat(chunks).toString() });
+    seen.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), directory: req.headers['x-opencode-directory'], auth: req.headers.authorization, body: Buffer.concat(chunks).toString() });
     handler(req, res, url);
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -37,24 +37,26 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-test('sends Basic auth, ?directory and JSON bodies; parses JSON and 204', async (t) => {
+test('sends Basic auth, directory header and JSON bodies; parses JSON and 204', async (t) => {
   const srv = await startServer(t, (req, res, url) => {
-    if (url.pathname === '/empty') { res.writeHead(204); res.end(); return; }
+    if (url.pathname === '/api/empty') { res.writeHead(204); res.end(); return; }
     json(res, 200, { ok: true, method: req.method });
   });
   const client = createClient({ baseUrl: `${srv.url}/`, password: PASSWORD, directory: '/tmp/my ws' });
-  assert.deepEqual(await client.get('/global/health'), { ok: true, method: 'GET' });
-  assert.deepEqual(await client.post('/x', { a: 1 }), { ok: true, method: 'POST' });
-  assert.deepEqual(await client.patch('/x', { b: 2 }, { query: { directory: '/other', limit: 5 } }), { ok: true, method: 'PATCH' });
-  assert.equal(await client.get('/empty'), null);
+  assert.deepEqual(await client.get('/api/info'), { ok: true, method: 'GET' });
+  assert.deepEqual(await client.post('/api/x', { a: 1 }), { ok: true, method: 'POST' });
+  assert.deepEqual(await client.patch('/api/x', { b: 2 }, { query: { limit: 5 } }), { ok: true, method: 'PATCH' });
+  assert.equal(await client.get('/api/empty'), null);
   const expectedAuth = `Basic ${Buffer.from(`opencode:${PASSWORD}`).toString('base64')}`;
   assert.equal(srv.seen[0].auth, expectedAuth);
-  assert.deepEqual(srv.seen[0].query, { directory: '/tmp/my ws' });
+  assert.equal(srv.seen[0].directory, '/tmp/my ws');
+  assert.deepEqual(srv.seen[0].query, {});
   assert.equal(srv.seen[1].body, '{"a":1}');
-  assert.deepEqual(srv.seen[2].query, { directory: '/other', limit: '5' });
+  assert.equal(srv.seen[2].directory, '/tmp/my ws');
+  assert.deepEqual(srv.seen[2].query, { limit: '5' });
   assert.equal(client.baseUrl, srv.url);
   assert.equal(client.directory, '/tmp/my ws');
-  assert.match(client.buildUrl('/event'), /\/event\?directory=%2Ftmp%2Fmy\+ws$/);
+  assert.equal(client.buildUrl('/api/event'), `${srv.url}/api/event`);
   assert.deepEqual(client.authHeaders(), { authorization: expectedAuth });
 });
 
@@ -80,7 +82,7 @@ test('maps 401, 404, 400 and 5xx to typed errors with redacted bodies', async (t
 test('error messages never contain the password or the query string', async (t) => {
   const srv = await startServer(t, (req, res) => json(res, 500, { echo: req.headers.authorization, pw: PASSWORD }));
   const client = createClient({ baseUrl: srv.url, password: PASSWORD, directory: '/secret/dir' });
-  await assert.rejects(client.get('/x'), (e) => {
+  await assert.rejects(client.get('/api/x'), (e) => {
     assert.ok(!e.message.includes(PASSWORD));
     assert.ok(!e.message.includes('/secret/dir'));
     assert.ok(!JSON.stringify(e.details).includes(PASSWORD));
@@ -106,7 +108,7 @@ test('connection refused becomes SERVER_DOWN; GET retries once through onServerD
       return { url: srv.url, password: 'new-password-654321' };
     },
   });
-  const body = await client.get('/global/health');
+  const body = await client.get('/api/info');
   assert.equal(calls, 1);
   assert.equal(body.auth, `Basic ${Buffer.from('opencode:new-password-654321').toString('base64')}`);
   assert.equal(client.baseUrl, srv.url);
@@ -118,7 +120,7 @@ test('POST does not retry on SERVER_DOWN unless retryOnServerDown is set', async
   let calls = 0;
   const onServerDown = async () => { calls += 1; return srv.url; };
   const client = createClient({ baseUrl: deadUrl, onServerDown });
-  await assert.rejects(client.post('/x', {}), (e) => e.code === 'SERVER_DOWN');
+  await assert.rejects(client.post('/api/x', {}), (e) => e.code === 'SERVER_DOWN');
   assert.equal(calls, 0);
   const client2 = createClient({ baseUrl: deadUrl, onServerDown });
   assert.deepEqual(await client2.post('/x', {}, { retryOnServerDown: true }), { ok: true });

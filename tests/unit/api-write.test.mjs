@@ -4,39 +4,46 @@ import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 
 function recordingClient() {
   const calls = [];
-  const record = (method) => async (path, body) => { calls.push([method, path, body]); return method === 'POST' && path.endsWith('/prompt_async') ? null : { ok: true }; };
-  return { calls, get: record('GET'), post: record('POST'), patch: record('PATCH') };
+  const record = (method) => async (path, body) => { calls.push([method, path, body]); return method === 'POST' && path.endsWith('/interrupt') ? { interrupted: true } : null; };
+  return { calls, get: record('GET'), post: record('POST'), patch: record('PATCH'), delete: record('DELETE') };
 }
 
-test('write methods hit the OpenAPI 1.18.32 routes with the right bodies', async () => {
+test('write methods use V2 routes and bodies', async () => {
   const client = recordingClient();
   const api = createApi(client);
-  await api.createSession({ title: 'OPC: task: x', permission: [] });
-  await api.patchSession('ses_1', { permission: [{ permission: '*', pattern: '*', action: 'deny' }] });
-  assert.equal(await api.promptAsync('ses_1', { messageID: 'msg_1', parts: [] }), null);
-  await api.abort('ses_1');
-  await api.replyPermission('per_1', { reply: 'reject', message: 'no' });
-  await api.replyPermission('per_2', { reply: 'once' });
-  await api.replyQuestion('que_1', [['A'], ['B', 'C']]);
-  await api.rejectQuestion('que_2');
+  const permissions = [{ action: '*', resource: '*', effect: 'deny' }];
+  const model = { providerID: 'p', id: 'm' };
+  await api.createSession({ title: 'OPC: task: x', permissions, model });
+  await api.setPermissions('ses_1', permissions);
+  await api.setModel('ses_1', model);
+  await api.setAgent('ses_1', 'build');
+  await api.prompt('ses_1', { id: 'msg_1', text: 'hello', agents: [] });
+  assert.equal(await api.interrupt('ses_1'), true);
+  await api.replyPermission('ses_1', 'per_1', { reply: 'reject', message: 'no' });
+  await api.replyPermission('ses_1', 'per_2', { reply: 'once' });
+  const question = { id: 'frm_1', questions: [{ key: 'q0', options: [{ label: 'Red', value: 'red' }], multiple: false }] };
+  await api.replyQuestion('ses_1', question, [['Red']]);
+  await api.rejectQuestion('ses_1', 'frm_2');
   assert.deepEqual(client.calls, [
-    ['POST', '/session', { title: 'OPC: task: x', permission: [] }],
-    ['PATCH', '/session/ses_1', { permission: [{ permission: '*', pattern: '*', action: 'deny' }] }],
-    ['POST', '/session/ses_1/prompt_async', { messageID: 'msg_1', parts: [] }],
-    ['POST', '/session/ses_1/abort', undefined],
-    ['POST', '/permission/per_1/reply', { reply: 'reject', message: 'no' }],
-    ['POST', '/permission/per_2/reply', { reply: 'once' }],
-    ['POST', '/question/que_1/reply', { answers: [['A'], ['B', 'C']] }],
-    ['POST', '/question/que_2/reject', undefined],
+    ['POST', '/api/session', { title: 'OPC: task: x', permissions, model }],
+    ['PATCH', '/api/session/ses_1', { permissions }],
+    ['POST', '/api/session/ses_1/model', { model }],
+    ['POST', '/api/session/ses_1/agent', { agent: 'build' }],
+    ['POST', '/api/session/ses_1/prompt', { id: 'msg_1', text: 'hello', agents: [] }],
+    ['POST', '/api/session/ses_1/interrupt', undefined],
+    ['POST', '/api/session/ses_1/permission/per_1/reply', { decision: 'reject', message: 'no' }],
+    ['POST', '/api/session/ses_1/permission/per_2/reply', { decision: 'once' }],
+    ['POST', '/api/session/ses_1/form/frm_1/reply', { answer: { q0: 'red' } }],
+    ['DELETE', '/api/session/ses_1/form/frm_2', undefined],
   ]);
 });
 
-test('replyPermission never sends "always"; bad answers and ids are refused', () => {
-  const api = createApi(recordingClient());
-  assert.throws(() => api.replyPermission('per_1', { reply: 'always' }), (e) => e.code === 'INVALID_REPLY');
-  assert.throws(() => api.replyQuestion('que_1', ['A']), (e) => e.exitCode === 2);
-  assert.throws(() => api.abort(''), (e) => e.exitCode === 2);
+test('unsafe sessions and invalid replies are refused before HTTP', async () => {
   const client = recordingClient();
-  createApi(client).abort('ses/../x');
-  assert.equal(client.calls[0][1], '/session/ses%2F..%2Fx/abort');
+  const api = createApi(client);
+  await assert.rejects(api.createSession({ title: 'OPC: x' }), { code: 'UNSAFE_SESSION' });
+  await assert.rejects(api.replyPermission('ses_1', 'per_1', { reply: 'always' }), { code: 'INVALID_REPLY' });
+  await assert.rejects(api.replyQuestion('ses_1', { id: 'frm_1', questions: [] }, ['A']), { code: 'USAGE' });
+  assert.throws(() => api.rejectQuestion('', 'frm_1'), { code: 'INVALID_ID' });
+  assert.equal(client.calls.length, 0);
 });

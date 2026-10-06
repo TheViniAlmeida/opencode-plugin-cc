@@ -1,4 +1,5 @@
-// HTTP client for the OpenCode API v1: Basic auth, ?directory, typed errors, timeouts, redaction (spec §5.2).
+// HTTP client for the OpenCode 2.0.22 API: Basic auth, workspace header, typed errors and timeouts.
+import { resolve } from 'node:path';
 import { ConnectionError, NotFoundError, RequestError } from './opc-error.mjs';
 import { redact, registerSecret } from './redact.mjs';
 
@@ -14,11 +15,11 @@ function isServerDown(err) {
 }
 
 function parseBody(text) {
-  if (!text) return null;
+  if (!text) return { json: false, value: null };
   try {
-    return JSON.parse(text);
+    return { json: true, value: JSON.parse(text) };
   } catch {
-    return text;
+    return { json: false, value: text };
   }
 }
 
@@ -33,7 +34,6 @@ function safePath(path) {
 export function createClient({
   baseUrl,
   password,
-  username = 'opencode',
   directory,
   requestTimeoutMs = 30000,
   fetchImpl = fetch,
@@ -41,11 +41,12 @@ export function createClient({
 }) {
   let currentBase = String(baseUrl).replace(/\/+$/, '');
   let currentPassword = password ?? null;
+  const workspaceDirectory = directory ? resolve(directory) : null;
 
   function registerAuthSecrets() {
     registerSecret(currentPassword);
     if (!currentPassword) return;
-    const token = Buffer.from(`${username}:${currentPassword}`).toString('base64');
+    const token = Buffer.from(`opencode:${currentPassword}`).toString('base64');
     registerSecret(token);
     registerSecret(`Basic ${token}`);
   }
@@ -54,14 +55,13 @@ export function createClient({
 
   function authHeaders() {
     if (!currentPassword) return {};
-    const token = Buffer.from(`${username}:${currentPassword}`).toString('base64');
+    const token = Buffer.from(`opencode:${currentPassword}`).toString('base64');
     return { authorization: `Basic ${token}` };
   }
 
   function buildUrl(path, query = {}) {
     const url = new URL(currentBase + path);
-    const params = { ...(directory && query.directory === undefined ? { directory } : {}), ...query };
-    for (const [k, v] of Object.entries(params)) {
+    for (const [k, v] of Object.entries(query)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
     return url.toString();
@@ -76,7 +76,7 @@ export function createClient({
     try {
       res = await fetchImpl(buildUrl(path, query), {
         method,
-        headers: { ...authHeaders(), accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+        headers: { ...authHeaders(), accept: 'application/json', ...(workspaceDirectory ? { 'x-opencode-directory': workspaceDirectory } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -97,8 +97,12 @@ export function createClient({
       throw new ConnectionError('SERVER_DOWN', `${label}: conexão encerrada durante a resposta.`);
     }
     clearTimeout(timer);
-    const parsed = parseBody(text);
-    if (res.ok) return res.status === 204 ? null : parsed;
+    const { json, value: parsed } = parseBody(text);
+    if (res.ok) {
+      if (res.status === 204) return null;
+      if (!json) throw new RequestError('NOT_JSON', `${label}: resposta não é JSON (servidor não é OpenCode V2?)`);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'data') ? parsed.data : parsed;
+    }
     const details = { status: res.status, body: redact(parsed) };
     if (res.status === 401) throw new ConnectionError('AUTH_FAILED', `${label}: autenticação recusada (401).`, { details });
     if (res.status === 404) throw new NotFoundError('NOT_FOUND', `${label}: não encontrado (404).`, { details });
@@ -132,13 +136,14 @@ export function createClient({
     get: (path, opts) => request('GET', path, opts),
     post: (path, body, opts = {}) => request('POST', path, { ...opts, body }),
     patch: (path, body, opts = {}) => request('PATCH', path, { ...opts, body }),
+    delete: (path, opts) => request('DELETE', path, opts),
     authHeaders,
     buildUrl,
     get baseUrl() {
       return currentBase;
     },
     get directory() {
-      return directory;
+      return workspaceDirectory;
     },
   };
 }
