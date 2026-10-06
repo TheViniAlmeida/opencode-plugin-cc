@@ -4,10 +4,33 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { run as setup } from '../../plugins/opc/scripts/commands/setup.mjs';
-import { ensureServer, stopServer, assertCanCreateSessions } from '../../plugins/opc/scripts/lib/server.mjs';
+import { ensureServer, stopServer, assertCanCreateSessions, waitForModelCatalog } from '../../plugins/opc/scripts/lib/server.mjs';
+import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
+import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
+import { mergeOpencodeConfigSources } from '../../plugins/opc/scripts/commands/setup.mjs';
+import { validateAgainstServer } from '../../plugins/opc/scripts/lib/config.mjs';
 import { spawnDetached, terminateProcessGroup, isPidAlive } from '../../plugins/opc/scripts/lib/process.mjs';
 import { makeTempDir, registerStopper, trackTempDir } from '../helpers.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
+
+test('onboarding merges V2 config documents in order for defaultVariant validation', () => {
+  const opencodeConfig = mergeOpencodeConfigSources([
+    { type: 'document', info: { model: 'old/model', share: 'auto' } },
+    { type: 'directory', path: '<workspace>' },
+    { type: 'document', info: { model: 'current/model', share: 'disabled' } },
+  ]);
+  assert.deepEqual(opencodeConfig, { model: 'current/model', share: 'disabled' });
+  const catalog = { connected: new Set(), byFull: new Map([['current/model', { full: 'current/model', variants: ['high'] }]]) };
+  assert.deepEqual(validateAgainstServer({ defaultVariant: 'high' }, { catalog, opencodeConfig }).errors, []);
+});
+
+test('model warm-up aborts an individual request at its overall deadline', async () => {
+  const client = createClient({ baseUrl: 'http://127.0.0.1:43210', requestTimeoutMs: 30_000,
+    fetchImpl: (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })) });
+  const started = performance.now();
+  await assert.rejects(waitForModelCatalog(createApi(client), { timeoutMs: 25, pollMs: 1 }), { code: 'TIMEOUT' });
+  assert.ok(performance.now() - started < 1000);
+});
 
 test('V2 health rejects old versions and HTML even when HTTP status is 200', async (t) => {
   const dir = trackTempDir(t, makeTempDir('opc-v2-health-'));
@@ -15,7 +38,7 @@ test('V2 health rejects old versions and HTML even when HTTP status is 200', asy
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ version: '1.18.34' })));
   await assert.rejects(ensureServer(ctx), (error) => {
     assert.equal(error.code, 'UNSUPPORTED_VERSION');
-    assert.match(error.message, /server\.opencodeBin/);
+    assert.equal(error.message, 'OpenCode 1.18.34 é anterior ao mínimo suportado 2.0.22. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.');
     return true;
   });
   globalThis.fetch.mock.mockImplementation(async () => new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } }));

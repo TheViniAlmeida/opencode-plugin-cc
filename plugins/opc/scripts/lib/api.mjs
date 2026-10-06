@@ -27,7 +27,7 @@ export function createApi(client) {
     info: () => client.get('/api/info', GET),
     getConfigSources: () => client.get('/api/config', GET),
     providers: () => client.get('/api/provider', GET),
-    models: () => client.get('/api/model', GET),
+    models: ({ timeoutMs } = {}) => client.get('/api/model', { ...GET, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     defaultModel: () => client.get('/api/model/default', GET),
     agents: () => client.get('/api/agent', GET),
     commands: () => client.get('/api/command', GET),

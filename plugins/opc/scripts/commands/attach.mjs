@@ -5,7 +5,7 @@ import { parseArgs, shellQuote } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
 import { assertId } from '../lib/api.mjs';
-import { attachSecretPath, readServerRecord, writeAttachSecret } from '../lib/server.mjs';
+import { attachSecretPath, readServerRecord, resolveOpencodeBin, writeAttachSecret } from '../lib/server.mjs';
 import { listJobs } from '../lib/jobs.mjs';
 import { renderAttach } from '../lib/render.mjs';
 
@@ -89,15 +89,16 @@ export async function run(ctx, argv) {
       ? { type: 'env', name: 'OPC_SERVER_PASSWORD' }
       : { type: 'file', path: attachSecretPath(ctx.stateDir) };
     const attachArgs = buildAttachArgs({ url: server.url, sessionID, directory });
-    const info = { url: server.url, sessionID, directory, attached, authSource, argv: ['opencode', ...attachArgs] };
+    const opencodeBin = resolveOpencodeBin({ env: ctx.env, config: ctx.config });
+    const info = { url: server.url, sessionID, directory, attached, authSource, argv: [opencodeBin, ...attachArgs] };
     if (!attached) await persistManagedAttachSecret(ctx, server);
 
     if (flags.pane) {
       const scriptPath = join(ctx.stateDir, PANE_SCRIPT_NAME);
       writeFileSync(scriptPath, PANE_SCRIPT, { mode: 0o700 });
       chmodSync(scriptPath, 0o700);
-      const opencodeBin = resolveExecutable(ctx.env.OPC_ATTACH_OPENCODE_BIN ?? 'opencode', ctx.env.PATH);
-      const paneCommand = ['/bin/sh', scriptPath, authSource.path, opencodeBin, ...info.argv.slice(1)].map(shellQuote).join(' ');
+      const executable = resolveExecutable(opencodeBin, ctx.env.PATH);
+      const paneCommand = ['/bin/sh', scriptPath, authSource.path, executable, ...info.argv.slice(1)].map(shellQuote).join(' ');
       const res = spawnSync('tmux', ['split-window', '-h', '-P', '-F', '#{pane_id}', '-c', directory, paneCommand], {
         env: envWithoutSecrets(ctx.env), encoding: 'utf8', shell: false,
       });

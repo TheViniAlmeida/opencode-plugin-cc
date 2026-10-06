@@ -118,8 +118,7 @@ function assertSupportedVersion(health) {
     throw new ConnectionError('UNSUPPORTED_VERSION', 'A resposta de /api/info não contém uma versão válida do OpenCode V2. Instale o OpenCode V2 ou configure server.opencodeBin (ou OPC_OPENCODE_BIN).');
   }
   if (compareVersions(health.version, MIN_OPENCODE_VERSION) < 0) {
-    const version = `${health.version.slice(0, 12)}…`;
-    throw new ConnectionError('UNSUPPORTED_VERSION', `OpenCode ${version} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`);
+    throw new ConnectionError('UNSUPPORTED_VERSION', `OpenCode ${health.version} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`);
   }
   return health.version;
 }
@@ -269,6 +268,27 @@ export function assertCanCreateSessions(server) {
   }
 }
 
+export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200 } = {}) {
+  const deadline = performance.now() + timeoutMs;
+  while (true) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
+    let models;
+    try {
+      models = await api.models({ timeoutMs: Math.max(1, Math.ceil(remaining)) });
+    } catch (err) {
+      if (err.code === 'TIMEOUT' && performance.now() >= deadline) {
+        throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
+      }
+      throw err;
+    }
+    if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
+    if (models.length > 0) return models;
+    const delay = Math.min(pollMs, deadline - performance.now());
+    if (delay > 0) await sleep(delay);
+  }
+}
+
 async function attachServer(env, settings, config) {
   let parsed;
   try {
@@ -368,14 +388,7 @@ async function bootServer(ctx, settings) {
     try {
       const api = createApi(client);
       if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
-      const deadline = performance.now() + 20_000;
-      while (true) {
-        const models = await api.models();
-        if (Array.isArray(models) && models.length > 0) break;
-        if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
-        if (performance.now() >= deadline) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
-        await sleep(200);
-      }
+      await waitForModelCatalog(api);
     } catch (err) {
       await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
       throw err;

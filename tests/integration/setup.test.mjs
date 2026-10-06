@@ -93,12 +93,22 @@ test('version below the minimum → UNSUPPORTED_VERSION, exit 3, no server', asy
   assert.equal(report.opencode.supported, false);
   assert.equal(report.server.error.code, 'UNSUPPORTED_VERSION');
   assert.match(report.server.error.message, /server\.opencodeBin/);
+  assert.equal(report.server.error.message, 'OpenCode 1.18.34 é anterior ao mínimo suportado 2.0.22. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.');
   assert.equal(report.onboarding.opencodeInstalled, true);
   assert.equal(report.onboarding.opencodeVersion, report.opencode.version);
   assert.equal(report.onboarding.connectedProviders, null);
   assert.equal(report.onboarding.providerChoices, null);
   assert.match(report.onboarding.serverError, /não consultados.*falha no diagnóstico/i);
   assert.equal(readFakeState(env).bootAttempts, 0);
+});
+
+test('diagnostic reports the full configured OpenCode binary path', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  env.OPC_OPENCODE_BIN = path.join(FAKE_BIN_DIR, 'opencode');
+  const { code, report } = await setupJson(env, ws);
+  assert.equal(code, 0);
+  assert.equal(report.opencode.bin, env.OPC_OPENCODE_BIN);
 });
 
 test('SPA HTML at /api/info never passes setup health', async (t) => {

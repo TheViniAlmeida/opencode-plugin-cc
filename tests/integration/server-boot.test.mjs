@@ -96,6 +96,7 @@ test('world check: default override share:"disabled" keeps sessions allowed; den
   assert.equal(server.world.shareBlocked, false);
   assert.deepEqual(server.world.deniedDefaults, ['model', 'small_model']);
   assert.ok(server.warnings.some((w) => /"model"/.test(w) && /configOverride\.model/.test(w)));
+  assert.ok(server.warnings.some((w) => /"small_model"/.test(w) && /configOverride\.small_model/.test(w)));
 });
 
 test('config unavailable blocks session creation and a later successful reuse check clears the block', async (t) => {

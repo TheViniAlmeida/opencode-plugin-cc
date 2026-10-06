@@ -2,6 +2,9 @@
   {
     "type": "document",
     "path": "<workspace>/opencode.json",
-    "info": {}
+    "info": {
+      "model": "fake-provider/main",
+      "small_model": "fake-provider/small"
+    }
   }
 ]

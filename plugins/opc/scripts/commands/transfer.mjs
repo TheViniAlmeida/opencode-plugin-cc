@@ -6,6 +6,7 @@ import { ExitCode, OpcError } from '../lib/opc-error.mjs';
 import { redactOutput } from '../lib/redact.mjs';
 import { renderTransfer } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
+import { resolveOpencodeBin } from '../lib/server.mjs';
 import {
   buildExport, convertClaudeRecords, detectOpencodeVersion, readTranscript,
   resolveTranscriptPath, resolveTransferModel, runImport, validateExportShape, writeExportFile,
@@ -22,6 +23,7 @@ const SPEC = {
 
 export async function execute(ctx, { source = null, model = null } = {}) {
   const options = { env: ctx.env, cwd: ctx.cwd };
+  const opencodeBin = resolveOpencodeBin({ env: ctx.env, config: ctx.config });
   const transcript = resolveTranscriptPath({ source, ...options });
   const resolvedModel = resolveTransferModel({ flag: model, config: ctx.config });
   // Revalidate and read the source before invoking OpenCode, including --version.
@@ -30,7 +32,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   if (conversion.turns.length === 0) {
     throw new OpcError('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.', { exitCode: ExitCode.USAGE });
   }
-  const version = await detectOpencodeVersion({ env: ctx.env });
+  const version = await detectOpencodeVersion({ env: ctx.env, opencodeBin });
   const exported = buildExport(conversion, { model: resolvedModel, directory: ctx.workspaceRoot, version });
   const errors = validateExportShape(exported);
   if (errors.length) {
@@ -40,7 +42,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   const file = writeExportFile(ctx.stateDir, exported);
   let imported;
   try {
-    imported = await runImport({ file, cwd: ctx.workspaceRoot, env: ctx.env });
+    imported = await runImport({ file, cwd: ctx.workspaceRoot, env: ctx.env, opencodeBin });
     if (imported.sessionID !== exported.info.id) {
       throw new OpcError('IMPORT_FAILED', 'O OpenCode informou um ID de sessão diferente do exportado.', { exitCode: ExitCode.JOB_FAILED });
     }

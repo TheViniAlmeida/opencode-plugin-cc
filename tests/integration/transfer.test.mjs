@@ -73,6 +73,20 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(readFakeState(env).bootAttempts, 0, 'no server is started for transfer');
 });
 
+test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t) => {
+  const { env, ws, source } = setup(t);
+  const binDir = trackTempDir(t, makeTempDir('opc-transfer-bin-'));
+  const bin = path.join(binDir, 'configured-opencode.mjs');
+  const calls = path.join(binDir, 'calls.jsonl');
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.OPC_BIN_CALLS, JSON.stringify(args) + '\\n');\nif (args[0] === '--version') process.stdout.write('opencode v2.0.22\\n');\nelse if (args[0] === 'import') process.stdout.write('Imported session: ' + JSON.parse(fs.readFileSync(args[1], 'utf8')).info.id + '\\n');\nelse process.exitCode = 2;\n`, { mode: 0o700 });
+  env.OPC_OPENCODE_BIN = bin;
+  env.OPC_BIN_CALLS = calls;
+  const result = await cliJson(transferArgs(source), { env, cwd: ws });
+  assert.equal(result.code, 0, result.stderr);
+  const invoked = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(invoked.map((args) => args[0]), ['--version', 'import']);
+});
+
 test('transfer uses the SessionStart source and default model alias and renders Markdown', async (t) => {
   const { env, ws, source } = setup(t);
   writeTestConfig(env, { defaultModel: 'transfer-model', aliases: { 'transfer-model': MODEL } });

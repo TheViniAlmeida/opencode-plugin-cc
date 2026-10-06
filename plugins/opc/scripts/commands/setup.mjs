@@ -31,6 +31,11 @@ function setupCatalog(buildCatalog, providers, models) {
   }));
   return buildCatalog({ all, connected: providers.filter((provider) => ['enabled', 'configured'].includes(provider.activation)).map((provider) => provider.id), default: {} });
 }
+
+export function mergeOpencodeConfigSources(sources) {
+  if (!Array.isArray(sources)) throw new UsageError('UNSUPPORTED_VERSION', 'A configuração do OpenCode V2 não é uma lista de fontes.');
+  return Object.assign({}, ...sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info)).map((source) => source.info));
+}
 const SPEC = {
   flags: {
     json: { type: 'boolean' },
@@ -129,7 +134,7 @@ async function diagnose(ctx, flags) {
   const report = baseReport(ctx);
   const attach = Boolean(ctx.env.OPC_SERVER_URL);
   const opencodeBin = resolveOpencodeBin({ env: ctx.env, config: ctx.config });
-  report.opencode = { ...detectOpencode(ctx.env, opencodeBin), bin: opencodeBin === 'opencode' ? 'opencode' : `${opencodeBin.slice(0, 12)}…` };
+  report.opencode = { ...detectOpencode(ctx.env, opencodeBin), bin: opencodeBin };
   let exitCode = ExitCode.OK;
   if (!attach && !report.opencode.installed) {
     report.server = { status: 'skipped', warnings: [] };
@@ -138,7 +143,7 @@ async function diagnose(ctx, flags) {
   } else if (!attach && report.opencode.supported === false) {
     report.server = {
       status: 'error',
-      error: { code: 'UNSUPPORTED_VERSION', message: `OpenCode ${String(report.opencode.version).slice(0, 12)}… é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.` },
+      error: { code: 'UNSUPPORTED_VERSION', message: `OpenCode ${report.opencode.version} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.` },
       warnings: [],
     };
     report.nextSteps.push(NEXT_STEP_BY_CODE.UNSUPPORTED_VERSION);
@@ -254,7 +259,7 @@ const SetupOnboarding = {
   async discovery(d, ctx) {
     const { api } = await d.connectApi(ctx);
     const [providers, models, agents, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.agents(), api.getConfigSources()]);
-    return { catalog: setupCatalog(d.buildCatalog, providers, models), agents, opencodeConfig };
+    return { catalog: setupCatalog(d.buildCatalog, providers, models), agents, opencodeConfig: mergeOpencodeConfigSources(opencodeConfig) };
   },
 
   policyFor(d, ctx) {

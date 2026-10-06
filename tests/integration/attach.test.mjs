@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { makeWorkspace, testEnv, runCli, writeGlobalConfig, stateDirFor, startExternalFake, REPO_ROOT } from '../helpers.mjs';
+import { FAKE_BIN_DIR, makeWorkspace, testEnv, runCli, writeGlobalConfig, stateDirFor, startExternalFake, REPO_ROOT } from '../helpers.mjs';
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { PANE_SCRIPT } from '../../plugins/opc/scripts/commands/attach.mjs';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
@@ -13,6 +13,14 @@ import { resolveWorkspaceRoot } from '../../plugins/opc/scripts/lib/state.mjs';
 import { createJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 const ATTACH_PROBE = join(REPO_ROOT, 'tests/fixtures/attach-probe.mjs');
+
+test('attach reports the configured OpenCode binary', async (t) => {
+  const configured = join(FAKE_BIN_DIR, 'opencode');
+  const { cwd, env } = await setup(t, { extra: { OPC_OPENCODE_BIN: configured } });
+  const result = await runCli(['attach', SEED.session, '--json'], { env, cwd });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).argv[0], configured);
+});
 
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'opc-attach-'));
