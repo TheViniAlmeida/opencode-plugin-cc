@@ -1,4 +1,4 @@
-// SSE /event: parser, liveness, reconnection with backoff and per-session routing incl. children (spec §5.3).
+// SSE /api/event: parser, liveness, reconnection with backoff and per-session routing incl. children.
 import { ConnectionError } from './opc-error.mjs';
 import { redactText } from './redact.mjs';
 
@@ -11,10 +11,12 @@ export function createSSEParser() {
       buffer += String(chunkText);
       buffer = buffer.replace(/\r\n/g, '\n');
       const events = [];
+      let comments = 0;
       let index = buffer.indexOf('\n\n');
       while (index !== -1) {
         const frame = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
+        comments += frame.split('\n').filter((line) => line.startsWith(':')).length;
         const data = frame
           .split('\n')
           .filter((line) => line.startsWith('data:'))
@@ -29,15 +31,13 @@ export function createSSEParser() {
         }
         index = buffer.indexOf('\n\n');
       }
-      return events;
+      return { events, comments };
     },
   };
 }
 
 export function eventSessionID(event) {
-  const p = event?.properties;
-  if (!p || typeof p !== 'object') return null;
-  return p.sessionID ?? p.info?.sessionID ?? p.part?.sessionID ?? null;
+  return event?.data?.sessionID ?? null;
 }
 
 function safeCall(kind, fn, ...args) {
@@ -114,7 +114,7 @@ export class EventHub {
   }
 
   async start() {
-    if (this._state !== 'idle') throw new Error('EventHub already started');
+    if (this._state !== 'idle') throw new Error('O hub de eventos já foi iniciado.');
     this._state = 'connecting';
     let first;
     try {
@@ -122,35 +122,11 @@ export class EventHub {
     } catch (err) {
       clearTimeout(this._livenessTimer);
       this._stopConnection = null;
-      if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
-      if (err?.details?.disposed) {
-        this._state = 'reconnecting';
-        let lastError = err;
-        for (const delay of this.backoffMs) {
-          await sleep(delay);
-          if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
-          try {
-            first = await this._connect();
-            break;
-          } catch (reconnectError) {
-            lastError = reconnectError;
-            if (reconnectError.code === 'AUTH_FAILED') break;
-          }
-        }
-        if (!first) {
-          if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
-          this._state = 'down';
-          throw lastError;
-        }
-        this._state = 'open';
-        for (const h of this._reconnect) safeCall('onReconnect', h);
-        this._loop(first);
-        return;
-      }
+      if (this._state === 'stopped') throw new Error('O hub de eventos parou antes de abrir.');
       this._state = 'idle';
       throw err;
     }
-    if (this._state === 'stopped') throw new Error('EventHub start stopped before opening');
+    if (this._state === 'stopped') throw new Error('O hub de eventos parou antes de abrir.');
     this._state = 'open';
     this._loop(first);
   }
@@ -171,7 +147,7 @@ export class EventHub {
   }
 
   async _connect() {
-    if (this._state === 'stopped') throw new Error('EventHub connection stopped');
+    if (this._state === 'stopped') throw new Error('A conexão do hub de eventos foi encerrada.');
     const controller = new AbortController();
     this._controller = controller;
     const startedAt = performance.now();
@@ -193,15 +169,15 @@ export class EventHub {
       timeout = setTimeout(checkDeadline, this.livenessMs);
     });
     this._stopConnection = () => {
-      stopReject(new Error('EventHub connection stopped'));
+      stopReject(new Error('A conexão do hub de eventos foi encerrada.'));
     };
     let res;
     let reader;
     try {
       const fetchPromise = Promise.resolve().then(() => {
-        if (this._state === 'stopped') throw new Error('EventHub connection stopped');
-        return this.fetchImpl(this.client.buildUrl('/event'), {
-          headers: { ...this.client.authHeaders(), accept: 'text/event-stream' },
+        if (this._state === 'stopped') throw new Error('A conexão do hub de eventos foi encerrada.');
+        return this.fetchImpl(this.client.buildUrl('/api/event'), {
+          headers: { ...this.client.authHeaders(), ...(this.client.directory ? { 'x-opencode-directory': this.client.directory } : {}), accept: 'text/event-stream' },
           signal: controller.signal,
         });
       });
@@ -209,9 +185,9 @@ export class EventHub {
     } catch (err) {
       this._stopConnection = null;
       await closeConnection(controller);
-      if (this._state === 'stopped') throw new Error('EventHub connection stopped');
+      if (this._state === 'stopped') throw new Error('A conexão do hub de eventos foi encerrada.');
       if (err?.code === 'TIMEOUT') throw err;
-      throw new ConnectionError('SERVER_DOWN', 'Não foi possível abrir o fluxo de eventos (/event).');
+      throw new ConnectionError('SERVER_DOWN', 'Não foi possível abrir o fluxo de eventos (/api/event).');
     } finally {
       clearTimeout(timeout);
     }
@@ -222,21 +198,19 @@ export class EventHub {
       const decoder = new TextDecoder();
       const parser = createSSEParser();
       this._armLiveness();
-      // Wait for the first event (server.connected) before declaring the stream open.
+      // Any event or heartbeat confirms that the stream is open.
       for (;;) {
         let chunk;
         try {
           chunk = await Promise.race([reader.read(), stopped]);
         } catch {
-          if (this._state === 'stopped') throw new Error('EventHub connection stopped');
-          throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
+          if (this._state === 'stopped') throw new Error('A conexão do hub de eventos foi encerrada.');
+          throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro sinal.');
         }
-        if (chunk.done) throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro evento.');
-        const events = parser.push(decoder.decode(chunk.value, { stream: true }));
-        if (events.some((event) => event?.type === 'server.instance.disposed')) {
-          throw new ConnectionError('SERVER_DOWN', 'Instância do servidor descartada; reconectando o fluxo de eventos.', { details: { disposed: true } });
-        }
-        if (events.length > 0) {
+        if (chunk.done) throw new ConnectionError('SERVER_DOWN', 'Fluxo de eventos encerrado antes do primeiro sinal.');
+        const { events, comments } = parser.push(decoder.decode(chunk.value, { stream: true }));
+        if (events.length > 0 || comments > 0) {
+          this._armLiveness();
           this._stopConnection = null;
           return { reader, decoder, parser, controller, pending: events };
         }
@@ -249,16 +223,15 @@ export class EventHub {
   }
 
   async _read(conn) {
-    let disposed = false;
-    const handle = (events) => {
+    const handle = ({ events, comments }) => {
+      if (comments > 0) this._armLiveness();
       for (const event of events) {
         this._armLiveness();
         this._dispatch(event);
-        if (event?.type === 'server.instance.disposed') disposed = true;
       }
     };
-    handle(conn.pending);
-    while (!disposed && this._state !== 'stopped') {
+    handle({ events: conn.pending, comments: 0 });
+    while (this._state !== 'stopped') {
       let chunk;
       try {
         chunk = await conn.reader.read();
@@ -268,7 +241,6 @@ export class EventHub {
       if (chunk.done) return;
       handle(conn.parser.push(conn.decoder.decode(chunk.value, { stream: true })));
     }
-    conn.controller.abort();
   }
 
   async _loop(first) {
@@ -310,11 +282,11 @@ export class EventHub {
   _dispatch(event) {
     for (const h of this._any) safeCall('onAny', h, event);
     if (event?.type === 'session.created') {
-      const info = event.properties?.info;
-      const parent = info?.parentID ? this._routes.get(info.parentID) : null;
-      if (parent && info.id && !this._routes.has(info.id)) {
-        parent.ids.add(info.id);
-        this._routes.set(info.id, parent);
+      const data = event.data;
+      const parent = data?.parentID ? this._routes.get(data.parentID) : null;
+      if (parent && data.sessionID && !this._routes.has(data.sessionID)) {
+        parent.ids.add(data.sessionID);
+        this._routes.set(data.sessionID, parent);
       }
     }
     const sid = eventSessionID(event);
