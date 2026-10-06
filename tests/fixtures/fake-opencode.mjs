@@ -121,16 +121,11 @@ function safeConfigInfo(content) {
   }
 }
 
-function safeRequestBody(body) {
+export function safeRequestBody(body) {
+  if (typeof body === 'string') return '[REDACTED]';
+  if (Array.isArray(body)) return body.map(safeRequestBody);
   if (!body || typeof body !== 'object') return body;
-  const safe = structuredClone(body);
-  for (const key of ['text', 'prompt', 'message']) {
-    if (typeof safe[key] === 'string') safe[key] = `${safe[key].slice(0, 12)}…`;
-  }
-  delete safe.settings;
-  delete safe.apiKey;
-  delete safe.password;
-  return safe;
+  return Object.fromEntries(Object.entries(body).map(([key, value]) => [key, safeRequestBody(value)]));
 }
 
 export const DEFAULT_ROUTES = {

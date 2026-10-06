@@ -5,8 +5,8 @@
     "providerID": "omniroute-personal",
     "name": "DeepSeek V4.1 Flash",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -19,7 +19,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/opencode-go/qwen3.8-max",
@@ -27,8 +32,8 @@
     "providerID": "omniroute-personal",
     "name": "Qwen3.8 Max",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -41,7 +46,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/opencode-go/kimi-k3",
@@ -49,8 +59,8 @@
     "providerID": "omniroute-personal",
     "name": "Kimi K3",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -63,7 +73,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/opencode-go/qwen3.8-flash",
@@ -71,8 +86,8 @@
     "providerID": "omniroute-personal",
     "name": "Qwen3.8 Flash",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -85,7 +100,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/opencode-go/kimi-k2.6",
@@ -93,8 +113,8 @@
     "providerID": "omniroute-personal",
     "name": "Kimi K2.6",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -107,7 +127,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/cx/gpt-5.6-sol",
@@ -115,8 +140,8 @@
     "providerID": "omniroute-personal",
     "name": "GPT-5.6 Sol",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -129,7 +154,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-personal/opencode/big-pickle",
@@ -137,8 +167,8 @@
     "providerID": "omniroute-personal",
     "name": "Big Pickle (via omniroute)",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -151,7 +181,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
   },
   {
     "id": "omniroute-work/opencode-go/kimi-k3",
@@ -159,8 +194,8 @@
     "providerID": "omniroute-work",
     "name": "Kimi K3 (EQ)",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -173,7 +208,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
   },
   {
     "id": "omniroute-work/opencode-go/deepseek-v4-flash",
@@ -181,8 +221,8 @@
     "providerID": "omniroute-work",
     "name": "DeepSeek V4 Flash (EQ)",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -195,7 +235,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
   },
   {
     "id": "omniroute-work/cx/gpt-5.5",
@@ -203,8 +248,8 @@
     "providerID": "omniroute-work",
     "name": "GPT-5.5 (EQ)",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -217,7 +262,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
   },
   {
     "id": "opencode/big-pickle",
@@ -225,8 +275,8 @@
     "providerID": "opencode",
     "name": "Big Pickle",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -239,7 +289,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "opencode"
+    }
   },
   {
     "id": "opencode/space-bunny-free",
@@ -247,8 +302,8 @@
     "providerID": "opencode",
     "name": "Space Bunny (free)",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -261,7 +316,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "opencode"
+    }
   },
   {
     "id": "anthropic/claude-opus-5-5",
@@ -269,8 +329,8 @@
     "providerID": "anthropic",
     "name": "Claude Opus 5.5",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -283,7 +343,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "anthropic"
+    }
   },
   {
     "id": "anthropic/claude-haiku-4-5",
@@ -291,8 +356,8 @@
     "providerID": "anthropic",
     "name": "Claude Haiku 4.5",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -305,7 +370,12 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "anthropic"
+    }
   },
   {
     "id": "openai/gpt-5.6",
@@ -313,8 +383,8 @@
     "providerID": "openai",
     "name": "GPT-5.6",
     "capabilities": {
-      "toolcall": true,
-      "reasoning": false
+      "reasoning": false,
+      "tools": true
     },
     "variants": [
       {
@@ -327,6 +397,11 @@
         "id": "high"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "openai"
+    }
   }
 ]

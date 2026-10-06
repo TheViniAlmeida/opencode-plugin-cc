@@ -1,7 +1,6 @@
-// Structured output: OpenCode answers through the StructuredOutput tool and fills info.structured.
+// V2 returns JSON as ordinary assistant text; the client validates it.
 export default {
   async onPrompt(fake, sessionID) {
-    const structured = { verdict: 'approve', count: 3 };
-    await fake.emitTurn(sessionID, { text: '', structured, tools: [{ tool: 'StructuredOutput', input: structured, output: 'Structured output captured successfully.' }] });
+    await fake.emitTurn(sessionID, { text: JSON.stringify({ verdict: 'approve', count: 3 }) });
   },
 };

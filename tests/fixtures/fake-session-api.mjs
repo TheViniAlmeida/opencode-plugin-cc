@@ -90,8 +90,10 @@ export function installSessionApi(fake) {
     const wait = async () => (await fake.waitFor(sessionID, delayMs)).aborted || turn.aborted;
     event('session.execution.started', { sessionID });
     if (error && tools.length === 0) { fake.failExecution(sessionID, error); return; }
-    const assistant = message('assistant', { agent: session.agent, model: session.model, content: [], cost, tokens,
+    const pending = state.messages[sessionID].findLast((m) => m.type === 'assistant' && m.retry && !m.time.completed);
+    const assistant = pending ?? message('assistant', { agent: session.agent, model: session.model, content: [], cost, tokens,
       finish: tools.length ? 'tool-calls' : 'stop' });
+    if (pending) { delete assistant.retry; assistant.finish = tools.length ? 'tool-calls' : 'stop'; }
     event('session.step.started', { sessionID, assistantMessageID: assistant.id, agent: session.agent, model: session.model });
     for (const tool of tools) {
       if (await wait()) return;
@@ -108,21 +110,32 @@ export function installSessionApi(fake) {
     }
     if (error) {
       assistant.time.completed = Date.now();
-      state.messages[sessionID].push(assistant);
+      if (!pending) state.messages[sessionID].push(assistant);
       event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: 'error', cost, tokens });
       event('session.usage.updated', { sessionID, cost, tokens });
       fake.failExecution(sessionID, error);
       return;
     }
     if (await wait()) return;
-    if (text) {
-      assistant.content.push({ type: 'text', text });
-      event('session.text.delta', { sessionID, assistantMessageID: assistant.id, text });
-      event('session.text.ended', { sessionID, assistantMessageID: assistant.id, text });
-    }
     assistant.time.completed = Date.now();
-    state.messages[sessionID].push(assistant, message('idle', { outcome: 'succeeded' }));
-    event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: assistant.finish, cost, tokens });
+    if (!pending) state.messages[sessionID].push(assistant);
+    if (tools.length) event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: assistant.finish, cost, tokens });
+    if (text) {
+      const final = tools.length ? message('assistant', { agent: session.agent, model: session.model, content: [], cost, tokens, finish: 'stop' }) : assistant;
+      if (tools.length) {
+        state.messages[sessionID].push(final);
+        event('session.step.started', { sessionID, assistantMessageID: final.id, agent: session.agent, model: session.model });
+      }
+      final.content.push({ type: 'text', text });
+      event('session.text.delta', { sessionID, assistantMessageID: final.id, text });
+      event('session.text.ended', { sessionID, assistantMessageID: final.id, text });
+      if (tools.length) {
+        final.time.completed = Date.now();
+        event('session.step.ended', { sessionID, assistantMessageID: final.id, finish: final.finish, cost, tokens });
+      }
+    }
+    if (!tools.length) event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: assistant.finish, cost, tokens });
+    state.messages[sessionID].push(message('idle', { outcome: 'succeeded' }));
     event('session.usage.updated', { sessionID, cost, tokens });
     turns.delete(sessionID);
     fake.setStatus(sessionID, { type: 'idle' });
@@ -145,6 +158,7 @@ export function installSessionApi(fake) {
       }
     }
     if (running) {
+      state.messages[sessionID] = state.messages[sessionID].filter((m) => !(m.type === 'assistant' && m.retry && !m.time.completed));
       state.messages[sessionID].push(message('idle', { outcome: 'interrupted' }));
       fake.setStatus(sessionID, { type: 'idle' });
       event('session.execution.interrupted', { sessionID, reason: 'user' });
@@ -190,8 +204,9 @@ export function installSessionApi(fake) {
       if (Object.keys(body).some((key) => !['id', 'text', 'files', 'agents', 'skills', 'delivery', 'resume'].includes(key))) return bad('Campos do prompt inválidos');
       if (body.id !== undefined && !/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(body.id)) return bad('ID da mensagem inválido');
       const existing = body.id && state.messages[session.id].find((item) => item.id === body.id);
-      if (existing) return ok(existing);
-      const user = message('user', { id: body.id ?? id('msg'), text: body.text });
+      const promptResponse = (user) => ({ id: user.id, sessionID: session.id, time: user.time, type: 'user', payload: { text: user.text }, delivery: user.delivery ?? 'steer' });
+      if (existing) return ok(promptResponse(existing));
+      const user = message('user', { id: body.id ?? id('msg'), text: body.text, delivery: body.delivery ?? 'steer' });
       state.messages[session.id].push(user);
       fake.setStatus(session.id, { type: 'busy' });
       persist();
@@ -201,9 +216,10 @@ export function installSessionApi(fake) {
         Promise.resolve(hook ? hook(fake, session.id, body) : fake.emitTurn(session.id)).catch((err) => {
           const preview = redactText(String(err?.message ?? err)).replace(/[\r\n]+/g, ' ').slice(0, 12);
           process.stderr.write(`Erro no cenário do servidor falso: ${preview}…\n`);
+          if (state.statuses[session.id]) fake.failExecution(session.id, { type: 'scenario.error', message: 'Falha no cenário do servidor falso' });
         });
       });
-      return ok(user);
+      return ok(promptResponse(user));
     }],
     ['POST', /^\/api\/session\/(ses[^/]+)\/interrupt$/, (m) => ({ body: { interrupted: fake.abortSession(m[1]) } })],
     ['GET', /^\/api\/session\/(ses[^/]+)\/message$/, (m, q) => {

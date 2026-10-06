@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startFake } from '../fixtures/fake-opencode.mjs';
+import { startFake, safeRequestBody } from '../fixtures/fake-opencode.mjs';
 import { installSessionApi } from '../fixtures/fake-session-api.mjs';
 import { checkImportShape } from '../fixtures/fake-import.mjs';
 import { assertShape, loadContractSample } from '../fixtures/contract-shapes.mjs';
@@ -31,7 +31,7 @@ function memoryFake() {
   return fake;
 }
 
-test('fake V2 turn ends with execution.succeeded and an idle message', async () => {
+test('fake V2 tool call and final text occupy separate assistant messages', async () => {
   const fake = memoryFake();
   const session = fake.createSession({ title: 'OPC: t', model: MODEL, permissions: RULES }, '/w');
   await fake.emitTurn(session.id, { text: 'ok', tools: [{ tool: 'read', input: { path: 'a' } }], delayMs: 1 });
@@ -39,7 +39,10 @@ test('fake V2 turn ends with execution.succeeded and an idle message', async () 
   assert.ok(types.includes('session.tool.success'));
   assert.equal(types.at(-1), 'session.execution.succeeded');
   assert.ok(fake.events.every((e) => e.data && !('properties' in e)));
-  assert.deepEqual(fake.state.messages[session.id].map((m) => m.type).slice(-2), ['assistant', 'idle']);
+  assert.deepEqual(fake.state.messages[session.id].map((m) => m.type), ['assistant', 'assistant', 'idle']);
+  assert.deepEqual(fake.state.messages[session.id].slice(0, 2).map((m) => m.finish), ['tool-calls', 'stop']);
+  assert.deepEqual(fake.state.messages[session.id][0].content.map((c) => c.type), ['tool']);
+  assert.deepEqual(fake.state.messages[session.id][1].content.map((c) => c.type), ['text']);
 });
 
 test('fake V2 child sessions inherit the parent permissions and model', () => {
@@ -99,16 +102,40 @@ test('fake V2 import oracle accepts recorded V2 and rejects a V1 message', () =>
   assert.ok(checkImportShape(old).length > 0);
 });
 
-test('fake catalogs match V2 shapes and omit provider settings', () => {
+test('fake catalogs retain sensitive V2 settings for consumer redaction', () => {
   for (const provider of loadFixtureData('provider.json')) {
     assertShape('provider', provider);
-    assert.equal('settings' in provider, false);
+    assert.equal(typeof provider.settings.apiKey, 'string');
   }
   for (const agent of loadFixtureData('agent.json')) assertShape('agent', agent);
   for (const model of loadFixtureData('model.json')) {
     assertShape('model', model);
-    assert.equal('settings' in model, false);
+    assert.equal(typeof model.settings.apiKey, 'string');
+    assert.equal(model.capabilities.tools, true);
+    assert.equal('toolcall' in model.capabilities, false);
   }
+});
+
+test('request history redacts short and nested strings before persistence', () => {
+  const body = { text: 'short', nested: { apiKey: 'key', input: ['secret', { note: 'hidden' }] }, model: { id: 'm' } };
+  const safe = safeRequestBody(body);
+  assert.equal(JSON.stringify(safe).includes('short'), false);
+  assert.equal(JSON.stringify(safe).includes('key'), false);
+  assert.equal(JSON.stringify(safe).includes('secret'), false);
+  assert.equal(JSON.stringify(safe).includes('hidden'), false);
+  assert.equal(JSON.stringify(body).includes('short'), true);
+});
+
+test('fake prompt response follows recorded V2 payload and delivery shape', () => {
+  const fake = memoryFake();
+  const api = installSessionApi(fake);
+  const session = fake.createSession({ model: MODEL, permissions: RULES }, '/w');
+  const data = api.handle('POST', `/api/session/${session.id}/prompt`, new URLSearchParams(), { text: 'hi', delivery: 'steer' }).body.data;
+  assert.equal(data.sessionID, session.id);
+  assert.deepEqual(data.payload, { text: 'hi' });
+  assert.equal(data.delivery, 'steer');
+  assert.equal('text' in data, false);
+  assert.equal(fake.state.messages[session.id][0].text, 'hi');
 });
 
 test('F3 V2 seed, children and fork use flat messages', () => {

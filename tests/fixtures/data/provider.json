@@ -2,26 +2,46 @@
   {
     "id": "omniroute-personal",
     "name": "OmniRoute (personal)",
-    "activation": "configured"
+    "activation": "configured",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1"
+    }
   },
   {
     "id": "omniroute-work",
     "name": "OmniRoute (work)",
-    "activation": "configured"
+    "activation": "configured",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1"
+    }
   },
   {
     "id": "opencode",
     "name": "OpenCode Zen",
-    "activation": "configured"
+    "activation": "configured",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1"
+    }
   },
   {
     "id": "anthropic",
     "name": "Anthropic",
-    "activation": "configured"
+    "activation": "configured",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1"
+    }
   },
   {
     "id": "openai",
     "name": "OpenAI",
-    "activation": "configured"
+    "activation": "configured",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1"
+    }
   }
 ]

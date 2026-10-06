@@ -14,13 +14,13 @@ const agentItem = {
   variant: 'default', temperature: 0.5,
 };
 
-test('V2 fixtures provide separate provider, model and agent lists without settings', () => {
+test('V2 fixtures provide separate provider, model and agent lists with sensitive settings', () => {
   const provider = fixtureData('provider.json');
   const models = fixtureData('model.json');
   assert.ok(provider.some((item) => item.id && item.name && item.activation));
   assert.ok(models.some((item) => item.id && item.modelID && item.providerID && Array.isArray(item.variants)));
-  assert.ok(provider.every((item) => !Object.hasOwn(item, 'settings')));
-  assert.ok(models.every((item) => !Object.hasOwn(item, 'settings')));
+  assert.ok(provider.every((item) => typeof item.settings?.apiKey === 'string'));
+  assert.ok(models.every((item) => typeof item.settings?.apiKey === 'string' && item.capabilities?.tools === true));
   const agents = fixtureData('agent.json');
   assert.ok(agents.some((agent) => agent.id === 'build' && Array.isArray(agent.permissions)));
 });
