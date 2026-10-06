@@ -18,7 +18,7 @@ if (process.argv[2] === 'serve') {
   const fd = openSync(process.env.PROBE_LOG, 'a', 0o600);
   try {
     fchmodSync(fd, 0o600);
-    writeSync(fd, `${JSON.stringify({ argv: redactedArgs, passwordMatches, passwordInArgv })}\n`);
+    writeSync(fd, `${JSON.stringify({ argv: redactedArgs, cwd: process.cwd(), passwordMatches, passwordInArgv })}\n`);
   } finally {
     closeSync(fd);
   }

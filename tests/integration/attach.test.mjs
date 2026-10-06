@@ -54,9 +54,10 @@ test('attach prints the command without the password; workspace with spaces is q
   const root = resolveWorkspaceRoot(cwd);
   assert.ok(!res.stdout.includes(password) && !res.stderr.includes(password));
   assert.ok(res.stdout.includes(`OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(join(stateDir, 'attach.secret'))})"`));
-  assert.ok(res.stdout.includes(`opencode --server ${url} -s ${SEED.session} --dir ${shellQuote(root)}`));
+  assert.ok(res.stdout.includes(`cd ${shellQuote(root)} && OPENCODE_SERVER_PASSWORD=`));
+  assert.ok(res.stdout.includes(`opencode --server ${url} -s ${SEED.session}`));
   const json = JSON.parse((await runCli(['attach', SEED.session, '--json'], { env, cwd })).stdout);
-  assert.deepEqual(json.argv, ['opencode', '--server', url, '-s', SEED.session, '--dir', root]);
+  assert.deepEqual(json.argv, ['opencode', '--server', url, '-s', SEED.session]);
   assert.deepEqual(json.authSource, { type: 'file', path: join(stateDir, 'attach.secret') });
   assert.equal(json.attached, false);
   assert.ok(!JSON.stringify(json).includes(password));
@@ -115,7 +116,8 @@ test('pane: tmux argv has no password and the pane script receives intact args',
   const ran = spawnSync('/bin/sh', ['-c', argv[7]], { env: { PATH: process.env.PATH, PROBE_LOG: probeLog, EXPECTED_SHA256: sha }, encoding: 'utf8' });
   assert.equal(ran.status, 0, ran.stderr);
   const probe = JSON.parse(readFileSync(probeLog, 'utf8').trim());
-  assert.deepEqual(probe.argv, ['--server', url, '-s', SEED.session, '--dir', root]);
+  assert.deepEqual(probe.argv, ['--server', url, '-s', SEED.session]);
+  assert.equal(probe.cwd, root);
   assert.equal(probe.passwordMatches, true);
   assert.equal(probe.passwordInArgv, false);
 });

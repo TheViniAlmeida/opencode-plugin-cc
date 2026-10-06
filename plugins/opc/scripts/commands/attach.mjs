@@ -16,9 +16,11 @@ export const PANE_SCRIPT = `#!/bin/sh
 set -eu
 secret_file=$1
 opencode_bin=$2
-shift 2
+directory=$3
+shift 3
 OPENCODE_SERVER_PASSWORD=$(cat "$secret_file")
 export OPENCODE_SERVER_PASSWORD
+cd "$directory"
 exec "$opencode_bin" "$@"
 `;
 
@@ -34,7 +36,7 @@ export function resolveExecutable(name, pathEnv = process.env.PATH ?? '') {
 }
 
 export function buildAttachArgs({ url, sessionID, directory }) {
-  return ['--server', url, ...(sessionID ? ['-s', sessionID] : []), '--dir', directory];
+  return ['--server', url, ...(sessionID ? ['-s', sessionID] : [])];
 }
 
 export async function persistManagedAttachSecret(ctx, server) {
@@ -98,7 +100,7 @@ export async function run(ctx, argv) {
       writeFileSync(scriptPath, PANE_SCRIPT, { mode: 0o700 });
       chmodSync(scriptPath, 0o700);
       const executable = resolveExecutable(opencodeBin, ctx.env.PATH);
-      const paneCommand = ['/bin/sh', scriptPath, authSource.path, executable, ...info.argv.slice(1)].map(shellQuote).join(' ');
+      const paneCommand = ['/bin/sh', scriptPath, authSource.path, executable, directory, ...info.argv.slice(1)].map(shellQuote).join(' ');
       const res = spawnSync('tmux', ['split-window', '-h', '-P', '-F', '#{pane_id}', '-c', directory, paneCommand], {
         env: envWithoutSecrets(ctx.env), encoding: 'utf8', shell: false,
       });
@@ -116,4 +118,4 @@ export async function run(ctx, argv) {
   }
 }
 
-function preview(value) { return String(value).length > 12 ? `${String(value).slice(0, 12)}…` : String(value); }
+function preview(value) { return `${String(value).slice(0, 12)}…`; }

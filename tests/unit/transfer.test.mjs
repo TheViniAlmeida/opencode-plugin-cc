@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { checkImportShape } from '../fixtures/fake-import.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 import {
   buildExport,
@@ -27,7 +28,7 @@ import {
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const SAMPLE_JSONL = path.join(DATA, 'claude-transcript-sample.jsonl');
-const EXPORT_SAMPLE = JSON.parse(fs.readFileSync(path.join(DATA, '..', 'contract', 'opencode-2.0.22', 'export.json'), 'utf8'));
+const EXPORT_SAMPLE = loadContractSample('export.json');
 const MODEL = { providerID: 'example-provider', modelID: 'example/model-a', full: 'example-provider/example/model-a' };
 
 test('V2 export is accepted by the independent import oracle', async () => {
@@ -38,6 +39,24 @@ test('V2 export is accepted by the independent import oracle', async () => {
   assert.equal(exported.messages[0].type, 'synthetic');
   assert.equal(exported.messages[1].type, 'user');
   assert.equal(exported.messages[2].type, 'assistant');
+});
+
+test('buildExport emits the OpenCode 2 export shape', () => {
+  const conversion = convertClaudeRecords([
+    { type: 'user', message: { content: 'hello' }, timestamp: '2026-10-06T10:00:00Z' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] }, timestamp: '2026-10-06T10:00:01Z' },
+  ], { now: 1 });
+  const out = buildExport(conversion, { model: { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' }, directory: '/w' });
+  assert.deepEqual(validateExportShape(out), []);
+  assert.deepEqual(Object.keys(out.info.tokens).sort(), ['cache', 'input', 'output', 'reasoning']);
+  assert.deepEqual(out.info.location, { directory: '/w' });
+  assert.deepEqual(out.info.model, { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal', variant: 'default' });
+  assert.ok(out.messages.every((m) => typeof m.type === 'string' && !('info' in m) && !('parts' in m)));
+  assert.equal(out.messages.at(-1).content[0].text, 'hi');
+});
+
+test('the import oracle refuses the V1 shape', () => {
+  assert.ok(checkImportShape({ info: { id: 'ses_x', title: 't' }, messages: [] }).some((e) => /info\.cost ausente/.test(e)));
 });
 
 function tempDir(t) {
@@ -264,7 +283,7 @@ test('buildExport produces a valid V2 export with a synthetic header and flat me
   const [header, u1, a1] = exported.messages;
   assert.equal(header.text, transferHeader('11111111-2222-4333-8444-555555555555'));
   assert.equal(u1.text, 'List the files in src and explain main.mjs.');
-  assert.deepEqual(a1.model, { id: 'example/model-a', providerID: 'example-provider' });
+  assert.deepEqual(a1.model, { id: 'example/model-a', providerID: 'example-provider', variant: 'default' });
   assert.equal(a1.content[0].text, "I'll look at the directory first.");
   assert.deepEqual(exported.info.location, { directory: '/tmp/opc-fixture/proj' });
   assert.equal(exported.info.time.created, Date.parse('2026-09-26T10:00:00.000Z'));
@@ -336,8 +355,11 @@ function fakeExec(result) {
 test('runImport returns the session id and maps failures to exit 7 / 5', async () => {
   const ok = fakeExec({ stdout: 'Imported session: ses_abc123\n', stderr: '[autotitle] Module loaded\n' });
   assert.deepEqual(await runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env: {}, execFileImpl: ok.impl }), { sessionID: 'ses_abc123', exitCode: 0 });
-  assert.deepEqual(ok.calls[0].args, ['--server', 'http://127.0.0.1:4096', 'session', 'import', '/f.json']);
+  assert.deepEqual(ok.calls[0].args, ['session', 'import', '--server', 'http://127.0.0.1:4096', '--directory', '/w', '/f.json']);
   assert.equal(ok.calls[0].options.cwd, '/w');
+  const withoutServer = fakeExec({ stdout: 'Imported session: ses_abc123\n' });
+  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: withoutServer.impl }), (e) => e.code === 'SERVER_URL_REQUIRED');
+  assert.equal(withoutServer.calls.length, 0);
   const soft = fakeExec({ stdout: 'Failed to read session data\n' });
   await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
   const crash = fakeExec({ error: Object.assign(new Error('x'), { code: 1 }), stderr: 'Error: boom' });

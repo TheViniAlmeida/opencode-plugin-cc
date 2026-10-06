@@ -306,7 +306,7 @@ export function buildExport(conversion, { model, agent = 'build', directory, nex
   const sessionID = nextId('ses', 'descending');
   const first = conversion.turns[0];
   const turns = first.role === 'user' ? conversion.turns : [{ role: 'user', createdAt: first.createdAt, texts: [] }, ...conversion.turns];
-  const modelRef = { id: model.modelID, providerID: model.providerID };
+  const modelRef = { id: model.modelID, providerID: model.providerID, variant: 'default' };
   const messages = [{ id: nextId('msg', 'ascending'), type: 'synthetic', time: { created: first.createdAt }, text: transferHeader(conversion.claudeSessionId) }];
   let updated = turns[0].createdAt;
   for (const turn of turns) {
@@ -338,7 +338,7 @@ export function validateExportShape(data) {
   const info = data.info;
   for (const key of EXPORT_SHAPE.session) if (info[key] === undefined) errors.push(`info.${key}: obrigatório`);
   if (!/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(info.id ?? '')) errors.push('info.id: inválido');
-  if (!isObject(info.model) || typeof info.model.id !== 'string' || typeof info.model.providerID !== 'string') errors.push('info.model: inválido');
+  if (!isObject(info.model) || typeof info.model.id !== 'string' || typeof info.model.providerID !== 'string' || info.model.variant !== 'default') errors.push('info.model: inválido');
   if (!Array.isArray(info.permissions) || info.permissions.length === 0) errors.push('info.permissions: obrigatório');
   if (typeof info.location?.directory !== 'string') errors.push('info.location.directory: obrigatório');
   const seen = new Set();
@@ -350,6 +350,7 @@ export function validateExportShape(data) {
     if (seen.has(message.id)) errors.push(`${where}.id: duplicado`);
     seen.add(message.id);
     if (message.type === 'assistant' && (!Array.isArray(message.content) || message.content.some((part) => part?.type !== 'text' || typeof part.text !== 'string'))) errors.push(`${where}.content: inválido`);
+    if (message.type === 'assistant' && message.model?.variant !== 'default') errors.push(`${where}.model: inválido`);
   });
   return errors;
 }
@@ -419,7 +420,10 @@ export function parseImportOutput(stdout) {
 }
 
 export async function runImport({ opencodeBin = 'opencode', serverUrl, file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
-  const r = await execFileResult(execFileImpl, opencodeBin, ['--server', serverUrl, 'session', 'import', file], { cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
+  if (typeof serverUrl !== 'string' || !serverUrl) {
+    throw new OpcError('SERVER_URL_REQUIRED', 'A importação requer a URL do servidor gerenciado.', { exitCode: ExitCode.CONNECTION });
+  }
+  const r = await execFileResult(execFileImpl, opencodeBin, ['session', 'import', '--server', serverUrl, '--directory', cwd, file], { cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
   const missing = notFound(r.error);
   if (missing) throw missing;
   const sessionID = parseImportOutput(r.stdout);

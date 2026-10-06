@@ -13,11 +13,12 @@ export function checkImportShape(data) {
   for (const key of SESSION_KEYS) if (data.info[key] === undefined) errors.push(`info.${key} ausente`);
   if (!ID.test(data.info.id)) errors.push('info.id inválido');
   if (!Number.isFinite(data.info.cost)) errors.push('info.cost inválido');
-  if (!object(data.info.model) || typeof data.info.model.id !== 'string' || typeof data.info.model.providerID !== 'string') errors.push('info.model inválido');
+  if (!object(data.info.model) || typeof data.info.model.id !== 'string' || typeof data.info.model.providerID !== 'string' || data.info.model.variant !== 'default') errors.push('info.model inválido');
   if (!Array.isArray(data.info.permissions)) errors.push('info.permissions inválidas');
   if (typeof data.info.location?.directory !== 'string') errors.push('info.location inválido');
   if (!Number.isFinite(data.info.time?.created) || !Number.isFinite(data.info.time?.updated)) errors.push('info.time inválido');
   for (const key of ['input', 'output', 'reasoning']) if (!Number.isFinite(data.info.tokens?.[key])) errors.push(`info.tokens.${key} inválido`);
+  for (const key of ['read', 'write']) if (!Number.isFinite(data.info.tokens?.cache?.[key])) errors.push(`info.tokens.cache.${key} inválido`);
   const seen = new Set();
   data.messages.forEach((item, index) => {
     const at = `messages[${index}]`;
@@ -30,7 +31,7 @@ export function checkImportShape(data) {
     if (item.type === 'assistant') {
       if (!Array.isArray(item.content)) errors.push(`${at}.content inválido`);
       else if (item.content.some((part) => !object(part) || !['text', 'reasoning', 'tool'].includes(part.type))) errors.push(`${at}.content inválido`);
-      if (!Number.isFinite(item.cost) || !object(item.tokens)) errors.push(`${at}.usage inválido`);
+      if (!Number.isFinite(item.cost) || !object(item.tokens) || item.model?.variant !== 'default' || item.finish !== 'stop') errors.push(`${at}.usage inválido`);
     }
   });
   return errors;
@@ -46,6 +47,8 @@ function recordImport(entry) {
 }
 
 export async function runFakeImport(args) {
+  if (args[0] !== '--server' || !args[1]) { process.stderr.write('Servidor gerenciado obrigatório\n'); return 1; }
+  args = args.slice(2);
   let directory = null;
   if (args[0] === '--directory') { directory = args[1]; args = args.slice(2); }
   const file = args[0];

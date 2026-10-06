@@ -904,7 +904,7 @@ export function renderAttach(info) {
     return f3Finish(lines);
   }
   lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.authSource?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
-  lines.push(`    ${secret} ${args}`, '');
+  lines.push(`    cd ${shellQuote(info.directory)} && ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
   return f3Finish(lines);
 }

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
 import { MAX_TRANSCRIPT_BYTES } from '../../plugins/opc/scripts/lib/transfer.mjs';
 import { checkImportShape } from '../fixtures/fake-import.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 import {
   cliJson, makeTempDir, makeWorkspace, PLUGIN_ROOT, readFakeState, REPO_ROOT,
   runCli, stateDirFor, testEnv, trackTempDir, trackWorkspace, writeTestConfig, startExternalFake,
@@ -50,6 +51,7 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(imp.mode, '600');
   assert.equal(imp.dirMode, '700');
   assert.equal(imp.cwd, ws);
+  assert.equal(imp.directory, ws);
   assert.equal((fs.statSync(stateDirFor(env, ws)).mode & 0o777).toString(8), '700');
   assertTemporaryRemoved(env, ws);
   assert.match(r.data.sessionID, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
@@ -81,14 +83,15 @@ test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t
   const binDir = trackTempDir(t, makeTempDir('opc-transfer-bin-'));
   const bin = path.join(binDir, 'configured-opencode.mjs');
   const calls = path.join(binDir, 'calls.jsonl');
-  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.OPC_BIN_CALLS, JSON.stringify(args) + '\\n');\nif (args[0] === '--version') process.stdout.write('opencode v2.0.22\\n');\nelse if (args[0] === '--server' && args[2] === 'session' && args[3] === 'import') process.stdout.write('Imported session: ' + JSON.parse(fs.readFileSync(args[4], 'utf8')).info.id + '\\n');\nelse process.exitCode = 2;\n`, { mode: 0o700 });
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.OPC_BIN_CALLS, JSON.stringify(args) + '\\n');\nif (args[0] === '--version') process.stdout.write('opencode v2.0.22\\n');\nelse if (args[0] === 'session' && args[1] === 'import' && args[2] === '--server' && args[4] === '--directory') process.stdout.write('Imported session: ' + JSON.parse(fs.readFileSync(args[6], 'utf8')).info.id + '\\n');\nelse process.exitCode = 2;\n`, { mode: 0o700 });
   env.OPC_OPENCODE_BIN = bin;
   env.OPC_BIN_CALLS = calls;
   const result = await cliJson(transferArgs(source), { env, cwd: ws });
   assert.equal(result.code, 0, result.stderr);
   const invoked = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-  assert.deepEqual(invoked.map((args) => args[0]), ['--version', '--server']);
-  assert.deepEqual(invoked[1].slice(2, 4), ['session', 'import']);
+  assert.deepEqual(invoked.map((args) => args[0]), ['--version', 'session']);
+  assert.deepEqual(invoked[1].slice(1, 3), ['import', '--server']);
+  assert.deepEqual(invoked[1].slice(4, 6), ['--directory', ws]);
 });
 
 test('transfer uses the SessionStart source and default model alias and renders Markdown', async (t) => {
@@ -232,7 +235,7 @@ test('/opc:transfer is user-only, uses a guarded quoted heredoc and does not run
 
 test('fake import oracle independently rejects malformed export references', () => {
   assert.ok(checkImportShape({ info: {}, messages: [] }).includes('info.id inválido'));
-  const sample = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'contract', 'opencode-2.0.22', 'export.json'), 'utf8'));
+  const sample = loadContractSample('export.json');
   sample.messages[1].id = sample.messages[0].id;
   assert.ok(checkImportShape(sample).some((error) => /id duplicado/.test(error)));
 });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { validateExportShape } from '../../plugins/opc/scripts/lib/transfer.mjs';
-import { cliJson, makeTempDir, makeWorkspace, REPO_ROOT, runProcess, trackTempDir } from '../helpers.mjs';
+import { cliJson, makeTempDir, makeWorkspace, REPO_ROOT, stateDirFor, trackTempDir } from '../helpers.mjs';
 import { appendSafeOutput, safeOutputText } from './_f3-lib.mjs';
 
 const MODEL = process.env.OPC_LIVE_MODEL?.trim();
@@ -54,25 +54,29 @@ test('F5 live: isolated transfer, session list and export preserve synthetic his
   const { sessionID } = result.data;
   assert.match(sessionID, /^ses_[0-9A-Za-z]+$/);
   assert.equal(result.data.messages.total, 4);
-  const command = async (args) => {
-    const result = await runProcess('opencode', args, { env, cwd: ws, timeoutMs: 120_000 });
-    assert.equal(result.code, 0, safe(result.stderr));
-    return JSON.parse(result.stdout);
+  const server = JSON.parse(fs.readFileSync(path.join(stateDirFor(env, ws), 'server.json'), 'utf8'));
+  const request = async (apiPath) => {
+    const response = await fetch(`${server.url}${apiPath}`, { headers: {
+      authorization: `Basic ${Buffer.from(`opencode:${server.password}`).toString('base64')}`,
+      'x-opencode-directory': ws,
+    } });
+    assert.equal(response.status, 200, `A consulta ${apiPath} falhou.`);
+    return response.json();
   };
-  const list = await command(['session', 'list', '--format', 'json']);
-  const entry = list.find((session) => session.id === sessionID);
-  assert.ok(entry, 'Imported session is listed in the isolated workspace.');
-  assert.equal(entry.title, `OPC: transfer: live transfer ${marker}`);
-  assert.equal(entry.directory, ws);
-  const exported = await command(['export', sessionID]);
+  const info = (await request(`/api/session/${sessionID}`)).data;
+  assert.equal(info.id, sessionID);
+  assert.equal(info.title, `OPC: transfer: live transfer ${marker}`);
+  assert.equal(info.location.directory, ws);
+  const messages = (await request(`/api/session/${sessionID}/message?order=asc&limit=50`)).data;
+  const exported = { info, messages };
   assert.deepEqual(validateExportShape(exported), []);
-  assert.equal(exported.messages.length, 4);
-  const texts = exported.messages.flatMap((message) => message.parts.filter((part) => part.type === 'text').map((part) => part.text));
+  assert.equal(messages.length, 5);
+  const texts = messages.flatMap((message) => [message.text, ...(message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text)].filter(Boolean));
   assert.ok(texts.includes(`Remember the code word ${marker}.`));
   assert.ok(texts.includes(`The code word is ${marker}.`));
   assert.ok(texts.some((text) => text.includes('Read') && text.includes('notes.md')));
   assert.ok(texts.some((text) => text.includes('resultado da ferramenta') && text.includes(marker)));
-  const evidence = { sessionID, messages: exported.messages.length, version: exported.info.version, sessionListed: true, exportShapeValid: true, storage: 'isolated', providerRequests: 0 };
+  const evidence = { sessionID, messages: messages.length, sessionLoaded: true, importShapeValid: true, storage: 'isolated', providerRequests: 0 };
   appendSafeOutput(REPORT, `### Transfer: round trip com armazenamento isolado\n\n\`\`\`json\n${JSON.stringify(evidence, null, 2)}\n\`\`\`\n\n`, env.OPC_DATA_DIR);
   t.diagnostic(JSON.stringify(evidence));
 });
