@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, catalogFromV2, rulesFromV2, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
+import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, catalogFromV2, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
 
 test('task uses the V2 OpenCode default when no opc model is configured', async () => {
   const calls = [];
@@ -29,7 +29,6 @@ test('task adapts V2 model catalog and permission rules without retaining provid
   assert.equal(catalog.byFull.get('p/m').modelID, 'm');
   assert.deepEqual(catalog.byFull.get('p/m').variants, ['high']);
   assert.equal(JSON.stringify(catalog).includes('must-not-retain'), false);
-  assert.deepEqual(rulesFromV2([{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'bash', pattern: 'npm test', action: 'ask' }, { permission: 'doom_loop', pattern: '*', action: 'deny' }]), [{ action: '*', resource: '*', effect: 'deny' }, { action: 'shell', resource: 'npm test', effect: 'ask' }]);
 });
 
 test('normalizeResumeFlag: id only when it looks like a job or session id', () => {

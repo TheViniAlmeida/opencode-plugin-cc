@@ -91,11 +91,7 @@ async function workerFixture(t, { structuredOutput = 'text', wrapped = false } =
   };
   const routes = installSessionApi(fake);
   const handle = async (method, route, body, options) => {
-    // Task 8 migrates policy rules; adapt that unrelated V1 profile at this test boundary.
-    const v2Body = route === '/api/session' && method === 'POST'
-      ? { ...body, permissions: body.permissions.map((rule) => ({ action: rule.permission, resource: rule.pattern, effect: rule.action })) }
-      : body;
-    const response = await routes.handle(method, route, new URLSearchParams(options?.query), v2Body);
+    const response = await routes.handle(method, route, new URLSearchParams(options?.query), body);
     assert.ok((response.status ?? 200) < 400, `${method} ${route}: ${response.status}`);
     return response.body?.data ?? response.body;
   };

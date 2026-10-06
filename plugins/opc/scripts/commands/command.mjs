@@ -6,12 +6,13 @@ import { assertCommandUsable } from '../lib/policy.mjs';
 import {
   createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock,
 } from '../lib/jobs.mjs';
-import { newMessageId } from '../lib/runner.mjs';
 import { classifyError } from '../lib/errors.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderCommandResult, renderPermissionRequest } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
+import { toPermissionRequest, toQuestion } from '../lib/opencode-v2.mjs';
+import { parseFullId } from '../lib/models.mjs';
 import { safeOutputText } from '../lib/redact.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
@@ -123,7 +124,9 @@ export async function runWorker(ctx, job, request = job.request) {
   try {
     conn = await openApi(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
-    const session = await api.createSession({ title: job.title, permission: request.rules });
+    const selected = parseFullId(request.model);
+    const session = await api.createSession({ title: job.title, permissions: request.rules,
+      model: { providerID: selected.providerID, id: selected.modelID }, ...(request.agent ? { agent: request.agent } : {}) });
     release = tryAcquireLock(join(stateDir, `session-${session.id}.lock`), { purpose: `job ${job.id}` });
     await updateJob(stateDir, job.id, { status: 'running', phase: 'running', startedAt: now(), sessionID: session.id });
     const updater = createSerialUpdater(stateDir, job.id);
@@ -131,23 +134,27 @@ export async function runWorker(ctx, job, request = job.request) {
       profileKind: request.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
       log: (line) => appendJobLog(stateDir, job.id, line) });
     const bridgeError = (kind) => (err) => appendJobLog(stateDir, job.id, `[opc] falha na ponte de ${kind}: ${safeMessage(err.message)}`);
-    const untrack = hub.track(session.id, (event) => {
-      const props = event?.properties ?? {};
-      if (event?.type === 'permission.asked') bridge.onPermission(props).catch(bridgeError('permissões'));
-      else if (event?.type === 'question.asked') bridge.onQuestion(props).catch(bridgeError('perguntas'));
-      else if (event?.type === 'permission.replied') bridge.onResolved({ type: 'permission', requestID: props.requestID, sessionID: props.sessionID, outcome: props.reply }).catch(bridgeError('permissões'));
-      else if (event?.type === 'question.replied' || event?.type === 'question.rejected') bridge.onResolved({ type: 'question', requestID: props.requestID, sessionID: props.sessionID, outcome: event.type === 'question.replied' ? 'replied' : 'rejected' }).catch(bridgeError('perguntas'));
-    });
+    const onEvent = (event) => {
+      const data = event?.data ?? {};
+      if (event?.type === 'form.created' && data.form?.sessionID !== session.id) return;
+      if (event?.type === 'permission.asked') bridge.onPermission(toPermissionRequest(data)).catch(bridgeError('permissões'));
+      else if (event?.type === 'form.created' && data.form) {
+        const question = toQuestion(data.form);
+        if (question) bridge.onQuestion(question).catch(bridgeError('perguntas'));
+      }
+      else if (event?.type === 'permission.replied') bridge.onResolved({ type: 'permission', requestID: data.requestID, sessionID: data.sessionID, outcome: data.reply }).catch(bridgeError('permissões'));
+      else if (event?.type === 'form.replied' || event?.type === 'form.cancelled') bridge.onResolved({ type: 'question', requestID: data.id, sessionID: data.sessionID, outcome: event.type === 'form.replied' ? 'replied' : 'rejected' }).catch(bridgeError('perguntas'));
+    };
+    const untrack = hub.track(session.id, onEvent);
+    const offForms = hub.onAny?.((event) => { if (event?.type === 'form.created') onEvent(event); }) ?? (() => {});
     let response = null;
     let failure = null;
     try {
-      response = await api.runCommand(session.id, { command: request.command, arguments: request.arguments ?? '',
-        agent: request.agent ?? undefined, model: request.model, variant: request.variant ?? undefined,
-        messageID: newMessageId(), timeoutMs: request.timeoutMs });
+      response = await api.runCommand(session.id, { name: request.command, text: request.arguments ?? '' });
     } catch (err) {
       failure = err;
       if (err.code === 'TIMEOUT') await api.abort(session.id).catch(() => {});
-    } finally { untrack(); bridge.dispose(); await updater.flush(); }
+    } finally { untrack(); offForms(); bridge.dispose(); await updater.flush(); }
     const latest = readJob(stateDir, job.id);
     const error = response?.info?.error ?? null;
     let patch;

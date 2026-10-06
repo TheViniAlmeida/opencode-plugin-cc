@@ -53,7 +53,7 @@ test('permissions list with no registered server still reports recorded requests
   assert.match(ctx.output, /servidor não está em execução/);
 });
 
-test('reply keeps full ids and follow-up line when bridge clears the job during the API reply', async (t) => {
+test('reply masks the supplied id and keeps follow-up line when bridge clears the job', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
   const pendingId = 'per_562c642c123456789';
   const sessionID = 'ses_session123456789';
@@ -66,11 +66,12 @@ test('reply keeps full ids and follow-up line when bridge clears the job during 
     async replyPermission(id, requestID, body) { assert.equal(id, sessionID); assert.equal(requestID, pendingId); assert.equal(body.reply, 'reject'); await updateJob(stateDir, job.id, { pendingRequest: null, status: 'running' }); },
   };
   await run(ctx, ['reply', pendingId, 'reject'], { getApi: () => api });
-  assert.match(ctx.output, new RegExp(`Resposta reject enviada para ${pendingId}`));
+  assert.match(ctx.output, /Resposta reject enviada para per_562c642c…/);
+  assert.ok(!ctx.output.includes(pendingId));
   assert.match(ctx.output, new RegExp(`/opc:status ${job.id} --wait`));
 });
 
-test('permissions reply prints full sibling request identifiers', async (t) => {
+test('permissions reply masks the supplied id and reports sibling identifiers', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
   const ids = ['per_562c642c123456789', 'per_89ab0345123456789'];
   const sessionID = 'ses_session123456789';
@@ -78,7 +79,8 @@ test('permissions reply prints full sibling request identifiers', async (t) => {
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
   const api = { async listPermissions() { return ids.map((id) => ({ id, permission: 'bash', sessionID })); }, async replyPermission() {} };
   await run(ctx, ['reply', ids[0], 'reject'], { getApi: () => api });
-  assert.ok(ids.every((id) => ctx.output.includes(id)), ctx.output);
+  assert.ok(!ctx.output.includes(ids[0]), ctx.output);
+  assert.ok(ctx.output.includes(ids[1]), ctx.output);
 });
 
 test('permissions answer uses the V2 form session and string[][] answers', async (t) => {
@@ -99,4 +101,17 @@ test('permissions list with no jobs and no server reports an empty list', async 
   const ctx = { stateDir: '/missing-state', out: (value) => { ctx.output = value; }, json: (value) => { ctx.output = JSON.stringify(value); } };
   await list(ctx, {}, () => null);
   assert.match(ctx.output, /Nenhuma solicitação pendente/);
+});
+
+test('permissions list discovers pending requests in every OPC workspace session', async () => {
+  const ctx = { stateDir: '/missing-state', out: (value) => { ctx.output = value; }, json: (value) => { ctx.output = value; } };
+  const seen = [];
+  const api = {
+    async listSessions() { return [{ id: 'ses_first', title: 'OPC: first' }, { id: 'ses_second', title: 'OPC: second' }, { id: 'ses_other', title: 'unrelated' }]; },
+    async listPermissions(id) { seen.push(id); return [{ id: `per_${id}`, sessionID: id, permission: 'shell', patterns: ['ls'] }]; },
+    async listQuestions() { return []; },
+  };
+  await list(ctx, { json: true }, () => api);
+  assert.deepEqual(seen, ['ses_first', 'ses_second']);
+  assert.deepEqual(ctx.output.requests.map((request) => request.id), ['per_ses_first', 'per_ses_second']);
 });

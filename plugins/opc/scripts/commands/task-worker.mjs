@@ -94,11 +94,6 @@ export function createRequestBridge({ update, jobId, stateDir, api, profileKind,
       arm(req.id, () => api.replyPermission(req.sessionID, req.id, { reply: 'reject', message: 'opc: nenhum aprovador disponível' }));
     },
     async onQuestion(req) {
-      if (autoReject) {
-        log(`pergunta ${req.id} recusada automaticamente: perfil somente leitura`);
-        await api.rejectQuestion(req.sessionID, req.id);
-        return;
-      }
       await addPending({ type: 'question', id: req.id, sessionID: req.sessionID, questions: req.questions ?? [], askedAt: nowIso() });
       log(`aguardando resposta para ${req.id}`);
       arm(req.id, () => api.rejectQuestion(req.sessionID, req.id));

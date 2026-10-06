@@ -105,8 +105,8 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
           request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, format: { type: 'json_schema', schema: spec.schema }, messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
           isCancelled: () => isCancelled(id),
           onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.abort(sessionID); }),
-          onPermission: (p) => conn.api.replyPermission(p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
-          onQuestion: (q) => conn.api.rejectQuestion(q.id),
+          onPermission: (p) => conn.api.replyPermission(p.sessionID, p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
+          onQuestion: (q) => conn.api.rejectQuestion(q.sessionID, q.id),
         });
       } catch (err) {
         throw persistenceError ?? err;

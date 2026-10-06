@@ -23,15 +23,6 @@ const KIND_SPECS = Object.freeze({
   plan: { template: 'plan.md', readOnly: true },
 });
 
-const REMOVED_ACTIONS = new Set(['list', 'lsp', 'skill', 'todowrite', 'doom_loop']);
-
-export function rulesFromV2(rules) {
-  return rules.flatMap(({ permission, pattern, action }) => {
-    const name = { bash: 'shell', task: 'subagent' }[permission] ?? permission;
-    return REMOVED_ACTIONS.has(name) ? [] : [{ action: name, resource: pattern, effect: action }];
-  });
-}
-
 export function catalogFromV2(providers, models) {
   const connected = new Set(providers.filter((provider) => provider.activation === 'enabled').map((provider) => provider.id));
   const entries = models.map((model) => ({
@@ -256,7 +247,7 @@ export async function runKindCommand(ctx, argv, kind) {
     else ctx.err(`[opc] aviso: defaultVariant "${config.defaultVariant}" não está disponível para ${candidate.full}; ignorada\n`);
   }
   const selection = validateSelection({ candidate, variant, agentName, agents, catalog, policy });
-  const rules = rulesFromV2(buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] }));
+  const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
   const sessionID = resolveResumeSession(ctx, flags, kind);
   let patchPermission = null;
   if (sessionID) {
