@@ -6,10 +6,10 @@ import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
 
-async function setup(t) {
+async function setup(t, { config = {} } = {}) {
   const cwd = makeWorkspace(t);
   const env = testEnv(t, { scenario: 'f3-sessions' });
-  writeGlobalConfig(env, F3_TEST_CONFIG); // servers stopped by the F0 per-test cleanup (testEnv/makeWorkspace)
+  writeGlobalConfig(env, { ...F3_TEST_CONFIG, ...config }); // servers stopped by the F0 per-test cleanup (testEnv/makeWorkspace)
   return { cwd, env };
 }
 
@@ -39,24 +39,36 @@ test('revert without --confirmed-by-user: exit 2, scope notice and instruction, 
   assert.equal(fakeRequests(env).filter((r) => r.method !== 'GET').length, 0, 'the preview only reads');
 });
 
-test('revert with --confirmed-by-user stages then commits {messageID} and shows the revert marker', async (t) => {
+test('revert with --confirmed-by-user only stages {messageID} (never commits) and shows the pending revert', async (t) => {
   const { cwd, env } = await setup(t);
   const res = await runCli(['session', 'revert', SEED.session, SEED.m3, '--confirmed-by-user', '--json'], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   const stage = sessionPosts(env, SEED.session, 'revert/stage');
-  const commit = sessionPosts(env, SEED.session, 'revert/commit');
   assert.deepEqual(stage.map((r) => r.body), [{ messageID: SEED.m3 }]);
-  assert.equal(commit.length, 1);
-  assert.ok(stage[0].at <= commit[0].at, 'stage runs before commit');
+  // V2 commit drops the messages for good, which would leave nothing for unrevert.
+  assert.equal(sessionPosts(env, SEED.session, 'revert/commit').length, 0);
   const out = JSON.parse(res.stdout);
   assert.equal(out.confirmed, true);
   assert.equal(out.session.revert.messageID, SEED.m3);
-  assert.equal(out.session.revert.committed, true);
+  assert.deepEqual(out.session.revert.files.map((f) => f.file), ['notes.txt', 'extra.txt']);
   const text = await runCli(['session', 'revert', SEED.session, SEED.m1, '--confirmed-by-user'], { env, cwd });
   assert.equal(text.code, 0, text.stderr);
-  assert.match(text.stdout, /Reversão aplicada/);
+  assert.match(text.stdout, /Reversão aplicada \(pendente\)/);
   assert.match(text.stdout, new RegExp(`Revert ativo: a partir de ${SEED.m1}`));
   assert.deepEqual(sessionPosts(env, SEED.session, 'revert/stage').map((r) => r.body), [{ messageID: SEED.m3 }, { messageID: SEED.m1 }]);
+});
+
+test('revert and diff explain that snapshots are off when the OpenCode config disables them', async (t) => {
+  const { cwd, env } = await setup(t, { config: { server: { configOverride: { share: 'disabled', snapshot: false } } } });
+  const res = await runCli(['session', 'revert', SEED.session, SEED.m3, '--confirmed-by-user', '--json'], { env, cwd });
+  assert.equal(res.code, 2);
+  assert.equal(JSON.parse(res.stdout).error.code, 'SNAPSHOT_DISABLED');
+  assert.equal(sessionPosts(env, SEED.session, 'revert/stage').length, 0);
+  const diff = await runCli(['session', 'diff', SEED.userSession, '--json'], { env, cwd });
+  assert.equal(diff.code, 0, diff.stderr);
+  const { diffs, notices } = JSON.parse(diff.stdout);
+  assert.deepEqual(diffs, []);
+  assert.ok(notices.some((notice) => /"snapshot": false/.test(notice)), JSON.stringify(notices));
 });
 
 test('revert refuses --part (OpenCode 2 reverts by message) before staging anything', async (t) => {
@@ -165,7 +177,12 @@ test('summarize: sets the session model then compacts; model from --model (alias
   assert.equal(compacts().length, 1);
   assert.ok(modelPosts()[0].at <= compacts()[0].at, 'the model switch precedes the compaction');
   assert.equal(JSON.parse(res.stdout).model, 'omniroute-personal/opencode-go/qwen3.8-max');
-  assert.equal((await runCli(['session', 'summarize', SEED.session], { env, cwd })).code, 0);
+  // V2 refuses a compact without an object body and answers 200 with the compaction message.
+  assert.deepEqual(compacts()[0].body, {});
+  assert.match(JSON.parse(res.stdout).compactionMessageID, /^msg_/);
+  const human = await runCli(['session', 'summarize', SEED.session], { env, cwd });
+  assert.equal(human.code, 0, human.stderr);
+  assert.match(human.stdout, /Mensagem de compactação: msg_/);
   assert.deepEqual(modelPosts()[1].body, { model: { providerID: 'omniroute-personal', id: 'opencode-go/deepseek-v4.1-flash' } });
   assert.equal((await runCli(['session', 'summarize', SEED.session, '--model', 'omniroute-work/cx/gpt-5.5'], { env, cwd })).code, 4);
   assert.equal(modelPosts().length, 2);

@@ -53,7 +53,7 @@ test('setup --json without opencode on PATH: install offer data', async (t) => {
   const report = JSON.parse(r.stdout);
   assert.equal(report.opencode.installed, false);
   assert.equal(report.server.status, 'skipped');
-  assert.ok(report.nextSteps.some((step) => /npm install -g opencode-ai/.test(step)));
+  assert.ok(report.nextSteps.some((step) => /Instale o OpenCode 2\.0\.22 ou mais novo/.test(step)));
   const s = report.onboarding;
   assert.equal(s.opencodeInstalled, false);
   assert.equal(s.npmAvailable, false);

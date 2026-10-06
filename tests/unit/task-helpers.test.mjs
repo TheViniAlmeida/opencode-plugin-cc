@@ -3,16 +3,27 @@ import assert from 'node:assert/strict';
 import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 
-test('task uses the V2 OpenCode default when no opc model is configured', async () => {
+test('task uses the model declared in the OpenCode config when no opc model is configured', async () => {
   const calls = [];
   const api = {
-    providers: async () => [{ id: 'p', activation: 'enabled' }],
-    models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }],
-    defaultModel: async () => { calls.push('defaultModel'); return { providerID: 'p', id: 'm' }; },
+    providers: async () => [{ id: 'p', activation: 'enabled' }, { id: 'opencode', activation: 'enabled' }],
+    models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }, { id: 'free', modelID: 'free', providerID: 'opencode', variants: [] }],
+    defaultModel: async () => { calls.push('defaultModel'); return { providerID: 'opencode', id: 'free' }; },
+    getConfigSources: async () => { calls.push('config'); return [{ type: 'document', info: { model: 'p/m' } }]; },
   };
   const { resolution } = await resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { policy: {} } });
   assert.deepEqual(resolution.candidates.map(({ full, source }) => ({ full, source })), [{ full: 'p/m', source: 'opencode' }]);
-  assert.deepEqual(calls, ['defaultModel']);
+  assert.deepEqual(calls.sort(), ['config', 'defaultModel']);
+});
+
+test('task never runs on the server default model when the OpenCode config declares none', async () => {
+  const api = {
+    providers: async () => [{ id: 'opencode', activation: 'enabled' }],
+    models: async () => [{ id: 'free', modelID: 'free', providerID: 'opencode', variants: [] }],
+    defaultModel: async () => ({ providerID: 'opencode', id: 'free' }),
+    getConfigSources: async () => [{ type: 'directory', path: '<workspace>' }, { type: 'document', info: { share: 'disabled' } }],
+  };
+  await assert.rejects(resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { policy: {} } }), (e) => e.code === 'NO_MODEL' && e.exitCode === 2);
 });
 
 test('task keeps an explicit opc model ahead of the OpenCode default', async () => {
@@ -20,6 +31,7 @@ test('task keeps an explicit opc model ahead of the OpenCode default', async () 
     providers: async () => [{ id: 'p', activation: 'enabled' }],
     models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }],
     defaultModel: async () => ({ providerID: 'p', id: 'm' }),
+    getConfigSources: async () => [{ type: 'document', info: { model: 'p/m' } }],
   };
   const { resolution } = await resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { defaultModel: 'p/m', policy: {} } });
   assert.equal(resolution.candidates[0].source, 'default');

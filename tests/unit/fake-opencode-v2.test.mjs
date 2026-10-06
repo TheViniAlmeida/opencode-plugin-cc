@@ -156,11 +156,18 @@ test('F3 V2 revert, compact and command routes use their V2 paths', () => {
   scenario.setup(fake);
   const params = { id: SEED.session };
   const stage = scenario.routes['POST /api/session/:id/revert/stage'](fake, { params, body: { messageID: SEED.m3 } });
-  assert.equal(stage.body.data.revert.messageID, SEED.m3);
-  const committed = scenario.routes['POST /api/session/:id/revert/commit'](fake, { params });
-  assert.equal(committed.body.data.revert.committed, true);
-  assert.equal(scenario.routes['DELETE /api/session/:id/revert'](fake, { params }).body.data.revert, undefined);
-  assert.equal(scenario.routes['POST /api/session/:id/compact'](fake, { params, body: { providerID: 'p', modelID: 'm' } }).status, 204);
+  assert.equal(stage.body.data.messageID, SEED.m3);
+  assert.equal(fake.state.sessions[SEED.session].revert.messageID, SEED.m3);
+  assert.equal(scenario.routes['DELETE /api/session/:id/revert'](fake, { params }).status, 204);
+  assert.equal(fake.state.sessions[SEED.session].revert, undefined);
+  scenario.routes['POST /api/session/:id/revert/stage'](fake, { params, body: { messageID: SEED.m3 } });
+  assert.equal(scenario.routes['POST /api/session/:id/revert/commit'](fake, { params }).status, 204);
+  assert.equal(fake.state.sessions[SEED.session].revert, undefined);
+  assert.equal(fake.state.messages[SEED.session].some((m) => m.id === SEED.m3), false);
+  assert.equal(scenario.routes['POST /api/session/:id/compact'](fake, { params, body: { providerID: 'p', modelID: 'm' } }).status, 400);
+  assert.equal(scenario.routes['POST /api/session/:id/compact'](fake, { params, body: null }).status, 400);
+  const compacted = scenario.routes['POST /api/session/:id/compact'](fake, { params, body: {} });
+  assert.deepEqual([compacted.status, compacted.body.data.type, compacted.body.data.sessionID], [200, 'compaction', SEED.session]);
   assert.equal(scenario.routes['POST /api/session/:id/command'](fake, { params, body: { name: 'echo', text: 'a b' } }).status, 204);
   // V2 answers 204 and the result arrives later through the turn; only the user message exists right away.
   assert.equal(fake.state.messages[SEED.session].at(-1).type, 'user');

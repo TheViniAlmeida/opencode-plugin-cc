@@ -7,8 +7,9 @@ import { F3_PROVIDERS, F3_MODEL_CATALOG, F3_AGENTS, F3_TEST_CONFIG, F3_MODELS } 
 const config = { ...DEFAULT_CONFIG, ...F3_TEST_CONFIG };
 const ctx = { config, err: () => {} };
 const DEFAULT_MODEL = { providerID: 'omniroute-personal', id: 'opencode-go/deepseek-v4.1-flash' };
+const CONFIG_SOURCES = [{ type: 'directory', path: '<workspace>' }, { type: 'document', path: '<workspace>/opencode.json', info: { model: F3_MODELS.qwen } }];
 const discovery = await loadDiscovery({ providers: async () => F3_PROVIDERS, models: async () => F3_MODEL_CATALOG,
-  defaultModel: async () => DEFAULT_MODEL, agents: async () => F3_AGENTS });
+  defaultModel: async () => DEFAULT_MODEL, agents: async () => F3_AGENTS, getConfigSources: async () => CONFIG_SOURCES });
 const policy = config.policy;
 
 test('loadDiscovery uses V2 catalogs and reaches model selection', async () => {
@@ -18,10 +19,14 @@ test('loadDiscovery uses V2 catalogs and reaches model selection', async () => {
     models: async () => { calls.push('models'); return F3_MODEL_CATALOG; },
     defaultModel: async () => { calls.push('default'); return DEFAULT_MODEL; },
     agents: async () => { calls.push('agents'); return F3_AGENTS; },
+    getConfigSources: async () => { calls.push('config'); return CONFIG_SOURCES; },
   };
   const found = await loadDiscovery(api);
-  assert.deepEqual(calls.sort(), ['agents', 'default', 'models', 'providers']);
-  assert.equal(found.opencodeConfig.model, F3_MODELS.deepseek);
+  assert.deepEqual(calls.sort(), ['agents', 'config', 'default', 'models', 'providers']);
+  // The fallback is the model declared in the OpenCode config, not GET /api/model/default.
+  assert.equal(found.opencodeConfig.model, F3_MODELS.qwen);
+  assert.equal(resolveModel({ ...ctx, config: { ...config, defaultModel: null } }, found, 'task', null).full, F3_MODELS.qwen);
+  assert.equal(found.catalog.providers.find((p) => p.id === DEFAULT_MODEL.providerID).defaultModel, F3_MODELS.deepseek);
   assert.equal(resolveModel(ctx, found, 'task', 'fast').full, F3_MODELS.deepseek);
   assert.equal(found.catalog.byFull.get(F3_MODELS.deepseek).variants.includes('high'), true);
 });

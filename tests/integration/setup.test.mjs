@@ -82,7 +82,8 @@ test('opencode missing from PATH → ready:false, installed:false, exit 5, nothi
   assert.equal(report.ready, false);
   assert.equal(report.opencode.installed, false);
   assert.equal(report.server.status, 'skipped');
-  assert.ok(report.nextSteps.some((s) => /npm install -g opencode-ai/.test(s)));
+  assert.ok(report.nextSteps.some((s) => /Instale o OpenCode 2\.0\.22 ou mais novo[\s\S]*OPC_OPENCODE_BIN/.test(s)));
+  assert.ok(!report.nextSteps.some((s) => /npm install/.test(s)));
 });
 
 test('version below the minimum → UNSUPPORTED_VERSION, exit 3, no server', async (t) => {

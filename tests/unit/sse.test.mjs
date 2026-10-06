@@ -214,6 +214,35 @@ test('stop during reconnect keeps the hub stopped', async () => {
   assert.equal(secondSignal.aborted, true);
 });
 
+test('stop during the reconnect backoff ends the wait instead of holding the process', async () => {
+  let fetchCount = 0;
+  const hub = new EventHub({
+    client,
+    livenessMs: 1000,
+    backoffMs: [60_000],
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return { ok: true, status: 200, body: { getReader: () => {
+        let first = true;
+        return { read: async () => {
+          if (!first) return { done: true };
+          first = false;
+          return { done: false, value: new TextEncoder().encode(': heartbeat\n\n') };
+        } };
+      } } };
+    },
+  });
+  await hub.start();
+  while (hub.state !== 'reconnecting') await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof hub._wakeBackoff, 'function', 'hub is not waiting in the backoff');
+  hub.stop();
+  assert.equal(hub._wakeBackoff, null);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(hub.state, 'stopped');
+  assert.equal(fetchCount, 1);
+});
+
 test('dropped connections abort and close their streams before reconnecting', async () => {
   const signals = [];
   let openStreams = 0;

@@ -13,6 +13,41 @@ const MODEL = { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-pe
 const validRules = (rules) => Array.isArray(rules) && rules.every((r) => r && typeof r.action === 'string' && typeof r.resource === 'string' && ['allow', 'deny', 'ask'].includes(r.effect));
 const message = (type, extra = {}) => ({ id: id('msg'), type, time: { created: Date.now() }, ...extra });
 
+// V2 list paging: `limit` ≤ 200, an opaque anchor cursor that already carries the order (cursor + order → 400),
+// `cursor.next` filled on every non-empty page and `next: null` only on the empty page after the last one.
+export const MAX_PAGE_LIMIT = 200;
+const cursorError = (message) => ({ status: 400, body: { _tag: 'InvalidCursorError', message } });
+const encodeCursor = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+function decodeCursor(text) {
+  try {
+    const value = JSON.parse(Buffer.from(text, 'base64url').toString('utf8'));
+    return typeof value?.anchor?.id === 'string' && ['asc', 'desc'].includes(value.order) ? value : null;
+  } catch {
+    return null;
+  }
+}
+export function pageList(items, query, { defaultOrder = 'desc', orderBy = (list) => list } = {}) {
+  const cursorText = query.get('cursor');
+  if (cursorText !== null && query.has('order')) return cursorError('Cursor cannot be combined with order');
+  const limitText = query.get('limit');
+  const limit = limitText === null ? null : Number(limitText);
+  if (limit !== null && limit > MAX_PAGE_LIMIT) return bad(`Expected a value less than or equal to ${MAX_PAGE_LIMIT}`);
+  if (limit !== null && !(Number.isInteger(limit) && limit >= 1)) return bad('Expected a positive integer');
+  const cursor = cursorText === null ? null : decodeCursor(cursorText);
+  if (cursorText !== null && !cursor) return cursorError('Invalid cursor');
+  const order = cursor?.order ?? (query.get('order') === 'asc' ? 'asc' : query.get('order') === 'desc' ? 'desc' : defaultOrder);
+  const ordered = orderBy([...items], order);
+  let start = 0;
+  if (cursor) {
+    const anchor = ordered.findIndex((item) => item.id === cursor.anchor.id);
+    if (anchor < 0) return cursorError('Invalid cursor');
+    start = anchor + 1;
+  }
+  const data = ordered.slice(start, limit === null ? undefined : start + limit);
+  const anchorOf = (item, direction) => encodeCursor({ anchor: { id: item.id, time: item.time?.updated ?? item.time?.created ?? 0, direction }, order });
+  return { body: { data, cursor: { previous: data.length ? anchorOf(data[0], 'previous') : null, next: data.length ? anchorOf(data.at(-1), 'next') : null } } };
+}
+
 export function installSessionApi(fake) {
   const state = fake.state;
   for (const key of ['sessions', 'messages', 'permissions', 'forms', 'statuses', 'diffs']) state[key] ??= {};
@@ -171,7 +206,8 @@ export function installSessionApi(fake) {
     ['POST', /^\/api\/session$/, (_m, _q, body, directory) =>
       body && validRules(body.permissions) && body.model?.id && body.model?.providerID
         ? ok(fake.createSession(body, directory ?? '')) : bad('Modelo e permissões inválidos')],
-    ['GET', /^\/api\/session$/, (_m, q) => ok(Object.values(state.sessions).filter((s) => !q.get('parentID') || s.parentID === q.get('parentID')).sort((a, b) => b.time.updated - a.time.updated))],
+    ['GET', /^\/api\/session$/, (_m, q) => pageList(Object.values(state.sessions).filter((s) => !q.get('parentID') || s.parentID === q.get('parentID')), q,
+      { orderBy: (list, order) => list.sort((a, b) => (order === 'asc' ? 1 : -1) * (a.time.updated - b.time.updated)) })],
     ['GET', /^\/api\/session\/active$/, () => ok({ ...state.statuses })],
     ['GET', /^\/api\/session\/(ses[^/]+)$/, (m) => state.sessions[m[1]] ? ok(state.sessions[m[1]]) : missing()],
     ['PATCH', /^\/api\/session\/(ses[^/]+)$/, (m, _q, body) => {
@@ -225,9 +261,7 @@ export function installSessionApi(fake) {
     ['POST', /^\/api\/session\/(ses[^/]+)\/interrupt$/, (m) => ({ body: { interrupted: fake.abortSession(m[1]) } })],
     ['GET', /^\/api\/session\/(ses[^/]+)\/message$/, (m, q) => {
       if (!state.messages[m[1]]) return missing();
-      const ordered = q.get('order') === 'asc' ? [...state.messages[m[1]]] : [...state.messages[m[1]]].reverse();
-      const limit = Number(q.get('limit'));
-      return ok(limit > 0 ? ordered.slice(0, limit) : ordered);
+      return pageList(state.messages[m[1]], q, { orderBy: (list, order) => (order === 'asc' ? list : list.reverse()) });
     }],
     ['GET', /^\/api\/session\/(ses[^/]+)\/diff$/, (m) => (state.sessions[m[1]] ? ok(state.diffs[m[1]] ?? []) : missing())],
     ['GET', /^\/api\/session\/(ses[^/]+)\/permission$/, (m) => ok(Object.values(state.permissions).filter((r) => r.sessionID === m[1]))],

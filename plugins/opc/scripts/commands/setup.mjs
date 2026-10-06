@@ -12,6 +12,7 @@ import { globalConfigPath, workspaceConfigPath, setStopGateEnabled } from '../li
 import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
 import { renderSetup, renderReviewGate } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, resolveOpencodeBin, stopServer } from '../lib/server.mjs';
+import { mergeOpencodeConfigSources } from '../lib/opencode-config.mjs';
 import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
 import { liveActiveJobs } from '../lib/jobs.mjs';
 
@@ -21,10 +22,7 @@ function setupCatalog(buildCatalog, providers, models) {
   return buildCatalog({ providers, models });
 }
 
-export function mergeOpencodeConfigSources(sources) {
-  if (!Array.isArray(sources)) throw new UsageError('UNSUPPORTED_VERSION', 'A configuração do OpenCode V2 não é uma lista de fontes.');
-  return Object.assign({}, ...sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info)).map((source) => source.info));
-}
+export { mergeOpencodeConfigSources };
 const SPEC = {
   flags: {
     json: { type: 'boolean' },
@@ -127,7 +125,8 @@ async function diagnose(ctx, flags) {
   let exitCode = ExitCode.OK;
   if (!attach && !report.opencode.installed) {
     report.server = { status: 'skipped', warnings: [] };
-    report.nextSteps.push('Instale o OpenCode (npm install -g opencode-ai) e rode `/opc:setup` de novo.');
+    // The npm package `opencode-ai` still publishes V1 (1.18.x), so opc does not suggest it.
+    report.nextSteps.push(`Instale o OpenCode ${MIN_OPENCODE_VERSION} ou mais novo pela documentação oficial (https://opencode.ai), ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário, e rode \`/opc:setup\` de novo.`);
     exitCode = ExitCode.CONNECTION;
   } else if (!attach && report.opencode.supported === false) {
     report.server = {

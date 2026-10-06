@@ -115,6 +115,7 @@ function safeConfigInfo(content) {
     for (const key of ['share', 'model', 'small_model', 'agent']) {
       if (typeof source?.[key] === 'string') info[key] = source[key];
     }
+    if (typeof source?.snapshot === 'boolean') info.snapshot = source.snapshot;
     return info;
   } catch {
     return {};

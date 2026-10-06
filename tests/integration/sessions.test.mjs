@@ -47,7 +47,8 @@ test('sessions --refresh only rereads the list (no instance dispose in OpenCode 
   assert.deepEqual(JSON.parse(res.stdout).sessions.map((s) => s.id), [SEED.session]);
   assert.equal(refreshRequests(env).length, 0);
   assert.equal(fakeRequests(env).filter((r) => r.method !== 'GET').length, 0);
-  assert.equal(listRequests(env).length, 1);
+  // One listing: the first page and its cursor page that comes back empty.
+  assert.deepEqual(listRequests(env).map((r) => typeof r.query.cursor), ['undefined', 'string']);
 });
 
 test('sessions --refresh is not refused while a job is active', async (t) => {

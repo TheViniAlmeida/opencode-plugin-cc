@@ -160,6 +160,7 @@ export const V2_SHAPES = Object.freeze({
   agent: ['id', 'name', 'mode', 'hidden', 'permissions'],
   provider: ['id', 'name', 'activation'],
   export: ['info', 'messages'],
+  compaction: ['id', 'sessionID', 'time', 'type', 'payload', 'delivery'],
   files: {
     'info.json': 'info',
     'session.json': 'session',
@@ -179,6 +180,7 @@ export const V2_SHAPES = Object.freeze({
     'prompt.json': null,
     'active.json': null,
     'interrupt.json': null,
+    'compact.json': 'compaction',
   },
 });
 

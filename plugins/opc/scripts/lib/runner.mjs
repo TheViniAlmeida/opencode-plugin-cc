@@ -245,7 +245,9 @@ export async function runTurn({
       for (const req of (await api.listQuestions(id)) ?? []) if (req) await handleQuestion(req);
     }
     if (statuses?.[sessionID]) return;
-    const listed = request.command ? await readSessionMessages(api, sessionID, { limit: commandBaseline.size + 1000 }) : await readTurnMessages(api, sessionID, messageID);
+    // Before the command baseline exists there is no command turn to look for.
+    if (request.command && !commandBaseline) return;
+    const listed = request.command ? await readSessionMessages(api, sessionID) : await readTurnMessages(api, sessionID);
     const turn = request.command ? listed.filter((message) => !commandBaseline.has(message.id)) : turnMessages(listed, messageID);
     for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     const idle = turn.find((message) => message.type === 'idle');
@@ -333,9 +335,11 @@ export async function runTurn({
       if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
       if (!settled) {
         const text = (request.parts ?? []).filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('\n');
-        const promptText = request.format?.type === 'json_schema' ? `${text}\n\n${jsonInstruction(request.format.schema)}` : text;
+        const instruction = request.format?.type === 'json_schema' ? jsonInstruction(request.format.schema) : null;
+        // Callers may already embed the same instruction in their prompt template.
+        const promptText = instruction && !text.includes(instruction) ? `${text}\n\n${instruction}` : text;
         if (request.command) {
-          commandBaseline = new Set((await readSessionMessages(api, sessionID, { limit: 1_000_000 })).map((message) => message.id));
+          commandBaseline = new Set((await readSessionMessages(api, sessionID)).map((message) => message.id));
           await api.runCommand(sessionID, request.command);
         } else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
         promptAccepted = true;
@@ -386,10 +390,11 @@ export async function runTurn({
     }
     let collected;
     try {
+      // Without a baseline the command was never sent (e.g. the baseline read failed): no command messages exist.
       const messages = request.command
-        ? await readSessionMessages(api, sessionID, { limit: commandBaseline.size + 1000 })
-        : await readTurnMessages(api, sessionID, messageID);
-      const commandMessages = request.command ? messages.filter((message) => !commandBaseline.has(message.id)) : null;
+        ? (commandBaseline ? await readSessionMessages(api, sessionID) : [])
+        : await readTurnMessages(api, sessionID);
+      const commandMessages = request.command ? messages.filter((message) => !commandBaseline?.has(message.id)) : null;
       if (request.command) messageID = commandMessages.find((message) => message.type === 'user')?.id ?? messageID;
       base.messageID = messageID;
       if (outcome.reason === 'idle' && !(request.command ? commandMessages.some((message) => message.type === 'user') : messages.some((message) => message?.id === messageID))) {

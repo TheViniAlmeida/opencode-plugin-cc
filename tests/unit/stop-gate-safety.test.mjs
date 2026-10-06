@@ -178,6 +178,7 @@ test('F4a I2: stop-gate request preserves route candidates and fallback eligibil
       providers: async () => [{ id: 'p', name: 'p', activation: 'enabled' }],
       models: async () => [{ id: 'first', modelID: 'first', providerID: 'p', variants: [] }, { id: 'second', modelID: 'second', providerID: 'p', variants: [] }],
       defaultModel: async () => null,
+      getConfigSources: async () => [],
     } }),
     submitTurnJobFn: async (_ctx, { request }) => { submitted = request; return { id: 'gate-routed' }; },
     waitForJobFn: async () => ({ status: 'completed', result: { finalText: 'ALLOW: certo' } }),

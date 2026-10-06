@@ -104,28 +104,43 @@ test('f3 fake: fork copies only messages before the boundary', async (t) => {
   assert.equal(unknown.status, 400);
 });
 
-test('f3 fake: revert stage sets a diff, commit marks it, delete clears it', async (t) => {
+test('f3 fake: revert stage keeps a pending revert with files, delete clears it, commit drops the messages', async (t) => {
   const { call } = await boot(t);
-  const reverted = await call('POST', `/api/session/${SEED.session}/revert/stage`, { messageID: SEED.m3 });
-  assert.equal(reverted.status, 200);
-  assert.equal(reverted.body.revert.messageID, SEED.m3);
-  assert.match(reverted.body.revert.diff, /\+BETA/);
-  const committed = await call('POST', `/api/session/${SEED.session}/revert/commit`);
-  assert.equal(committed.body.revert.committed, true);
+  const staged = await call('POST', `/api/session/${SEED.session}/revert/stage`, { messageID: SEED.m3 });
+  assert.equal(staged.status, 200);
+  assert.equal(staged.body.messageID, SEED.m3);
+  assert.deepEqual(staged.body.files.map((f) => f.file), ['notes.txt', 'extra.txt']);
+  assert.match(staged.body.files[0].patch, /\+BETA/);
+  const pending = await call('GET', `/api/session/${SEED.session}`);
+  assert.equal(pending.body.revert.messageID, SEED.m3);
   const missing = await call('POST', `/api/session/${SEED.session}/revert/stage`, {});
   assert.equal(missing.status, 400);
-  const restored = await call('DELETE', `/api/session/${SEED.session}/revert`);
-  assert.equal(restored.status, 200);
-  assert.equal(restored.body.revert, undefined);
+  const cleared = await call('DELETE', `/api/session/${SEED.session}/revert`);
+  assert.equal(cleared.status, 204);
+  assert.equal((await call('GET', `/api/session/${SEED.session}`)).body.revert, undefined);
+  await call('POST', `/api/session/${SEED.session}/revert/stage`, { messageID: SEED.m3 });
+  const committed = await call('POST', `/api/session/${SEED.session}/revert/commit`);
+  assert.equal(committed.status, 204);
+  assert.equal((await call('GET', `/api/session/${SEED.session}`)).body.revert, undefined);
+  const left = await call('GET', `/api/session/${SEED.session}/message?order=asc&limit=200`);
+  assert.ok(Array.isArray(left.body) && !left.body.some((m) => m.id === SEED.m3), 'commit drops the messages from the target on');
 });
 
 test('f3 fake: compact uses the session model and appends a compaction message', async (t) => {
   const { call } = await boot(t);
-  assert.equal((await call('POST', '/api/session/ses_missing/compact')).status, 404);
+  assert.equal((await call('POST', '/api/session/ses_missing/compact', {})).status, 404);
   const switched = await call('POST', `/api/session/${SEED.session}/model`, { model: { providerID: 'omniroute-personal', id: 'opencode-go/qwen3.8-max' } });
   assert.equal(switched.status, 204);
-  const res = await call('POST', `/api/session/${SEED.session}/compact`);
-  assert.equal(res.status, 204);
+  // V2 2.0.22 refuses a compact without an object body (400 "Expected object") and extra keys.
+  const noBody = await call('POST', `/api/session/${SEED.session}/compact`);
+  assert.deepEqual([noBody.status, noBody.body.message], [400, 'Expected object']);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/compact`, { providerID: 'p' })).status, 400);
+  const res = await call('POST', `/api/session/${SEED.session}/compact`, {});
+  assert.equal(res.status, 200);
+  assertShape('compaction', res.body);
+  assert.equal(res.body.type, 'compaction');
+  assert.equal(res.body.sessionID, SEED.session);
+  assert.match(res.body.id, /^msg_/);
   const msgs = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
   const compaction = msgs.body.findLast((m) => m.type === 'assistant');
   assert.equal(compaction.agent, 'compaction');

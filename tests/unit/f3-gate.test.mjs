@@ -99,7 +99,8 @@ test('I3: prévia de 250 mensagens localiza mensagem 240 além da primeira pági
     diff: async () => { throw new Error('a prévia do revert não consulta o diff agregado'); },
   };
   assert.equal(await collectAffectedDiff(api, 'ses_gate', 'msg_240'), null);
-  assert.deepEqual(limits, [200, 400]);
+  // One complete read: the API follows the V2 cursor pages (200 each) instead of growing `limit`.
+  assert.deepEqual(limits, [undefined]);
   await assert.rejects(collectAffectedDiff(api, 'ses_gate', 'msg_999'), (error) => error.code === 'UNKNOWN_MESSAGE' && error.exitCode === 2);
 });
 

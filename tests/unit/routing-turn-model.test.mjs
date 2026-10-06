@@ -8,10 +8,21 @@ import { fixtureModelIds } from '../f2b-helpers.mjs';
 import { DEFAULT_CONFIG } from '../../plugins/opc/scripts/lib/config.mjs';
 import { buildCatalog, parseFullId } from '../../plugins/opc/scripts/lib/models.mjs';
 import { resolveTurnModel } from '../../plugins/opc/scripts/lib/routing.mjs';
+import { RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 const PROVIDERS = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'provider.json'), 'utf8'));
 const MODELS = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'model.json'), 'utf8'));
-const api = { providers: async () => PROVIDERS, models: async () => MODELS, defaultModel: async () => null };
+const api = { providers: async () => PROVIDERS, models: async () => MODELS, defaultModel: async () => null, getConfigSources: async () => [] };
+// V2 2.0.22: GET /api/model/default is the server's catalog pick (a free opencode/* model), not a user choice.
+const SERVER_DEFAULT = loadContractSample('model-default.json').data;
+const SERVER_DEFAULT_FULL = `${SERVER_DEFAULT.providerID}/${SERVER_DEFAULT.modelID}`;
+const apiWithServerDefault = (configSources) => ({
+  providers: async () => PROVIDERS,
+  models: async () => [...MODELS, SERVER_DEFAULT],
+  defaultModel: async () => SERVER_DEFAULT,
+  getConfigSources: configSources,
+});
 
 function configWith(patch) {
   return { ...structuredClone(DEFAULT_CONFIG), ...patch };
@@ -54,7 +65,51 @@ test('resolveTurnModel exposes the resolution, catalog and OpenCode config for l
   const result = await resolveTurnModel({ api, kind: 'review', config: configWith({ defaultModel: first }) });
   assert.equal(result.resolution.candidates[0].full, first);
   assert.ok(result.catalog.byFull.has(first));
-  assert.equal(result.opencodeConfig, null);
+  assert.deepEqual(result.opencodeConfig, {});
+});
+
+test('the server default model never becomes the execution fallback (NO_MODEL)', async () => {
+  assert.match(SERVER_DEFAULT_FULL, /^opencode\//);
+  const sources = async () => [{ type: 'directory', path: '<workspace>' }, { type: 'document', path: '<workspace>/opencode.json', info: { share: 'disabled' } }];
+  const fake = apiWithServerDefault(sources);
+  // The free model is in the connected catalog and still is not picked.
+  const { byFull, connected } = buildCatalog({ providers: await fake.providers(), models: await fake.models() });
+  assert.ok(byFull.has(SERVER_DEFAULT_FULL) && connected.has(SERVER_DEFAULT.providerID));
+  await assert.rejects(
+    resolveTurnModel({ api: fake, kind: 'review', config: configWith({}) }),
+    (err) => err.code === 'NO_MODEL' && err.exitCode === 2 && /"model" declarado na configuração do OpenCode/.test(err.message) && !err.message.includes(SERVER_DEFAULT.modelID),
+  );
+});
+
+test('the model declared in the OpenCode config sources is the opencode fallback', async () => {
+  const declared = fixtureModelIds().find((id) => id !== SERVER_DEFAULT_FULL);
+  const sources = async () => [
+    { type: 'directory', path: '<workspace>' },
+    { type: 'document', path: '<global>/opencode.json', info: { model: SERVER_DEFAULT_FULL } },
+    { type: 'document', path: '<workspace>/opencode.json', info: { model: declared } },
+  ];
+  const result = await resolveTurnModel({ api: apiWithServerDefault(sources), kind: 'review', config: configWith({}) });
+  assert.equal(result.full, declared);
+  assert.equal(result.resolution.candidates[0].source, 'opencode');
+  assert.equal(result.opencodeConfig.model, declared);
+  // The server default still marks the catalog.
+  assert.equal(result.catalog.providers.find((p) => p.id === SERVER_DEFAULT.providerID).defaultModel, SERVER_DEFAULT_FULL);
+});
+
+test('a failed GET /api/config leaves no fallback and NO_MODEL says why', async () => {
+  const sources = async () => { throw new RequestError('SERVER_ERROR', 'GET /api/config: erro do servidor (500).'); };
+  await assert.rejects(
+    resolveTurnModel({ api: apiWithServerDefault(sources), kind: 'review', config: configWith({}) }),
+    (err) => err.code === 'NO_MODEL' && err.exitCode === 2 && /GET \/api\/config\) não pôde ser lida \(SERVER_ERROR\)/.test(err.message) && !err.message.includes(SERVER_DEFAULT.modelID),
+  );
+  const [first] = fixtureModelIds();
+  const explicit = await resolveTurnModel({ api: apiWithServerDefault(sources), kind: 'review', config: configWith({ defaultModel: first }) });
+  assert.equal(explicit.full, first);
+});
+
+test('a GET /api/config failure outside the API layer is not swallowed', async () => {
+  const sources = async () => { throw new TypeError('bug'); };
+  await assert.rejects(resolveTurnModel({ api: apiWithServerDefault(sources), kind: 'review', config: configWith({ defaultModel: fixtureModelIds()[0] }) }), TypeError);
 });
 
 test('a valid variant is passed through', async (t) => {

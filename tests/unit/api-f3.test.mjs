@@ -36,7 +36,7 @@ test('fork, revert, compact and command use V2 request shapes', async () => {
     ['POST', '/api/session/ses_a/revert/stage', { messageID: 'msg_b' }],
     ['POST', '/api/session/ses_a/revert/commit', undefined],
     ['DELETE', '/api/session/ses_a/revert', undefined],
-    ['POST', '/api/session/ses_a/compact', undefined],
+    ['POST', '/api/session/ses_a/compact', {}],
     ['POST', '/api/session/ses_a/command', { name: 'echo', text: 'x y' }],
     ['GET', '/api/session/ses_a/diff', undefined],
   ]);

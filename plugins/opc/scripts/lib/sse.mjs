@@ -2,7 +2,6 @@
 import { ConnectionError } from './opc-error.mjs';
 import { redactText } from './redact.mjs';
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createSSEParser() {
   let buffer = '';
@@ -138,6 +137,15 @@ export class EventHub {
     clearTimeout(this._livenessTimer);
     if (this._controller) this._controller.abort();
     this._stopConnection?.();
+    this._wakeBackoff?.();
+  }
+
+  // Backoff wait that stop() cuts short, so a stopped hub does not keep the process alive.
+  _backoff(ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this._wakeBackoff = null; resolve(); }, ms);
+      this._wakeBackoff = () => { clearTimeout(timer); this._wakeBackoff = null; resolve(); };
+    });
   }
 
   _armLiveness() {
@@ -256,7 +264,7 @@ export class EventHub {
       conn = null;
       let lastError = null;
       for (const delay of this.backoffMs) {
-        await sleep(delay);
+        await this._backoff(delay);
         if (this._state === 'stopped') return;
         try {
           conn = await this._connect();

@@ -60,9 +60,11 @@ test('catalog bootstrap watcher resolves on model.updated and false when the str
   const streamOf = (text) => new Response(new ReadableStream({ start(c) { c.enqueue(encoder.encode(text)); } }), { headers: { 'content-type': 'text/event-stream' } });
   const client = createClient({ baseUrl: 'http://127.0.0.1:43210', password: 'pw' });
   const ok = watchCatalogBootstrap(client, { fetchImpl: async () => streamOf('data: {"type":"server.connected","data":{}}\n\ndata: {"type":"model.updated","data":{}}\n\n') });
+  assert.equal(await ok.opened, true);
   assert.equal(await ok.ready, true);
   ok.stop();
   const broken = watchCatalogBootstrap(client, { fetchImpl: async () => { throw new Error('refused'); } });
+  assert.equal(await broken.opened, false);
   assert.equal(await broken.ready, false);
   broken.stop();
 });

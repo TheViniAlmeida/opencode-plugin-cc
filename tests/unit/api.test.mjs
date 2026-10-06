@@ -4,7 +4,7 @@ import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 
 function recordingClient() {
   const calls = [];
-  return { calls, get: async (path, opts) => { calls.push({ method: 'GET', path, opts }); return path.endsWith('/active') ? { ses_a: { type: 'running' } } : path.endsWith('/permission') || path.endsWith('/form') || path.endsWith('/agent') ? [] : { path }; } };
+  return { calls, get: async (path, opts) => { calls.push({ method: 'GET', path, opts }); return path.endsWith('/active') ? { ses_a: { type: 'running' } } : path.endsWith('/permission') || path.endsWith('/form') || path.endsWith('/agent') ? [] : opts?.envelope ? { data: [], cursor: { previous: null, next: null } } : { path }; } };
 }
 
 test('read methods map to V2 routes and retry on ServerDown', async () => {
@@ -26,6 +26,7 @@ test('read methods map to V2 routes and retry on ServerDown', async () => {
   assert.deepEqual(client.calls[8].opts.query, { parentID: 'ses_a', limit: 5 });
   assert.deepEqual(client.calls[11].opts.query, { order: 'asc', limit: 200 });
   assert.deepEqual(client.calls[13].opts.query, { parentID: 'ses_a' });
+  assert.deepEqual(client.calls.filter((call) => call.opts.envelope).map((call) => call.path), ['/api/session', '/api/session/ses_a/message', '/api/session']);
 });
 
 test('session ids with path tricks are refused', async () => {

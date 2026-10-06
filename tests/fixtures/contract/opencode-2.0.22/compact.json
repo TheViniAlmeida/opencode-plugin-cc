@@ -1,0 +1,12 @@
+{
+  "data": {
+    "id": "msg_111a1b02c000kPqrVwxYZaBcDe",
+    "sessionID": "ses_eee5e96b1ffelQCavzDVYTlNHI",
+    "time": {
+      "created": 1791297212345
+    },
+    "type": "compaction",
+    "payload": {},
+    "delivery": "steer"
+  }
+}

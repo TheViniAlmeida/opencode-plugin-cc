@@ -12,6 +12,7 @@ import { EventHub } from './sse.mjs';
 import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
 import { resolveCandidates, validateSelection } from './routing.mjs';
 import { buildCatalog } from './models.mjs';
+import { loadOpencodeConfig } from './opencode-config.mjs';
 import { UsageError } from './opc-error.mjs';
 
 export async function createContext({
@@ -172,12 +173,10 @@ export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
 }
 
 export async function loadDiscovery(api) {
-  const [providers, models, defaultModel, agents] = await Promise.all([
-    api.providers(), api.models(), api.defaultModel(), api.agents(),
+  const [providers, models, defaultModel, agents, opencodeConfig] = await Promise.all([
+    api.providers(), api.models(), api.defaultModel(), api.agents(), loadOpencodeConfig(api),
   ]);
   const catalog = buildCatalog({ providers, models, defaultModel });
-  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
-    ? { model: `${defaultModel.providerID}/${defaultModel.modelID ?? defaultModel.id}` } : null;
   return { catalog, opencodeConfig, agents: agents ?? [] };
 }
 

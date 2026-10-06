@@ -7,6 +7,7 @@ import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
 import { buildCatalog } from '../lib/models.mjs';
+import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
@@ -25,11 +26,8 @@ const KIND_SPECS = Object.freeze({
 });
 
 export async function resolveTaskCandidates({ api, kind, flags, config }) {
-  const [providers, models, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const [providers, models, defaultModel, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api)]);
   const catalog = buildCatalog({ providers, models, defaultModel });
-  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
-    ? { model: `${defaultModel.providerID}/${defaultModel.id}` }
-    : null;
   return { catalog, resolution: resolveCandidates({ kind, flags, config, catalog, opencodeConfig }) };
 }
 

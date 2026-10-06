@@ -278,8 +278,8 @@ export function watchCatalogBootstrap(client, { fetchImpl } = {}) {
   const ready = new Promise((resolve) => { settle = resolve; });
   hub.onAny((event) => { if (event?.type === 'model.updated') settle(true); });
   hub.onDown(() => settle(false));
-  hub.start().catch(() => settle(false));
-  return { ready, stop: () => { settle(false); hub.stop(); } };
+  const opened = hub.start().then(() => true, () => { settle(false); return false; });
+  return { ready, opened, stop: () => { settle(false); hub.stop(); } };
 }
 
 export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000 } = {}) {
@@ -389,11 +389,15 @@ async function bootServer(ctx, settings) {
       continue;
     }
     const client = createClient({ baseUrl: res.url, password, directory: workspaceRoot, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
-    // Subscribe before the first workspace request so the bootstrap's `model.updated` is not missed.
+    // Subscribe before the first workspace request so the bootstrap's `model.updated` is not missed; a stream
+    // that does not open in 5 s only costs the event (the catalog wait falls back to the non-empty check).
     const bootstrap = watchCatalogBootstrap(client);
     let health;
     let identity;
     try {
+      let openTimer;
+      await Promise.race([bootstrap.opened, new Promise((resolve) => { openTimer = setTimeout(resolve, 5000); })]);
+      clearTimeout(openTimer);
       try {
         health = await createApi(client).info();
       } catch (err) {

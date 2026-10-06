@@ -597,7 +597,7 @@ export function validateAgainstServer(cfg, { catalog, agents = [], opencodeConfi
   if (cfg.defaultVariant) {
     const modelId = cfg.defaultModel ?? opencodeConfig?.model ?? null;
     const entry = modelId ? catalog.byFull.get(modelId) : null;
-    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant precisa de um defaultModel válido (ou do modelo padrão do OpenCode)' });
+    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant precisa de um defaultModel válido (ou do "model" declarado na configuração do OpenCode)' });
     else {
       try { validateVariant(entry, cfg.defaultVariant); } catch (err) { errors.push({ path: 'defaultVariant', code: err.code, message: err.message }); }
     }

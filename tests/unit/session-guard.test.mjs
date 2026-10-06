@@ -55,6 +55,7 @@ test('revert accepts a target after the first 200 V2 messages', async () => {
   const limits = [];
   const api = { messages: async (_id, { limit }) => { limits.push(limit); return messages.slice(0, limit); }, diff: async (id) => { calls.push(id); return []; } };
   assert.equal(await collectAffectedDiff(api, 'ses_a', 'msg_230'), null);
-  assert.deepEqual(limits, [200, 400]);
+  // One complete read: the API follows the V2 cursor pages (200 each) instead of growing `limit`.
+  assert.deepEqual(limits, [undefined]);
   assert.deepEqual(calls, []);
 });

@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs';
 
 const source = (name) => readFileSync(new URL(`../live/${name}.mjs`, import.meta.url), 'utf8');
 
-test('LIVE-2: diff de notes.txt é exigido antes do revert; pós-unrevert é só registrado', () => {
+test('LIVE-2: diff de notes.txt (ou vazio com aviso) é exigido antes do revert; pós-unrevert é só registrado', () => {
   const code = source('f3-sessions');
   const firstDiff = code.indexOf("['session', 'diff', sid, '--json']");
   const revert = code.indexOf("['session', 'revert', sid, m2]");
-  const assertion = code.indexOf("assert.ok(JSON.parse(res.stdout).diffs.some((d) => String(d.file).endsWith('notes.txt')))");
+  const assertion = code.indexOf("assert.ok(listsNotes || (sessionDiff.diffs.length === 0 && sessionDiff.notices.length > 0)");
+  assert.match(code, /const listsNotes = sessionDiff\.diffs\.some\(\(d\) => String\(d\.file\)\.endsWith\('notes\.txt'\)\)/);
   assert.ok(firstDiff > 0 && firstDiff < assertion && assertion < revert);
   const afterUnrevert = code.slice(code.indexOf("['session', 'unrevert', sid, '--confirmed-by-user', '--json']"));
   assert.match(afterUnrevert, /await run\([^\n]*\['session', 'diff', sid, '--json'\]/);

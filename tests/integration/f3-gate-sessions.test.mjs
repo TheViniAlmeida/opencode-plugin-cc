@@ -88,7 +88,10 @@ test('I3: fake com 250 mensagens valida alvo tardio sem atribuir diff da sessão
     assert.ok(!output.includes('+TARGET'));
     if (suffix.length) assert.equal(JSON.parse(output).affected, null);
   }
-  assert.ok(requests.some((r) => r.path.endsWith('/message') && Number(r.query.limit) > 200));
+  // V2 caps limit at 200: the 250 messages are read through the cursor, never with a larger limit.
+  const messageReads = requests.filter((r) => r.path.endsWith('/message'));
+  assert.ok(messageReads.some((r) => typeof r.query.cursor === 'string' && !('order' in r.query)));
+  assert.ok(messageReads.every((r) => Number(r.query.limit) <= 200));
   assert.equal(requests.some((r) => r.method === 'POST' && r.path.endsWith('/revert/stage')), false);
   assert.equal((await run(session, ['revert', SEED.session, 'msg_long_230', '--confirmed-by-user'])).code, 0);
   assert.equal(fake.state.sessions[SEED.session].revert.messageID, 'msg_long_230');

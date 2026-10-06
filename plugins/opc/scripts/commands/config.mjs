@@ -10,6 +10,7 @@ import {
   saveGlobalConfig, saveWorkspaceConfig, CONFIG_SCHEMA, isSecretLikeSetting,
 } from '../lib/config.mjs';
 import { buildCatalog } from '../lib/models.mjs';
+import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 import { createPrompter } from '../lib/tty.mjs';
 import { runInitWizard } from '../lib/onboarding.mjs';
 import { renderConfig, renderOnboarding } from '../lib/render.mjs';
@@ -89,9 +90,7 @@ async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
 
 async function serverDeps(ctx) {
   const { api } = await connectApi(ctx);
-  const [providers, models, defaultModel, agents] = await Promise.all([api.providers(), api.models(), api.defaultModel(), api.agents()]);
-  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
-    ? { model: `${defaultModel.providerID}/${defaultModel.modelID ?? defaultModel.id}` } : null;
+  const [providers, models, defaultModel, agents, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), api.agents(), loadOpencodeConfig(api)]);
   return { catalog: buildCatalog({ providers, models, defaultModel }), agents, opencodeConfig };
 }
 

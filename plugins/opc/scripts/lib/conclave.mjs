@@ -640,13 +640,8 @@ function checkTurn(turn, schema) {
     return { ok: false, errorType, message: turn?.errorMessage ?? `turn ended with status ${turn?.status ?? 'unknown'}` };
   }
   let structured = turn.structured;
-  if ((structured === null || structured === undefined) && turn.finalText) {
-    structured = extractTextJson(turn.finalText, (value) => {
-      if (typeof value.title !== 'string' || typeOf(value.properties) !== 'object'
-        || Object.keys(value).some((key) => key !== 'title' && key !== 'properties')) return 'not a schema-shaped wrapper';
-      return validateSchema(value.properties, schema).length === 0 ? null : 'invalid wrapped values';
-    });
-  }
+  // The runner only returns strictly valid text JSON; recover echoed schema shapes from the raw text here.
+  if ((structured === null || structured === undefined) && turn.finalText) structured = extractTextJson(turn.finalText, () => null);
   if (structured === null || structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
   const errors = validateSchema(structured, schema);
   if (errors.length && typeOf(structured) === 'object') {

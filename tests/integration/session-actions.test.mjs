@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, readFakeState } from '../helpers.mjs';
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
+import { EMPTY_DIFF_NOTICE } from '../../plugins/opc/scripts/commands/session.mjs';
 
 async function setup(t, { scenario = 'f3-sessions', extra = {} } = {}) {
   const cwd = makeWorkspace(t);
@@ -149,7 +150,8 @@ test('session children lists child sessions', async (t) => {
   assert.equal(out.children.length, 2);
   assert.ok(out.children.every((c) => c.parentID === SEED.session));
   const query = fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session' && r.query.parentID);
-  assert.deepEqual(query.map((r) => r.query.parentID), [SEED.session]);
+  // First page, then the cursor page that comes back empty (V2 fills cursor.next until an empty page).
+  assert.deepEqual(query.map((r) => [r.query.parentID, typeof r.query.cursor]), [[SEED.session, 'undefined'], [SEED.session, 'string']]);
   const text = await runCli(['session', 'children', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`Filhas de ${SEED.session}`));
   assert.match(text.stdout, /child one/);
@@ -180,15 +182,19 @@ test('session diff --message is not available in OpenCode 2 and nothing is reque
   assert.equal(fakeRequests(env).filter((r) => r.path.endsWith('/diff')).length, 0);
 });
 
-test('session diff: an empty aggregate stays empty (no per-message fallback in OpenCode 2)', async (t) => {
+test('session diff: an empty aggregate stays empty with a git notice (no per-message fallback in OpenCode 2)', async (t) => {
   const { cwd, env } = await setup(t, { extra: { FAKE_EMPTY_SESSION_DIFF: '1' } });
   const out = JSON.parse((await runCli(['session', 'diff', SEED.session, '--json'], { env, cwd })).stdout);
   assert.equal(out.source, 'session');
   assert.deepEqual(out.diffs, []);
-  assert.deepEqual(out.notices, []);
+  // OpenCode 2.0.22 may answer [] even after edits: the notice points to the workspace git, nothing is derived.
+  assert.deepEqual(out.notices, [EMPTY_DIFF_NOTICE]);
+  assert.match(EMPTY_DIFF_NOTICE, /OpenCode não informou alterações/);
+  assert.match(EMPTY_DIFF_NOTICE, /git diff/);
   const text = await runCli(['session', 'diff', SEED.session], { env, cwd });
   assert.equal(text.code, 0);
   assert.match(text.stdout, new RegExp(`# Diff da sessão ${SEED.session}\\n\\nNenhuma alteração registrada`));
+  assert.ok(text.stdout.includes(`Aviso: ${EMPTY_DIFF_NOTICE}`));
   const diffReq = fakeRequests(env).filter((r) => r.path.endsWith('/diff'));
   assert.equal(diffReq.length, 2, 'one aggregate read per invocation');
   assert.ok(diffReq.every((r) => r.query.messageID === undefined));

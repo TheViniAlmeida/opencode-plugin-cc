@@ -67,7 +67,8 @@ export function createClient({
     return url.toString();
   }
 
-  async function once(method, path, { query, body, timeoutMs }) {
+  // `envelope: true` keeps the whole JSON body (e.g. `{ data, cursor }` of paginated lists).
+  async function once(method, path, { query, body, timeoutMs, envelope = false }) {
     const label = `${method} ${safePath(path)}`;
     const controller = new AbortController();
     const limit = timeoutMs ?? requestTimeoutMs;
@@ -101,6 +102,7 @@ export function createClient({
     if (res.ok) {
       if (res.status === 204) return null;
       if (!json) throw new RequestError('NOT_JSON', `${label}: resposta não é JSON (servidor não é OpenCode V2?)`);
+      if (envelope) return parsed;
       return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'data') ? parsed.data : parsed;
     }
     const details = { status: res.status, body: redact(parsed) };
@@ -112,10 +114,10 @@ export function createClient({
     throw new RequestError('BAD_REQUEST', `${label}: requisição recusada (${res.status}).`, { details });
   }
 
-  async function request(method, path, { query, body, timeoutMs, retryOnServerDown } = {}) {
+  async function request(method, path, { query, body, timeoutMs, retryOnServerDown, envelope } = {}) {
     const retry = retryOnServerDown ?? method === 'GET';
     try {
-      return await once(method, path, { query, body, timeoutMs });
+      return await once(method, path, { query, body, timeoutMs, envelope });
     } catch (err) {
       if (!(retry && onServerDown && err instanceof ConnectionError && err.code === 'SERVER_DOWN')) throw err;
       const next = await onServerDown();
@@ -127,7 +129,7 @@ export function createClient({
           registerAuthSecrets();
         }
       }
-      return once(method, path, { query, body, timeoutMs });
+      return once(method, path, { query, body, timeoutMs, envelope });
     }
   }
 

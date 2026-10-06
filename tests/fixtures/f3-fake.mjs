@@ -64,6 +64,8 @@ export function seedSession(fake) {
     assistantMessage(SEED.session, SEED.m4, SEED.m3, 'second answer', { created: t0 + 4000 }),
     { id: 'msg_00000000000500000000000005', type: 'idle', time: { created: t0 + 4001 }, outcome: 'succeeded' }];
   fake.state.messages[SEED.userSession] = [];
+  // Seeded ids use sequence numbers 1–5; generated ids continue after them (V2 never repeats a message id).
+  fake.state.f3.seq = Math.max(fake.state.f3.seq, 5);
   const alpha = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: `@@ -1 +1,2 @@\n original\n+ALPHA\n${injected ? `+${injected}\n` : ''}` };
   const beta = { file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1,2 +1,3 @@\n original\n ALPHA\n+BETA\n' };
   const extra = { file: 'extra.txt', status: 'added', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+new file\n' };
@@ -91,6 +93,8 @@ export const F3_SESSION_ROUTES = {
     persist(fake);
     return ok(forked);
   },
+  // V2 2.0.22 (verified live with snapshots on): stage restores the files and leaves the revert pending
+  // ({ messageID, snapshot, files[] }); DELETE undoes it; commit drops the messages for good and clears the revert.
   'POST /api/session/:id/revert/stage': (fake, { params, body = {} }) => {
     const session = fake.state.sessions[params.id];
     if (!session) return notFound();
@@ -98,32 +102,41 @@ export const F3_SESSION_ROUTES = {
     const msgs = fake.state.messages[params.id];
     const index = msgs.findIndex((m) => m.id === body.messageID);
     const positions = new Map(msgs.map((m, i) => [m.id, i]));
-    const diff = Object.entries(fake.state.f3.messageDiffs[params.id] ?? {}).filter(([key]) => positions.get(key) >= index).flatMap(([, diffs]) => diffs.map((d) => d.patch)).join('\n');
-    session.revert = { messageID: body.messageID, snapshot: 'snap_fake', diff };
+    const files = Object.entries(fake.state.f3.messageDiffs[params.id] ?? {}).filter(([key]) => positions.get(key) >= index).flatMap(([, diffs]) => diffs);
+    session.revert = { messageID: body.messageID, snapshot: 'snap_fake', files: structuredClone(files) };
     persist(fake);
-    return ok(session);
+    return ok(session.revert);
   },
   'POST /api/session/:id/revert/commit': (fake, { params }) => {
     const session = fake.state.sessions[params.id];
     if (!session || !session.revert) return notFound();
-    session.revert.committed = true;
+    const msgs = fake.state.messages[params.id] ?? [];
+    const index = msgs.findIndex((m) => m.id === session.revert.messageID);
+    if (index >= 0) fake.state.messages[params.id] = msgs.slice(0, index);
+    delete session.revert;
     persist(fake);
-    return ok(session);
+    return { status: 204 };
   },
   'DELETE /api/session/:id/revert': (fake, { params }) => {
     const session = fake.state.sessions[params.id];
     if (!session) return notFound();
     delete session.revert;
     persist(fake);
-    return ok(session);
+    return { status: 204 };
   },
-  'POST /api/session/:id/compact': (fake, { params }) => {
+  // V2 2.0.22: the body must be an object ({ id?, delivery? }, no other keys); 200 returns the compaction message.
+  'POST /api/session/:id/compact': (fake, { params, body }) => {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return bad('Expected object');
+    if (Object.keys(body).some((key) => !['id', 'delivery'].includes(key))) return bad('Unexpected key');
+    if (body.id !== undefined && !/^msg_/.test(String(body.id))) return bad('Expected a message id');
     if (!fake.state.sessions[params.id]) return notFound();
     const compact = () => {
       const selected = fake.state.sessions[params.id].model;
+      const created = Date.now();
+      const compaction = { id: body.id ?? nextId(fake, 'msg'), sessionID: params.id, time: { created }, type: 'compaction', payload: {}, delivery: body.delivery ?? 'steer' };
       fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
       persist(fake);
-      return { status: 204 };
+      return ok(compaction);
     };
     // FAKE_COMPACT_DELAY_MS makes the request slow (tests of the --timeout flag); synchronous otherwise.
     const delayMs = Number(process.env.FAKE_COMPACT_DELAY_MS ?? 0);
