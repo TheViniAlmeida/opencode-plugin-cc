@@ -6,7 +6,6 @@ const object = (value) => value !== null && typeof value === 'object' && !Array.
 const SESSION_KEYS = ['id', 'projectID', 'agent', 'model', 'cost', 'tokens', 'time', 'title', 'permissions', 'location'];
 const MESSAGE_KEYS = { user: ['id', 'type', 'time', 'text'], assistant: ['id', 'type', 'time', 'agent', 'model', 'content', 'cost', 'tokens'], idle: ['id', 'type', 'time', 'outcome'], synthetic: ['id', 'type', 'time', 'text'] };
 const ID = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
-const preview = (value) => `${String(value ?? '').slice(0, 12)}…`;
 
 export function checkImportShape(data) {
   if (!object(data?.info) || !Array.isArray(data?.messages)) return ['Esperado { info, messages[] }'];
@@ -53,7 +52,7 @@ export async function runFakeImport(args) {
   if (!file || args.length !== 1) { process.stderr.write('Informe um arquivo de exportação\n'); return 1; }
   let stat;
   try { stat = fs.statSync(file); } catch { process.stderr.write('Arquivo de exportação não encontrado\n'); return 1; }
-  const entry = { file: preview(file), directory: directory ? preview(directory) : null, mode: (stat.mode & 0o777).toString(8),
+  const entry = { file, cwd: process.cwd(), directory, mode: (stat.mode & 0o777).toString(8),
     dirMode: (fs.statSync(path.dirname(file)).mode & 0o777).toString(8), errors: [], sessionID: null,
     messageCount: 0, partCount: 0, texts: [] };
   const mode = process.env.FAKE_OPENCODE_IMPORT ?? 'ok';
@@ -69,10 +68,10 @@ export async function runFakeImport(args) {
   }
   entry.errors = checkImportShape(data);
   entry.sessionID = data?.info?.id ?? null;
-  entry.title = data?.info?.title ? preview(data.info.title) : null;
+  entry.title = data?.info?.title ?? null;
   entry.messageCount = data?.messages?.length ?? 0;
   entry.partCount = (data?.messages ?? []).reduce((n, m) => n + (m.content?.length ?? 0), 0);
-  entry.texts = (data?.messages ?? []).flatMap((m) => [...(m.type === 'user' || m.type === 'synthetic' ? [m.text] : []), ...(m.content ?? []).filter((c) => c.type === 'text').map((c) => c.text)]).map(preview);
+  entry.texts = (data?.messages ?? []).flatMap((m) => [...(m.type === 'user' || m.type === 'synthetic' ? [m.text] : []), ...(m.content ?? []).filter((c) => c.type === 'text').map((c) => c.text)]);
   recordImport(entry);
   if (entry.errors.length) { process.stderr.write('Formato de exportação inválido\n'); return 1; }
   const reportedID = mode === 'mismatch' ? 'ses_0000000000000123456789ABCD' : data.info.id;

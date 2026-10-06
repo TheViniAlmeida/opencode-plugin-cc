@@ -1,5 +1,4 @@
-// Claude Code JSONL transcript -> `opencode export` JSON -> `opencode import` (spec §4, §13.3 F5).
-// Export format verified against OpenCode 1.18.32 (`opencode export`, OpenAPI Session/UserMessage/AssistantMessage/TextPart).
+// Claude Code JSONL transcript -> OpenCode V2 session export -> session import.
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -9,6 +8,7 @@ import path from 'node:path';
 import { expandAlias, parseFullId } from './models.mjs';
 import { ExitCode, OpcError } from './opc-error.mjs';
 import { assertAllowed } from './policy.mjs';
+import { maskSecretPatterns } from './redact.mjs';
 import { compareVersions, MIN_OPENCODE_VERSION } from './server.mjs';
 import { ensurePrivateDir } from './state.mjs';
 
@@ -24,29 +24,10 @@ const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const LOCAL_COMMAND_RE = /^<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>/;
 
 export const EXPORT_SHAPE = Object.freeze({
-  session: {
-    required: ['id', 'slug', 'projectID', 'directory', 'title', 'version', 'time'],
-    allowed: ['id', 'slug', 'projectID', 'workspaceID', 'directory', 'path', 'parentID', 'summary', 'cost', 'tokens', 'share', 'title', 'agent', 'model', 'version', 'metadata', 'time', 'permission', 'revert'],
-  },
-  user: {
-    required: ['id', 'sessionID', 'role', 'time', 'agent', 'model'],
-    allowed: ['id', 'sessionID', 'role', 'time', 'format', 'summary', 'agent', 'model', 'system', 'tools'],
-  },
-  assistant: {
-    required: ['id', 'sessionID', 'role', 'time', 'parentID', 'modelID', 'providerID', 'mode', 'agent', 'path', 'cost', 'tokens'],
-    allowed: ['id', 'sessionID', 'role', 'time', 'error', 'parentID', 'modelID', 'providerID', 'mode', 'agent', 'path', 'summary', 'cost', 'tokens', 'structured', 'variant', 'finish'],
-  },
-  partBase: ['id', 'sessionID', 'messageID', 'type'],
-  parts: {
-    text: {
-      required: ['id', 'sessionID', 'messageID', 'type', 'text'],
-      allowed: ['id', 'sessionID', 'messageID', 'type', 'text', 'synthetic', 'ignored', 'time', 'metadata'],
-    },
-    reasoning: { required: ['id', 'sessionID', 'messageID', 'type', 'text', 'time'] },
-    tool: { required: ['id', 'sessionID', 'messageID', 'type', 'callID', 'tool', 'state'] },
-    'step-start': { required: ['id', 'sessionID', 'messageID', 'type'] },
-    'step-finish': { required: ['id', 'sessionID', 'messageID', 'type', 'reason', 'cost', 'tokens'] },
-  },
+  session: ['id', 'projectID', 'agent', 'model', 'cost', 'tokens', 'time', 'title', 'permissions', 'location'],
+  user: ['id', 'type', 'time', 'text'],
+  assistant: ['id', 'type', 'time', 'agent', 'model', 'content', 'cost', 'tokens'],
+  synthetic: ['id', 'type', 'time', 'text'],
 });
 
 function usage(code, message) {
@@ -309,7 +290,7 @@ export function createIdGenerator({ now = () => Date.now(), randomBytes = crypto
 export function buildTitle(conversion) {
   const firstUser = conversion.turns.find((turn) => turn.role === 'user')?.texts[0] ?? '';
   const base = String(conversion.title || firstUser || 'Claude session').replace(/\s+/g, ' ').trim();
-  return `${TITLE_PREFIX}${base.slice(0, 56)}`;
+  return `${TITLE_PREFIX}${maskSecretPatterns(base).slice(0, 56)}`;
 }
 
 export function transferHeader(claudeSessionId) {
@@ -318,119 +299,57 @@ export function transferHeader(claudeSessionId) {
 
 const ZERO_TOKENS = Object.freeze({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
-export function buildExport(conversion, { model, agent = 'build', directory, version, nextId = createIdGenerator() }) {
+export function buildExport(conversion, { model, agent = 'build', directory, nextId = createIdGenerator() }) {
   if (conversion.turns.length === 0) {
     throw usage('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.');
   }
   const sessionID = nextId('ses', 'descending');
   const first = conversion.turns[0];
   const turns = first.role === 'user' ? conversion.turns : [{ role: 'user', createdAt: first.createdAt, texts: [] }, ...conversion.turns];
-  const messages = [];
-  let lastUserId = null;
+  const modelRef = { id: model.modelID, providerID: model.providerID };
+  const messages = [{ id: nextId('msg', 'ascending'), type: 'synthetic', time: { created: first.createdAt }, text: transferHeader(conversion.claudeSessionId) }];
   let updated = turns[0].createdAt;
-  turns.forEach((turn, index) => {
-    const id = nextId('msg', 'ascending');
-    const parts = [];
-    if (index === 0) {
-      parts.push({ id: nextId('prt', 'ascending'), sessionID, messageID: id, type: 'text', text: transferHeader(conversion.claudeSessionId), synthetic: true });
-    }
-    for (const text of turn.texts) parts.push({ id: nextId('prt', 'ascending'), sessionID, messageID: id, type: 'text', text });
+  for (const turn of turns) {
     updated = Math.max(updated, turn.completedAt ?? turn.createdAt);
+    const id = nextId('msg', 'ascending');
     if (turn.role === 'user') {
-      lastUserId = id;
-      messages.push({
-        info: { id, sessionID, role: 'user', time: { created: turn.createdAt }, agent, model: { providerID: model.providerID, modelID: model.modelID } },
-        parts,
-      });
-      return;
+      messages.push({ id, type: 'user', time: { created: turn.createdAt }, text: turn.texts.join('\n\n') });
+    } else {
+      messages.push({ id, type: 'assistant', time: { created: turn.createdAt, completed: turn.completedAt ?? turn.createdAt },
+        agent, model: modelRef, content: turn.texts.map((text) => ({ type: 'text', text })), finish: 'stop',
+        cost: 0, tokens: structuredClone(ZERO_TOKENS) });
     }
-    messages.push({
-      info: {
-        id,
-        sessionID,
-        role: 'assistant',
-        time: { created: turn.createdAt, completed: turn.completedAt ?? turn.createdAt },
-        parentID: lastUserId,
-        modelID: model.modelID,
-        providerID: model.providerID,
-        mode: agent,
-        agent,
-        path: { cwd: directory, root: directory },
-        cost: 0,
-        tokens: structuredClone(ZERO_TOKENS),
-        finish: 'stop',
-      },
-      parts,
-    });
-  });
+  }
   return {
     info: {
-      id: sessionID,
-      slug: `transfer-${sessionID.slice(-6).toLowerCase()}`,
-      projectID: 'global',
-      directory,
-      title: buildTitle(conversion),
-      agent,
-      model: { id: model.modelID, providerID: model.providerID },
-      version,
-      summary: { additions: 0, deletions: 0, files: 0 },
-      cost: 0,
-      tokens: structuredClone(ZERO_TOKENS),
-      time: { created: turns[0].createdAt, updated },
+      id: sessionID, projectID: 'global', agent, model: modelRef, cost: 0, tokens: structuredClone(ZERO_TOKENS),
+      time: { created: turns[0].createdAt, updated }, title: buildTitle(conversion),
+      permissions: [{ action: '*', resource: '*', effect: 'deny' }], location: { directory },
     },
     messages,
   };
-}
-
-function checkKeys(obj, shape, where, errors) {
-  for (const key of shape.required) if (obj[key] === undefined) errors.push(`${where}.${key}: obrigatório`);
-  if (shape.allowed) for (const key of Object.keys(obj)) if (!shape.allowed.includes(key)) errors.push(`${where}.${preview(key)}: chave inválida para exportação`);
 }
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export function validateExportShape(data) {
   const errors = [];
-  if (!isObject(data) || !isObject(data.info) || !Array.isArray(data.messages)) return ['$: esperado { info: objeto, messages: lista }'];
+  if (!isObject(data?.info) || !Array.isArray(data?.messages)) return ['$: esperado { info: objeto, messages: lista }'];
   const info = data.info;
-  checkKeys(info, EXPORT_SHAPE.session, 'info', errors);
-  if (typeof info.id !== 'string' || !info.id.startsWith('ses')) errors.push('info.id: deve começar com "ses"');
-  if (!isObject(info.time) || typeof info.time.created !== 'number' || typeof info.time.updated !== 'number') errors.push('info.time: created/updated devem ser números');
-  const userIds = new Set();
-  data.messages.forEach((message, i) => {
-    const where = `messages[${i}]`;
-    if (!isObject(message) || !isObject(message.info) || !Array.isArray(message.parts)) {
-      errors.push(`${where}: esperado { info: objeto, parts: lista }`);
-      return;
-    }
-    const m = message.info;
-    const shape = EXPORT_SHAPE[m.role];
-    if (m.role !== 'user' && m.role !== 'assistant') {
-      errors.push(`${where}.info.role: deve ser user ou assistant`);
-      return;
-    }
-    checkKeys(m, shape, `${where}.info`, errors);
-    if (typeof m.id !== 'string' || !m.id.startsWith('msg')) errors.push(`${where}.info.id: deve começar com "msg"`);
-    if (m.sessionID !== info.id) errors.push(`${where}.info.sessionID: deve ser igual a info.id`);
-    if (!isObject(m.time) || typeof m.time.created !== 'number') errors.push(`${where}.info.time.created: deve ser um número`);
-    if (m.role === 'user') {
-      if (!isObject(m.model) || typeof m.model.providerID !== 'string' || typeof m.model.modelID !== 'string') errors.push(`${where}.info.model: exige providerID e modelID`);
-      userIds.add(m.id);
-    } else if (!userIds.has(m.parentID)) {
-      errors.push(`${where}.info.parentID: deve apontar para uma mensagem anterior do usuário`);
-    }
-    message.parts.forEach((part, j) => {
-      const pw = `${where}.parts[${j}]`;
-      if (!isObject(part)) {
-        errors.push(`${pw}: esperado objeto`);
-        return;
-      }
-      checkKeys(part, EXPORT_SHAPE.parts[part.type] ?? { required: EXPORT_SHAPE.partBase }, pw, errors);
-      if (typeof part.id !== 'string' || !part.id.startsWith('prt')) errors.push(`${pw}.id: deve começar com "prt"`);
-      if (part.sessionID !== info.id) errors.push(`${pw}.sessionID: deve ser igual a info.id`);
-      if (part.messageID !== m.id) errors.push(`${pw}.messageID: deve ser igual ao ID da mensagem`);
-      if (part.type === 'text' && typeof part.text !== 'string') errors.push(`${pw}.text: deve ser texto`);
-    });
+  for (const key of EXPORT_SHAPE.session) if (info[key] === undefined) errors.push(`info.${key}: obrigatório`);
+  if (!/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(info.id ?? '')) errors.push('info.id: inválido');
+  if (!isObject(info.model) || typeof info.model.id !== 'string' || typeof info.model.providerID !== 'string') errors.push('info.model: inválido');
+  if (!Array.isArray(info.permissions) || info.permissions.length === 0) errors.push('info.permissions: obrigatório');
+  if (typeof info.location?.directory !== 'string') errors.push('info.location.directory: obrigatório');
+  const seen = new Set();
+  data.messages.forEach((message, index) => {
+    const where = `messages[${index}]`;
+    if (!isObject(message) || !EXPORT_SHAPE[message.type]) { errors.push(`${where}: tipo inválido`); return; }
+    for (const key of EXPORT_SHAPE[message.type]) if (message[key] === undefined) errors.push(`${where}.${key}: obrigatório`);
+    if (!/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(message.id ?? '')) errors.push(`${where}.id: inválido`);
+    if (seen.has(message.id)) errors.push(`${where}.id: duplicado`);
+    seen.add(message.id);
+    if (message.type === 'assistant' && (!Array.isArray(message.content) || message.content.some((part) => part?.type !== 'text' || typeof part.text !== 'string'))) errors.push(`${where}.content: inválido`);
   });
   return errors;
 }
@@ -499,8 +418,8 @@ export function parseImportOutput(stdout) {
   return match ? match[1] : null;
 }
 
-export async function runImport({ opencodeBin = 'opencode', file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
-  const r = await execFileResult(execFileImpl, opencodeBin, ['import', file], { cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
+export async function runImport({ opencodeBin = 'opencode', serverUrl, file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
+  const r = await execFileResult(execFileImpl, opencodeBin, ['--server', serverUrl, 'session', 'import', file], { cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
   const missing = notFound(r.error);
   if (missing) throw missing;
   const sessionID = parseImportOutput(r.stdout);

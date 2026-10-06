@@ -34,7 +34,7 @@ export function resolveExecutable(name, pathEnv = process.env.PATH ?? '') {
 }
 
 export function buildAttachArgs({ url, sessionID, directory }) {
-  return ['attach', url, ...(sessionID ? ['-s', sessionID] : []), '--dir', directory];
+  return ['--server', url, ...(sessionID ? ['-s', sessionID] : []), '--dir', directory];
 }
 
 export async function persistManagedAttachSecret(ctx, server) {

@@ -6,7 +6,8 @@ import { ExitCode, OpcError } from '../lib/opc-error.mjs';
 import { redactOutput } from '../lib/redact.mjs';
 import { renderTransfer } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
-import { resolveOpencodeBin } from '../lib/server.mjs';
+import { ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
+import { serverContext } from '../lib/jobs.mjs';
 import {
   buildExport, convertClaudeRecords, detectOpencodeVersion, readTranscript,
   resolveTranscriptPath, resolveTransferModel, runImport, validateExportShape, writeExportFile,
@@ -42,20 +43,23 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   const file = writeExportFile(ctx.stateDir, exported);
   let imported;
   try {
-    imported = await runImport({ file, cwd: ctx.workspaceRoot, env: ctx.env, opencodeBin });
+    const server = await ensureServer(serverContext(ctx));
+    imported = await runImport({ file, cwd: ctx.workspaceRoot,
+      env: { ...ctx.env, OPENCODE_SERVER_PASSWORD: server.password }, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {
       throw new OpcError('IMPORT_FAILED', 'O OpenCode informou um ID de sessão diferente do exportado.', { exitCode: ExitCode.JOB_FAILED });
     }
   } finally {
     fs.rmSync(file, { force: true });
   }
-  const user = exported.messages.filter((message) => message.info.role === 'user').length;
+  const user = exported.messages.filter((message) => message.type === 'user').length;
+  const assistant = exported.messages.filter((message) => message.type === 'assistant').length;
   return redactOutput({
     sessionID: imported.sessionID,
     title: exported.info.title,
     model: resolvedModel.full,
     workspaceRoot: ctx.workspaceRoot,
-    messages: { total: exported.messages.length, user, assistant: exported.messages.length - user },
+    messages: { total: user + assistant, user, assistant },
     skipped: { ...conversion.stats.skipped, invalidLines: invalid },
     resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && opencode -s ${imported.sessionID}`,
     warnings: [],
