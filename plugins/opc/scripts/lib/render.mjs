@@ -102,6 +102,7 @@ export function renderSetup(report) {
     '',
     `- node: ${check(report.node?.ok)} (${report.node?.version})`,
     `- opencode: ${report.opencode?.installed ? `${check(report.opencode.supported)} (${report.opencode.version ?? 'versão desconhecida'})` : 'não encontrado'}`,
+    `- binário OpenCode: ${report.opencode?.bin ?? '<valor>'}`,
     `- diretório de dados: ${report.dataDir}`,
     `- workspace: ${report.workspaceRoot}`,
     `- estado: ${report.stateDir}`,

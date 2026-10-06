@@ -7,17 +7,72 @@ import { run as setup } from '../../plugins/opc/scripts/commands/setup.mjs';
 import { ensureServer, stopServer, assertCanCreateSessions } from '../../plugins/opc/scripts/lib/server.mjs';
 import { spawnDetached, terminateProcessGroup, isPidAlive } from '../../plugins/opc/scripts/lib/process.mjs';
 import { makeTempDir, registerStopper, trackTempDir } from '../helpers.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
+
+test('V2 health rejects old versions and HTML even when HTTP status is 200', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-v2-health-'));
+  const ctx = { stateDir: dir, workspaceRoot: dir, config: {}, env: { OPC_SERVER_URL: 'http://127.0.0.1:43210' } };
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ version: '1.18.34' })));
+  await assert.rejects(ensureServer(ctx), (error) => {
+    assert.equal(error.code, 'UNSUPPORTED_VERSION');
+    assert.match(error.message, /server\.opencodeBin/);
+    return true;
+  });
+  globalThis.fetch.mock.mockImplementation(async () => new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+  await assert.rejects(ensureServer(ctx), (error) => {
+    assert.equal(error.code, 'NOT_JSON');
+    return true;
+  });
+});
+
+test('V2 config documents merge in source order before share check', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-v2-config-'));
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const route = new URL(url).pathname;
+    if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
+    assert.equal(route, '/api/config');
+    return new Response(JSON.stringify([
+      ...loadContractSample('config.json'),
+      { type: 'document', info: { share: 'auto' } },
+      { type: 'directory', path: '<workspace>' },
+      { type: 'document', info: { share: 'disabled' } },
+    ]));
+  });
+  const server = await ensureServer({ stateDir: dir, workspaceRoot: dir, config: {}, env: { OPC_SERVER_URL: 'http://127.0.0.1:43210' } });
+  assert.equal(server.world.shareBlocked, false);
+});
+
+test('setup onboarding reads V2 catalogs without exposing provider settings', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-v2-setup-'));
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const route = new URL(url).pathname;
+    if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
+    if (route === '/api/config') return new Response(JSON.stringify(loadContractSample('config.json')));
+    if (route === '/api/provider') return new Response(JSON.stringify(loadContractSample('provider.json')));
+    if (route === '/api/model') return new Response(JSON.stringify(loadContractSample('model.json')));
+    if (route === '/api/agent') return new Response(JSON.stringify(loadContractSample('agent.json')));
+    assert.fail(`Rota inesperada: ${route}`);
+  });
+  const ctx = { stateDir: dir, workspaceRoot: dir, dataDir: dir, config: {}, configMeta: {}, configWarnings: [],
+    env: { OPC_SERVER_URL: 'http://127.0.0.1:43210', PATH: '' } };
+  let report;
+  assert.equal(await setup({ ...ctx, json(value) { report = value; } }, ['--json']), 0);
+  assert.equal(report.onboarding.serverError, null);
+  assert.ok(report.onboarding.connectedProviders.length > 0);
+  assert.ok(!JSON.stringify(report).includes('apiKey'));
+  assert.ok(!JSON.stringify(report).includes('YOUR_API_KEY_HERE'));
+});
 
 for (const [scenario, status, body] of [
   ['204', 204, undefined], ['null', 200, null], ['array', 200, []], ['string', 200, 'invalid'],
-  ['number', 200, 1], ['unavailable', 503, {}], ['auto', 200, { share: 'auto' }],
-  ['disabled', 200, { share: 'disabled' }],
+  ['number', 200, 1], ['unavailable', 503, {}], ['auto', 200, [{ type: 'document', info: { share: 'auto' } }]],
+  ['disabled', 200, [{ type: 'document', info: { share: 'disabled' } }]],
 ]) {
   test(`config ${scenario}: attach and setup fail closed with correct guidance`, async (t) => {
     const dir = trackTempDir(t, makeTempDir('opc-config-review-'));
     t.mock.method(globalThis, 'fetch', async (url) => {
-      if (new URL(url).pathname === '/global/health') return new Response(JSON.stringify({ healthy: true, version: '1.18.0' }));
-      assert.equal(new URL(url).pathname, '/config');
+      if (new URL(url).pathname === '/api/info') return new Response(JSON.stringify({ version: '2.0.22' }));
+      assert.equal(new URL(url).pathname, '/api/config');
       return new Response(status === 204 ? null : JSON.stringify(body), { status });
     });
     const ctx = { stateDir: dir, workspaceRoot: dir, dataDir: dir, config: {},

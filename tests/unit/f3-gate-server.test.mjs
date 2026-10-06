@@ -22,7 +22,7 @@ async function bootFixture(t) {
   fs.writeFileSync(opencodeBin, `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.writeFileSync('child.pid', String(process.pid));
-console.log('opencode server listening on http://127.0.0.1:43210');
+console.log('server listening on http://127.0.0.1:43210');
 setInterval(() => {}, 1000);
 `, { mode: 0o700 });
   t.mock.method(net, 'createServer', () => ({
@@ -31,7 +31,7 @@ setInterval(() => {}, 1000);
   }));
   t.mock.method(globalThis, 'fetch', async (url) => {
     const pathname = new URL(url).pathname;
-    const data = { '/global/health': { healthy: true, version: '1.18.32' }, '/agent': [], '/config': { share: 'manual' } };
+    const data = { '/api/info': { version: '2.0.22' }, '/api/agent': { data: [] }, '/api/model': { data: [{ id: 'test/model' }] }, '/api/config': [{ type: 'document', info: { share: 'manual' } }] };
     assert.ok(Object.hasOwn(data, pathname));
     return new Response(JSON.stringify(data[pathname]));
   });

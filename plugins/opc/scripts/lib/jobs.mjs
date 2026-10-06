@@ -9,7 +9,7 @@ import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } fr
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
-import { readServerRecord } from './server.mjs';
+import { readServerRecord, resolveOpencodeBin } from './server.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
 
@@ -452,6 +452,7 @@ export function serverContext(ctx) {
     workspaceRoot: ctx.workspaceRoot,
     config: ctx.config,
     env: ctx.env,
+    opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
     hasActiveJobs: () => listJobs(ctx.stateDir, { all: true }).some(isActive),
   };
 }

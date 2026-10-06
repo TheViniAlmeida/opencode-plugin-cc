@@ -41,7 +41,8 @@ test('diagnostic JSON: node, opencode, dirs, config and a running server on a po
   assert.equal(code, 0);
   assert.equal(report.ready, true);
   assert.equal(report.node.ok, true);
-  assert.deepEqual({ installed: report.opencode.installed, version: report.opencode.version, supported: report.opencode.supported }, { installed: true, version: '1.18.32', supported: true });
+  assert.deepEqual({ installed: report.opencode.installed, version: report.opencode.version, supported: report.opencode.supported }, { installed: true, version: '2.0.22', supported: true });
+  assert.equal(report.opencode.bin, 'opencode');
   assert.equal(report.dataDir, env.OPC_DATA_DIR);
   assert.equal(report.workspaceRoot, ws);
   assert.equal(report.server.status, 'running');
@@ -53,11 +54,12 @@ test('diagnostic JSON: node, opencode, dirs, config and a running server on a po
   const fake = readFakeState(env);
   assert.equal(fake.boots[0].insideServer, '1');
   assert.equal(fake.boots[0].hasPassword, true);
-  assert.equal(fake.boots[0].username, 'opencode');
+  assert.equal(fake.boots[0].username, null);
   assert.equal(fake.boots[0].configContent, JSON.stringify({ share: 'disabled' }));
   assert.equal(fake.boots[0].hostname, '127.0.0.1');
-  assert.ok(fake.requests.some((r) => r.path === '/agent' && r.query.directory === ws), 'warm-up GET /agent?directory');
-  assert.ok(fake.requests.some((r) => r.path === '/config'), 'world check GET /config');
+  assert.ok(fake.requests.some((r) => r.path === '/api/agent' && r.directory === ws), 'warm-up GET /api/agent');
+  assert.ok(fake.requests.some((r) => r.path === '/api/model'), 'warm-up GET /api/model');
+  assert.ok(fake.requests.some((r) => r.path === '/api/config'), 'world check GET /api/config');
 });
 
 test('markdown output (no --json) contains the alias and no password', async (t) => {
@@ -83,19 +85,28 @@ test('opencode missing from PATH → ready:false, installed:false, exit 5, nothi
   assert.ok(report.nextSteps.some((s) => /npm install -g opencode-ai/.test(s)));
 });
 
-test('version below the minimum → UNSUPPORTED_VERSION, exit 5, no server', async (t) => {
+test('version below the minimum → UNSUPPORTED_VERSION, exit 3, no server', async (t) => {
   const env = testEnv(t, { scenario: 'old-version' });
   const ws = makeWorkspace(t);
   const { code, report } = await setupJson(env, ws);
-  assert.equal(code, 5);
+  assert.equal(code, 3);
   assert.equal(report.opencode.supported, false);
   assert.equal(report.server.error.code, 'UNSUPPORTED_VERSION');
+  assert.match(report.server.error.message, /server\.opencodeBin/);
   assert.equal(report.onboarding.opencodeInstalled, true);
   assert.equal(report.onboarding.opencodeVersion, report.opencode.version);
   assert.equal(report.onboarding.connectedProviders, null);
   assert.equal(report.onboarding.providerChoices, null);
   assert.match(report.onboarding.serverError, /não consultados.*falha no diagnóstico/i);
   assert.equal(readFakeState(env).bootAttempts, 0);
+});
+
+test('SPA HTML at /api/info never passes setup health', async (t) => {
+  const env = testEnv(t, { scenario: 'spa-only' });
+  const ws = makeWorkspace(t);
+  const { code, report } = await setupJson(env, ws);
+  assert.notEqual(code, 0);
+  assert.ok(['NOT_JSON', 'UNSUPPORTED_VERSION'].includes(report.server.error.code));
 });
 
 test('auth-401 → AUTH_FAILED, exit 5, one single boot, no orphan server', async (t) => {
@@ -221,7 +232,7 @@ test('attach mode on loopback: validates health with OPC_SERVER_PASSWORD, never 
   assert.equal(fs.existsSync(path.join(report.stateDir, 'server.json')), false);
   const stop = await runCli(['setup', '--stop-server', '--json'], { env, cwd: ws });
   assert.equal(parseJsonOutput(stop.stdout).stop.reason, 'attached');
-  const health = await fetch(`${fake.url}/global/health`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` } });
+  const health = await fetch(`${fake.url}/api/info`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` } });
   assert.equal(health.status, 200);
   const wrong = testEnv(t, { extra: { OPC_SERVER_URL: fake.url, OPC_SERVER_PASSWORD: 'wrong-password-000000' } });
   const denied = await setupJson(wrong, ws);

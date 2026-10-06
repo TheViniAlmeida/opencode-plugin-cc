@@ -11,11 +11,26 @@ import { parseArgs } from '../lib/args.mjs';
 import { globalConfigPath, workspaceConfigPath, setStopGateEnabled } from '../lib/config.mjs';
 import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
 import { renderSetup, renderReviewGate } from '../lib/render.mjs';
-import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, stopServer } from '../lib/server.mjs';
+import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, resolveOpencodeBin, stopServer } from '../lib/server.mjs';
 import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
 import { liveActiveJobs } from '../lib/jobs.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+function setupCatalog(buildCatalog, providers, models) {
+  const all = providers.map(({ id, name }) => ({
+    id,
+    name,
+    models: Object.fromEntries(models.filter((model) => model.providerID === id).map((model) => [model.modelID, {
+      id: model.modelID,
+      name: model.name,
+      status: model.status,
+      capabilities: { reasoning: model.capabilities?.reasoning, toolcall: model.capabilities?.tools },
+      variants: Object.fromEntries((model.variants ?? []).map((variant) => [variant.id, {}])),
+    }])),
+  }));
+  return buildCatalog({ all, connected: providers.filter((provider) => ['enabled', 'configured'].includes(provider.activation)).map((provider) => provider.id), default: {} });
+}
 const SPEC = {
   flags: {
     json: { type: 'boolean' },
@@ -40,7 +55,7 @@ export function terminalAlias(dataDir, pluginRoot = PLUGIN_ROOT) {
 export function detectOpencode(env, bin = 'opencode') {
   const res = spawnSync(bin, ['--version'], { env, encoding: 'utf8', timeout: 15000, shell: false });
   if (res.error) {
-    return { installed: false, version: null, supported: null, detail: res.error.code === 'ENOENT' ? 'não encontrado no PATH' : res.error.message };
+    return { installed: false, version: null, supported: null, detail: res.error.code === 'ENOENT' ? 'binário não encontrado' : `falha ao executar o binário (${res.error.code ?? 'erro desconhecido'})` };
   }
   const match = /\d+\.\d+\.\d+[^\s]*/.exec(`${res.stdout} ${res.stderr}`);
   const version = match ? match[0] : null;
@@ -73,7 +88,7 @@ function serverContext(ctx) {
     workspaceRoot: ctx.workspaceRoot,
     config: ctx.config,
     env: ctx.env,
-    opencodeBin: 'opencode',
+    opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
     hasActiveJobs: () => listActiveJobs(ctx.stateDir).length > 0,
   };
 }
@@ -104,7 +119,7 @@ function baseReport(ctx) {
 const NEXT_STEP_BY_CODE = {
   AUTH_FAILED: 'O servidor recusou a senha (401). Rode `/opc:setup --stop-server` e depois `/opc:setup` de novo.',
   BOOT_FAILED: 'O servidor não subiu. Veja o server.log no diretório de estado e docs/troubleshooting.md.',
-  UNSUPPORTED_VERSION: `Atualize o OpenCode para ${MIN_OPENCODE_VERSION} ou mais novo: npm install -g opencode-ai.`,
+  UNSUPPORTED_VERSION: `Instale o OpenCode V2 ${MIN_OPENCODE_VERSION} ou configure server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`,
   TIMEOUT: 'Tempo esgotado. Tente de novo; se persistir, veja docs/troubleshooting.md (locks e boot lento).',
   INSECURE_SERVER_URL: 'Corrija OPC_SERVER_URL (http://127.0.0.1, http://localhost ou https://) ou remova a variável.',
   SERVER_DOWN: 'Servidor inacessível. Rode `/opc:setup` de novo.',
@@ -113,7 +128,8 @@ const NEXT_STEP_BY_CODE = {
 async function diagnose(ctx, flags) {
   const report = baseReport(ctx);
   const attach = Boolean(ctx.env.OPC_SERVER_URL);
-  report.opencode = detectOpencode(ctx.env);
+  const opencodeBin = resolveOpencodeBin({ env: ctx.env, config: ctx.config });
+  report.opencode = { ...detectOpencode(ctx.env, opencodeBin), bin: opencodeBin === 'opencode' ? 'opencode' : `${opencodeBin.slice(0, 12)}…` };
   let exitCode = ExitCode.OK;
   if (!attach && !report.opencode.installed) {
     report.server = { status: 'skipped', warnings: [] };
@@ -122,11 +138,11 @@ async function diagnose(ctx, flags) {
   } else if (!attach && report.opencode.supported === false) {
     report.server = {
       status: 'error',
-      error: { code: 'UNSUPPORTED_VERSION', message: `OpenCode ${report.opencode.version} é anterior ao mínimo ${MIN_OPENCODE_VERSION}.` },
+      error: { code: 'UNSUPPORTED_VERSION', message: `OpenCode ${String(report.opencode.version).slice(0, 12)}… é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.` },
       warnings: [],
     };
     report.nextSteps.push(NEXT_STEP_BY_CODE.UNSUPPORTED_VERSION);
-    exitCode = ExitCode.CONNECTION;
+    exitCode = ExitCode.WAITING;
   } else {
     try {
       const s = await ensureServer(serverContext(ctx));
@@ -237,8 +253,8 @@ const SetupOnboarding = {
 
   async discovery(d, ctx) {
     const { api } = await d.connectApi(ctx);
-    const [providers, agents, opencodeConfig] = await Promise.all([api.providers(), api.agents(), api.getConfig()]);
-    return { catalog: d.buildCatalog(providers), agents, opencodeConfig };
+    const [providers, models, agents, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.agents(), api.getConfigSources()]);
+    return { catalog: setupCatalog(d.buildCatalog, providers, models), agents, opencodeConfig };
   },
 
   policyFor(d, ctx) {
@@ -256,15 +272,16 @@ const SetupOnboarding = {
 
   async state(ctx, { reconfigure }) {
     const d = await this.deps();
-    const opencode = this.probeBinary(d, 'opencode', ['--version'], ctx.env);
+    const opencode = this.probeBinary(d, resolveOpencodeBin({ env: ctx.env, config: ctx.config }), ['--version'], ctx.env);
     const npmAvailable = this.probeBinary(d, 'npm', ['--version'], ctx.env).installed;
     const { loaded, draft, policy } = this.policyFor(d, ctx);
     let catalog = null;
     let serverError = null;
-    if (opencode.installed) {
+    if (opencode.installed || ctx.env.OPC_SERVER_URL) {
       try {
         const { api } = await d.connectApi(ctx);
-        catalog = d.buildCatalog(await api.providers());
+        const [providers, models] = await Promise.all([api.providers(), api.models()]);
+        catalog = setupCatalog(d.buildCatalog, providers, models);
       } catch (err) {
         if (err.code === 'SERVER_ERROR') throw err;
         serverError = `${err.code ?? 'ERROR'}: ${err.message}`;

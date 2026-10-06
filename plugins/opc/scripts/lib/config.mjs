@@ -10,7 +10,7 @@ import { evaluate, evaluateAgent } from './policy.mjs';
 import { withLock } from './locks.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
-export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
+export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin']);
 const MISSING = Symbol('missing');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -119,6 +119,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   'jobs.maxParallel': schemaField('integer', { min: 1, max: 32 }),
   'server.bootTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
   'server.requestTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
+  'server.opencodeBin': schemaField('string'),
   'server.configOverride': schemaField('object'),
 });
 

@@ -6,17 +6,18 @@ import path from 'node:path';
 
 import { DEFAULT_CONFIG, matchesGlob } from './config.mjs';
 import { createClient } from './http.mjs';
+import { createApi } from './api.mjs';
 import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
 import { registerSecret, redactText } from './redact.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
 
-export const MIN_OPENCODE_VERSION = '1.18.0';
+export const MIN_OPENCODE_VERSION = '2.0.22';
 const MAX_BOOT_ATTEMPTS = 3;
 const HEALTH_REUSE_TIMEOUT_MS = 2000;
 const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
-const LISTENING_RE = /opencode server listening on (https?:\/\/[^\s]+)/;
+export const LISTENING_RE = /\bserver listening on (https?:\/\/\S+)/;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -43,11 +44,15 @@ export function pickFreePort() {
   });
 }
 
-export function serverMatcher(port) {
+export function resolveOpencodeBin({ env = process.env, config = {} } = {}) {
+  return env.OPC_OPENCODE_BIN || config?.server?.opencodeBin || 'opencode';
+}
+
+export function serverMatcher(port, opencodeBin = 'opencode') {
   const wanted = String(port);
   return (cmdline) => {
     if (!Array.isArray(cmdline) || cmdline.length === 0) return false;
-    const isOpencode = cmdline.slice(0, 3).some((arg) => /^opencode(\.exe)?$/.test(path.basename(arg)));
+    const isOpencode = cmdline.slice(0, 3).some((arg) => /^opencode(\.exe)?$/.test(path.basename(arg)) || arg === opencodeBin);
     if (!isOpencode || !cmdline.includes('serve')) return false;
     return cmdline.some((arg, i) => (arg === '--port' && cmdline[i + 1] === wanted) || arg === `--port=${wanted}`);
   };
@@ -89,24 +94,38 @@ function serverSettings(config) {
   return { ...DEFAULT_CONFIG.server, ...(config?.server ?? {}) };
 }
 
-function recordIdentityOk(record) {
+function recordIdentityOk(record, opencodeBin = 'opencode') {
   const identity = getProcessIdentity(record.pid);
   if (!identity) return false;
-  return String(identity.startTime) === String(record.startTime) && serverMatcher(record.port)(identity.cmdline);
+  return String(identity.startTime) === String(record.startTime) && serverMatcher(record.port, opencodeBin)(identity.cmdline);
 }
 
 async function probeHealth(url, password, timeoutMs) {
   const client = createClient({ baseUrl: url, password, requestTimeoutMs: timeoutMs });
   try {
-    const body = await client.get('/global/health', { retryOnServerDown: false });
-    return { ok: body?.healthy === true, version: body?.version ?? null };
+    const body = await createApi(client).info();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.version !== 'string') {
+      return { ok: false, error: new ConnectionError('UNSUPPORTED_VERSION', 'A resposta de /api/info não contém uma versão válida do OpenCode V2.') };
+    }
+    return { ok: true, version: body.version };
   } catch (err) {
     return { ok: false, error: err };
   }
 }
 
-async function shutdownRecorded(stateDir, record) {
-  const result = await terminateProcessGroup({ pid: record.pid, startTime: record.startTime }, serverMatcher(record.port), {
+function assertSupportedVersion(health) {
+  if (!health || typeof health !== 'object' || Array.isArray(health) || typeof health.version !== 'string' || !/^\d+\.\d+\.\d+/.test(health.version)) {
+    throw new ConnectionError('UNSUPPORTED_VERSION', 'A resposta de /api/info não contém uma versão válida do OpenCode V2. Instale o OpenCode V2 ou configure server.opencodeBin (ou OPC_OPENCODE_BIN).');
+  }
+  if (compareVersions(health.version, MIN_OPENCODE_VERSION) < 0) {
+    const version = `${health.version.slice(0, 12)}…`;
+    throw new ConnectionError('UNSUPPORTED_VERSION', `OpenCode ${version} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`);
+  }
+  return health.version;
+}
+
+async function shutdownRecorded(stateDir, record, opencodeBin = 'opencode') {
+  const result = await terminateProcessGroup({ pid: record.pid, startTime: record.startTime }, serverMatcher(record.port, opencodeBin), {
     graceMs: 3000,
   });
   removeServerRecord(stateDir);
@@ -212,14 +231,17 @@ async function worldCheck(client, config) {
   const warnings = [];
   let oc;
   try {
-    oc = await client.get('/config', { retryOnServerDown: false });
-    if (!oc || typeof oc !== 'object' || Array.isArray(oc)) {
-      throw new Error('Resposta de GET /config não é um objeto de configuração.');
+    const sources = await createApi(client).getConfigSources();
+    if (!Array.isArray(sources)) {
+      throw new Error('Resposta de GET /api/config não é uma lista de fontes.');
     }
+    const documents = sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info));
+    if (documents.length === 0) throw new Error('Nenhuma fonte de configuração do OpenCode V2 foi encontrada.');
+    oc = Object.assign({}, ...documents.map((source) => source.info));
   } catch (err) {
     world.shareBlocked = true;
     world.shareReason = 'config-unavailable';
-    warnings.push(`Não foi possível ler GET /config para as checagens de mundo: ${err.code ?? err.message}`);
+    warnings.push(`Não foi possível ler GET /api/config para as checagens de mundo: ${err.code ?? err.message}`);
     return { world, warnings };
   }
   if (oc?.share === 'auto' || (oc?.autoshare === true && oc?.share !== 'disabled')) {
@@ -231,7 +253,7 @@ async function worldCheck(client, config) {
   for (const key of ['model', 'small_model']) {
     if (isDeniedModel(oc?.[key], config?.policy)) {
       world.deniedDefaults.push(key);
-      warnings.push(`O "${key}" do OpenCode (${oc[key]}) é negado pela política do opc; `
+      warnings.push(`O "${key}" do OpenCode (${String(oc[key]).slice(0, 12)}…) é negado pela política do opc; `
         + `considere trocar via server.configOverride.${key}.`);
     }
   }
@@ -265,10 +287,8 @@ async function attachServer(env, settings, config) {
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
   const client = createClient({ baseUrl: url, password, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
-  const health = await client.get('/global/health', { retryOnServerDown: false });
-  if (compareVersions(health?.version, MIN_OPENCODE_VERSION) < 0) {
-    throw new ConnectionError('UNSUPPORTED_VERSION', `OpenCode ${health?.version} é anterior ao mínimo ${MIN_OPENCODE_VERSION}.`);
-  }
+  const health = await createApi(client).info();
+  assertSupportedVersion(health);
   const { world, warnings } = await worldCheck(client, config);
   warnings.unshift('Modo attach: o opc não sobe nem encerra este servidor, e o server.configOverride não se aplica.');
   return { url, password, version: health.version, pid: null, port: Number(parsed.port) || null, attached: true, reused: true, world, warnings };
@@ -282,12 +302,12 @@ async function spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, 
   const childEnv = {
     ...env,
     OPENCODE_SERVER_PASSWORD: password,
-    OPENCODE_SERVER_USERNAME: 'opencode',
     OPENCODE_CONFIG_CONTENT: JSON.stringify(settings.configOverride ?? {}),
     OPC_INSIDE_SERVER: '1',
   };
   delete childEnv.OPC_SERVER_URL;
   delete childEnv.OPC_SERVER_PASSWORD;
+  delete childEnv.OPENCODE_SERVER_USERNAME;
   let proc;
   try {
     proc = await spawnDetached(opencodeBin, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
@@ -296,7 +316,7 @@ async function spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, 
       logFile,
     });
   } catch (err) {
-    throw new ConnectionError('BOOT_FAILED', `Não foi possível executar "${opencodeBin}": instale o OpenCode (npm install -g opencode-ai).`, {
+    throw new ConnectionError('BOOT_FAILED', 'Não foi possível executar o binário OpenCode. Instale o OpenCode V2 ou configure server.opencodeBin (ou OPC_OPENCODE_BIN).', {
       cause: err,
     });
   }
@@ -308,7 +328,7 @@ async function spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, 
       logFile, offset, port, url, password, pid: proc.pid, timeoutMs: settings.bootTimeoutSec * 1000,
     });
   } catch (err) {
-    await terminateProcessGroup({ pid: proc.pid, startTime }, serverMatcher(port), { graceMs: 3000 });
+    await terminateProcessGroup({ pid: proc.pid, startTime }, serverMatcher(port, opencodeBin), { graceMs: 3000 });
     throw err;
   }
   return { ...outcome, port, url, pid: proc.pid, startTime };
@@ -322,7 +342,7 @@ async function bootServer(ctx, settings) {
   for (let attempt = 1; attempt <= MAX_BOOT_ATTEMPTS; attempt += 1) {
     const res = await spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, password });
     const expected = { pid: res.pid, startTime: res.startTime };
-    const matcher = serverMatcher(res.port);
+    const matcher = serverMatcher(res.port, opencodeBin);
     if (!res.ok) {
       failures.push(`tentativa ${attempt} (porta ${res.port}): ${res.reason} — ${res.detail}`);
       await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
@@ -331,26 +351,34 @@ async function bootServer(ctx, settings) {
     const client = createClient({ baseUrl: res.url, password, directory: workspaceRoot, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
     let health;
     try {
-      health = await client.get('/global/health', { retryOnServerDown: false });
+      health = await createApi(client).info();
     } catch (err) {
       await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
-      if (err.code === 'AUTH_FAILED') throw err;
+      if (err.code === 'AUTH_FAILED' || err.code === 'NOT_JSON') throw err;
       failures.push(`tentativa ${attempt} (porta ${res.port}): health falhou — ${err.code}`);
       continue;
     }
-    if (compareVersions(health?.version, MIN_OPENCODE_VERSION) < 0) {
-      await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
-      throw new ConnectionError('UNSUPPORTED_VERSION', `OpenCode ${health?.version} é anterior ao mínimo suportado ${MIN_OPENCODE_VERSION}. Atualize com npm install -g opencode-ai.`);
-    }
+    try { assertSupportedVersion(health); }
+    catch (err) { await terminateProcessGroup(expected, matcher, { graceMs: 3000 }); throw err; }
     const identity = getProcessIdentity(res.pid);
     if (!identity || !matcher(identity.cmdline)) {
       throw new ConnectionError('BOOT_FAILED', `O processo ${res.pid} não se identifica como "opencode serve --port ${res.port}"; o opc não vai registrá-lo nem sinalizá-lo.`);
     }
     const warnings = [];
     try {
-      await client.get('/agent', { timeoutMs: settings.bootTimeoutSec * 1000, retryOnServerDown: false });
+      const api = createApi(client);
+      if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
+      const deadline = performance.now() + 20_000;
+      while (true) {
+        const models = await api.models();
+        if (Array.isArray(models) && models.length > 0) break;
+        if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
+        if (performance.now() >= deadline) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
+        await sleep(200);
+      }
     } catch (err) {
-      warnings.push(`Aquecimento (GET /agent) falhou: ${err.code ?? err.message}`);
+      await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
+      throw err;
     }
     const checked = await worldCheck(client, config);
     warnings.push(...checked.warnings);
@@ -387,7 +415,7 @@ async function bootServer(ctx, settings) {
 
 export async function ensureServer(ctx) {
   const { stateDir, config, env = process.env, hasActiveJobs = () => false } = ctx;
-  const full = { opencodeBin: 'opencode', ...ctx, env, hasActiveJobs };
+  const full = { ...ctx, opencodeBin: ctx.opencodeBin ?? resolveOpencodeBin({ env, config }), env, hasActiveJobs };
   const settings = serverSettings(config);
   const lockTimeout = 4 * settings.bootTimeoutSec * 1000;
   return withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
@@ -397,22 +425,24 @@ export async function ensureServer(ctx) {
     if (!record) {
       const unusable = readServerRecordData(stateDir);
       if (unusable && (typeof unusable.password !== 'string' || unusable.password.length === 0)) {
-        if (!recordIdentityOk(unusable)) {
+        if (!recordIdentityOk(unusable, full.opencodeBin)) {
           removeServerRecord(stateDir);
           warnings.push(`Registro de servidor antigo descartado (pid ${unusable.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
         } else {
-          await shutdownRecorded(stateDir, unusable);
+          await shutdownRecorded(stateDir, unusable, full.opencodeBin);
           warnings.push(`Servidor anterior encerrado: registro do servidor sem senha utilizável (pid ${unusable.pid}).`);
         }
       }
     }
     if (record) {
-      if (!recordIdentityOk(record)) {
+      if (!recordIdentityOk(record, full.opencodeBin)) {
         removeServerRecord(stateDir);
         warnings.push(`Registro de servidor antigo descartado (pid ${record.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
       } else {
         const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
+        if (health.ok) assertSupportedVersion(health);
+        if (health.error?.code === 'UNSUPPORTED_VERSION' || health.error?.code === 'NOT_JSON') throw health.error;
         if (health.ok && health.version === record.version) {
           const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
           record.world = checked.world;
@@ -433,7 +463,7 @@ export async function ensureServer(ctx) {
           };
         }
         const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
-        await shutdownRecorded(stateDir, record);
+        await shutdownRecorded(stateDir, record, full.opencodeBin);
         warnings.push(`Servidor anterior encerrado: ${why}.`);
       }
     }
@@ -460,11 +490,12 @@ async function stopServerUnlocked(ctx, { force = false, confirmedByUser = false 
     removeServerRecord(stateDir);
     return { stopped: false, reason: 'not-running' };
   }
-  if (!recordIdentityOk(record)) {
+  const opencodeBin = ctx.opencodeBin ?? resolveOpencodeBin({ env, config });
+  if (!recordIdentityOk(record, opencodeBin)) {
     removeServerRecord(stateDir);
     return { stopped: false, reason: 'identity-mismatch' };
   }
-  const result = await shutdownRecorded(stateDir, record);
+  const result = await shutdownRecorded(stateDir, record, opencodeBin);
   if (result === 'identity-mismatch') return { stopped: false, reason: 'identity-mismatch' };
   return { stopped: true, reason: result === 'killed' ? 'killed' : 'terminated' };
 }
