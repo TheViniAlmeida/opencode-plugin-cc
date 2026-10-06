@@ -115,7 +115,7 @@ test('locked keys in the workspace are ignored with a warning (only restrictive 
     { policy: { approver: 'user', permissionTimeoutSec: 600 } },
     {
       policy: { approver: 'claude', permissionTimeoutSec: 5, sensitivePaths: ['*.secret'] },
-      permissionProfiles: { yolo: [{ permission: '*', pattern: '*', action: 'allow' }] },
+      permissionProfiles: { yolo: [{ action: '*', resource: '*', effect: 'allow' }] },
       server: { configOverride: { share: 'auto' }, bootTimeoutSec: 1 },
     },
   );

@@ -194,8 +194,8 @@ function checkValue(desc, value) {
 
 function checkRules(rules) {
   if (!Array.isArray(rules)) return 'as regras devem ser uma lista';
-  const ok = rules.every((r) => isObj(r) && typeof r.permission === 'string' && typeof r.pattern === 'string' && ['allow', 'deny', 'ask'].includes(r.action));
-  return ok ? null : 'cada regra precisa de {permission, pattern, action: allow|deny|ask}';
+  const ok = rules.every((r) => isObj(r) && typeof r.action === 'string' && typeof r.resource === 'string' && ['allow', 'deny', 'ask'].includes(r.effect));
+  return ok ? null : 'cada regra precisa de {action, resource, effect: allow|deny|ask}';
 }
 
 export function findSecretLikeKeys(obj, prefix = '') {

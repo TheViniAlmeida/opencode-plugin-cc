@@ -116,14 +116,14 @@ test('fake catalogs retain sensitive V2 settings for consumer redaction', () => 
   }
 });
 
-test('request history redacts short and nested strings before persistence', () => {
-  const body = { text: 'short', nested: { apiKey: 'key', input: ['secret', { note: 'hidden' }] }, model: { id: 'm' } };
+test('request history masks credential keys at any depth and keeps asserted content', () => {
+  const body = { text: 'short', nested: { apiKey: 'key-value', input: ['kept', { password: 'hidden', note: 'kept-note' }] }, headers: { Authorization: 'Basic abc' } };
   const safe = safeRequestBody(body);
-  assert.equal(JSON.stringify(safe).includes('short'), false);
-  assert.equal(JSON.stringify(safe).includes('key'), false);
-  assert.equal(JSON.stringify(safe).includes('secret'), false);
-  assert.equal(JSON.stringify(safe).includes('hidden'), false);
-  assert.equal(JSON.stringify(body).includes('short'), true);
+  const json = JSON.stringify(safe);
+  for (const leaked of ['key-value', 'hidden', 'Basic abc']) assert.equal(json.includes(leaked), false, leaked);
+  assert.equal(safe.text, 'short');
+  assert.deepEqual(safe.nested.input, ['kept', { password: '[REDACTED]', note: 'kept-note' }]);
+  assert.equal(JSON.stringify(body).includes('hidden'), true);
 });
 
 test('fake prompt response follows recorded V2 payload and delivery shape', () => {
@@ -161,6 +161,7 @@ test('F3 V2 revert, compact and command routes use their V2 paths', () => {
   assert.equal(committed.body.data.revert.committed, true);
   assert.equal(scenario.routes['DELETE /api/session/:id/revert'](fake, { params }).body.data.revert, undefined);
   assert.equal(scenario.routes['POST /api/session/:id/compact'](fake, { params, body: { providerID: 'p', modelID: 'm' } }).status, 204);
-  assert.equal(scenario.routes['POST /api/session/:id/command'](fake, { params, body: { command: 'echo', arguments: 'a b' } }).status, 204);
-  assert.equal(fake.state.messages[SEED.session].at(-1).type, 'assistant');
+  assert.equal(scenario.routes['POST /api/session/:id/command'](fake, { params, body: { name: 'echo', text: 'a b' } }).status, 204);
+  // V2 answers 204 and the result arrives later through the turn; only the user message exists right away.
+  assert.equal(fake.state.messages[SEED.session].at(-1).type, 'user');
 });
