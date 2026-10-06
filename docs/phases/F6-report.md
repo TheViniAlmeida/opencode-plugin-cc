@@ -3,13 +3,13 @@
 - **Data:** 06/10/2026 (America/Belem).
 - **Branch:** `feat/opc-f6-opencode-v2`.
 - **Contrato:** OpenCode ≥ 2.0.22; somente `/api/*`.
-- **Estado do portão:** **NÃO VALIDADO**. O controlador informou suíte completa com 0 falhas fora do sandbox; o aceite ao vivo e manual continua pendente.
+- **Estado do portão:** **GATE: FAIL** na entrada da rodada 2: o controlador encontrou 5 falhas em `tests/integration/transfer.test.mjs`. A correção requer nova execução fora do sandbox. O aceite ao vivo e manual continua **NÃO VALIDADO**.
 
 | Item | Evidência | Resultado |
 |---|---|---|
 | Referências V1 removidas dos docs públicos principais | `tests/unit/docs-f6.test.mjs`: 3/3; busca pelos termos proibidos sem ocorrência | PASSOU |
 | Ferramentas MCP documentadas conforme catálogo atual | Teste de documentação compara a tabela com `TOOL_NAMES` (24 ferramentas) | PASSOU |
-| Suíte completa sem falhas | O controlador informou `GATE: PASS`, 0 falhas na suíte, fora do sandbox, antes desta rodada de correções. Neste sandbox, testes com socket podem falhar em `listen EPERM`. A suíte com as correções desta rodada requer nova execução fora do sandbox. | PASSOU na revisão anterior; nova rodada NÃO VALIDADA |
+| Suíte completa sem falhas | Na rodada 2, o controlador informou `GATE: FAIL`, 5 falhas de transfer. O resultado anterior de 0 falhas pertence à revisão anterior. A correção requer nova execução fora do sandbox; testes com socket podem falhar aqui em `listen EPERM`. | NÃO VALIDADO após a correção |
 | `npm run scan-secrets` | `scan-secrets: nenhum achado` | PASSOU |
 | `git diff --check` | Saída vazia, exit 0 | PASSOU |
 | Contrato V2 ao vivo e paridade com fake | Não executado neste sandbox | NÃO VALIDADO |

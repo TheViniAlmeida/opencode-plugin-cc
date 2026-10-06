@@ -42,8 +42,9 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   ensurePrivateDir(ctx.stateDir);
   const file = writeExportFile(ctx.stateDir, exported);
   let imported;
+  let server;
   try {
-    const server = await ensureServer(serverContext(ctx));
+    server = await ensureServer(serverContext(ctx));
     imported = await runImport({ file, cwd: ctx.workspaceRoot,
       env: ctx.env, password: server.password, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {

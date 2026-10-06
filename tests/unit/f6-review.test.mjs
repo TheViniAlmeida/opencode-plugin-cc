@@ -36,6 +36,8 @@ test('published transfer instructions select the managed V2 server', () => {
 
 test('F6 report distinguishes controller full-suite result from pending live gate', () => {
   const report = read('docs/phases/F6-report.md');
-  assert.match(report, /suíte completa.*0 falhas/i);
+  assert.match(report, /rodada 2.*GATE: FAIL.*5 falhas/is);
   assert.match(report, /NÃO VALIDADO/);
+  const live = read('docs/phases/F6-live-output.md');
+  assert.match(live, /NÃO VALIDADO/);
 });

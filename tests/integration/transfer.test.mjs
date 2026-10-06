@@ -90,6 +90,7 @@ test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t
   env.OPC_BIN_CALLS = calls;
   const result = await cliJson(transferArgs(source), { env, cwd: ws });
   assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(external.url)} -s ${result.data.sessionID}`);
   const invoked = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(invoked.map((args) => args[0]), ['--version', 'session']);
   assert.deepEqual(invoked[1].slice(1, 3), ['import', '--server']);
