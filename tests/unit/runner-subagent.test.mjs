@@ -113,21 +113,14 @@ test('subtask fallback masks the task tool output (registered secrets and token 
   assert.match(res.finalText, /^key /);
 });
 
-test('subtask fallback reads messages through the list-bug-aware reader (per-message reads after a 400)', async () => {
+test('subtask fallback propagates a V2 message-list failure', async () => {
   const listErr = Object.assign(new Error('Bad Request'), { code: 'BAD_REQUEST', details: { body: { message: 'Expected OutputFormatJsonSchema' } } });
   const api = {
     created: [],
     async createSession(body) { this.created.push(body); return { id: `ses_${this.created.length}` }; },
     async messages() { throw listErr; },
-    async message(sessionID, messageID) {
-      assert.equal(messageID, 'msg_a');
-      return { info: { id: 'msg_a' }, parts: [{ type: 'tool', tool: 'task', state: { status: 'completed', output: 'VIA PER-MESSAGE' } }] };
-    },
   };
-  const { rememberMessage } = await import('../../plugins/opc/scripts/lib/session-messages.mjs');
-  rememberMessage(api, 'ses_1', 'msg_a'); // the turn remembers the ids it produced
-  const res = await dispatchSubagent({ api, hub: {}, parentSessionID: 'ses_parent', member: MEMBER, prompt: 'p', rules: RULES, mechanism: 'subtask', runTurnImpl: okTurn('') });
-  assert.equal(res.finalText, 'VIA PER-MESSAGE');
+  await assert.rejects(dispatchSubagent({ api, hub: {}, parentSessionID: 'ses_parent', member: MEMBER, prompt: 'p', rules: RULES, mechanism: 'subtask', runTurnImpl: okTurn('') }), (error) => error === listErr);
 });
 
 test('non-refusal errors propagate; allowFallback=false never falls back; bad mechanism is a usage error', async () => {

@@ -46,7 +46,7 @@ test('classifyError safely describes circular unknown errors', () => {
   assert.deepEqual(classifyError(error), {
     errorClass: 'fatal',
     errorType: 'UnknownError',
-    message: 'E_UNKNOWN',
+    message: 'Erro do OpenCode.',
   });
 });
 
@@ -56,9 +56,34 @@ test('classifyError redacts registered secrets and preserves the expected messag
 
   const result = classifyError({ name: 'UnknownError', message: `request failed with ${secret}` });
 
-  assert.equal(result.message, 'request failed with ***');
-  assert.ok(result.message.includes('***'));
+  assert.equal(result.message, 'Erro do OpenCode.');
   assert.ok(!result.message.includes(secret));
+});
+
+for (const [type, expectedClass, expectedMessage] of [
+  ['provider.no-route', 'fatal', 'Modelo indisponível.'],
+  ['provider.rate-limit', 'recoverable', 'Limite de requisições do provedor atingido.'],
+  ['aborted', 'fatal', 'Turno cancelado.'],
+]) {
+  test(`V2 ${type} is classified with a Portuguese message`, () => {
+    const result = classifyError({ type, message: 'p/modelo-privado' });
+    assert.equal(result.errorClass, expectedClass);
+    assert.equal(result.errorType, type);
+    assert.equal(result.message, expectedMessage);
+  });
+}
+
+test('V2 permission rejection during a tool is recoverable', () => {
+  const result = classifyError({ type: 'permission.rejected', message: 'private path' }, { toolsRan: true });
+  assert.equal(result.errorClass, 'recoverable');
+  assert.equal(result.message, 'Permissão recusada.');
+});
+
+test('V2 HTTP 429 is recoverable even without APIError', () => {
+  const result = classifyError({ type: 'provider.http', status: 429, message: 'private model' });
+  assert.equal(result.errorClass, 'recoverable');
+  assert.equal(result.errorType, 'provider.http');
+  assert.equal(result.message, 'Limite de requisições do provedor atingido.');
 });
 
 test('retryExceedsCap: attempt above max or wait above max', () => {

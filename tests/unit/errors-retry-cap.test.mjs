@@ -31,11 +31,12 @@ test('defaults are maxProviderRetries 3 and maxRetryWaitSec 60', () => {
   assert.equal(retryExceedsCap({ attempt: 4, next: NOW }, null, NOW), true);
 });
 
-test('retryCapError builds the synthetic error with attempt, wait and provider message', () => {
+test('retryCapError builds the synthetic error with attempt and wait', () => {
   const error = retryCapError({ type: 'retry', attempt: 4, next: NOW + 5000, message: 'Limite de requisições' }, NOW);
   assert.equal(error.name, RETRY_CAP_ERROR_NAME);
   assert.equal(RETRY_CAP_ERROR_NAME, 'RetryCapExceeded');
-  assert.match(error.data.message, /tentativa 4, próxima em 5s\): Limite de requisições$/);
+  assert.match(error.data.message, /tentativa 4, próxima em 5s\)\.$/);
+  assert.ok(!error.data.message.includes('Limite de requisições'));
 });
 
 test('classifyError treats RetryCapExceeded as recoverable, even with tools run', () => {
@@ -43,7 +44,7 @@ test('classifyError treats RetryCapExceeded as recoverable, even with tools run'
   const out = classifyError(error, { toolsRan: true });
   assert.equal(out.errorClass, 'recoverable');
   assert.equal(out.errorType, 'RetryCapExceeded');
-  assert.equal(out.message, error.data.message);
+  assert.equal(out.message, 'Limite de novas tentativas excedido.');
 });
 
 test('classifyError keeps the F2a classes for the OpenCode union', () => {

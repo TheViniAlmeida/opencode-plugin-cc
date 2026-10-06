@@ -1,29 +1,24 @@
 // Classification of OpenCode errors (spec §7.1).
-import { redactText } from './redact.mjs';
-
-const MAX_MESSAGE_CHARS = 2000;
-
-function messageOf(error) {
-  let raw;
-  if (typeof error === 'string') raw = error;
-  else {
-    raw = error?.data?.message ?? error?.message;
-    if (raw === undefined || raw === null) {
-      try {
-        raw = JSON.stringify(error ?? null);
-      } catch {
-        raw = error?.code ?? error?.name ?? 'erro desconhecido';
-      }
-    }
-  }
-  const text = redactText(String(raw));
-  return text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text;
-}
-
 export function classifyError(error, { toolsRan = false, candidateHasLargerContext = false } = {}) {
-  const errorType = typeof error?.name === 'string' && error.name ? error.name : 'UnknownError';
-  const message = messageOf(error);
+  const errorType = error?.type ?? (typeof error?.name === 'string' && error.name ? error.name : 'UnknownError');
+  const fixed = {
+    Timeout: 'O turno excedeu o tempo limite.',
+    RetryCapExceeded: 'Limite de novas tentativas excedido.',
+    'provider.no-route': 'Modelo indisponível.',
+    'provider.rate-limit': 'Limite de requisições do provedor atingido.',
+    aborted: 'Turno cancelado.',
+    'permission.rejected': 'Permissão recusada.',
+    'execution.failed': 'A execução falhou.',
+    APIError: 'Falha na API do provedor.',
+    BadRequest: 'A requisição foi rejeitada.',
+    StructuredOutputError: 'A saída estruturada é inválida.',
+    ContextOverflowError: 'O contexto do modelo foi excedido.',
+  };
+  const message = fixed[errorType] ?? 'Erro do OpenCode.';
   const as = (errorClass) => ({ errorClass, errorType, message });
+  if (Number(error?.status ?? error?.statusCode ?? error?.data?.statusCode ?? error?.data?.status) === 429) {
+    return { errorClass: 'recoverable', errorType, message: 'Limite de requisições do provedor atingido.' };
+  }
   switch (errorType) {
     case 'APIError': {
       const data = error.data ?? {};
@@ -31,7 +26,13 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     }
     case 'RetryCapExceeded':
     case 'Timeout':
+    case 'provider.rate-limit':
       return as('recoverable');
+    case 'provider.no-route':
+    case 'aborted':
+      return as('fatal');
+    case 'permission.rejected':
+      return as(toolsRan ? 'recoverable' : 'fatal');
     case 'StructuredOutputError':
       return as(toolsRan ? 'fatal' : 'recoverable');
     case 'ContextOverflowError':
@@ -45,7 +46,7 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
 
 export const RETRY_CAP_ERROR_NAME = 'RetryCapExceeded';
 
-// `next` é o instante agendado da próxima tentativa, em epoch ms (OpenCode 1.18.32: `next: data.at`).
+// `next` é o instante agendado da próxima tentativa, em epoch ms (V2: `at`).
 export function retryExceedsCap(status, fallbackCfg = {}, now = Date.now()) {
   if (!status || (status.type !== undefined && status.type !== 'retry')) return false;
   const maxRetries = Number(fallbackCfg?.maxProviderRetries ?? 3);
@@ -59,6 +60,7 @@ export function retryExceedsCap(status, fallbackCfg = {}, now = Date.now()) {
 export function retryCapError(status, now = Date.now()) {
   const next = Number(status?.next);
   const wait = Number.isFinite(next) ? `, próxima em ${Math.max(0, Math.round((next - now) / 1000))}s` : '';
-  const message = `teto de retries do OpenCode excedido (tentativa ${status?.attempt ?? '?'}${wait}): ${status?.message ?? ''}`.trim();
+  const attempt = Number(status?.attempt);
+  const message = `Limite de tentativas do OpenCode excedido (tentativa ${Number.isInteger(attempt) ? attempt : '?'}${wait}).`;
   return { name: RETRY_CAP_ERROR_NAME, data: { message } };
 }
