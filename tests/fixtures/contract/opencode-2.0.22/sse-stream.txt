@@ -1,0 +1,7 @@
+data: {"id":"evt_fixture0001","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id": "evt_11191c7e60012A5qsax0Hp3Bj5", "created": 1791296128998, "type": "session.created", "location": {"directory": "<workspace>"}, "data": {"sessionID": "ses_ffff94ae588d83e65655d771cd", "slug": "lucky-wolf", "version": "2.0.22", "projectID": "global", "location": {"directory": "<workspace>"}, "subpath": "", "title": "OPC: v2 probe", "agent": "build", "permissions": [{"action": "*", "resource": "*", "effect": "deny"}, {"action": "read", "resource": "*", "effect": "allow"}, {"action": "shell", "resource": "*", "effect": "ask"}], "model": {"id": "opencode-go/deepseek-v4.1-flash", "providerID": "omniroute-personal"}}, "durable": {"aggregateID": "ses_ffff94ae588d83e65655d771cd", "seq": 0, "version": 1}}
+
+: heartbeat

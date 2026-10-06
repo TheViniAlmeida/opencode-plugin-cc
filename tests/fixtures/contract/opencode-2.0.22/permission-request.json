@@ -1,0 +1,16 @@
+{
+  "id": "per_111928eff001vmE1pXignFsXIS",
+  "sessionID": "ses_ffff94ae588d83e65655d771cd",
+  "action": "shell",
+  "resources": [
+    "echo opc-probe"
+  ],
+  "save": [
+    "echo *"
+  ],
+  "source": {
+    "type": "tool",
+    "messageID": "msg_111927d96001FG5sGw6FTkGbRR",
+    "id": "call_00_e6gmchvlc7fcwwmf36omrlrj"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "data": [
+    {
+      "id": "ses_eee5ed478ffeazDIKHVGSI1fSH",
+      "projectID": "global",
+      "agent": "build",
+      "model": {
+        "id": "opencode-go/deepseek-v4.1-flash",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "time": {
+        "created": 1791297137553,
+        "updated": 1791297137604
+      },
+      "title": "OPC: contract",
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "glob",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ],
+      "location": {
+        "directory": "<workspace>"
+      }
+    }
+  ],
+  "cursor": {
+    "previous": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZWVlNWVkNDc4ZmZlYXpESUtIVkdTSTFmU0giLCJ0aW1lIjoxNzkxMjk3MTM3NjA0LCJkaXJlY3Rpb24iOiJwcmV2aW91cyJ9fQ",
+    "next": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZWVlNWVkNDc4ZmZlYXpESUtIVkdTSTFmU0giLCJ0aW1lIjoxNzkxMjk3MTM3NjA0LCJkaXJlY3Rpb24iOiJuZXh0In19"
+  }
+}

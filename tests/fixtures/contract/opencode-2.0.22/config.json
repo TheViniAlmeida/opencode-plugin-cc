@@ -1,0 +1,30 @@
+[
+  {
+    "type": "directory",
+    "path": "<workspace>"
+  },
+  {
+    "type": "document",
+    "info": {
+      "share": "disabled",
+      "providers": {
+        "omniroute-personal": {
+          "name": "Omniroute personal",
+          "package": "aisdk:@ai-sdk/openai-compatible",
+          "settings": {
+            "baseURL": "http://127.0.0.1:9/v1",
+            "apiKey": "fake-provider-key"
+          },
+          "models": {
+            "opencode-go/deepseek-v4.1-flash": {
+              "name": "DeepSeek V4.1 Flash"
+            },
+            "opencode-go/qwen3.8-max": {
+              "name": "Qwen 3.8 Max"
+            }
+          }
+        }
+      }
+    }
+  }
+]

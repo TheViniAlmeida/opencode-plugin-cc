@@ -23,27 +23,29 @@ Capturados com `opencode serve` 2.0.22 isolado e com dois modelos reais (`deepse
 
 1. `opencode serve --hostname 127.0.0.1 --port P` sobe e loga `server listening on http://127.0.0.1:P`. Sem `OPENCODE_SERVER_PASSWORD`, gera senha e a imprime no log: o opc **sempre** passa a senha.
 2. Auth Basic com usuário fixo `opencode`; `OPENCODE_SERVER_USERNAME` é ignorado. 401 vem como `{"_tag":"UnauthorizedError","message":"Authentication required"}`.
-3. Rotas sem `/api` devolvem a SPA (HTML 200, inclusive sem auth). Toda resposta JSON útil vem em `{ data, location? }` (listas paginadas: `{ data, cursor }`).
+3. Rotas sem `/api` devolvem a SPA (HTML 200, inclusive sem auth). A maioria das respostas vem em `{ data, location? }` (listas paginadas: `{ data, cursor }`), mas `GET /api/info`, `GET /api/config` e `POST …/interrupt` vêm **sem** envelope.
 4. `GET /api/info` → `{version, pid, urls, paths}`. Não há `/global/health`.
-5. Workspace por header `x-opencode-directory: <abs>` (ou query `location[directory]`).
+5. Workspace por header `x-opencode-directory: <abs>` (ou query `location[directory]`). Caminho **relativo** no header derruba a rota com 500: o cliente sempre resolve para absoluto.
 6. `POST /api/session {title, agent, model:{id,providerID,variant?}, permissions[], parentID?}` → `{data:{id:'ses_…', projectID, agent, model, permissions, outcome?, time, title, location, cost, tokens}}`. Modelo inexistente **não** falha na criação.
 7. `PATCH /api/session/{id} {permissions}` → 204 e **substitui** a lista inteira (confirmado relendo a sessão).
 8. `POST /api/session/{id}/model {model:{id,providerID,variant?}}` → 204 (gera mensagem `model-switched`); `POST …/agent {agent}` análogo.
 9. `POST /api/session/{id}/prompt {id?, text, files?, agents?, skills?, delivery?, resume?}` é assíncrono e devolve a mensagem do usuário. Aceita `id` gerado pelo cliente no formato `msg_` + 12 hex + 14 base62 (o mesmo do `newMessageId` atual). **Repetir o mesmo `id` é idempotente** (devolve o original, não reenfileira). Não há `model`, `agent`, `variant`, `parts` nem `format` no prompt.
 10. Não existe saída estruturada (`json_schema`) no V2.
 11. `GET /api/session/active` → `{data:{"ses_…":{type:"running"}}}`; sessão ociosa fica ausente (`{}`).
-12. `GET /api/session/{id}/message?order=asc&limit=N` → lista plana por `type`: `user {id,time,text}`, `assistant {id,time{created,completed},agent,model,content[],finish,cost,tokens,error?}`, `model-switched`, `idle {outcome: succeeded|failed|interrupted}`, `shell`, `synthetic`… Mensagens não têm `parentID`: o turno são as mensagens depois da mensagem do usuário até o `idle` seguinte.
+12. `GET /api/session/{id}/message?order=asc&limit=N` (a ordem padrão é **desc**; o opc sempre passa `order=asc`) → lista plana por `type`: `user {id,time,text}`, `assistant {id,time{created,completed},agent,model,content[],finish,cost,tokens,error?}`, `model-switched`, `idle {outcome: succeeded|failed|interrupted}`, `shell`, `synthetic`… Mensagens não têm `parentID`: o turno são as mensagens depois da mensagem do usuário até o `idle` seguinte.
 13. `assistant.content[]`: `{type:'text', text}`, `{type:'reasoning', text}`, `{type:'tool', id, name, state:{status: streaming|running|completed|error, input, content[], metadata, error?}}`. Nomes de tool vistos: `read`, `glob`, `shell`, `subagent`, `question`.
 14. Eventos SSE em `GET /api/event` (todas as locations; filtrar por `sessionID`): linhas `data: {json}` sem `event:`; heartbeat é a linha de comentário `: heartbeat` a cada 15 s. Envelope `{id, created, type, location:{directory}, data, durable?}`. Primeiro evento `server.connected`.
 15. Eventos do turno: `session.created {sessionID, parentID?}`, `session.execution.started|succeeded|failed {sessionID, error?}`, `session.execution.interrupted`, `session.step.started {assistantMessageID, agent, model}`, `session.step.ended {finish, cost, tokens}`, `session.text.delta|ended {assistantMessageID, text}`, `session.reasoning.*`, `session.tool.called {id, input}`, `session.tool.success {id, content}`, `session.tool.failed {id, error:{type,message}}`, `session.tool.input.started {id, name}`, `session.usage.updated {cost, tokens}`, `permission.asked|replied`, `form.created|replied|cancelled`.
-16. Falha de execução: `session.execution.failed {sessionID, error:{type:'provider.no-route', message}}` + mensagem `idle {outcome:'failed'}`, sem assistant.
+16. Falha de execução: `session.execution.failed {sessionID, error:{type:'provider.no-route', message}}` + mensagem `idle {outcome:'failed'}`, sem assistant. A mensagem `idle` **não** traz o erro: só o evento traz. Interrupção: `session.execution.interrupted {sessionID, reason}` + `idle {outcome:'interrupted'}`.
+16a. Retry do provider: evento `session.retry.scheduled {sessionID, assistantMessageID, attempt, at, error:{type,message}}` (ex.: `provider.transport`); enquanto tenta, a mensagem assistant fica com `content: []` e `retry {attempt, at, error}`.
+16b. Formas dos eventos de pedido: `permission.replied {sessionID, requestID, reply}`; `form.created {form: {…}}` (o form vem embrulhado); `form.replied {id, sessionID, answer}`.
 17. Permissão: `permission.asked {id:'per_…', sessionID, action, resources[], save[], source:{type:'tool', messageID, id}}`. Lista por sessão `GET /api/session/{id}/permission`; resposta `POST /api/session/{id}/permission/{requestID}/reply {decision:'once'|'always'|'reject', message?}` → 204. Recusa vira `session.tool.failed` com `error.type:'permission.rejected'`.
 18. Pergunta = form: `form.created` / `GET /api/session/{id}/form` → `{id:'frm_…', sessionID, title, metadata:{kind:'question'}, fields:[{key, title, description, type, options:[{value,label,description}], custom}]}`; resposta `POST …/form/{formID}/reply {answer:{<key>: valor}}` → 204; cancelar `DELETE …/form/{formID}`.
 19. Subagente: tool `subagent` (`input:{agent, description, prompt}`); cria sessão filha com `parentID`, que **herda as `permissions` da pai** e o modelo da pai.
 20. Filhas: `GET /api/session?parentID=<id>`. Interrupção: `POST /api/session/{id}/interrupt` → `{interrupted: bool}`.
-21. Catálogos: `/api/provider` (`{id,name,activation}`), `/api/model` (`{id, modelID, providerID, name, capabilities, variants:[{id}]}`), `/api/agent` (`{id,name,mode,hidden,description,permissions[]}`), `/api/command`, `/api/skill`. `GET /api/config` devolve uma **lista de fontes** (`{type:'document', path?, info}` / `{type:'directory', path}`), não a config mesclada.
-22. Export/import: `opencode session export <id>` → `{info, messages}` (mensagens planas); `opencode session import [--directory D] <file>` imprime `Imported session: ses_…` e preserva o id; formato V1 é recusado.
-23. Ações de permissão nos agentes nativos: `*`, `read`, `edit`, `grep`, `glob`, `webfetch`, `websearch`, `question`, `subagent`, `external_directory`, `browser`, `shell`.
+21. Catálogos: `/api/provider` (`{id,name,activation,settings}`), `/api/model` (`{id, modelID, providerID, name, capabilities, variants:[{id}], settings}`; modelos de provider próprio vêm com variants `low|medium|high`). **`settings` traz a `apiKey` do provider em claro**: o opc nunca imprime nem grava `settings`. O catálogo carrega de forma assíncrona: logo após o boot, `GET /api/model` responde 200 com lista vazia (pronto em ~1 s). `/api/agent` (`{id,name,mode,hidden,description,permissions[]}`), `/api/command`, `/api/skill`. `GET /api/config` devolve uma **lista de fontes** (`{type:'document', path?, info}` / `{type:'directory', path}`), não a config mesclada.
+22. Export/import: `opencode session export <id>` → `{info, messages}` (mensagens planas); `opencode session import [--directory D] <file>` imprime `Imported session: ses_…`, preserva o id e aceita mensagem `synthetic`; formato V1 é recusado. **Sem `--server <url>` ou `--standalone`, o CLI sobe um serviço em background (`opencode serve --service`)**: o opc sempre passa `--server <url do servidor gerenciado>` com `OPENCODE_SERVER_PASSWORD` no ambiente. Ids de mensagem são únicos no banco inteiro: reimportar ids existentes dá 500.
+23. Ações de permissão nos agentes nativos (2.0.22 sem config): `*`, `read`, `edit`, `grep`, `glob`, `webfetch`, `websearch`, `question`, `subagent`, `external_directory`, `browser`; a tool de shell pede a ação `shell` (Fato 17). Agentes nativos: `build`, `plan` (primary), `general`, `explore` (subagent) e os ocultos `compaction`, `title`, `summary`.
 
 ## Global Constraints
 
@@ -52,7 +54,7 @@ Capturados com `opencode serve` 2.0.22 isolado e com dois modelos reais (`deepse
 - **OpenCode mínimo `2.0.22`; só a API `/api/*`.** Nenhum caminho V1 (`/session`, `/event`, `/global/health`, `prompt_async`, `/question`, `/permission/{id}/reply`) permanece no código de produção.
 - Toda resposta HTTP de sucesso precisa ser JSON; HTML ou corpo não-JSON em rota de API é `RequestError('NOT_JSON')` (evita o falso positivo da SPA).
 - Toda sessão criada pelo opc leva `permissions` explícitas e `model` explícito (nunca o default do servidor).
-- A senha do servidor e chaves de provider nunca aparecem em stdout, stderr, logs, docs ou fixtures.
+- A senha do servidor e chaves de provider nunca aparecem em stdout, stderr, logs, docs ou fixtures. Os catálogos V2 devolvem `settings.apiKey`: toda saída de `providers`/`models`/`catalog` (CLI, `--json`, MCP) remove `settings`.
 - O plugin nunca escreve em `~/.config/opencode/` nem em dados do OpenCode.
 - `always` nunca é enviado em resposta de permissão.
 - Exit codes da spec §4.1 inalterados: `0, 2, 3, 4, 5, 6, 7, 130`.
@@ -77,7 +79,7 @@ Capturados com `opencode serve` 2.0.22 isolado e com dois modelos reais (`deepse
 |---|---|---|
 | `tests/fixtures/contract/opencode-2.0.22/*.json` | Amostras reais sanitizadas (info, session, messages, eventos, permission, form, model, agent, config, export) | 1 |
 | `tests/fixtures/contract-shapes.mjs` | Formas V2 esperadas, usadas pelo fake e pelo contrato ao vivo | 1 |
-| `tests/live/contract.mjs` | Contrato ao vivo V2 (servidor próprio, sem inferência) | 1 |
+| `tests/live/contract-v2.mjs` | Contrato ao vivo V2 (servidor próprio, sem inferência) | 1 |
 | `tests/fixtures/fake-opencode.mjs` | Servidor falso V2: `/api/*`, auth, `x-opencode-directory`, SSE V2 | 2 |
 | `tests/fixtures/fake-session-api.mjs`, `f3-fake.mjs`, `scenarios/*.mjs` | Helpers de cenário emitindo V2 | 2 |
 | `tests/fixtures/bin/opencode` | Binário falso: `--version` → `opencode v2.0.22`, `serve`, `session import` | 2 |
@@ -105,7 +107,7 @@ Capturados com `opencode serve` 2.0.22 isolado e com dois modelos reais (`deepse
 - Create: `tests/fixtures/contract/opencode-2.0.22/info.json`, `session.json`, `messages-turn.json`, `messages-failed.json`, `events-turn.jsonl`, `events-permission.jsonl`, `events-form.jsonl`, `permission-request.json`, `form.json`, `model.json`, `agent.json`, `provider.json`, `config.json`, `export.json`
 - Modify: `tests/fixtures/contract-shapes.mjs` (acrescentar `V2_SHAPES`, `assertShape`, `loadContractSample`; manter `shapeOf`/`diffShapes`/`lookup`; trocar `EVENT_TYPES` por `['server.connected']` e `PROBES` pelas rotas `/api/*`)
 - Delete: `tests/fixtures/contract/opencode-1.18.32.shapes.json` (substituído pelas amostras 2.0.22)
-- Modify: `tests/live/contract.mjs` (contrato V2)
+- Create: `tests/live/contract-v2.mjs` (contrato V2 autônomo; o `contract.mjs` V1 e seus testes saem na Task 12)
 - Test: `tests/unit/contract-v2-fixtures.test.mjs`
 
 **Interfaces:**
@@ -144,7 +146,9 @@ test('V2 contract samples carry no operator data', () => {
 - [ ] **Step 3: Gravar as amostras.** A partir das capturas do controlador (servidor próprio, 06/10/2026), copie as respostas reais para os arquivos listados, aplicando a sanitização: id do provider real do operador → `omniroute-personal`; ids reais dos dois modelos → `opencode-go/deepseek-v4.1-flash` e `opencode-go/qwen3.8-max` (os mesmos de `tests/fixtures/f3-fake.mjs`); diretórios → `<workspace>`; `pid` → `12345`; `urls` → `["http://127.0.0.1:4096"]`; textos de reasoning reduzidos a uma frase neutra. Ordem das mensagens sempre `asc`.
 - [ ] **Step 4: Formas.** Em `contract-shapes.mjs`, defina `V2_SHAPES` com as chaves obrigatórias de cada forma conforme os "Fatos do V2" (itens 4, 6, 12, 13, 17, 18, 21) e `V2_SHAPES.files` (mapa nome do arquivo → forma). `assertShape(name, value)` lança `AssertionError` citando a chave ausente.
 - [ ] **Step 5: Contrato ao vivo.** Reescreva `tests/live/contract.mjs` para: subir `opencode serve` (binário de `OPC_OPENCODE_BIN` ou `opencode`) em HOME/XDG temporários com senha própria; checar `GET /api/info` contra `V2_SHAPES.info` e versão ≥ 2.0.22; checar 401 sem senha; checar HTML em `/global/health`; criar sessão com `permissions` e `model` fixos; `PATCH` de permissões e releitura (substituição); `prompt` com `resume:false` e `id` cliente, repetido (idempotência); `GET /api/session/active`; `interrupt`; encerrar com SIGTERM e provar que o processo saiu. Sem inferência.
-- [ ] **Step 6:** `node --test tests/unit/contract-v2-fixtures.test.mjs` → PASS. Controlador: `OPC_LIVE=1 OPC_OPENCODE_BIN=~/.opencode/bin/opencode node tests/live/contract.mjs` → PASS.
+- [ ] **Step 6:** `node --test tests/unit/contract-v2-fixtures.test.mjs` → PASS. Controlador: `OPC_LIVE=1 OPC_OPENCODE_BIN=<binário V2> node tests/live/contract-v2.mjs` → PASS.
+
+> **Feito pelo controlador em 06/10/2026** (fixtures em `tests/fixtures/contract/opencode-2.0.22/`, contrato ao vivo 12/12). Os nomes reais estão em `V2_SHAPES.files`; amostras de eventos em `events-{turn,permission,form,failure}.jsonl` e `sse-stream.txt`.
 - [ ] **Step 7: Commit** `test(contract): record OpenCode 2.0.22 shapes and live contract`.
 
 ---
@@ -358,7 +362,8 @@ test('normalizes the recorded permission request and form', () => {
 - Health: `api.info()` com JSON obrigatório; `version` < mínimo → `UNSUPPORTED_VERSION`, mensagem: `OpenCode <v> é anterior ao mínimo suportado 2.0.22. Instale o OpenCode V2 ou aponte server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`
 - Env do filho: `OPENCODE_SERVER_PASSWORD` sempre; `OPENCODE_SERVER_USERNAME` removido; `OPENCODE_CONFIG_CONTENT` mantido.
 - World check: lê `api.getConfigSources()`, junta os `info` dos documentos em ordem (o último vence por chave de topo) e aplica a regra atual de `share` / `model` / `small_model` sobre o resultado.
-- Warm-up: `api.agents()`.
+- Warm-up: `api.agents()` e espera do catálogo (`api.models()` até a lista não vir vazia, no máximo 20 s; Fato 21) antes de validar modelo.
+- `createClient` resolve `directory` com `path.resolve` (Fato 5).
 
 - [ ] **Step 1: Testes que falham**
 
@@ -448,6 +453,7 @@ Imports do arquivo: `startFake` de `../fixtures/fake-opencode.mjs`, `createClien
 - Prompt: `api.prompt(sessionID, { id: messageID, text })`, onde `text` é a junção dos `parts` de texto. Timeout no prompt → reenviar com o mesmo `id` (idempotente; Fato 9), sem ler mensagens.
 - Eventos tratados: `session.created` (filha), `session.execution.started` (busy), `session.execution.succeeded` → `finish('idle')`, `session.execution.failed` → `finish('session-error', { error: data.error })`, `session.execution.interrupted` → `finish('interrupted')`, `session.step.started` (registra `assistantMessageID`), `session.tool.input.started` / `session.tool.called` / `session.tool.success` / `session.tool.failed` (progresso, fase, `toolsRanLive`), `session.text.delta` (fase `running`), `session.retry.scheduled` (se vier: `handleRetryStatus({ attempt, message, next })`), `permission.asked` → `toPermissionRequest`, `form.created` → `toQuestion` (ignora `null`), `permission.replied`, `form.replied` / `form.cancelled` → `onRequestResolved`.
 - Fases por nome de tool V2: `read|grep|glob|webfetch|websearch` → `investigating`; `edit|write|apply_patch|patch` → `editing`; `subagent` → `subagent`; `shell` → `verifying` (se `VERIFY_RE` casar com `input.command`) ou `running`; demais → `running`.
+- O erro de `session.execution.failed` é guardado no momento do evento (a mensagem `idle failed` não o traz — Fato 16). `session.retry.scheduled` alimenta `handleRetryStatus({ attempt, message: error.message, next: at })`.
 - Resync (poll e reconexão): `sessionStatus()`, `children(sessionID)`, `listPermissions(id)` e `listQuestions(id)` para a sessão e cada filha rastreada, e, se a sessão não estiver ativa, ler `messages()` e terminar quando houver `idle` depois da mensagem `messageID` (`outcome` succeeded → idle; failed → session-error com o `error` do último assistant ou `{type:'execution.failed'}`; interrupted → interrupted).
 - `turnMessages(messages, messageID)`: mensagens depois da que tem `id === messageID`, até a primeira `idle` (inclusive). `extractTurn(turn, { childMessages, diffs })`: `finalText` = texto do último `assistant` com `content` `text`; ferramentas = `content` `tool` com `state.status === 'completed'` (nome `name`); arquivos tocados por `EDIT_TOOLS` via `state.input.path|filePath`; `usage` somando `tokens`/`cost` dos assistants; `error` = `error` do último assistant (`{type, message}`) mapeado para `{ name: type, data: { message } }`.
 - `errors.mjs#classifyError`: aceitar os tipos V2 (`provider.no-route` → fatal "modelo indisponível"; `aborted` → cancelado; `permission.rejected` em tool não falha o turno; `provider.rate-limit`/HTTP 429 → recuperável). Mantém os nomes V1 que ainda chegam dos testes antigos só até a Task 10, depois remova.
@@ -712,7 +718,8 @@ test('buildCatalog reads the V2 provider, model and default lists', () => {
   });
   const entry = catalog.byFullId.get('omniroute-personal/opencode-go/deepseek-v4.1-flash');
   assert.ok(entry);
-  assert.deepEqual(entry.variants, ['low', 'medium', 'high', 'max']);
+  assert.deepEqual(entry.variants, ['low', 'medium', 'high']);
+  assert.ok(!JSON.stringify(catalog).includes('fake-provider-key'), 'settings/apiKey never reaches the catalog');
   assert.ok(catalog.connected.includes('omniroute-personal'));
 });
 ```
@@ -736,7 +743,7 @@ test('session todo is gone in V2', async (t) => {
 });
 ```
 
-A Task 1 grava também `model-default.json` (`GET /api/model/default`) e o modelo da amostra com as variants reais. Confira em `tests/helpers.mjs` o nome do campo de exit code devolvido por `runCli` (`code` ou `status`) e use o existente.
+`model-default.json` e `model.json` já existem (Task 1); a amostra inclui `settings.apiKey: "fake-provider-key"` justamente para provar a remoção. Confira em `tests/helpers.mjs` o nome do campo de exit code devolvido por `runCli` (`code` ou `status`) e use o existente.
 - [ ] **Step 2:** FAIL. **Step 3:** implementar. **Step 4:** a **suíte inteira** volta a ser obrigatória: `npm test` → 0 falhas (controlador, fora do sandbox). **Step 5: Commit** `feat(sessions): sessions and catalogs on OpenCode 2; drop session todo`.
 
 ---
@@ -748,9 +755,9 @@ A Task 1 grava também `model-default.json` (`GET /api/model/default`) e o model
 - Test: `tests/unit/transfer.test.mjs`, `tests/integration/transfer.test.mjs`, `tests/unit/attach.test.mjs`, `tests/live/f5-transfer.mjs`
 
 **Interfaces:**
-- `buildExport(conversion, { model, agent = 'build', directory, nextId })` → `{ info: { id, title, projectID: 'global', agent, model: { id, providerID, variant: 'default' }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created, updated }, location: { directory } }, messages: [...] }` com mensagens planas: `{ id, type: 'user', time: { created }, text }` e `{ id, type: 'assistant', time: { created, completed }, agent, model: { id, providerID, variant: 'default' }, content: [{ type: 'text', text }], finish: 'stop', cost: 0, tokens }`. A primeira mensagem é `{ type: 'synthetic', text: transferHeader(...) }` se o V2 aceitar `synthetic` na importação; senão o cabeçalho vai como primeira mensagem `user` (o controlador confirma com o binário real e registra no relatório da task).
+- `buildExport(conversion, { model, agent = 'build', directory, nextId })` → `{ info: { id, title, projectID: 'global', agent, model: { id, providerID, variant: 'default' }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created, updated }, location: { directory } }, messages: [...] }` com mensagens planas: `{ id, type: 'user', time: { created }, text }` e `{ id, type: 'assistant', time: { created, completed }, agent, model: { id, providerID, variant: 'default' }, content: [{ type: 'text', text }], finish: 'stop', cost: 0, tokens }`. A primeira mensagem é `{ id, type: 'synthetic', time: { created }, text: transferHeader(...) }` (o V2 aceita `synthetic` na importação — confirmado ao vivo). Todos os ids de mensagem são novos (`nextId`), nunca reaproveitados.
 - `EXPORT_SHAPE`/`validateExportShape` para a forma V2 (`fake-import.mjs` é o oráculo independente).
-- `runImport({ opencodeBin, file, cwd })` → `opencode session import --directory <cwd> <file>`; `IMPORT_SUCCESS_RE` inalterada.
+- `runImport({ opencodeBin, file, cwd, serverUrl, password })` → `opencode session import --server <serverUrl> --directory <cwd> <file>` com a senha em `OPENCODE_SERVER_PASSWORD` só no ambiente do filho (nunca em argumento); `IMPORT_SUCCESS_RE` inalterada. O transfer garante o servidor gerenciado antes (`ensureServer`). Nunca chamar o CLI sem `--server` (Fato 22).
 - `resumeCommand(sessionID)` → `opencode -s <sessionID>` (V2 mantém `-s`).
 - `buildAttachArgs({ url, sessionID, directory })` → `['--server', url, ...(sessionID ? ['-s', sessionID] : [])]` (o V2 não tem `attach` nem `--dir`; o pane faz `cd <directory>` antes de executar). O `PANE_SCRIPT` segue lendo a senha do arquivo 0600 para `OPENCODE_SERVER_PASSWORD`; o texto impresso nunca contém a senha.
 

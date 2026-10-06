@@ -1,0 +1,88 @@
+{
+  "info": {
+    "id": "ses_eee5dd6dfffeG77IxRlsoqsF8V",
+    "projectID": "global",
+    "agent": "build",
+    "model": {
+      "id": "does-not-exist",
+      "providerID": "omniroute-personal",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "failed",
+    "time": {
+      "created": 1791297202473,
+      "updated": 1791297202492,
+      "idle": 1791297202502
+    },
+    "title": "OPC: transfer: sample",
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "deny"
+      }
+    ],
+    "location": {
+      "directory": "<workspace>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_111a2293b001qYhSkFTa5YMAyy",
+      "time": {
+        "created": 1791297202498
+      },
+      "type": "synthetic",
+      "text": "transfer header"
+    },
+    {
+      "id": "msg_111a2293b001qYhSkFTa5YMA4Q",
+      "time": {
+        "created": 1791297202499
+      },
+      "text": "hi",
+      "type": "user"
+    },
+    {
+      "id": "msg_111a2293b001qYhSkFTa5YMAzz",
+      "time": {
+        "created": 1791297202500,
+        "completed": 1791297202501
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "does-not-exist",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "hello back"
+        }
+      ],
+      "finish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  ]
+}
