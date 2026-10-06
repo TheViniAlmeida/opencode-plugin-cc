@@ -19,3 +19,10 @@ test('validator accepts nullable fields in product schemas', () => {
   assert.equal(validate({ line: null }), null);
   assert.equal(typeof validate({ line: '1' }), 'string');
 });
+
+test('validator preserves one schema-shaped wrapper for downstream recovery', () => {
+  const validate = schemaValidator(schema);
+  assert.equal(validate({ title: 'Example', properties: { files: ['a'] } }), null);
+  assert.equal(typeof validate({ title: 'Example', properties: { files: 'a' } }), 'string');
+  assert.equal(typeof validate({ title: 'Example', properties: { properties: { files: ['a'] } } }), 'string');
+});

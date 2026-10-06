@@ -5,5 +5,14 @@ export function jsonInstruction(schema) {
 }
 
 export function schemaValidator(schema) {
-  return (value) => validateInput(schema, value)[0] ?? null;
+  return (value) => {
+    const error = validateInput(schema, value)[0] ?? null;
+    if (error === null) return null;
+    // Keep one schema-shaped wrapper intact so the conclave can recover its values.
+    if (value && typeof value === 'object' && !Array.isArray(value)
+      && typeof value.title === 'string' && value.properties && typeof value.properties === 'object'
+      && !Array.isArray(value.properties) && Object.keys(value).every((key) => key === 'title' || key === 'properties')
+      && validateInput(schema, value.properties).length === 0) return null;
+    return error;
+  };
 }

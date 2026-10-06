@@ -206,7 +206,7 @@ test('evidence file names are anonymized in packages, peers, judge and Markdown'
 });
 
 for (const mode of ['text', 'tool']) {
-  test(`${mode} member, debate and judge prompts have exactly one mode-specific contract`, async () => {
+  test(`${mode} member, debate and judge prompts request unfenced V2 text JSON`, async () => {
     const h = harness((spec) => spec.role === 'judge'
       ? ok(synthesis(['A', 'B', 'C']), 'ses_judge')
       : ok(spec.round === 1 ? answer() : debateAnswer(peerOf(spec)), `ses_${spec.label}`),
@@ -215,9 +215,9 @@ for (const mode of ['text', 'tool']) {
     assert.equal(h.calls.length, 7);
     for (const { prompt } of h.calls) {
       assert.doesNotMatch(prompt, /Reply only through the structured output/);
-      assert.equal(prompt.split('Return your answer only through the structured output.').length - 1, mode === 'tool' ? 1 : 0);
-      assert.equal(prompt.split('Return only one JSON object inside a single ```json fence').length - 1, mode === 'text' ? 1 : 0);
-      assert.equal(prompt.includes('Return a JSON instance with field values, not the schema.'), mode === 'text');
+      assert.doesNotMatch(prompt, /Return your answer only through the structured output|single ```json fence/);
+      assert.equal(prompt.split('Reply with only one JSON object, no prose and no code fence').length - 1, 1);
+      assert.equal(prompt.includes('Return a JSON instance with field values, not the schema.'), true);
     }
   });
 }

@@ -99,6 +99,21 @@ test('V2 JSON schema request adds text instruction and accepts only matching out
   }
 });
 
+test('V2 runner retains a review finding without a file for conclave clustering', async () => {
+  const finding = { severity: 'low', title: 'Missing tests', body: 'No test covers this behavior.', confidence: 0.5, recommendation: 'Add a test.' };
+  const schema = { type: 'object', required: ['findings'], properties: { findings: { type: 'array', items: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, file: { type: ['string', 'null'] } } } } } };
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'Review changes' }], format: { type: 'json_schema', schema }, newSession: { title: 'OPC: review', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  const response = { findings: [finding] };
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: JSON.stringify(response) }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  const result = await pending;
+  assert.deepEqual(result.structured, response);
+  assert.equal(result.structuredSource, 'text');
+});
+
 test('V2 execution.failed before assistant is a classified provider failure', async () => {
   const { api, hub, emit } = memoryV2();
   const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'missing' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });

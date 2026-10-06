@@ -73,7 +73,7 @@ test('presenter handles failed refreshed group summaries in text and JSON modes'
   assert.deepEqual(json, { jobId: 'conc-test', status: 'failed', errorCode: 'coordinator_error', errorMessage: 'provider unavailable' });
 });
 
-async function workerFixture(t, { structuredOutput = 'text' } = {}) {
+async function workerFixture(t, { structuredOutput = 'text', wrapped = false } = {}) {
   const dir = stateDir(t);
   const { group, members } = await createGroup(dir, { kind: 'conclave' }, [
     ...MEMBERS.map((m) => ({ kind: 'conclave-member', role: `member:${m.label}`, model: m.full })),
@@ -86,7 +86,7 @@ async function workerFixture(t, { structuredOutput = 'text' } = {}) {
       prompts.push(id);
       const isJudge = f.state.sessions[id].title === 'OPC: conclave: judge';
       const response = isJudge ? synthesis(['A', 'B', 'C']) : answer();
-      f.emitTurn(id, { text: JSON.stringify(response), delayMs: 1 });
+      f.emitTurn(id, { text: JSON.stringify(wrapped ? { title: isJudge ? 'ConclaveSynthesis' : 'ConclaveMember', properties: response } : response), delayMs: 1 });
     } },
   };
   const routes = installSessionApi(fake);
@@ -110,8 +110,8 @@ async function workerFixture(t, { structuredOutput = 'text' } = {}) {
 }
 
 for (const mode of ['text', 'tool']) {
-  test(`${mode} worker accepts schema-shaped values from the real runner without losing members`, async (t) => {
-    const f = await workerFixture(t, { structuredOutput: mode });
+  test(`${mode} worker recovers wrapped schema-shaped values from the real runner`, async (t) => {
+    const f = await workerFixture(t, { structuredOutput: mode, wrapped: true });
     assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 0);
     const group = readJob(f.ctx.stateDir, f.group.id);
     assert.equal(group.status, 'completed');
