@@ -1,7 +1,7 @@
 // Helpers for the conclave integration tests (not a test file; the runner only collects *.test.mjs).
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeWorkspace, testEnv, runCli, fakeRequests, writeGlobalConfig } from '../helpers.mjs';
+import { makeWorkspace, testEnv, runCli, fakeRequests, readFakeState, writeGlobalConfig } from '../helpers.mjs';
 import { kindOf } from '../fixtures/scenarios/_conclave-common.mjs';
 export { fakeRequests };
 export const PREFIX = 'omniroute-personal/opencode-go/';
@@ -22,7 +22,15 @@ export async function conclave(args, { env, cwd, stdin = '', timeoutMs = 90_000 
   try { json = JSON.parse(res.stdout); } catch {}
   return { ...res, json };
 }
-export function promptRequests(env) { return fakeRequests(env).filter((r) => r.method === 'POST' && /^\/api\/session\/[^/]+\/prompt$/.test(r.path)); }
+export function promptRequestsFromState(state) {
+  return (state.requests ?? []).filter((r) => r.method === 'POST' && /^\/api\/session\/[^/]+\/prompt$/.test(r.path)).map((request) => {
+    const sessionID = sessionOfRequest(request);
+    const messageID = request.body?.id;
+    const user = messageID && (state.messages?.[sessionID] ?? []).find((message) => message.type === 'user' && message.id === messageID);
+    return user ? { ...request, body: { ...request.body, text: user.text } } : request;
+  });
+}
+export function promptRequests(env) { return promptRequestsFromState(readFakeState(env)); }
 export function sessionOfRequest(request) { return request.path.split('/')[3]; }
 const KIND_BY_TITLE = { ConclaveSynthesis: 'judge', ConclaveDebate: 'debate', ConclaveMember: 'member' };
 export function requestsBySchema(env, title) { return promptRequests(env).filter((r) => kindOf(r.body) === KIND_BY_TITLE[title]); }
