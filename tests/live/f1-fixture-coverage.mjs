@@ -1,4 +1,4 @@
-// F1 contract: shapes of GET /provider, /agent, /command, /skill on the real 1.18.x server vs the fake fixtures.
+// F1 contract: shapes of GET /api/provider, /api/agent, /api/command, /api/skill on the real OpenCode 2 server vs the fake fixtures.
 // Run: OPC_LIVE=1 node --test tests/live/f1-fixture-coverage.mjs   (prints key paths only, never values)
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,10 +42,12 @@ test('live contract: fixtures cover every key path the real server returns', { s
   const stateDir = workspaceStateDir(resolveDataDir(env), workspaceRoot);
   ensurePrivateDir(stateDir);
   const ctx = { stateDir, workspaceRoot, config: loadConfig({ dataDir, workspaceRoot }).config, env };
-  const api = createApi(clientFor(ctx, await ensureServer(ctx)));
+  const client = clientFor(ctx, await ensureServer(ctx));
+  const api = createApi(client);
   const pairs = [
     ['provider.json', await api.providers()],
-    ['agent.json', await api.agents()],
+    // Raw response: api.agents() returns the adapted opc shape, which the V2 fixture does not mirror.
+    ['agent.json', await client.get('/api/agent', { retryOnServerDown: true })],
     ['command.json', await api.commands()],
     ['skill.json', await api.skills()],
   ];

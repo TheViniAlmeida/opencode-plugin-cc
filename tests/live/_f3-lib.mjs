@@ -35,6 +35,9 @@ export function liveWorkspace(t, { name = 'ws' } = {}) {
   writeFileSync(join(ws, 'README.md'), '# Live F3 workspace\n\nDisposable repository for opc F3 live tests.\n');
   git('add', '.');
   git('commit', '-q', '-m', 'init');
+  // Session diff and revert need OpenCode snapshots; the operator's own config may turn them off, so the
+  // disposable opc config turns them on for this managed server only.
+  writeFileSync(join(dataDir, 'config.json'), `${JSON.stringify({ server: { configOverride: { share: 'disabled', snapshot: true } } }, null, 2)}\n`, { mode: 0o600 });
   const env = { ...process.env, OPC_DATA_DIR: dataDir, OPC_COMPANION_SESSION_ID: `live-f3-${randomBytes(4).toString('hex')}` };
   delete env.OPC_SERVER_URL;
   delete env.OPC_SERVER_PASSWORD;
@@ -159,4 +162,5 @@ export function parseList(stdout, key) {
   return Array.isArray(data) ? data : (data[key] ?? data.items ?? []);
 }
 
-export const userText = (m) => (m.parts ?? []).filter((p) => p.type === 'text').map((p) => p.text).join(' ');
+// V2 user messages are flat: the prompt text is the `text` field.
+export const userText = (m) => (m?.type === 'user' && typeof m.text === 'string' ? m.text : '');
