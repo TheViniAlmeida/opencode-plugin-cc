@@ -62,8 +62,8 @@ test('reply keeps full ids and follow-up line when bridge clears the job during 
   ] });
   const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
   const api = {
-    async listPermissions() { return [{ id: pendingId, permission: 'bash', sessionID }]; },
-    async replyPermission() { await updateJob(stateDir, job.id, { pendingRequest: null, status: 'running' }); },
+    async listPermissions(id) { assert.equal(id, sessionID); return [{ id: pendingId, permission: 'shell', sessionID }]; },
+    async replyPermission(id, requestID, body) { assert.equal(id, sessionID); assert.equal(requestID, pendingId); assert.equal(body.reply, 'reject'); await updateJob(stateDir, job.id, { pendingRequest: null, status: 'running' }); },
   };
   await run(ctx, ['reply', pendingId, 'reject'], { getApi: () => api });
   assert.match(ctx.output, new RegExp(`Resposta reject enviada para ${pendingId}`));
@@ -79,6 +79,20 @@ test('permissions reply prints full sibling request identifiers', async (t) => {
   const api = { async listPermissions() { return ids.map((id) => ({ id, permission: 'bash', sessionID })); }, async replyPermission() {} };
   await run(ctx, ['reply', ids[0], 'reject'], { getApi: () => api });
   assert.ok(ids.every((id) => ctx.output.includes(id)), ctx.output);
+});
+
+test('permissions answer uses the V2 form session and string[][] answers', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
+  const sessionID = 'ses_session123456789';
+  const formID = 'frm_form123456789';
+  await createJob(stateDir, { kind: 'task', title: 'test', workspaceRoot: '/ws', status: 'waiting_permission', sessionID, pendingRequest: [{ id: formID, type: 'question', sessionID, questions }] });
+  const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
+  const api = {
+    async listQuestions(id) { assert.equal(id, sessionID); return [{ id: formID, sessionID, questions }]; },
+    async replyQuestion(id, request, answers) { assert.equal(id, sessionID); assert.equal(request.id, formID); assert.deepEqual(answers, [['Postgres'], ['A', 'C'], ['my-name']]); },
+  };
+  assert.equal(await run(ctx, ['answer', formID, 'postgres', 'A|C', 'my-name'], { getApi: () => api }), 0);
+  assert.match(ctx.output, /Resposta enviada/);
 });
 
 test('permissions list with no jobs and no server reports an empty list', async () => {

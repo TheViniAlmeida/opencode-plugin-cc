@@ -238,6 +238,14 @@ export function installSessionApi(fake) {
       event('permission.replied', { sessionID: m[1], requestID: m[2], reply: body.decision });
       if (body.decision === 'reject') event('session.tool.failed', { sessionID: m[1], id: request.source.id, error: { type: 'permission.rejected', message: 'Permissão recusada' } });
       settle(m[2], body.decision);
+      if (body.decision === 'reject') {
+        for (const sibling of Object.values(state.permissions).filter((item) => item.sessionID === m[1])) {
+          delete state.permissions[sibling.id];
+          state.permissionReplies.push({ requestID: sibling.id, decision: 'reject' });
+          event('permission.replied', { sessionID: m[1], requestID: sibling.id, reply: 'reject' });
+          settle(sibling.id, 'reject');
+        }
+      }
       persist();
       return empty();
     }],

@@ -70,14 +70,13 @@ test('um segundo job na mesma sessão OpenCode falha imediatamente (exit 2)', as
   assert.match(again.stdout + again.stderr, /SESSION_BUSY/);
 });
 
-test('troca de perfil ao retomar: read-only → escrita recusada; write → read-only aplicado', async (t) => {
+test('troca de perfil ao retomar: V2 substitui permissões nos dois sentidos', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const ro = await opc(ctx, ['task', 'read only first']);
   const roJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(ro.stderr));
-  const refused = await opc(ctx, ['task', '--write', '--resume', roJob.id, 'now write']);
-  assert.equal(refused.code, 2);
-  assert.match(refused.stdout + refused.stderr, /PROFILE_SWITCH_UNSUPPORTED/);
-  assert.equal(requestsTo(ctx.env, 'PATCH', /^\/api\/session\//).length, 0);
+  const upgraded = await opc(ctx, ['task', '--write', '--resume', roJob.id, 'now write']);
+  assert.equal(upgraded.code, 0, upgraded.stderr);
+  assert.equal(requestsTo(ctx.env, 'PATCH', `/api/session/${roJob.sessionID}`).length, 1);
   const wr = await opc(ctx, ['task', '--write', 'write first']);
   const wrJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(wr.stderr));
   const back = await opc(ctx, ['task', '--resume', wrJob.id, 'now read only']);

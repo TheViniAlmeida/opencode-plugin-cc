@@ -5,9 +5,8 @@ import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
-import { buildCatalog } from '../lib/models.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
-import { buildPermissionRules, parseProfile, planPermissionSwitch } from '../lib/policy.mjs';
+import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
@@ -23,6 +22,26 @@ const KIND_SPECS = Object.freeze({
   ask: { template: 'ask.md', readOnly: true },
   plan: { template: 'plan.md', readOnly: true },
 });
+
+const REMOVED_ACTIONS = new Set(['list', 'lsp', 'skill', 'todowrite', 'doom_loop']);
+
+export function rulesFromV2(rules) {
+  return rules.flatMap(({ permission, pattern, action }) => {
+    const name = { bash: 'shell', task: 'subagent' }[permission] ?? permission;
+    return REMOVED_ACTIONS.has(name) ? [] : [{ action: name, resource: pattern, effect: action }];
+  });
+}
+
+export function catalogFromV2(providers, models) {
+  const connected = new Set(providers.filter((provider) => provider.activation === 'enabled').map((provider) => provider.id));
+  const entries = models.map((model) => ({
+    providerID: model.providerID, modelID: model.modelID ?? model.id,
+    full: `${model.providerID}/${model.modelID ?? model.id}`,
+    variants: (model.variants ?? []).map((variant) => variant.id),
+    connected: connected.has(model.providerID),
+  }));
+  return { connected, models: entries, byFull: new Map(entries.map((entry) => [entry.full, entry])), providers: providers.map(({ id, name }) => ({ id, name, connected: connected.has(id) })) };
+}
 
 export const TURN_FLAGS = Object.freeze({
   json: { type: 'boolean' },
@@ -209,8 +228,9 @@ export async function runKindCommand(ctx, argv, kind) {
   const policy = config.policy ?? {};
 
   const { api, server } = await connectApi(ctx);
-  const catalog = buildCatalog(await api.providers());
-  const opencodeConfig = await api.getConfig();
+  const [providers, models] = await Promise.all([api.providers(), api.models()]);
+  const catalog = catalogFromV2(providers, models);
+  const opencodeConfig = null;
   const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
   const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
@@ -224,12 +244,12 @@ export async function runKindCommand(ctx, argv, kind) {
     else ctx.err(`[opc] aviso: defaultVariant "${config.defaultVariant}" não está disponível para ${candidate.full}; ignorada\n`);
   }
   const selection = validateSelection({ candidate, variant, agentName, agents, catalog, policy });
-  const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
+  const rules = rulesFromV2(buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] }));
   const sessionID = resolveResumeSession(ctx, flags, kind);
   let patchPermission = null;
   if (sessionID) {
     const session = await api.getSession(sessionID);
-    if (planPermissionSwitch(session?.permission, rules) === 'patch') patchPermission = rules;
+    if (JSON.stringify(session?.permissions) !== JSON.stringify(rules)) patchPermission = rules;
   }
   const template = spec.template ? loadPrompt(spec.template) : null;
   const text = buildPromptText({ userPrompt, template, project: config.project });
@@ -239,7 +259,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const request = {
     kind,
     profileKind,
-    ...(sessionID ? { sessionID } : { newSession: { title: sessionTitle(kind, summary), permission: rules } }),
+    ...(sessionID ? { sessionID } : { newSession: { title: sessionTitle(kind, summary), permissions: rules } }),
     ...(patchPermission ? { patchPermission } : {}),
     childPermission: profileKind === 'read-only' ? null : rules,
     parts: [{ type: 'text', text }],

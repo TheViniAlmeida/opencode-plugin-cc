@@ -126,7 +126,7 @@ async function waitIdle(api, sessionID, maxMs) {
   const deadline = performance.now() + maxMs;
   while (performance.now() < deadline) {
     try { if (!((await api.sessionStatus())?.[sessionID])) return true; }
-    catch (err) { if (isServerDown(err)) return false; }
+    catch { return false; }
     await sleep(250);
   }
   return false;
@@ -353,7 +353,7 @@ export async function runTurn({
       try { await api.interrupt(sessionID); } catch { /* Best effort. */ }
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
     }
-    const safetyFailure = outcome.reason === 'callback-failed';
+    const safetyFailure = outcome.reason === 'callback-failed' || outcome.reason === 'resync-failed';
     if (safetyFailure) {
       const sessionAborts = [];
       for (const id of [...tracked].reverse()) {
@@ -393,7 +393,7 @@ export async function runTurn({
       if (!safetyFailure) { if (isServerDown(err)) return serverLost(); throw err; }
       collected = extractTurn([]);
     }
-    const textJson = request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : null);
+    const textJson = request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : request.kind === 'task' ? () => null : null);
     if (outcome.reason === 'idle' && !collected.error && !forcedError && typeof textJson === 'function') collected.structured = extractTextJson(collected.finalText, textJson);
     collected = redactOutput({ ...collected, structuredSource: collected.structured === null ? null : 'text' });
     const toolsRan = collected.toolsRan || toolsRanLive;

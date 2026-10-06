@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { F2A_POLICY, opc, requestsTo, setupF2a } from '../helpers.mjs';
 import { NPM_TEST_ONLY_RULES, READ_ONLY_RULES, WRITE_RULES } from '../fixtures/expected-rules-f2a.mjs';
+import { rulesFromV2 } from '../../plugins/opc/scripts/commands/task.mjs';
 
-test('profile rules are sent to POST /session exactly as spec §8.1 (read-only, write, custom)', async (t) => {
+test('profile rules are sent to POST /api/session in V2 form (read-only, write, custom)', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok', config: { permissionProfiles: { 'npm-test-only': [{ permission: 'bash', pattern: 'npm test', action: 'allow' }] } } });
   for (const [args, expected] of [
     [['task', 'read only please'], READ_ONLY_RULES],
@@ -12,8 +13,8 @@ test('profile rules are sent to POST /session exactly as spec §8.1 (read-only, 
   ]) {
     const r = await opc(ctx, args);
     assert.equal(r.code, 0, r.stderr);
-    const posts = requestsTo(ctx.env, 'POST', '/session');
-    assert.deepEqual(posts.at(-1).body.permission, expected, args.join(' '));
+    const posts = requestsTo(ctx.env, 'POST', '/api/session');
+    assert.deepEqual(posts.at(-1).body.permissions, rulesFromV2(expected), args.join(' '));
   }
 });
 

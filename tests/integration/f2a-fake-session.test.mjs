@@ -91,9 +91,9 @@ test('fake session API: reject rejects the sibling; always stays accepted by the
   assert.equal((await call('POST', `/api/session/${session.id}/permission/${pending[0].id}/reply`, { decision: 'reject' })).status, 204);
   const replied = await waitEvent((e) => e.type === 'permission.replied' && e.data.requestID === pending[0].id);
   assert.equal(replied[0].data.reply, 'reject');
-  assert.equal(fake.state.permissionReplies.length, 1);
-  assert.equal((await call('GET', `/api/session/${session.id}/permission`)).body.data.length, 1);
-  assert.equal((await call('POST', `/api/session/${session.id}/permission/${pending[1].id}/reply`, { decision: 'once' })).status, 204);
+  assert.equal(fake.state.permissionReplies.length, 2);
+  assert.equal((await call('GET', `/api/session/${session.id}/permission`)).body.data.length, 0);
+  assert.equal((await call('POST', `/api/session/${session.id}/permission/${pending[1].id}/reply`, { decision: 'once' })).status, 404);
   await waitEvent((e) => e.type === 'session.execution.succeeded');
 });
 

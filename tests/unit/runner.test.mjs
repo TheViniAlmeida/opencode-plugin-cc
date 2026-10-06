@@ -70,6 +70,16 @@ test('V2 turn completes on execution.succeeded and reads idle-bounded messages',
   assert.deepEqual(api.createdBody.model, { providerID: 'p', id: 'm' });
 });
 
+test('V2 task preserves a JSON object returned as text', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { kind: 'task', model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'give me json' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: '{"verdict":"approve"}' }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  assert.deepEqual((await pending).structured, { verdict: 'approve' });
+});
+
 test('V2 execution.failed before assistant is a classified provider failure', async () => {
   const { api, hub, emit } = memoryV2();
   const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'missing' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
@@ -126,6 +136,38 @@ for (const method of ['sessionStatus', 'children', 'listPermissions', 'listQuest
     assert.match(result.errorMessage, new RegExp(method));
   });
 }
+
+test('V2 resync failure interrupts an active session before returning failure', async () => {
+  const { api, hub } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], idleWaitMs: 50, timeoutMs: 1000 } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.children = async () => { throw new RequestError('API_FAILED', 'children failed'); };
+  api.interrupt = async (sessionID) => { api.calls.push(['interrupt', sessionID]); api.sessionStatus = async () => ({}); return true; };
+  reconnect();
+  const result = await pending;
+  assert.equal(result.errorCode, 'API_FAILED');
+  assert.deepEqual(api.calls.filter(([name]) => name === 'interrupt'), [['interrupt', id]]);
+  assert.equal(result.abortConfirmed, true);
+});
+
+test('V2 resync failure reports an unconfirmed interrupt', async () => {
+  const { api, hub } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], idleWaitMs: 5, timeoutMs: 1000 } });
+  await api.created;
+  await api.promptSettled;
+  api.children = async () => { throw new RequestError('API_FAILED', 'children failed'); };
+  api.interrupt = async () => false;
+  reconnect();
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.abortConfirmed, false);
+  assert.deepEqual(result.sessionAborts.map(({ aborted }) => aborted), [false]);
+});
 
 test('V2 prompt timeout resends same id without reading messages', async () => {
   const { api, hub, emit } = memoryV2({ promptFailsOnce: 'TIMEOUT' });

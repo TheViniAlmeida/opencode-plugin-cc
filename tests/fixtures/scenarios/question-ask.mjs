@@ -4,7 +4,7 @@ export default {
     fake.setStatus(sessionID, { type: 'busy' });
     const outcome = await fake.askQuestion(sessionID, [
       { key: 'q0', title: 'Banco de dados', description: 'Escolha o banco de dados.', type: 'string', options: [{ value: 'Postgres', label: 'Postgres', description: 'Relacional' }, { value: 'SQLite', label: 'SQLite', description: 'Embutido' }], custom: false },
-      { key: 'q1', title: 'Recursos', description: 'Escolha os recursos.', type: 'string', options: [{ value: 'A', label: 'A', description: 'Autenticação' }], custom: false },
+      { key: 'q1', title: 'Recursos', description: 'Escolha os recursos.', type: 'multiselect', options: [{ value: 'A', label: 'A', description: 'Autenticação' }, { value: 'C', label: 'C', description: 'Cache' }], custom: false },
       { key: 'q2', title: 'Nome', description: 'Informe o nome.', type: 'string', options: [], custom: true },
     ]);
     if (fake.isAborted(sessionID)) return;

@@ -81,6 +81,8 @@ test('bridgeModeOf: read-only auto-rejects, others bridge', () => {
 });
 
 test('requiresUser: destructive bash, external_directory, sensitive paths', () => {
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['rm -rf build'] }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['ls -la'] }, policy), false);
   assert.equal(requiresUser({ permission: 'bash', patterns: ['rm -rf build'] }, policy), true);
   assert.equal(requiresUser({ permission: 'bash', patterns: ['make nuke all'] }, policy), true);
   assert.equal(requiresUser({ permission: 'bash', patterns: ['psql -c "DROP TABLE x"'] }, policy), true);

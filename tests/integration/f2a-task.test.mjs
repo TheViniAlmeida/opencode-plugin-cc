@@ -7,7 +7,7 @@ import { F2A_MODEL_ID, F2A_PROVIDER, jobIdFrom, jobIn, opc, requestsTo, setupF2a
 test('task foreground: V2 prompt prints final text and creates an explicit session', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'say hello\n' });
-  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.code, 0, `stdout=${r.stdout.length} stderr=${r.stderr.length}; ${r.stderr + r.stdout}`);
   assert.match(r.stdout, /^ok\n/);
   assert.match(r.stderr, /\[opc\] tarefa task-[0-9a-z]+-[0-9a-z]{6} iniciada/);
   const [post] = requestsTo(ctx.env, 'POST', '/api/session');
@@ -32,12 +32,11 @@ test('task: structured result is stored and shown', async (t) => {
   assert.equal(job.result.toolsRan, false);
 });
 
-test('task: StructuredOutputError → exit 7 with the raw text', async (t) => {
+test('task: non-JSON V2 text remains a normal result', async (t) => {
   const ctx = setupF2a(t, { scenario: 'structured-error' });
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'give me json' });
-  assert.equal(r.code, 7, r.stderr);
-  assert.match(r.stdout, /StructuredOutputError \(recoverable\)/);
-  assert.match(r.stdout, /Saída bruta \(falha na saída estruturada\):\n\nraw text answer/);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /raw text answer that is not valid JSON/);
 });
 
 test('--model with slashes reaches the V2 session; --effort is sent as variant', async (t) => {

@@ -194,7 +194,7 @@ export function requiresUser(request, policy = {}) {
   if (!request || typeof request.permission !== 'string') return true;
   const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
   if (request.permission === 'external_directory') return true;
-  if (request.permission === 'bash') {
+  if (request.permission === 'bash' || request.permission === 'shell') {
     const commands = [...patterns];
     if (typeof request.metadata?.command === 'string') commands.push(request.metadata.command);
     const destructive = destructiveBashOf(policy);
