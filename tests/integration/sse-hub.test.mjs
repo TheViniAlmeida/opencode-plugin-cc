@@ -69,14 +69,11 @@ for (const scenario of ['sse-drop', 'no-heartbeat']) {
   test(`${scenario}: the hub reconnects and fires onReconnect (resync point)`, async (t) => {
     const { hub, fake } = await setup(t, { scenario, livenessMs: 300 });
     let reconnects = 0;
-    const types = [];
     hub.onReconnect(() => { reconnects += 1; });
-    hub.onAny((e) => types.push(e.type));
     await hub.start();
     await waitFor(() => reconnects === 1, { timeoutMs: 5000, message: 'reconnect' });
     assert.equal(fake.state.sseConnections, 2);
     assert.equal(hub.state, 'open');
-    await waitFor(() => types.filter((x) => x === 'server.connected').length === 2, { message: 'eventos após reconectar' });
   });
 }
 

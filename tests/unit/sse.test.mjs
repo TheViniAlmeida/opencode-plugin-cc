@@ -36,8 +36,15 @@ test('parser counts heartbeat comments and parses data frames', () => {
   assert.deepEqual(out.events.map((e) => e.type), ['server.connected']);
 });
 
+test('parser counts each line-terminated heartbeat before a frame delimiter', () => {
+  const parser = createSSEParser();
+  assert.deepEqual(parser.push(': heartbeat\n'), { events: [], comments: 1 });
+  assert.deepEqual(parser.push(': heartbeat\n'), { events: [], comments: 1 });
+  assert.deepEqual(parser.push('\n'), { events: [], comments: 0 });
+});
+
 test('parser accepts the recorded OpenCode 2.0.22 stream', () => {
-  const result = createSSEParser().push(`${loadContractSample('sse-stream.txt')}\n`);
+  const result = createSSEParser().push(loadContractSample('sse-stream.txt'));
   assert.ok(result.comments >= 2);
   assert.equal(result.events[0].type, 'server.connected');
   assert.equal(result.events[1].type, 'session.created');
@@ -86,10 +93,19 @@ test('heartbeat comments rearm liveness without dispatching events', async () =>
     client,
     livenessMs: 80,
     backoffMs: [1],
-    fetchImpl: async () => {
+    fetchImpl: async (_url, { signal }) => {
       fetchCount += 1;
+      let readCount = 0;
       return { ok: true, status: 200, body: { getReader: () => ({
-        read: () => new Promise((resolve) => setTimeout(() => resolve({ done: false, value: new TextEncoder().encode(': heartbeat\n\n') }), 20)),
+        read: () => new Promise((resolve, reject) => {
+          const onAbort = () => { clearTimeout(timer); reject(new Error('aborted')); };
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            readCount += 1;
+            resolve({ done: false, value: new TextEncoder().encode(readCount === 1 ? ': heartbeat\n\n' : ': heartbeat\n') });
+          }, 20);
+          signal.addEventListener('abort', onAbort, { once: true });
+        }),
       }) } };
     },
   });
@@ -130,6 +146,42 @@ test('a heartbeat comment opens the stream without server.connected', async () =
   assert.equal(hub.state, 'open');
   assert.equal(fetchCount, 1);
   hub.stop();
+});
+
+test('reconnection opens on a line-terminated comment without server.connected', async () => {
+  let fetchCount = 0;
+  let reconnects = 0;
+  const received = [];
+  let notifyReconnect;
+  const reconnected = new Promise((resolve) => { notifyReconnect = resolve; });
+  const hub = new EventHub({
+    client,
+    livenessMs: 50,
+    backoffMs: [1],
+    fetchImpl: async () => {
+      fetchCount += 1;
+      const frames = fetchCount === 1
+        ? ['data: {"type":"server.connected","data":{}}\n\n']
+        : [': heartbeat\n'];
+      let index = 0;
+      return { ok: true, status: 200, body: { getReader: () => ({
+        read: async () => index < frames.length
+          ? { done: false, value: new TextEncoder().encode(frames[index++]) }
+          : fetchCount === 1 ? { done: true } : new Promise(() => {}),
+      }) } };
+    },
+  });
+  hub.onAny((event) => received.push(event.type));
+  hub.onReconnect(() => { reconnects += 1; notifyReconnect(); });
+  try {
+    await hub.start();
+    await Promise.race([reconnected, new Promise((resolve) => setTimeout(resolve, 100))]);
+    assert.equal(fetchCount, 2);
+    assert.equal(reconnects, 1);
+    assert.deepEqual(received, ['server.connected']);
+  } finally {
+    hub.stop();
+  }
 });
 
 test('stop during reconnect keeps the hub stopped', async () => {

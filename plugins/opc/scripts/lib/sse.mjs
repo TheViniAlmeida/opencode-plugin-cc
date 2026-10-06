@@ -6,30 +6,32 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createSSEParser() {
   let buffer = '';
+  let dataLines = [];
   return {
     push(chunkText) {
       buffer += String(chunkText);
-      buffer = buffer.replace(/\r\n/g, '\n');
       const events = [];
       let comments = 0;
-      let index = buffer.indexOf('\n\n');
+      let index = buffer.indexOf('\n');
       while (index !== -1) {
-        const frame = buffer.slice(0, index);
-        buffer = buffer.slice(index + 2);
-        comments += frame.split('\n').filter((line) => line.startsWith(':')).length;
-        const data = frame
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).replace(/^ /, ''))
-          .join('\n');
-        if (data) {
-          try {
-            events.push(JSON.parse(data));
-          } catch {
-            // invalid JSON frames are ignored
+        const rawLine = buffer.slice(0, index);
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        buffer = buffer.slice(index + 1);
+        if (line.startsWith(':')) {
+          comments += 1;
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).replace(/^ /, ''));
+        } else if (line === '') {
+          if (dataLines.length > 0) {
+            try {
+              events.push(JSON.parse(dataLines.join('\n')));
+            } catch {
+              // invalid JSON frames are ignored
+            }
           }
+          dataLines = [];
         }
-        index = buffer.indexOf('\n\n');
+        index = buffer.indexOf('\n');
       }
       return { events, comments };
     },
