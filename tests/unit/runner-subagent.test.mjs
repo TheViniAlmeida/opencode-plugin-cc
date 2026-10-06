@@ -49,6 +49,22 @@ test('child-session creates a child with explicit rules and model', async () => 
   assert.equal(result.finalText, 'found');
 });
 
+test('failed child session keeps the V2 provider diagnostic for group rendering', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'child-session' });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  api.messagesFor(sessionID, [
+    { id: api.lastPromptId(), type: 'user', text: 'find x' },
+    { id: 'msg_idle', type: 'idle', outcome: 'failed' },
+  ]);
+  emit({ type: 'session.execution.failed', data: { sessionID, error: { type: 'provider.auth', message: 'Chave de API inválida.' } } });
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.mechanism, 'child-session');
+  assert.match(result.errorMessage, /Chave de API inválida/);
+});
+
 test('subagent-tool allows only the member agent and asks for it by name', async () => {
   const { api, hub, emit } = memoryV2();
   const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'subagent-tool' });

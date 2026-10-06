@@ -6,6 +6,7 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     Timeout: 'O turno excedeu o tempo limite.',
     RetryCapExceeded: 'Limite de novas tentativas excedido.',
     'provider.no-route': 'Modelo indisponível.',
+    'provider.auth': 'Falha de autenticação do provedor.',
     'provider.rate-limit': 'Limite de requisições do provedor atingido.',
     aborted: 'Turno cancelado.',
     'permission.rejected': 'Permissão recusada.',
@@ -15,7 +16,7 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     StructuredOutputError: 'A saída estruturada é inválida.',
     ContextOverflowError: 'O contexto do modelo foi excedido.',
   };
-  const providerDetail = errorType === 'provider.no-route' && typeof (error?.data?.message ?? error?.message) === 'string'
+  const providerDetail = ['provider.no-route', 'provider.auth'].includes(errorType) && typeof (error?.data?.message ?? error?.message) === 'string'
     ? safeOutputText(error.data?.message ?? error.message).replace(/[\r\n]+/g, ' ').slice(0, 500).trim()
     : '';
   const message = providerDetail ? `${fixed[errorType]} ${providerDetail}` : fixed[errorType] ?? 'Erro do OpenCode.';

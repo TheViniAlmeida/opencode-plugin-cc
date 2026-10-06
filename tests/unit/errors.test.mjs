@@ -92,6 +92,13 @@ test('V2 provider route detail keeps the model and masks token patterns', () => 
   assert.doesNotMatch(result.message, /sk-proj-1234567890123456/);
 });
 
+test('V2 provider authentication failure preserves its masked diagnostic', () => {
+  const result = classifyError({ type: 'provider.auth', message: 'Chave de API inválida.' });
+  assert.equal(result.errorClass, 'fatal');
+  assert.equal(result.errorType, 'provider.auth');
+  assert.match(result.message, /Chave de API inválida/);
+});
+
 test('retryExceedsCap: attempt above max or wait above max', () => {
   const cfg = { maxProviderRetries: 3, maxRetryWaitSec: 60 };
   const now = 1_000_000;
