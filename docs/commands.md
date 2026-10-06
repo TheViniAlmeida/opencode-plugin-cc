@@ -330,6 +330,8 @@ OPC_ARGS_5f1d0c7a_EOF
 
 Para `unrevert`, o corpo é `unrevert ses_<id> --confirmed-by-user`. Nunca acrescente a flag sem a confirmação daquela ação e daquele alvo.
 
+O revert fica pendente até o `unrevert`. Um prompt novo na sessão (`/opc:task --resume`) ou um `summarize` pode consolidar o revert no OpenCode e apagar as mensagens revertidas; depois disso o `unrevert` não as traz de volta (A CONFIRMAR no OpenCode 2.0.22).
+
 O diff da sessão pode estar vazio. O OpenCode 2 não oferece diff por mensagem; confira o estado do workspace com o git. Com `"snapshot": false` na config do OpenCode, o diff fica sempre vazio e a saída avisa isso.
 
 ```bash
@@ -346,7 +348,7 @@ $ opc session diff ses_<id>
 {"sessionID":"ses_<id>","messageID":null,"source":"session","notices":[],"diffs":[…]}
 
 $ opc session summarize ses_<id> --model omniroute-personal/cmd/Qwen/Qwen3.7-Flash --json
-{"sessionID":"ses_<id>","model":"omniroute-personal/cmd/Qwen/Qwen3.7-Flash","summarized":true}
+{"sessionID":"ses_<id>","model":"omniroute-personal/cmd/Qwen/Qwen3.7-Flash","summarized":true,"compactionMessageID":"msg_<id>"}
 ```
 
 ### `/opc:subagent`

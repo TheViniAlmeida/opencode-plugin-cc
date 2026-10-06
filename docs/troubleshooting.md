@@ -190,8 +190,8 @@ consenso criado pelo juiz.
   de `~/.claude/projects`. Use um transcript dessa raiz; `OPC_TRANSFER_ALLOWED_ROOT`
   é destinado aos testes.
 - **`NO_MODEL` ou `MODEL_NEEDS_FULL_ID`:** forneça `--model <provider/model>` ou um
-  alias configurado, ou defina `defaultModel` no opc (ou `model` na configuração do
-  OpenCode). O opc não usa o modelo padrão do servidor como fallback. A transferência exige ID completo após expandir o alias e
+  alias configurado, ou defina `defaultModel` no opc. O transfer não lê o `model` da configuração do
+  OpenCode. O opc não usa o modelo padrão do servidor como fallback. A transferência exige ID completo após expandir o alias e
   respeita a política de provider/modelo.
 - **`EMPTY_TRANSCRIPT`:** não restou texto transferível após filtrar meta, sidechains,
   raciocínio e comandos locais. Confira a origem indicada.

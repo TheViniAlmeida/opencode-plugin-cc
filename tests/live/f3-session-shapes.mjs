@@ -11,7 +11,7 @@ import { resolveWorkspaceRoot } from '../../plugins/opc/scripts/lib/state.mjs';
 import { startFake } from '../fixtures/fake-opencode.mjs';
 import { SEED } from '../fixtures/f3-fake.mjs';
 
-// V2 paths: sessions carry location.directory, messages are flat (type/time/text) and compact answers 204.
+// V2 paths: sessions carry location.directory, messages are flat (type/time/text) and compact answers 200 with the compaction message.
 const READ_PATHS = {
   session: ['id', 'title', 'location.directory', 'time.updated'], fork: ['id', 'title', 'fork.sessionID'], reverted: ['id', 'revert.messageID'],
   unreverted: ['id'], message: ['id', 'type', 'time.created', 'text'], diff: ['file', 'status', 'additions', 'deletions', 'patch'],
