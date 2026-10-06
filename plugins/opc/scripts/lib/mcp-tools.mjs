@@ -19,7 +19,7 @@ const NON_ERROR_EXITS = new Set([ExitCode.OK, ExitCode.WAITING, ExitCode.WAIT_TI
 export const ALLOWED_COMMANDS = Object.freeze([
   'models', 'providers', 'agents', 'catalog', 'config get',
   'task', 'ask', 'plan', 'subagent', 'orchestrate', 'conclave',
-  'sessions', 'session show', 'session new', 'session fork', 'session summarize', 'session children', 'session diff', 'session todo',
+  'sessions', 'session show', 'session new', 'session fork', 'session summarize', 'session children', 'session diff',
   'status', 'result', 'cancel',
   'permissions list', 'permissions reply', 'permissions answer',
 ]);
@@ -301,7 +301,7 @@ export const TOOLS = Object.freeze([
     description: 'Bifurca uma sessão, opcionalmente em uma mensagem. Igual a /opc:session fork.',
     annotations: STATEFUL,
     inputSchema: object({ sessionId: ident('ID da sessão.'), messageId: ident('ID da mensagem de bifurcação.') }, ['sessionId']),
-    toArgv: (a) => new ArgvBuilder('session', 'fork').pos(a.sessionId).pos(a.messageId).build(),
+    toArgv: (a) => new ArgvBuilder('session', 'fork').pos(a.sessionId).str('before', a.messageId).build(),
   },
   {
     name: 'opc_session_summarize',
@@ -313,7 +313,6 @@ export const TOOLS = Object.freeze([
   },
   sessionTool('opc_session_children', 'Listar sessões filhas', 'children', 'Lista sessões filhas (subagentes). Igual a /opc:session children.'),
   sessionTool('opc_session_diff', 'Exibir diff da sessão', 'diff', 'Exibe o diff dos arquivos da sessão. Igual a /opc:session diff.'),
-  sessionTool('opc_session_todo', 'Exibir tarefas da sessão', 'todo', 'Exibe a lista de tarefas da sessão. Igual a /opc:session todo.'),
   {
     name: 'opc_job_status',
     title: 'Estado do job opc',

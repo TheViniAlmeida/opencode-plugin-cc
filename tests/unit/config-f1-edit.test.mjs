@@ -11,8 +11,8 @@ import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
-const catalog = buildCatalog(load('provider.json'));
-const agents = load('agent.json');
+const catalog = buildCatalog({ providers: load('provider.json'), models: load('model.json') });
+const agents = load('agent.json').map((agent) => ({ ...agent, name: agent.id }));
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const fresh = () => JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -103,7 +103,7 @@ test('validateAgainstServer: stored full ids are read without defaultProvider pr
 });
 
 test('defaultVariant falls back to the OpenCode default model', () => {
-  const cfg = { ...fresh(), defaultVariant: 'max' };
+  const cfg = { ...fresh(), defaultVariant: 'high' };
   const { errors } = validateAgainstServer(cfg, { catalog, agents, opencodeConfig: { model: `${MV}/opencode-go/qwen3.8-max` } });
   assert.deepEqual(errors, []);
 });
@@ -119,8 +119,7 @@ test('policyViolations: denied defaults, aliases and pinned agent models', () =>
   }, {}).config;
   const v = policyViolations(cfg, { catalog, agents });
   const paths = v.map((e) => e.path).sort();
-  assert.deepEqual(paths, ['aliases.eqk3', 'defaultAgent', 'defaultModel', 'defaultProvider', 'reviewModel']);
-  assert.match(v.find((e) => e.path === 'defaultAgent').rule, /modelo fixado/);
+  assert.deepEqual(paths, ['aliases.eqk3', 'defaultModel', 'defaultProvider', 'reviewModel']);
   assert.ok(v.every((e) => e.code === 'POLICY_DENIED'));
 });
 

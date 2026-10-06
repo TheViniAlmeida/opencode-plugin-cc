@@ -34,8 +34,9 @@ export function makeMainRepo(t) {
 }
 
 export function fixtureModelIds() {
-  const file = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'provider.json');
-  const catalog = buildCatalog(JSON.parse(fs.readFileSync(file, 'utf8')));
+  const data = path.join(REPO_ROOT, 'tests', 'fixtures', 'data');
+  const catalog = buildCatalog({ providers: JSON.parse(fs.readFileSync(path.join(data, 'provider.json'), 'utf8')),
+    models: JSON.parse(fs.readFileSync(path.join(data, 'model.json'), 'utf8')) });
   return catalog.models.filter((model) => catalog.connected.has(model.providerID)).map((model) => model.full);
 }
 

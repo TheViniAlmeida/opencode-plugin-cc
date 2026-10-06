@@ -11,6 +11,7 @@ import { createApi } from './api.mjs';
 import { EventHub } from './sse.mjs';
 import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
 import { resolveCandidates, validateSelection } from './routing.mjs';
+import { buildCatalog } from './models.mjs';
 import { UsageError } from './opc-error.mjs';
 
 export async function createContext({
@@ -171,23 +172,12 @@ export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
 }
 
 export async function loadDiscovery(api) {
-  const [providers, models, opencodeConfig, agents] = await Promise.all([
-    api.providers(), api.models(), api.getConfigSources(), api.agents(),
+  const [providers, models, defaultModel, agents] = await Promise.all([
+    api.providers(), api.models(), api.defaultModel(), api.agents(),
   ]);
-  const connected = new Set(providers.filter((provider) => provider.activation === 'enabled').map((provider) => provider.id));
-  const entries = models.map((model) => {
-    const modelID = model.modelID ?? model.id;
-    return {
-      providerID: model.providerID, modelID, full: `${model.providerID}/${modelID}`,
-      name: model.name ?? modelID, variants: (model.variants ?? []).map((variant) => variant.id),
-      limit: { context: model.limit?.context ?? null, output: model.limit?.output ?? null },
-      reasoning: Boolean(model.capabilities?.reasoning), toolcall: Boolean(model.capabilities?.tools),
-      connected: connected.has(model.providerID),
-    };
-  });
-  const catalog = { connected, models: entries, byFull: new Map(entries.map((entry) => [entry.full, entry])),
-    providers: providers.map((provider) => ({ id: provider.id, name: provider.name ?? provider.id,
-      connected: connected.has(provider.id), modelCount: entries.filter((entry) => entry.providerID === provider.id).length })), defaults: {} };
+  const catalog = buildCatalog({ providers, models, defaultModel });
+  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
+    ? { model: `${defaultModel.providerID}/${defaultModel.modelID ?? defaultModel.id}` } : null;
   return { catalog, opencodeConfig, agents: agents ?? [] };
 }
 

@@ -86,7 +86,7 @@ test('onboarding state and commit summaries protect nested and dotted secrets', 
   const draft = complete();
   draft.values = { 'server.configOverride': secretValues, 'server.configOverride.authToken': secretValues.authToken };
   saveDraft(dataDir, draft);
-  const summary = onboardingSummary({ hasGlobal: false, draft, catalog: buildCatalog(fixtureData('provider.json')), policy: {}, opencode: { installed: true }, npmAvailable: true });
+  const summary = onboardingSummary({ hasGlobal: false, draft, catalog: buildCatalog({ providers: fixtureData('provider.json'), models: fixtureData('model.json') }), policy: {}, opencode: { installed: true }, npmAvailable: true });
   safe(JSON.stringify(summary));
   safe(renderOnboarding({ kind: 'state', onboarding: summary }));
   const state = await cli(['setup', '--json']);
@@ -98,7 +98,7 @@ test('onboarding state and commit summaries protect nested and dotted secrets', 
 test('wizard summary and config init JSON mask fake secret-like settings from the existing config', async (t) => {
   fakeFetch(t);
   const { dataDir, cwd, cli } = harness(t);
-  const catalog = buildCatalog(fixtureData('provider.json'));
+  const catalog = buildCatalog({ providers: fixtureData('provider.json'), models: fixtureData('model.json') });
   const provider = catalog.providers.find(p => p.modelCount === 7).id;
   const output = captureStream();
   const answers = ['1', '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', '', '', 'n', 'n'];

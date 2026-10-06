@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, catalogFromV2, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
+import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
+import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 
 test('task uses the V2 OpenCode default when no opc model is configured', async () => {
   const calls = [];
@@ -18,14 +19,14 @@ test('task keeps an explicit opc model ahead of the OpenCode default', async () 
   const api = {
     providers: async () => [{ id: 'p', activation: 'enabled' }],
     models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }],
-    defaultModel: async () => { throw new Error('defaultModel should not be needed'); },
+    defaultModel: async () => ({ providerID: 'p', id: 'm' }),
   };
   const { resolution } = await resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { defaultModel: 'p/m', policy: {} } });
   assert.equal(resolution.candidates[0].source, 'default');
 });
 
 test('task adapts V2 model catalog and permission rules without retaining provider settings', () => {
-  const catalog = catalogFromV2([{ id: 'p', activation: 'enabled', settings: { apiKey: 'must-not-retain' } }], [{ id: 'm', modelID: 'm', providerID: 'p', variants: [{ id: 'high' }], settings: { apiKey: 'must-not-retain' } }]);
+  const catalog = buildCatalog({ providers: [{ id: 'p', activation: 'enabled', settings: { apiKey: 'must-not-retain' } }], models: [{ id: 'm', modelID: 'm', providerID: 'p', variants: [{ id: 'high' }], settings: { apiKey: 'must-not-retain' } }] });
   assert.equal(catalog.byFull.get('p/m').modelID, 'm');
   assert.deepEqual(catalog.byFull.get('p/m').variants, ['high']);
   assert.equal(JSON.stringify(catalog).includes('must-not-retain'), false);

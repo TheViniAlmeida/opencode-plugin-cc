@@ -41,11 +41,10 @@ const CASES = [
   ['opc_session_list', { all: true }, ['sessions', '--all', '--json']],
   ['opc_session_show', { sessionId: 'ses_1' }, ['session', 'show', 'ses_1', '--json']],
   ['opc_session_new', { title: 'My title', agent: 'plan', model: 'a/b' }, ['session', 'new', '--title', 'My title', '--agent', 'plan', '--model', 'a/b', '--json']],
-  ['opc_session_fork', { sessionId: 'ses_1', messageId: 'msg_2' }, ['session', 'fork', 'ses_1', 'msg_2', '--json']],
+  ['opc_session_fork', { sessionId: 'ses_1', messageId: 'msg_2' }, ['session', 'fork', 'ses_1', '--before', 'msg_2', '--json']],
   ['opc_session_summarize', { sessionId: 'ses_1', model: 'fast' }, ['session', 'summarize', 'ses_1', '--model', 'fast', '--json']],
   ['opc_session_children', { sessionId: 'ses_1' }, ['session', 'children', 'ses_1', '--json']],
   ['opc_session_diff', { sessionId: 'ses_1' }, ['session', 'diff', 'ses_1', '--json']],
-  ['opc_session_todo', { sessionId: 'ses_1' }, ['session', 'todo', 'ses_1', '--json']],
   ['opc_job_status', { jobId: 'task-1', all: true }, ['status', 'task-1', '--all', '--json']],
   ['opc_job_status', { jobId: 'task-1', wait: true, timeoutSec: 10 }, ['status', 'task-1', '--wait', '--timeout-ms', '10000', '--json']],
   ['opc_job_result', { jobId: 'task-1' }, ['result', 'task-1', '--json']],
@@ -78,11 +77,13 @@ function spyDispatch(result = { exitCode: 0, stdout: '{"ok":true}\n' }) {
   return { dispatch, calls };
 }
 
-test('the tool set is exactly the documented list (25 tools)', () => {
+test('the tool set is exactly the documented list (24 tools)', () => {
+  assert.ok(!TOOL_NAMES.includes('opc_session_todo'));
+  assert.equal(TOOL_NAMES.length, 24);
   assert.deepEqual(TOOL_NAMES, [
     'opc_models', 'opc_providers', 'opc_agents', 'opc_catalog', 'opc_config_get',
     'opc_task', 'opc_ask', 'opc_plan', 'opc_subagent', 'opc_orchestrate', 'opc_conclave',
-    'opc_session_list', 'opc_session_show', 'opc_session_new', 'opc_session_fork', 'opc_session_summarize', 'opc_session_children', 'opc_session_diff', 'opc_session_todo',
+    'opc_session_list', 'opc_session_show', 'opc_session_new', 'opc_session_fork', 'opc_session_summarize', 'opc_session_children', 'opc_session_diff',
     'opc_job_status', 'opc_job_result', 'opc_job_cancel',
     'opc_permissions_list', 'opc_permissions_reply', 'opc_permissions_answer',
   ]);

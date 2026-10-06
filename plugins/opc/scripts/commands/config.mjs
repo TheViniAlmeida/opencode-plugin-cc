@@ -89,8 +89,10 @@ async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
 
 async function serverDeps(ctx) {
   const { api } = await connectApi(ctx);
-  const [providers, agents, opencodeConfig] = await Promise.all([api.providers(), api.agents(), api.getConfig()]);
-  return { catalog: buildCatalog(providers), agents, opencodeConfig };
+  const [providers, models, defaultModel, agents] = await Promise.all([api.providers(), api.models(), api.defaultModel(), api.agents()]);
+  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
+    ? { model: `${defaultModel.providerID}/${defaultModel.modelID ?? defaultModel.id}` } : null;
+  return { catalog: buildCatalog({ providers, models, defaultModel }), agents, opencodeConfig };
 }
 
 async function cmdEdit(ctx, flags, op, rest) {

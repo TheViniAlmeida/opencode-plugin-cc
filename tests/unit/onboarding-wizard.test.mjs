@@ -10,8 +10,8 @@ import { scriptedTTY, captureStream, makeTempDir, trackTempDir } from '../helper
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
-const catalog = buildCatalog(load('provider.json'));
-const agents = load('agent.json');
+const catalog = buildCatalog({ providers: load('provider.json'), models: load('model.json') });
+const agents = load('agent.json').map((agent) => ({ ...agent, name: agent.id, native: ['build', 'plan', 'general', 'explore'].includes(agent.id) }));
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const tmp = (t) => trackTempDir(t, makeTempDir('opc-wiz-'));
@@ -52,7 +52,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
   assert.equal(cfg.policy.approver, 'claude');
   assert.equal(cfg.stopGate.enabled, true);
   assert.deepEqual(cfg.project, { goal: null, scope: [], taskTypes: ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'] });
-  assert.deepEqual(cfg.aliases, { strong: `${MV}/opencode-go/qwen3.8-max` });
+  assert.deepEqual(cfg.aliases, { strong: `${MV}/opencode-go/kimi-k3` });
   assert.match(log.text(), /AMBIGUOUS_MODEL: o modelo .* é ambíguo/);
   assert.doesNotMatch(output.text(), /Onde gravar\?/);
 });

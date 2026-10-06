@@ -6,6 +6,7 @@ import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
+import { buildCatalog } from '../lib/models.mjs';
 import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
@@ -23,26 +24,9 @@ const KIND_SPECS = Object.freeze({
   plan: { template: 'plan.md', readOnly: true },
 });
 
-export function catalogFromV2(providers, models) {
-  const connected = new Set(providers.filter((provider) => provider.activation === 'enabled').map((provider) => provider.id));
-  const entries = models.map((model) => ({
-    providerID: model.providerID, modelID: model.modelID ?? model.id,
-    full: `${model.providerID}/${model.modelID ?? model.id}`,
-    variants: (model.variants ?? []).map((variant) => variant.id),
-    connected: connected.has(model.providerID),
-  }));
-  return { connected, models: entries, byFull: new Map(entries.map((entry) => [entry.full, entry])), providers: providers.map(({ id, name }) => ({ id, name, connected: connected.has(id) })) };
-}
-
 export async function resolveTaskCandidates({ api, kind, flags, config }) {
-  const [providers, models] = await Promise.all([api.providers(), api.models()]);
-  const catalog = catalogFromV2(providers, models);
-  try {
-    return { catalog, resolution: resolveCandidates({ kind, flags, config, catalog }) };
-  } catch (error) {
-    if (error.code !== 'NO_MODEL') throw error;
-  }
-  const defaultModel = await api.defaultModel();
+  const [providers, models, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers, models, defaultModel });
   const opencodeConfig = defaultModel?.providerID && defaultModel?.id
     ? { model: `${defaultModel.providerID}/${defaultModel.id}` }
     : null;

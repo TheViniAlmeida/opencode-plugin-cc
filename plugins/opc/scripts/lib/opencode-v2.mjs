@@ -1,4 +1,20 @@
 // Pure adapters from OpenCode 2.0.22 responses to opc's internal request shapes.
+const NATIVE_AGENTS = new Set(['build', 'plan', 'general', 'explore']);
+
+export function toAgent(agent) {
+  return {
+    name: agent.id,
+    description: agent.description ?? null,
+    mode: agent.mode,
+    native: NATIVE_AGENTS.has(agent.id),
+    hidden: Boolean(agent.hidden),
+    model: agent.model?.providerID && (agent.model.modelID ?? agent.model.id)
+      ? { providerID: agent.model.providerID, modelID: agent.model.modelID ?? agent.model.id } : null,
+    variant: agent.variant ?? null,
+    permissions: agent.permissions ?? [],
+  };
+}
+
 export function toPermissionRequest(v2) {
   return {
     id: v2.id,

@@ -713,7 +713,8 @@ function fenceFor(text) {
 const f3Table = (headers, rows) => renderTable(headers, rows).trimEnd();
 
 function messageText(message) {
-  return (message.parts ?? []).filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text ?? '').join(' ');
+  if (message.type === 'user') return message.text ?? '';
+  return (message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join(' ');
 }
 
 function modelLabel(model) {
@@ -773,7 +774,7 @@ export function renderSession(session, { status = null, messages = [], note = nu
   const lines = [`# Sessão ${session.id}`, ''];
   lines.push(`- Título: ${session.title ?? '-'}`);
   lines.push(`- Status: ${status ?? '-'}`);
-  lines.push(`- Diretório: ${session.directory ?? '-'}`);
+  lines.push(`- Diretório: ${session.location?.directory ?? '-'}`);
   lines.push(`- Agente: ${session.agent ?? '-'} · Modelo: ${modelLabel(session.model)}`);
   if (session.parentID) lines.push(`- Pai: ${session.parentID}`);
   lines.push(`- Criada: ${fmtTime(session.time?.created)} · Atualizada: ${fmtTime(session.time?.updated)} (UTC)`);
@@ -786,9 +787,9 @@ export function renderSession(session, { status = null, messages = [], note = nu
     lines.push('', `## Mensagens (${messages.length})`, '');
     lines.push(f3Table(['#', 'ID', 'Papel', 'Agente/Modelo', 'Texto'], messages.map((m, i) => [
       String(i + 1),
-      m.info?.id ?? '-',
-      m.info?.role ?? '-',
-      m.info?.role === 'assistant' ? `${m.info.agent ?? '-'} · ${m.info.providerID ?? '-'}/${m.info.modelID ?? '-'}${m.info.summary ? ' (resumo)' : ''}` : (m.info?.agent ?? '-'),
+      m.id ?? '-',
+      m.type ?? '-',
+      m.type === 'assistant' ? `${m.agent ?? '-'} · ${modelLabel(m.model)}` : (m.agent ?? '-'),
       oneLine(messageText(m), 100),
     ])));
   }

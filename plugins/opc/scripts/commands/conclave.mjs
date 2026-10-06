@@ -40,7 +40,8 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   try {
-    const catalog = buildCatalog(await conn.api.providers());
+    const [providers, models, defaultModel] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel()]);
+    const catalog = buildCatalog({ providers, models, defaultModel });
     const composition = composeMembers({ models, pool: flags.pool ?? null, config: ctx.config, catalog, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
     for (const warning of composition.warnings) ctx.err(`[opc] aviso: ${warning}\n`);
     const common = { summary: (question || `review ${target?.label ?? ''}`).trim().slice(0, 120), permissionProfile: 'read-only' };
@@ -83,7 +84,8 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     request = { ...request, members: request.members.map((m) => ({ ...m, jobId: idsByRole.get(`member:${m.label}`) })), judge: { ...request.judge, jobId: idsByRole.get('judge') ?? null } };
     await persisted(() => updateJobImpl(ctx.stateDir, job.id, { status: 'running', phase: 'starting', startedAt: now() }));
     conn = await openApiImpl(ctx, { withHub: true, respawn: false });
-    const catalog = buildCatalog(await conn.api.providers());
+    const [providers, models, defaultModel] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel()]);
+    const catalog = buildCatalog({ providers, models, defaultModel });
     const knownNames = buildKnownNames(catalog, { extraModels: [...request.members, ...(request.judge.type === 'model' ? [request.judge] : [])] });
     const rules = profileRules(ctx, 'read-only');
     const ids = new Map(request.members.map((m) => [m.label, m.jobId]));

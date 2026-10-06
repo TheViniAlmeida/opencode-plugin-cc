@@ -1,6 +1,6 @@
 // Domain operations over the OpenCode 2.0.22 API.
 import { UsageError } from './opc-error.mjs';
-import { toFormAnswer, toPermissionRequest, toQuestion, toSessionStatus } from './opencode-v2.mjs';
+import { toAgent, toFormAnswer, toPermissionRequest, toQuestion, toSessionStatus } from './opencode-v2.mjs';
 
 const GET = { retryOnServerDown: true };
 const given = (value) => value !== undefined && value !== null;
@@ -29,7 +29,7 @@ export function createApi(client) {
     providers: () => client.get('/api/provider', GET),
     models: ({ timeoutMs } = {}) => client.get('/api/model', { ...GET, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     defaultModel: () => client.get('/api/model/default', GET),
-    agents: () => client.get('/api/agent', GET),
+    agents: async () => (await client.get('/api/agent', GET)).map(toAgent),
     commands: () => client.get('/api/command', GET),
     skills: () => client.get('/api/skill', GET),
     listSessions: ({ parentID, limit } = {}) => client.get('/api/session', { ...GET, ...(given(parentID) || given(limit) ? { query: { ...(given(parentID) ? { parentID: assertId('ses', parentID) } : {}), ...(given(limit) ? { limit } : {}) } } : {}) }),

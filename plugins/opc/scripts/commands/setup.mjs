@@ -18,18 +18,7 @@ import { liveActiveJobs } from '../lib/jobs.mjs';
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function setupCatalog(buildCatalog, providers, models) {
-  const all = providers.map(({ id, name }) => ({
-    id,
-    name,
-    models: Object.fromEntries(models.filter((model) => model.providerID === id).map((model) => [model.modelID, {
-      id: model.modelID,
-      name: model.name,
-      status: model.status,
-      capabilities: { reasoning: model.capabilities?.reasoning, toolcall: model.capabilities?.tools },
-      variants: Object.fromEntries((model.variants ?? []).map((variant) => [variant.id, {}])),
-    }])),
-  }));
-  return buildCatalog({ all, connected: providers.filter((provider) => ['enabled', 'configured'].includes(provider.activation)).map((provider) => provider.id), default: {} });
+  return buildCatalog({ providers, models });
 }
 
 export function mergeOpencodeConfigSources(sources) {

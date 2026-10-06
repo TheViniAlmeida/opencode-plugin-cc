@@ -15,4 +15,4 @@ OPC_ARGS_5f1d0c7a_EOF
 ```
 
 - Apresente a saída como veio (tabela Markdown), sem resumir.
-- `--refresh` descarta a instância do servidor do opc para reler o armazenamento; só use se o usuário pedir.
+- `--refresh` relê a lista de sessões; não reinicia nem descarta o servidor.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 import {
   globToRegExp, matchesAny, parseFullId, buildCatalog, expandAlias, normalizeModelId,
   resolveModelRef, validateVariant, searchModels,
@@ -10,8 +11,21 @@ import {
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const providers = JSON.parse(fs.readFileSync(path.join(DATA, 'provider.json'), 'utf8'));
-const catalog = buildCatalog(providers);
+const catalog = buildCatalog({ providers, models: JSON.parse(fs.readFileSync(path.join(DATA, 'model.json'), 'utf8')), defaultModel: { providerID: 'omniroute-personal', id: 'opencode-go/deepseek-v4.1-flash' } });
 const MV = 'omniroute-personal';
+
+test('buildCatalog reads the V2 provider, model and default lists', () => {
+  const catalog = buildCatalog({
+    providers: loadContractSample('provider.json').data,
+    models: loadContractSample('model.json').data,
+    defaultModel: loadContractSample('model-default.json').data,
+  });
+  const entry = catalog.byFull.get('omniroute-personal/opencode-go/deepseek-v4.1-flash');
+  assert.ok(entry);
+  assert.deepEqual(entry.variants, ['low', 'medium', 'high']);
+  assert.ok(!JSON.stringify(catalog).includes('fake-provider-key'));
+  assert.ok(catalog.connected.has('omniroute-personal'));
+});
 
 test('globToRegExp: * matches any sequence including slashes', () => {
   assert.ok(globToRegExp('omniroute-personal/*').test('omniroute-personal/opencode-go/kimi-k3'));
@@ -38,7 +52,7 @@ test('buildCatalog: connected set, models with full ids, variants, providers sum
   assert.ok(!catalog.connected.has('openai'));
   const kimi = catalog.byFull.get(`${MV}/opencode-go/kimi-k3`);
   assert.deepEqual(kimi.variants, ['low', 'medium', 'high']);
-  assert.equal(kimi.limit.context, 262144);
+  assert.equal(kimi.limit.context, null);
   assert.equal(kimi.connected, true);
   const mv = catalog.providers.find((p) => p.id === MV);
   assert.equal(mv.modelCount, 7);

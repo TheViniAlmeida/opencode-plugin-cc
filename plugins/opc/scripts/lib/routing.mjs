@@ -198,8 +198,10 @@ export function validateSelection({ candidate, variant = null, agentName = null,
 import { buildCatalog } from './models.mjs';
 
 export async function resolveTurnModel({ api, kind, flags = {}, config }) {
-  const [providerResponse, opencodeConfig] = await Promise.all([api.providers(), api.getConfig()]);
-  const catalog = buildCatalog(providerResponse);
+  const [providers, models, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers, models, defaultModel });
+  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
+    ? { model: `${defaultModel.providerID}/${defaultModel.modelID ?? defaultModel.id}` } : null;
   const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
   const chosen = resolution.candidates[0];
   const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, catalog, policy: config?.policy ?? {} });

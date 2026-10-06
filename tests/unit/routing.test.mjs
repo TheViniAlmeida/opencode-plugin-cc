@@ -6,18 +6,20 @@ import { PolicyError, UsageError } from '../../plugins/opc/scripts/lib/opc-error
 
 const P = 'omniroute-personal';
 const catalog = buildCatalog({
-  connected: [P, 'anthropic'],
-  default: {},
-  all: [
-    { id: P, name: 'Omni', models: {
-      'opencode-go/deepseek-v4.1-flash': { id: 'opencode-go/deepseek-v4.1-flash', providerID: P, name: 'DeepSeek', variants: { high: {}, low: {} }, limit: { context: 128000, output: 8192 } },
-      'opencode-go/qwen3.8-max': { id: 'opencode-go/qwen3.8-max', providerID: P, name: 'Qwen', variants: {}, limit: { context: 256000, output: 8192 } },
-      'opencode-go/kimi-k3': { id: 'opencode-go/kimi-k3', providerID: P, name: 'Kimi', variants: { thinking: {} }, limit: { context: 200000, output: 8192 } },
-      'abcdefghijklmnop': { id: 'abcdefghijklmnop', providerID: P, name: 'Long ID' },
-    } },
-    { id: 'anthropic', name: 'Anthropic', models: { 'claude-x': { id: 'claude-x', providerID: 'anthropic', name: 'X', variants: {} } } },
-    { id: 'omniroute-work', name: 'EQ', models: { 'm': { id: 'm', providerID: 'omniroute-work', name: 'm' } } },
-    { id: 'ollama', name: 'Ollama', models: { 'llama9': { id: 'llama9', providerID: 'ollama', name: 'llama9' } } },
+  providers: [
+    { id: P, name: 'Omni', activation: 'enabled' },
+    { id: 'anthropic', name: 'Anthropic', activation: 'enabled' },
+    { id: 'omniroute-work', name: 'EQ', activation: 'disabled' },
+    { id: 'ollama', name: 'Ollama', activation: 'disabled' },
+  ],
+  models: [
+    { id: 'opencode-go/deepseek-v4.1-flash', providerID: P, name: 'DeepSeek', variants: [{ id: 'high' }, { id: 'low' }], limit: { context: 128000, output: 8192 } },
+    { id: 'opencode-go/qwen3.8-max', providerID: P, name: 'Qwen', variants: [], limit: { context: 256000, output: 8192 } },
+    { id: 'opencode-go/kimi-k3', providerID: P, name: 'Kimi', variants: [{ id: 'thinking' }], limit: { context: 200000, output: 8192 } },
+    { id: 'abcdefghijklmnop', providerID: P, name: 'Long ID', variants: [] },
+    { id: 'claude-x', providerID: 'anthropic', name: 'X', variants: [] },
+    { id: 'm', providerID: 'omniroute-work', name: 'm', variants: [] },
+    { id: 'llama9', providerID: 'ollama', name: 'llama9', variants: [] },
   ],
 });
 const FLASH = `${P}/opencode-go/deepseek-v4.1-flash`;

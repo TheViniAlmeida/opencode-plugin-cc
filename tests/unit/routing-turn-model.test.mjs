@@ -10,7 +10,8 @@ import { buildCatalog, parseFullId } from '../../plugins/opc/scripts/lib/models.
 import { resolveTurnModel } from '../../plugins/opc/scripts/lib/routing.mjs';
 
 const PROVIDERS = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'provider.json'), 'utf8'));
-const api = { providers: async () => PROVIDERS, getConfig: async () => ({}) };
+const MODELS = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'model.json'), 'utf8'));
+const api = { providers: async () => PROVIDERS, models: async () => MODELS, defaultModel: async () => null };
 
 function configWith(patch) {
   return { ...structuredClone(DEFAULT_CONFIG), ...patch };
@@ -53,11 +54,11 @@ test('resolveTurnModel exposes the resolution, catalog and OpenCode config for l
   const result = await resolveTurnModel({ api, kind: 'review', config: configWith({ defaultModel: first }) });
   assert.equal(result.resolution.candidates[0].full, first);
   assert.ok(result.catalog.byFull.has(first));
-  assert.deepEqual(result.opencodeConfig, {});
+  assert.equal(result.opencodeConfig, null);
 });
 
 test('a valid variant is passed through', async (t) => {
-  const catalog = buildCatalog(PROVIDERS);
+  const catalog = buildCatalog({ providers: PROVIDERS, models: MODELS });
   const withVariant = catalog.models.find((model) => catalog.connected.has(model.providerID) && model.variants.length > 0);
   if (!withVariant) return t.skip('fixture has no model with variants');
   const result = await resolveTurnModel({ api, kind: 'review', flags: { model: withVariant.full, variant: withVariant.variants[0] }, config: configWith({}) });

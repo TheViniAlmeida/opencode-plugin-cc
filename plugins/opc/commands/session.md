@@ -1,6 +1,6 @@
 ---
-description: Gerencia sessões do OpenCode (new, show, fork, revert, unrevert, summarize, children, diff, todo)
-argument-hint: '<new|show|fork|revert|unrevert|summarize|children|diff|todo> [sessionID] [messageID] [--title t] [--agent a] [--model m] [--write]'
+description: Gerencia sessões do OpenCode (new, show, fork, revert, unrevert, summarize, children, diff)
+argument-hint: '<new|show|fork|revert|unrevert|summarize|children|diff> [sessionID] [messageID] [--before messageID] [--title t] [--agent a] [--model m] [--write]'
 allowed-tools: Bash(opc:*), AskUserQuestion
 ---
 
