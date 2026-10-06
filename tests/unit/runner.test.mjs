@@ -82,7 +82,7 @@ test('V2 task preserves a JSON object returned as text', async () => {
 
 test('V2 JSON schema request adds text instruction and accepts only matching output', async () => {
   const schema = { type: 'object', required: ['files'], properties: { files: { type: 'array', items: { type: 'string' } } }, additionalProperties: false };
-  for (const [reply, expected] of [['{"files":["a"]}', { files: ['a'] }], ['{"files":"a"}', null]]) {
+  for (const [reply, expected] of [['{"files":["a"]}', { files: ['a'] }], ['{"files":"a"}', null], ['{"title":"Example","properties":{"files":["a"]}}', null]]) {
     const { api, hub, emit } = memoryV2();
     const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'List files' }], format: { type: 'json_schema', schema }, newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
     const sessionID = await api.created;

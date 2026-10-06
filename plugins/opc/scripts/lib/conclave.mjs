@@ -9,6 +9,7 @@ import { evaluate } from './policy.mjs';
 // Single home of the prompt helpers (F2b); conclave never redefines them.
 import { fillTemplate, loadPrompt, projectContextBlock } from './prompts.mjs';
 import { jsonInstruction } from './structured-text.mjs';
+import { extractTextJson } from './text-json.mjs';
 
 export const CONCLAVE_MODES = Object.freeze(['opinion', 'review', 'debate']);
 export const LABEL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -638,20 +639,28 @@ function checkTurn(turn, schema) {
     const errorType = turn?.status === 'cancelled' ? 'Cancelled' : (turn?.errorType ?? 'Failed');
     return { ok: false, errorType, message: turn?.errorMessage ?? `turn ended with status ${turn?.status ?? 'unknown'}` };
   }
-  if (turn.structured === null || turn.structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
-  const errors = validateSchema(turn.structured, schema);
-  if (errors.length && typeOf(turn.structured) === 'object') {
+  let structured = turn.structured;
+  if ((structured === null || structured === undefined) && turn.finalText) {
+    structured = extractTextJson(turn.finalText, (value) => {
+      if (typeof value.title !== 'string' || typeOf(value.properties) !== 'object'
+        || Object.keys(value).some((key) => key !== 'title' && key !== 'properties')) return 'not a schema-shaped wrapper';
+      return validateSchema(value.properties, schema).length === 0 ? null : 'invalid wrapped values';
+    });
+  }
+  if (structured === null || structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
+  const errors = validateSchema(structured, schema);
+  if (errors.length && typeOf(structured) === 'object') {
     // Models sometimes echo the schema shape: values under `properties`, or schema keywords beside the values.
-    if (typeOf(turn.structured.properties) === 'object' && validateSchema(turn.structured.properties, schema).length === 0) {
-      return { ok: true, structured: turn.structured.properties };
+    if (typeOf(structured.properties) === 'object' && validateSchema(structured.properties, schema).length === 0) {
+      return { ok: true, structured: structured.properties };
     }
-    const stripped = Object.fromEntries(Object.entries(turn.structured).filter(([key]) => !SCHEMA_ECHO_KEYS.has(key) || Object.hasOwn(schema.properties ?? {}, key)));
-    if (Object.keys(stripped).length < Object.keys(turn.structured).length && validateSchema(stripped, schema).length === 0) {
+    const stripped = Object.fromEntries(Object.entries(structured).filter(([key]) => !SCHEMA_ECHO_KEYS.has(key) || Object.hasOwn(schema.properties ?? {}, key)));
+    if (Object.keys(stripped).length < Object.keys(structured).length && validateSchema(stripped, schema).length === 0) {
       return { ok: true, structured: stripped };
     }
   }
   if (errors.length) return { ok: false, errorType: 'InvalidStructuredOutput', message: errors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('; ') };
-  return { ok: true, structured: turn.structured };
+  return { ok: true, structured };
 }
 
 function failureRecord({ label, round, role, turn, check }) {
