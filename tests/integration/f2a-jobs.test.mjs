@@ -31,7 +31,7 @@ test('background → status → status --wait → result', async (t) => {
   assert.match(waited.stdout, /Estado: completed/);
   const result = await opc(ctx, ['result', id]);
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /^fake-opencode: ok/);
+  assert.match(result.stdout, /^ok/);
 });
 
 test('result renders the structured output of a finished job', async (t) => {
@@ -79,7 +79,7 @@ test('cancel without id: one active job is cancelled; several → exit 2', async
   assert.equal(one.code, 0, one.stderr);
   assert.match(one.stdout, new RegExp(`Cancelada ${first}`));
   assert.equal(jobIn(ctx.env, ctx.cwd, first).status, 'cancelled');
-  assert.ok(requestsTo(ctx.env, 'POST', `/session/${job.sessionID}/abort`).length >= 1);
+  assert.ok(requestsTo(ctx.env, 'POST', `/api/session/${job.sessionID}/interrupt`).length >= 1);
   const a = await startBackground(ctx, 'a');
   const b = await startBackground(ctx, 'b');
   const many = await opc(ctx, ['cancel']);
@@ -161,7 +161,7 @@ test('retry-status → phase retrying in the log, then completed', async (t) => 
   const ctx = setupF2a(t, { scenario: 'retry-status' });
   const r = await opc(ctx, ['task', 'flaky provider']);
   assert.equal(r.code, 0, r.stderr);
-  assert.equal((r.stderr.match(/\[opc\] Nova tentativa \(1\): APIError 429/g) ?? []).length, 1);
+  assert.equal((r.stderr.match(/\[opc\] Nova tentativa \(1\): Limite de requisições/g) ?? []).length, 1);
   assert.match(r.stdout, /recovered after retry/);
 });
 
@@ -169,7 +169,7 @@ test('session-error-event → failed with the event error (fatal), exit 7', asyn
   const ctx = setupF2a(t, { scenario: 'session-error-event' });
   const r = await opc(ctx, ['task', 'bad credentials']);
   assert.equal(r.code, 7);
-  assert.match(r.stdout, /ProviderAuthError \(fatal\): invalid credentials for provider/);
+  assert.match(r.stdout, /provider\.auth \(fatal\)/);
   const [job] = jobsIn(ctx.env, ctx.cwd);
   assert.equal(job.phase, 'failed');
   assert.equal(job.errorClass, 'fatal');

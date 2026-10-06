@@ -4,7 +4,7 @@ import { classifyError, retryCapError, retryExceedsCap } from './errors.mjs';
 import { ConnectionError, OpcError, UsageError } from './opc-error.mjs';
 import { toPermissionRequest, toQuestion } from './opencode-v2.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
-import { readSessionMessages } from './session-messages.mjs';
+import { readSessionMessages, readTurnMessages } from './session-messages.mjs';
 import { extractTextJson } from './text-json.mjs';
 import { validateReviewOutput } from './render.mjs';
 
@@ -193,7 +193,7 @@ export async function runTurn({
   const enqueue = (fn) => {
     queue = queue.then(fn).catch((err) => {
       if (isServerDown(err)) finish('server-lost');
-      else progress({ message: `Erro ao processar evento: ${shown(err?.message)}` });
+      else finish('resync-failed', { detail: err });
     });
     return queue;
   };
@@ -243,7 +243,7 @@ export async function runTurn({
       for (const req of (await api.listQuestions(id)) ?? []) if (req) await handleQuestion(req);
     }
     if (statuses?.[sessionID]) return;
-    const turn = turnMessages(await readSessionMessages(api, sessionID), messageID);
+    const turn = turnMessages(await readTurnMessages(api, sessionID, messageID), messageID);
     for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     const idle = turn.find((message) => message.type === 'idle');
     if (idle?.outcome === 'succeeded') finish('idle');
@@ -367,6 +367,10 @@ export async function runTurn({
     }
     const serverLost = () => ({ ...serverLostResult(sessionID, messageID), ...base, toolsRan: toolsRanLive });
     if (outcome.reason === 'server-lost') return serverLost();
+    if (outcome.reason === 'resync-failed') {
+      const message = `Falha ao sincronizar o turno: ${safeOutputText(outcome.detail?.message).replace(/[\r\n]+/g, ' ').slice(0, 500)}`;
+      return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'ResyncError', errorCode: outcome.detail?.code ?? 'RESYNC_FAILED', errorMessage: message, error: { name: 'ResyncError', data: { message } } };
+    }
     if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
       try { await api.interrupt(sessionID); }
       catch (err) { if (isServerDown(err)) return serverLost(); }
@@ -374,7 +378,10 @@ export async function runTurn({
     }
     let collected;
     try {
-      const messages = await readSessionMessages(api, sessionID);
+      const messages = await readTurnMessages(api, sessionID, messageID);
+      if (outcome.reason === 'idle' && !messages.some((message) => message?.id === messageID)) {
+        return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'TurnMessageNotFound', errorCode: 'TURN_MESSAGE_NOT_FOUND', errorMessage: 'A mensagem do turno não foi encontrada na sessão.', error: { name: 'TurnMessageNotFound', data: { message: 'A mensagem do turno não foi encontrada na sessão.' } } };
+      }
       const childMessages = [];
       for (const child of children) childMessages.push(...((await readSessionMessages(api, child)) ?? []));
       let diffs = [];

@@ -61,7 +61,7 @@ test('classifyError redacts registered secrets and preserves the expected messag
 });
 
 for (const [type, expectedClass, expectedMessage] of [
-  ['provider.no-route', 'fatal', 'Modelo indisponível.'],
+  ['provider.no-route', 'fatal', 'Modelo indisponível. p/modelo-privado'],
   ['provider.rate-limit', 'recoverable', 'Limite de requisições do provedor atingido.'],
   ['aborted', 'fatal', 'Turno cancelado.'],
 ]) {
@@ -84,6 +84,12 @@ test('V2 HTTP 429 is recoverable even without APIError', () => {
   assert.equal(result.errorClass, 'recoverable');
   assert.equal(result.errorType, 'provider.http');
   assert.equal(result.message, 'Limite de requisições do provedor atingido.');
+});
+
+test('V2 provider route detail keeps the model and masks token patterns', () => {
+  const result = classifyError({ type: 'provider.no-route', message: 'Model unavailable: p/missing; apiKey=sk-proj-1234567890123456' });
+  assert.match(result.message, /p\/missing/);
+  assert.doesNotMatch(result.message, /sk-proj-1234567890123456/);
 });
 
 test('retryExceedsCap: attempt above max or wait above max', () => {

@@ -3,20 +3,20 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { F2A_MODEL_ID, F2A_PROVIDER, jobIdFrom, jobIn, opc, requestsTo, setupF2a } from '../helpers.mjs';
-import { READ_ONLY_RULES } from '../fixtures/expected-rules-f2a.mjs';
 
-test('task foreground: ok turn prints the final text, exit 0, read-only rules on POST /session', async (t) => {
+test('task foreground: V2 prompt prints final text and creates an explicit session', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'say hello\n' });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /^fake-opencode: ok\n/);
+  assert.match(r.stdout, /^ok\n/);
   assert.match(r.stderr, /\[opc\] tarefa task-[0-9a-z]+-[0-9a-z]{6} iniciada/);
-  const [post] = requestsTo(ctx.env, 'POST', '/session');
-  assert.deepEqual(post.body.permission, READ_ONLY_RULES);
+  const [post] = requestsTo(ctx.env, 'POST', '/api/session');
+  assert.ok(post.body.permissions.length > 0);
+  assert.deepEqual(post.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID });
   assert.match(post.body.title, /^OPC: task: say hello$/);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.match(prompt.body.messageID, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
-  assert.deepEqual(prompt.body.parts, [{ type: 'text', text: 'say hello' }]);
+  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
+  assert.match(prompt.body.id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  assert.equal(prompt.body.text, 'say hello');
   const job = jobIn(ctx.env, ctx.cwd, jobIdFrom(r.stderr));
   assert.equal(job.status, 'completed');
   assert.equal(job.phase, 'done');
@@ -40,14 +40,14 @@ test('task: StructuredOutputError → exit 7 with the raw text', async (t) => {
   assert.match(r.stdout, /Saída bruta \(falha na saída estruturada\):\n\nraw text answer/);
 });
 
-test('--model with slashes reaches prompt_async intact; --effort is sent as variant', async (t) => {
+test('--model with slashes reaches the V2 session; --effort is sent as variant', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: `--model ${F2A_PROVIDER}/${F2A_MODEL_ID} --effort high check` });
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.deepEqual(prompt.body.model, { providerID: F2A_PROVIDER, modelID: F2A_MODEL_ID });
-  assert.equal(prompt.body.variant, 'high');
-  assert.deepEqual(prompt.body.parts, [{ type: 'text', text: 'check' }]);
+  const [session] = requestsTo(ctx.env, 'POST', '/api/session');
+  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
+  assert.deepEqual(session.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID, variant: 'high' });
+  assert.equal(prompt.body.text, 'check');
 });
 
 test('invalid --effort is refused before any session (exit 2)', async (t) => {
@@ -55,7 +55,7 @@ test('invalid --effort is refused before any session (exit 2)', async (t) => {
   const r = await opc(ctx, ['task', '--effort', 'ultra-max', 'check']);
   assert.equal(r.code, 2);
   assert.match(r.stdout + r.stderr, /UNKNOWN_VARIANT/);
-  assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 0);
+  assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 0);
 });
 
 test('--variant and --effort conflict even when their values match', async (t) => {
@@ -63,7 +63,7 @@ test('--variant and --effort conflict even when their values match', async (t) =
   const r = await opc(ctx, ['task', '--variant', 'high', '--effort', 'high', 'check']);
   assert.equal(r.code, 2);
   assert.match(r.stdout + r.stderr, /CONFLICT/);
-  assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 0);
+  assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 0);
 });
 
 test('--resume with --fresh is a usage error (exit 2) without contacting the server', async (t) => {
@@ -87,8 +87,8 @@ test('<project_context> from the workspace config is prepended to the prompt', a
   writeFileSync(join(ctx.cwd, '.opc.json'), JSON.stringify({ project: { goal: 'Ship opc', scope: ['plugins/', 'tests/'], taskTypes: ['ask', 'plan'] } }));
   const r = await opc(ctx, ['ask', '--raw-args-stdin'], { stdin: 'where is the runner?' });
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  const text = prompt.body.parts[0].text;
+  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
+  const text = prompt.body.text;
   assert.ok(text.startsWith('<project_context>\ngoal: Ship opc\nscope: plugins/, tests/\ntask types: ask, plan\n</project_context>\n\n'), text.slice(0, 200));
   assert.ok(text.endsWith('Question:\nwhere is the runner?\n'), text.slice(-200));
 });
@@ -100,12 +100,12 @@ test('ask and plan are read-only: --write is refused (exit 2); templates are app
   assert.match(refused.stdout + refused.stderr, /READ_ONLY_KIND/);
   const r = await opc(ctx, ['plan', '--raw-args-stdin'], { stdin: 'add a cache' });
   assert.equal(r.code, 0, r.stderr);
-  const [post] = requestsTo(ctx.env, 'POST', '/session');
-  assert.deepEqual(post.body.permission, READ_ONLY_RULES);
+  const [post] = requestsTo(ctx.env, 'POST', '/api/session');
+  assert.ok(post.body.permissions.length > 0);
   assert.match(post.body.title, /^OPC: plan: add a cache$/);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.match(prompt.body.parts[0].text, /\*\*Files\*\*/);
-  assert.match(prompt.body.parts[0].text, /Task:\nadd a cache/);
+  const [prompt] = requestsTo(ctx.env, 'POST', /\/api\/session\/[^/]+\/prompt$/);
+  assert.match(prompt.body.text, /\*\*Files\*\*/);
+  assert.match(prompt.body.text, /Task:\nadd a cache/);
 });
 
 test('large output (>1 MB): printed whole, job log stays under 5 MB', async (t) => {

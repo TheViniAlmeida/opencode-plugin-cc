@@ -1,4 +1,5 @@
 // Classification of OpenCode errors (spec §7.1).
+import { safeOutputText } from './redact.mjs';
 export function classifyError(error, { toolsRan = false, candidateHasLargerContext = false } = {}) {
   const errorType = error?.type ?? (typeof error?.name === 'string' && error.name ? error.name : 'UnknownError');
   const fixed = {
@@ -14,7 +15,10 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     StructuredOutputError: 'A saída estruturada é inválida.',
     ContextOverflowError: 'O contexto do modelo foi excedido.',
   };
-  const message = fixed[errorType] ?? 'Erro do OpenCode.';
+  const providerDetail = errorType === 'provider.no-route' && typeof (error?.data?.message ?? error?.message) === 'string'
+    ? safeOutputText(error.data?.message ?? error.message).replace(/[\r\n]+/g, ' ').slice(0, 500).trim()
+    : '';
+  const message = providerDetail ? `${fixed[errorType]} ${providerDetail}` : fixed[errorType] ?? 'Erro do OpenCode.';
   const as = (errorClass) => ({ errorClass, errorType, message });
   if (Number(error?.status ?? error?.statusCode ?? error?.data?.statusCode ?? error?.data?.status) === 429) {
     return { errorClass: 'recoverable', errorType, message: 'Limite de requisições do provedor atingido.' };

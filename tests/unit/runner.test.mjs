@@ -76,12 +76,56 @@ test('V2 execution.failed before assistant is a classified provider failure', as
   const sessionID = await api.created;
   await api.promptSettled;
   api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user', text: 'hi' }, { id: 'msg_i', type: 'idle', outcome: 'failed' }]);
-  emit({ type: 'session.execution.failed', data: { sessionID, error: { type: 'provider.no-route', message: 'Modelo indisponível' } } });
+  emit({ type: 'session.execution.failed', data: { sessionID, error: { type: 'provider.no-route', message: 'Model unavailable: p/missing' } } });
   const result = await pending;
   assert.equal(result.status, 'failed');
   assert.notEqual(result.errorCode, 'NO_ASSISTANT_MESSAGE');
-  assert.match(result.errorMessage, /Modelo indisponível/);
+  assert.match(result.errorMessage, /p\/missing/);
+  assert.match(result.error.data.message, /p\/missing/);
 });
+
+test('V2 completed turn beyond 200 messages retains its text', async () => {
+  const { api, hub, emit } = memoryV2();
+  const original = api.messages;
+  api.messages = async (id, { limit } = {}) => (await original(id)).slice(0, limit);
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [...Array.from({ length: 201 }, (_, i) => ({ id: `msg_old${i}`, type: 'user' })), { id: api.lastPromptId(), type: 'user' }, { id: 'msg_final', type: 'assistant', content: [{ type: 'text', text: 'long session result' }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  assert.equal((await pending).finalText, 'long session result');
+});
+
+test('V2 missing prompt in a completed session fails explicitly', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [{ id: 'old', type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorCode, 'TURN_MESSAGE_NOT_FOUND');
+});
+
+for (const method of ['sessionStatus', 'children', 'listPermissions', 'listQuestions', 'messages']) {
+  test(`V2 resync reports ${method} API failure without waiting for timeout`, async () => {
+    const { api, hub } = memoryV2();
+    let reconnect;
+    hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+    const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], timeoutMs: 1000 } });
+    const id = await api.created;
+    await api.promptSettled;
+    api.sessionStatus = async () => ({});
+    api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }]);
+    api[method] = async () => { throw new RequestError('API_FAILED', `${method} failed`); };
+    reconnect();
+    const result = await pending;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorCode, 'API_FAILED');
+    assert.match(result.errorMessage, new RegExp(method));
+  });
+}
 
 test('V2 prompt timeout resends same id without reading messages', async () => {
   const { api, hub, emit } = memoryV2({ promptFailsOnce: 'TIMEOUT' });
@@ -282,6 +326,7 @@ test('V2 retry cap interrupts and classifies the failure', async () => {
   const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], fallbackCfg: { maxProviderRetries: 3 } } });
   const id = await api.created;
   await api.promptSettled;
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }]);
   emit({ type: 'session.retry.scheduled', data: { sessionID: id, attempt: 4, at: Date.now() + 1000, error: { type: 'provider.transport', message: 'retry' } } });
   const result = await pending;
   assert.equal(result.errorCode, 'retry_cap');
@@ -295,6 +340,7 @@ test('V2 cancellation interrupts the active session', async () => {
   api.interrupt = async (id) => { api.calls.push(['interrupt', id]); api.sessionStatus = async () => ({}); return true; };
   const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] }, signal: controller.signal });
   await api.promptSettled;
+  api.messagesFor('ses_mem1', [{ id: api.lastPromptId(), type: 'user' }]);
   controller.abort();
   const result = await pending;
   assert.equal(result.status, 'cancelled');
