@@ -1,6 +1,6 @@
-# Comandos de descoberta e configuração (F1)
+# Comandos do opc
 
-Os comandos abaixo existem no terminal como `opc …` e, no Claude Code, como `/opc:…`. `--json` entrega a mesma visão estruturada; saídas não expõem credenciais. Exit 0 é sucesso, 2 é uso/valor inválido, 4 é política/chave travada e 5 é servidor inacessível.
+Os comandos abaixo existem no terminal como `opc …` e, no Claude Code, como `/opc:…`. `--json` entrega a visão estruturada; saídas passam por redação de credenciais. Exit 0 é sucesso, 2 é uso/valor inválido, 3 é permissão pendente, 4 é política/chave travada, 5 é servidor ou conexão, 6 é fim da espera, 7 é falha do job e 130 é cancelamento.
 
 ## `/opc:setup`
 
@@ -550,3 +550,82 @@ opc conclave --pool duo --background "Qual estratégia de cache?"
 ```
 
 Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).
+
+## `/opc:transfer`
+
+Converte uma conversa do Claude Code para uma nova sessão OpenCode, retomável no
+terminal com `opencode -s <id>`. O slash command é invocado pelo usuário
+(`disable-model-invocation: true`); não há ferramenta MCP de transfer.
+
+```text
+/opc:transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>]
+opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json]
+```
+
+- **Origem:** `--source` ou `OPC_COMPANION_TRANSCRIPT_PATH`, exportado pelo hook
+  SessionStart. O arquivo e seu `realpath` precisam ser `.jsonl` sob `~/.claude/projects`;
+  symlinks para fora são recusados. O limite é 64 MiB por transcript.
+  `OPC_TRANSFER_ALLOWED_ROOT` substitui a raiz para testes; não é um contorno de política
+  no uso normal.
+- **Modelo:** `--model` (ID completo `provider/model` ou alias) → `defaultModel` →
+  `NO_MODEL`. Provider e modelo passam pela política. A transferência não consulta o
+  catálogo nem inicia `opencode serve`; a existência do modelo é conferida pelo OpenCode
+  ao retomar. O modelo original do Claude não é preservado.
+- **Conversão:** cada prompt real vira uma mensagem `user`; o texto do assistente até
+  o próximo prompt vira uma mensagem `assistant`. Chamadas e resultados de ferramentas
+  ficam como texto resumido: `[chamada de ferramenta: <nome>] <input JSON>` e
+  `[resultado da ferramenta: sucesso|erro] <saída>`, com até 2.000 caracteres por parte.
+  Textos têm limite de 65.536 caracteres, com marcador de truncamento. Imagens e
+  documentos recebem marcadores de conteúdo omitido. Blocos de raciocínio, sidechains,
+  mensagens meta e comandos locais são ignorados e contados; linhas JSONL inválidas
+  também são contadas. Se a conversa começa pelo assistente, é criada uma mensagem
+  sintética de usuário para manter o encadeamento.
+- **Importação:** a conversão gera IDs novos e valida a estrutura do formato
+  `opencode export`. O JSON temporário é gravado com modo 600 em `<estado>/transfer/`
+  (diretório 700), importado com `opencode import <arquivo>` no workspace e removido
+  ao fim da tentativa. O sucesso exige exit 0 e a linha `Imported session: <id>` com
+  o mesmo ID exportado.
+- **Título e saída:** a sessão tem prefixo `OPC: transfer:`. A saída mostra ID, título,
+  modelo, contagem de mensagens/itens ignorados e comando para retomar. O resumo passa
+  por redação; o conteúdo do histórico é preservado no arquivo importado.
+  O caminho da origem não é incluído no resumo público.
+
+Com `--json`, o resumo contém `sessionID`, `title`, `model`, `workspaceRoot`,
+`messages` (`total`, `user`, `assistant`), `skipped` (`meta`, `sidechain`, `command`,
+`thinking`, `other`, `invalidLines`), `resumeCommand` e `warnings`.
+
+| Exit code | Casos |
+|---|---|
+| 0 | Sessão importada |
+| 2 | `NO_TRANSCRIPT`, `NOT_JSONL`, `NOT_FOUND`, `NOT_A_FILE`, `TRANSCRIPT_TOO_LARGE` (> 64 MiB), `EMPTY_TRANSCRIPT`, `NO_MODEL`, `MODEL_NEEDS_FULL_ID` |
+| 4 | `TRANSCRIPT_OUTSIDE_ALLOWED_ROOT` ou `POLICY_DENIED` para provider/modelo |
+| 5 | `OPENCODE_NOT_FOUND`, `UNSUPPORTED_VERSION` |
+| 7 | `IMPORT_FAILED` (falha do processo, marcador ausente ou ID divergente), `EXPORT_SHAPE_INVALID` |
+
+Exemplo **ilustrativo**, com IDs, modelo e workspace fictícios; não é evidência de
+execução ao vivo. O round trip com OpenCode real e histórico sintético passou em armazenamento
+isolado; a transferência numa conversa real do Claude e a retomada interativa seguem
+**NÃO VALIDADO**. Evidências e pendências: [relatório da F5](phases/F5-report.md).
+
+```text
+# opc transfer
+
+Sessão OpenCode criada: `ses_EXAMPLE`
+Título: OPC: transfer: Planejar uma alteração
+Modelo registrado: example-provider/example-model
+Mensagens importadas: 4 (2 do usuário, 2 do assistente)
+Ignorados: 0 meta, 0 sidechain, 0 comandos locais, 0 blocos de raciocínio, 1 outros, 0 linhas inválidas
+
+Para retomar no terminal:
+
+    cd '<workspace>' && opencode -s ses_EXAMPLE
+```
+
+### Ferramentas MCP
+
+O servidor MCP `opc` expõe 25 ferramentas `opc_*`, usando o mesmo despachante da CLI.
+Consultas e ações seguem a política e as confirmações do comando equivalente;
+`opc_config_get` permite apenas leitura. `opc_conclave` aceita `opinion` e `debate`;
+review fica no slash command. A [arquitetura](architecture.md#servidor-mcp-f5) contém o
+catálogo completo, os limites e o envelope de resultado. As respostas de
+`opc_permissions_reply` e `opc_permissions_answer` podem entregar `data` como Markdown.

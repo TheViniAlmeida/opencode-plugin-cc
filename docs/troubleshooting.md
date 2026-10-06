@@ -171,3 +171,42 @@ avisos no stderr para cada entrada pulada.
 Se o juiz modelo falhar, o conclave continua concluído, inclui o aviso e preserva
 `synthesisInput`; o Claude sintetiza com a skill `opc-conclave`. Não trate essa falha como
 consenso criado pelo juiz.
+
+## MCP e transfer
+
+- **O servidor `opc` não aparece em `/mcp`:** use `/reload-plugins` e confira
+  `node --version` (≥ 20) no PATH do Claude Code. O teste de inicialização
+  `node <plugin>/scripts/mcp-server.mjs < /dev/null` deve sair com código 0 e stdout
+  vazio; um erro de inicialização aparece em stderr.
+- **`MCP_CALL_TIMEOUT`:** a chamada passou do teto MCP (300 s normalmente;
+  `waitTimeoutSec + 300 s` nos jobs longos com espera; `timeoutSec + 60 s` no status
+  com espera). O comando pode continuar e o job pode ter sido criado. Consulte
+  `/opc:status --all` antes de repetir a tarefa.
+- **`state: "wait_timeout"`:** terminou a espera, não a execução do job. Use o ID
+  retornado em `opc_job_status` ou `/opc:status <id> --wait` para acompanhar.
+- **Jobs MCP ausentes no status desta sessão:** o processo MCP pode não ter encontrado
+  a sessão do Claude pelo PID/horário de início do processo pai. Use
+  `/opc:status --all` (ou `opc_job_status` com `all: true`). A associação real ao
+  processo do Claude permanece **NÃO VALIDADO**.
+- **`data` veio como texto:** `opc_permissions_reply` e `opc_permissions_answer` podem
+  devolver Markdown. Leia o envelope de `content[0].text` e preserve o conteúdo
+  de `data`; ele não precisa ser um objeto JSON.
+- **`NO_TRANSCRIPT`:** o transcript não chegou pelo hook. Informe
+  `--source ~/.claude/projects/<projeto>/<sessao>.jsonl` ao `/opc:transfer`.
+- **`TRANSCRIPT_OUTSIDE_ALLOWED_ROOT`:** a origem ou o destino do symlink está fora
+  de `~/.claude/projects`. Use um transcript dessa raiz; `OPC_TRANSFER_ALLOWED_ROOT`
+  é destinado aos testes.
+- **`NO_MODEL` ou `MODEL_NEEDS_FULL_ID`:** forneça `--model <provider/model>` ou um
+  alias configurado. A transferência exige ID completo após expandir o alias e
+  respeita a política de provider/modelo.
+- **`EMPTY_TRANSCRIPT`:** não restou texto transferível após filtrar meta, sidechains,
+  raciocínio e comandos locais. Confira a origem indicada.
+- **`IMPORT_FAILED`:** o processo falhou, não imprimiu `Imported session: <id>` ou
+  informou um ID diferente do exportado. A mensagem não expõe stdout/stderr brutos
+  do OpenCode. Confira `opencode --version` e `opencode import --help`; antes de
+  repetir, consulte as sessões no mesmo workspace, pois a importação pode ter
+  produzido uma sessão mesmo sem confirmação de sucesso.
+- **Sessão transferida ausente em `opencode session list`:** a lista é por projeto;
+  execute dentro do workspace da transferência. Para retomar, use a linha
+  `cd … && opencode -s <id>` retornada. A retomada interativa ainda depende da
+  validação do portão F5.

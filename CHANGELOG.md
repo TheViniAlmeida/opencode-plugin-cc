@@ -6,6 +6,26 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado — F5 (MCP e transfer)
+
+- Servidor MCP stdio `opc`, sem dependências, com 25 ferramentas `opc_*` que usam o mesmo despachante da CLI. Negociação das versões `2025-06-18`, `2025-03-26` e `2024-11-05`; jobs longos em background por padrão e espera limitada a 540 s.
+- `/opc:transfer` e `opc transfer`: conversão do histórico JSONL do Claude Code para o formato de `opencode export`, importação por `opencode import` e comando para retomar a sessão no terminal.
+- Testes de aceite da F5 para MCP e transferência, habilitados apenas com `OPC_LIVE=1` e modelos explícitos. O round trip de transferência usa histórico sintético e armazenamento OpenCode isolado.
+
+### Corrigido — argumentos e histórico da F5
+
+- Flags de leitura de stdin depois de `--` permanecem texto literal no despachante e nas ferramentas MCP.
+- Requisições MCP concorrentes permitem responder a `ping` enquanto outra chamada aguarda um job.
+- O processo MCP drena as respostas JSON-RPC antes de sair no EOF e retorna falha em erros de transporte, preservando os frames sob backpressure.
+- O teste de GC restaura as permissões dos diretórios antes de sua limpeza, evitando `EACCES` em Node 24.
+- Mensagens de usuário com resultados de ferramentas misturados a texto, imagem ou documento preservam o prompt e os anexos no turno correto.
+
+### Segurança — F5
+
+- O MCP preserva as confirmações e o aprovador dos comandos. Escrita de configuração, revert/unrevert, parada do servidor, review e transfer continuam fora do catálogo MCP.
+- A transferência valida a raiz real do transcript, impede troca por symlink durante a abertura e limita os bytes efetivamente lidos. O export temporário é privado (arquivo 600, diretório 700) e removido após a tentativa de importação.
+- Erros de transferência omitem caminhos pessoais e saída bruta de subprocessos; processos com erro não são aceitos como sucesso mesmo quando imprimem um marcador de importação.
+
 ### Corrigido — suíte de testes sempre termina
 
 - `scripts/run-tests.mjs` não fica mais pendurado quando um teste trava (por exemplo, no sandbox do Codex, onde `listen 127.0.0.1` dá `EPERM`). O runner passa `--test-timeout` (300 s por arquivo, fora do live) e `--test-force-exit`, e roda a suíte num grupo de processos próprio. Esse grupo é encerrado inteiro no timeout da execução (30 min; 6 h no live), em `SIGINT`/`SIGTERM`/`SIGHUP` (código 128 + sinal) e quando o processo pai morre. Os limites podem ser ajustados com `OPC_TEST_TIMEOUT_MS` e `OPC_TEST_RUN_TIMEOUT_MS`.

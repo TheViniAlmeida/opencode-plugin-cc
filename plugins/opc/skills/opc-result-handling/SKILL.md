@@ -97,3 +97,36 @@ Siga o [procedimento único de permissões e perguntas](#procedimento-único-de-
 
 - É só do usuário (`disable-model-invocation`). Não sugira `--pane` fora do tmux e nunca
   exponha a senha do servidor.
+
+## Ferramentas MCP (`opc_*`)
+
+As ferramentas do servidor MCP `opc` chamam o mesmo despachante dos comandos `/opc:`.
+Aplicam-se os procedimentos desta skill, sem ampliar a autorização do usuário.
+
+- Jobs longos (`opc_task`, `opc_ask`, `opc_plan`, `opc_subagent`, `opc_orchestrate`,
+  `opc_conclave`) retornam o ID em background por padrão. Acompanhe com `opc_job_status`;
+  `wait: true` exige `jobId`. Apresente `opc_job_result` como `/opc:result`; em grupos,
+  `data` contém `{ group, members }` e a saída agregada está em `group.result`.
+- `content[0].text` contém o JSON do envelope (`exitCode`, `state`, `data`, `error`).
+  `data` pode ser uma string Markdown, especialmente nas respostas de permissões e
+  perguntas. Preserve a saída recebida ao apresentá-la.
+- `state: "waiting_permission"` corresponde ao exit 3. Liste os pedidos com
+  `opc_permissions_list` e siga o procedimento único de permissões e perguntas acima.
+  Consulte `policy.approver` com `opc_config_get` antes de responder.
+- Para `opc_permissions_reply`, com aprovador `user` (padrão), pergunte ao usuário com
+  AskUserQuestion. Com aprovador `claude`, só responda diretamente quando o pedido não
+  exigir o usuário. Comandos destrutivos, `external_directory` e caminhos sensíveis
+  sempre exigem o usuário, conforme o pedido e a política.
+- `confirmedByUser: true` equivale a `--confirmed-by-user`: use somente após o usuário
+  aprovar explicitamente aquele pedido nesta conversa. As respostas aceitas são `once`
+  e `reject`; `always` não existe. `opc-worker` e `opc-rescue` nunca chamam
+  `opc_permissions_reply`; devolvem o pedido à conversa principal.
+- `opc_permissions_answer` responde às perguntas na ordem, seguindo o procedimento
+  acima; em múltipla escolha, use `|` entre os rótulos de cada resposta.
+- `state: "wait_timeout"` não significa que o job falhou: o job continua. Informe o ID
+  e a chamada de acompanhamento. `isError: false` também pode acompanhar
+  `waiting_permission`; não apresente esse estado como conclusão do job.
+- Não há ferramenta MCP para alterar configuração, revert/unrevert, parar o servidor,
+  review ou transfer. Encaminhe o usuário para `/opc:config`, `/opc:session`,
+  `/opc:setup --stop-server`, `/opc:review`, `/opc:adversarial-review` ou `/opc:transfer`,
+  conforme a ação solicitada.
