@@ -74,23 +74,26 @@ test('turn window ends after asynchronous emitTurn completes', async (t) => {
   assert.ok(entry.end >= emittedAt, `logged end ${entry.end} precedes emitTurn completion ${emittedAt}`);
 });
 
-test('turn log never stores the prompt: only length, hash and the fixture-shaped dependency/result blocks', async (t) => {
+test('turn log never stores the prompt: only length, hash and result blocks this fake emitted itself', async (t) => {
   const dir = trackTempDir(t, makeTempDir('opc-f4b-'));
   const previous = process.env.FAKE_OPENCODE_STATE;
   process.env.FAKE_OPENCODE_STATE = path.join(dir, 'state.json');
   t.after(() => { if (previous === undefined) delete process.env.FAKE_OPENCODE_STATE; else process.env.FAKE_OPENCODE_STATE = previous; });
-  const fake = { state: { sessions: { ses_c: { model: { id: 'm3' } }, ses_s: { model: { id: 'm4' } } } }, emitTurn: async () => {} };
+  const fake = { state: { sessions: { ses_a: { model: { id: 'm1' } }, ses_c: { model: { id: 'm3' } }, ses_s: { model: { id: 'm4' } } } }, emitTurn: async () => {} };
   const scenario = makeOrchestrateScenario({ subtaskDelayMs: 5 });
+  scenario.onPrompt(fake, 'ses_a', { text: '<subtask id="a">\nx\n</subtask>' });
+  await new Promise((resolve) => setTimeout(resolve, 40));
   const canary = 'USER-CANARY-NOT-A-REGISTERED-SECRET';
-  const subtask = `${canary}\n<dependency id="a">\nRESULT[a] by m1\n</dependency>\n<dependency id="b">\nfree text ${canary}\n</dependency>\n<subtask id="c">\nx\n</subtask>`;
+  // A block shaped exactly like the fake's reply but carrying user text (RESULT[b] by <canary>) must be dropped too.
+  const subtask = `${canary}\n<dependency id="a">\nRESULT[a] by m1\n</dependency>\n<dependency id="b">\nRESULT[b] by ${canary}\n</dependency>\n<subtask id="c">\nx\n</subtask>`;
   scenario.onPrompt(fake, 'ses_c', { text: subtask });
-  const synth = `<orchestration_results>\n<result id="a" kind="ask" status="completed">\nRESULT[a] by m1\n</result>\n<result id="b" kind="ask" status="failed">\n${canary}\n</result>\n</orchestration_results>`;
+  const synth = `<orchestration_results>\n<result id="a" kind="ask" status="completed">\nRESULT[a] by m1\n</result>\n<result id="b" kind="ask" status="failed">\nRESULT[b] by ${canary}\n</result>\n</orchestration_results>`;
   scenario.onPrompt(fake, 'ses_s', { text: synth });
   await new Promise((resolve) => setTimeout(resolve, 80));
   const raw = readFileSync(turnLogPath(), 'utf8');
   assert.ok(!raw.includes(canary), 'no prompt text reaches the log');
   const log = readTurnLog({ FAKE_OPENCODE_STATE: process.env.FAKE_OPENCODE_STATE });
-  const c = log.find((e) => e.role === 'subtask');
+  const c = log.find((e) => e.role === 'subtask' && e.subtaskId === 'c');
   assert.equal('prompt' in c, false);
   assert.equal(c.promptLength, subtask.length);
   assert.match(c.promptSha256, /^[0-9a-f]{64}$/);

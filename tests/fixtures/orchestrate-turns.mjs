@@ -21,21 +21,23 @@ export function classifyTurn(body) {
 }
 
 // Prompts are never logged (they carry user text). Only what the assertions need survives: the prompt length and
-// hash, plus dependency/result blocks whose body has the exact shape this fake emits (`RESULT[<id>] by <model>`).
+// hash, plus dependency/result blocks whose body is exactly a reply this fake emitted itself (`emitted`); any other
+// text in a block is dropped, so nothing the user or a model wrote can reach the log.
 const FIXTURE_RESULT = String.raw`(RESULT\[[^\]\n]*\] by [^\n]*)`;
 const DEPENDENCY_BLOCK = new RegExp(String.raw`<dependency id="([^"]+)">\n${FIXTURE_RESULT}\n</dependency>`, 'g');
 const RESULT_BLOCK = new RegExp(String.raw`<result id="([^"]+)" kind="([^"]+)" status="([^"]+)">\n${FIXTURE_RESULT}\n</result>`, 'g');
 
-export function summarizePrompt(text) {
+export function summarizePrompt(text, emitted = new Set()) {
   return {
     promptLength: text.length,
     promptSha256: createHash('sha256').update(text).digest('hex'),
-    dependencies: [...text.matchAll(DEPENDENCY_BLOCK)].map((m) => ({ id: m[1], result: m[2] })),
-    results: [...text.matchAll(RESULT_BLOCK)].map((m) => ({ id: m[1], kind: m[2], status: m[3], result: m[4] })),
+    dependencies: [...text.matchAll(DEPENDENCY_BLOCK)].filter((m) => emitted.has(m[2])).map((m) => ({ id: m[1], result: m[2] })),
+    results: [...text.matchAll(RESULT_BLOCK)].filter((m) => emitted.has(m[4])).map((m) => ({ id: m[1], kind: m[2], status: m[3], result: m[4] })),
   };
 }
 
 export function makeOrchestrateScenario({ plan = null, plannerText = null, failSubtasks = [], subtaskDelayMs = 300, synthesisText = 'SYNTHESIS-OK: combined answer' } = {}) {
+  const emitted = new Set();
   return {
     onPrompt(fake, sessionID, body) {
       const turn = classifyTurn(body);
@@ -50,9 +52,11 @@ export function makeOrchestrateScenario({ plan = null, plannerText = null, failS
         } else if (turn.role === 'subtask' && failSubtasks.includes(turn.subtaskId)) {
           await fake.emitTurn(sessionID, { error: { type: 'provider.transport', message: 'Falha simulada na subtarefa.' } });
         } else {
-          await fake.emitTurn(sessionID, { text: `RESULT[${turn.subtaskId ?? turn.role}] by ${model}` });
+          const reply = `RESULT[${turn.subtaskId ?? turn.role}] by ${model}`;
+          emitted.add(reply);
+          await fake.emitTurn(sessionID, { text: reply });
         }
-        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), ...summarizePrompt(turn.text) })}\n`, { mode: 0o600 });
+        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), ...summarizePrompt(turn.text, emitted) })}\n`, { mode: 0o600 });
       }, delay);
     },
   };
