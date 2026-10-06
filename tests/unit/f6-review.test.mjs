@@ -34,10 +34,16 @@ test('published transfer instructions select the managed V2 server', () => {
   assert.match(read('plugins/opc/scripts/commands/transfer.mjs'), /resumeCommand: `cd .*opencode --server/);
 });
 
-test('F6 report distinguishes controller full-suite result from pending live gate', () => {
+test('F6 report records the live gate and keeps manual checks pending', () => {
   const report = read('docs/phases/F6-report.md');
-  assert.match(report, /rodada 2.*GATE: FAIL.*5 falhas/is);
-  assert.match(report, /NÃO VALIDADO/);
+  assert.match(report, /Contrato V2 ao vivo.*\| PASSOU \|/);
+  assert.match(report, /Serves do operador antes\/depois.*\| PASSOU \|/);
+  assert.match(report, /TUI:.*\| NÃO VALIDADO \|/);
   const live = read('docs/phases/F6-live-output.md');
-  assert.match(live, /NÃO VALIDADO/);
+  for (const file of ['contract-v2.mjs', 'f2a-jobs.mjs', 'f2b-review.mjs', 'f3-subagents.mjs', 'f4c-opinion.mjs', 'f5-mcp.mjs', 'f5-transfer.mjs']) {
+    assert.match(live, new RegExp(`${file.replace('.', '\\.')}\` \\| PASSOU`), file);
+  }
+  for (const text of [report, live]) {
+    for (const provider of text.match(/omniroute-[A-Za-z0-9]+/g) ?? []) assert.match(provider, /^omniroute-(personal|work)$/);
+  }
 });
