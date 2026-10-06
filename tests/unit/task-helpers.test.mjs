@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, catalogFromV2, rulesFromV2 } from '../../plugins/opc/scripts/commands/task.mjs';
+import { buildPromptText, exitCodeForJob, normalizeResumeFlag, projectContextBlock, resolveProfile, sessionTitle, summarize, catalogFromV2, rulesFromV2, resolveTaskCandidates } from '../../plugins/opc/scripts/commands/task.mjs';
+
+test('task uses the V2 OpenCode default when no opc model is configured', async () => {
+  const calls = [];
+  const api = {
+    providers: async () => [{ id: 'p', activation: 'enabled' }],
+    models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }],
+    defaultModel: async () => { calls.push('defaultModel'); return { providerID: 'p', id: 'm' }; },
+  };
+  const { resolution } = await resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { policy: {} } });
+  assert.deepEqual(resolution.candidates.map(({ full, source }) => ({ full, source })), [{ full: 'p/m', source: 'opencode' }]);
+  assert.deepEqual(calls, ['defaultModel']);
+});
+
+test('task keeps an explicit opc model ahead of the OpenCode default', async () => {
+  const api = {
+    providers: async () => [{ id: 'p', activation: 'enabled' }],
+    models: async () => [{ id: 'm', modelID: 'm', providerID: 'p', variants: [] }],
+    defaultModel: async () => { throw new Error('defaultModel should not be needed'); },
+  };
+  const { resolution } = await resolveTaskCandidates({ api, kind: 'task', flags: {}, config: { defaultModel: 'p/m', policy: {} } });
+  assert.equal(resolution.candidates[0].source, 'default');
+});
 
 test('task adapts V2 model catalog and permission rules without retaining provider settings', () => {
   const catalog = catalogFromV2([{ id: 'p', activation: 'enabled', settings: { apiKey: 'must-not-retain' } }], [{ id: 'm', modelID: 'm', providerID: 'p', variants: [{ id: 'high' }], settings: { apiKey: 'must-not-retain' } }]);

@@ -43,6 +43,21 @@ export function catalogFromV2(providers, models) {
   return { connected, models: entries, byFull: new Map(entries.map((entry) => [entry.full, entry])), providers: providers.map(({ id, name }) => ({ id, name, connected: connected.has(id) })) };
 }
 
+export async function resolveTaskCandidates({ api, kind, flags, config }) {
+  const [providers, models] = await Promise.all([api.providers(), api.models()]);
+  const catalog = catalogFromV2(providers, models);
+  try {
+    return { catalog, resolution: resolveCandidates({ kind, flags, config, catalog }) };
+  } catch (error) {
+    if (error.code !== 'NO_MODEL') throw error;
+  }
+  const defaultModel = await api.defaultModel();
+  const opencodeConfig = defaultModel?.providerID && defaultModel?.id
+    ? { model: `${defaultModel.providerID}/${defaultModel.id}` }
+    : null;
+  return { catalog, resolution: resolveCandidates({ kind, flags, config, catalog, opencodeConfig }) };
+}
+
 export const TURN_FLAGS = Object.freeze({
   json: { type: 'boolean' },
   cwd: { type: 'string' },
@@ -228,10 +243,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const policy = config.policy ?? {};
 
   const { api, server } = await connectApi(ctx);
-  const [providers, models] = await Promise.all([api.providers(), api.models()]);
-  const catalog = catalogFromV2(providers, models);
-  const opencodeConfig = null;
-  const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
+  const { catalog, resolution } = await resolveTaskCandidates({ api, kind, flags: { model: flags.model, tier: flags.tier }, config });
   const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
