@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { run as setup } from '../../plugins/opc/scripts/commands/setup.mjs';
-import { ensureServer, stopServer, assertCanCreateSessions, waitForModelCatalog } from '../../plugins/opc/scripts/lib/server.mjs';
+import { ensureServer, stopServer, assertCanCreateSessions, waitForModelCatalog, watchCatalogBootstrap } from '../../plugins/opc/scripts/lib/server.mjs';
 import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
 import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 import { mergeOpencodeConfigSources } from '../../plugins/opc/scripts/commands/setup.mjs';
@@ -30,6 +30,41 @@ test('model warm-up aborts an individual request at its overall deadline', async
   const started = performance.now();
   await assert.rejects(waitForModelCatalog(createApi(client), { timeoutMs: 25, pollMs: 1 }), { code: 'TIMEOUT' });
   assert.ok(performance.now() - started < 1000);
+});
+
+test('model warm-up waits for the bootstrap model.updated before trusting a partial catalog', async () => {
+  let calls = 0;
+  let loaded = false;
+  let announce;
+  const bootstrap = new Promise((resolve) => { announce = resolve; });
+  const builtIn = { providerID: 'opencode', id: 'built-in' };
+  const api = { models: async () => { calls += 1; return loaded ? [builtIn, { providerID: 'gateway', id: 'late' }] : [builtIn]; } };
+  const pending = waitForModelCatalog(api, { bootstrap, bootstrapTimeoutMs: 5_000, pollMs: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 0, 'catalog read before the bootstrap event');
+  loaded = true;
+  announce(true);
+  assert.equal((await pending).length, 2);
+});
+
+test('model warm-up falls back to the non-empty check when the bootstrap event never comes', async () => {
+  const started = performance.now();
+  const models = await waitForModelCatalog({ models: async () => [{ providerID: 'opencode', id: 'built-in' }] },
+    { bootstrap: new Promise(() => {}), bootstrapTimeoutMs: 30, pollMs: 1 });
+  assert.equal(models.length, 1);
+  assert.ok(performance.now() - started < 1000);
+});
+
+test('catalog bootstrap watcher resolves on model.updated and false when the stream fails', async () => {
+  const encoder = new TextEncoder();
+  const streamOf = (text) => new Response(new ReadableStream({ start(c) { c.enqueue(encoder.encode(text)); } }), { headers: { 'content-type': 'text/event-stream' } });
+  const client = createClient({ baseUrl: 'http://127.0.0.1:43210', password: 'pw' });
+  const ok = watchCatalogBootstrap(client, { fetchImpl: async () => streamOf('data: {"type":"server.connected","data":{}}\n\ndata: {"type":"model.updated","data":{}}\n\n') });
+  assert.equal(await ok.ready, true);
+  ok.stop();
+  const broken = watchCatalogBootstrap(client, { fetchImpl: async () => { throw new Error('refused'); } });
+  assert.equal(await broken.ready, false);
+  broken.stop();
 });
 
 test('V2 health rejects old versions and HTML even when HTTP status is 200', async (t) => {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { validateExportShape } from '../../plugins/opc/scripts/lib/transfer.mjs';
-import { cliJson, makeTempDir, makeWorkspace, REPO_ROOT, stateDirFor, trackTempDir } from '../helpers.mjs';
+import { cliJson, makeTempDir, makeWorkspace, REPO_ROOT, stateDirFor, trackEnv, trackTempDir } from '../helpers.mjs';
 import { appendSafeOutput, safeOutputText } from './_f3-lib.mjs';
 
 const MODEL = process.env.OPC_LIVE_MODEL?.trim();
@@ -20,7 +20,8 @@ test('F5 live: isolated transfer and session API preserve synthetic history', { 
   const home = path.join(root, 'home');
   const projects = path.join(home, '.claude', 'projects', 'synthetic');
   fs.mkdirSync(projects, { recursive: true, mode: 0o700 });
-  const env = {
+  // trackEnv: the per-test cleanup stops the managed server this env boots before the temp dirs go away.
+  const env = trackEnv(t, {
     ...process.env,
     HOME: home,
     XDG_CONFIG_HOME: path.join(root, 'config'),
@@ -30,7 +31,7 @@ test('F5 live: isolated transfer and session API preserve synthetic history', { 
     OPC_DATA_DIR: path.join(root, 'opc'),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [], mcp: {}, provider: {} }),
     OPENCODE_DISABLE_AUTOUPDATE: 'true',
-  };
+  });
   for (const key of ['OPC_COMPANION_TRANSCRIPT_PATH', 'OPC_TRANSFER_ALLOWED_ROOT', 'OPC_SERVER_URL', 'OPC_SERVER_PASSWORD', 'CLAUDE_PLUGIN_DATA', 'OPENCODE_CONFIG', 'OPENCODE_CONFIG_DIR']) delete env[key];
   const marker = `OPC-F5-${Date.now()}`;
   const source = path.join(projects, 'session.jsonl');

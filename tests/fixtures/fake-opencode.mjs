@@ -201,6 +201,11 @@ export async function startFake({
         },
         sendConnected() {
           stream.send({ type: 'server.connected', data: {} });
+          // V2 announces the loaded catalog once per instance bootstrap; opc's boot waits for it.
+          if (!fake.catalogAnnounced) {
+            fake.catalogAnnounced = true;
+            stream.send({ type: 'model.updated', data: {} });
+          }
         },
         startHeartbeat() {
           heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': heartbeat\n\n'); }, fake.heartbeatMs);

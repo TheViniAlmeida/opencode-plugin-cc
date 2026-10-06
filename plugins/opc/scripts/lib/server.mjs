@@ -11,6 +11,7 @@ import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
 import { registerSecret, redactText } from './redact.mjs';
+import { EventHub } from './sse.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
 
 export const MIN_OPENCODE_VERSION = '2.0.22';
@@ -268,7 +269,26 @@ export function assertCanCreateSessions(server) {
   }
 }
 
-export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200 } = {}) {
+// V2 loads providers while the instance bootstraps: until the first `model.updated` event, /api/model may list
+// only built-in providers (gateway providers arrived ~11 s after boot on the operator's machine). Resolves true on
+// that event and false when the event stream fails, so the caller never waits on a broken stream.
+export function watchCatalogBootstrap(client, { fetchImpl } = {}) {
+  const hub = new EventHub({ client, ...(fetchImpl ? { fetchImpl } : {}) });
+  let settle;
+  const ready = new Promise((resolve) => { settle = resolve; });
+  hub.onAny((event) => { if (event?.type === 'model.updated') settle(true); });
+  hub.onDown(() => settle(false));
+  hub.start().catch(() => settle(false));
+  return { ready, stop: () => { settle(false); hub.stop(); } };
+}
+
+export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000 } = {}) {
+  if (bootstrap) {
+    // Without the event by the deadline, fall back to the non-empty check below instead of failing the boot.
+    let timer;
+    await Promise.race([bootstrap, new Promise((resolve) => { timer = setTimeout(resolve, bootstrapTimeoutMs); })]);
+    clearTimeout(timer);
+  }
   const deadline = performance.now() + timeoutMs;
   while (true) {
     const remaining = deadline - performance.now();
@@ -369,30 +389,37 @@ async function bootServer(ctx, settings) {
       continue;
     }
     const client = createClient({ baseUrl: res.url, password, directory: workspaceRoot, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
+    // Subscribe before the first workspace request so the bootstrap's `model.updated` is not missed.
+    const bootstrap = watchCatalogBootstrap(client);
     let health;
+    let identity;
     try {
-      health = await createApi(client).info();
-    } catch (err) {
-      await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
-      if (err.code === 'AUTH_FAILED' || err.code === 'NOT_JSON') throw err;
-      failures.push(`tentativa ${attempt} (porta ${res.port}): health falhou — ${err.code}`);
-      continue;
-    }
-    try { assertSupportedVersion(health); }
-    catch (err) { await terminateProcessGroup(expected, matcher, { graceMs: 3000 }); throw err; }
-    const identity = getProcessIdentity(res.pid);
-    if (!identity || !matcher(identity.cmdline)) {
-      throw new ConnectionError('BOOT_FAILED', `O processo ${res.pid} não se identifica como "opencode serve --port ${res.port}"; o opc não vai registrá-lo nem sinalizá-lo.`);
+      try {
+        health = await createApi(client).info();
+      } catch (err) {
+        await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
+        if (err.code === 'AUTH_FAILED' || err.code === 'NOT_JSON') throw err;
+        failures.push(`tentativa ${attempt} (porta ${res.port}): health falhou — ${err.code}`);
+        continue;
+      }
+      try { assertSupportedVersion(health); }
+      catch (err) { await terminateProcessGroup(expected, matcher, { graceMs: 3000 }); throw err; }
+      identity = getProcessIdentity(res.pid);
+      if (!identity || !matcher(identity.cmdline)) {
+        throw new ConnectionError('BOOT_FAILED', `O processo ${res.pid} não se identifica como "opencode serve --port ${res.port}"; o opc não vai registrá-lo nem sinalizá-lo.`);
+      }
+      try {
+        const api = createApi(client);
+        if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
+        await waitForModelCatalog(api, { bootstrap: bootstrap.ready });
+      } catch (err) {
+        await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
+        throw err;
+      }
+    } finally {
+      bootstrap.stop();
     }
     const warnings = [];
-    try {
-      const api = createApi(client);
-      if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
-      await waitForModelCatalog(api);
-    } catch (err) {
-      await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
-      throw err;
-    }
     const checked = await worldCheck(client, config);
     warnings.push(...checked.warnings);
     const record = {
