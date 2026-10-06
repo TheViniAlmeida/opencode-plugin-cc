@@ -135,7 +135,7 @@ test('V2 contract samples match the recorded shapes', () => {
 test('V2 contract samples carry no operator data', () => {
   for (const name of Object.keys(V2_SHAPES.files)) {
     const text = JSON.stringify(loadContractSample(name));
-    assert.doesNotMatch(text, /mvalmeida|equilibrium|\/home\/|\/storage\/|\/tmp\/claude/i, name);
+    assert.doesNotMatch(text, /omniroute-(?!personal)|\/home\/|\/storage\/|\/tmp\//i, name);
   }
 });
 ```
