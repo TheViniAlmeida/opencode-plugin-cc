@@ -161,7 +161,7 @@ test('retry-status → phase retrying in the log, then completed', async (t) => 
   const ctx = setupF2a(t, { scenario: 'retry-status' });
   const r = await opc(ctx, ['task', 'flaky provider']);
   assert.equal(r.code, 0, r.stderr);
-  assert.equal((r.stderr.match(/\[opc\] Nova tentativa \(1\): Limite de requisições/g) ?? []).length, 1);
+  assert.equal((r.stderr.match(/\[opc\] Nova tentativa \(1\): Limite de re…/g) ?? []).length, 1);
   assert.match(r.stdout, /recovered after retry/);
 });
 

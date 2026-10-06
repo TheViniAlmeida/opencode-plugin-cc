@@ -279,12 +279,12 @@ test('waitForJob returns terminal or waiting_permission, streams log, times out 
   await assert.rejects(waitForJob(ctx, slow.id, { waitTimeoutMs: 80, pollMs: 20 }), (e) => e.code === 'WAIT_TIMEOUT' && e.exitCode === 6 && e.details.jobId === slow.id && e.message.includes(`/opc:status ${slow.id} --wait`) && !e.message.includes('<valor>'));
 });
 
-test('cancelJob aborts session and child sessions, never signals an identity mismatch', async (t) => {
+test('cancelJob interrupts session and child sessions, never signals an identity mismatch', async (t) => {
   const dir = stateDir(t);
   const job = await createJob(dir, base({ sessionID: 'ses_x', childSessionIDs: ['ses_child'] }));
   await updateJob(dir, job.id, { status: 'running', pid: process.pid, pidStartTime: 'bogus' });
   const calls = [];
-  const api = { async abort(id) { calls.push(id); return true; }, async sessionStatus() { return {}; } };
+  const api = { async interrupt(id) { calls.push(id); return true; }, async sessionStatus() { return {}; } };
   const { job: final, report } = await cancelJob({ stateDir: dir, env: {} }, job.id, { api });
   assert.equal(final.status, 'cancelled');
   assert.deepEqual(calls, ['ses_x', 'ses_child']);
@@ -299,7 +299,7 @@ test('cancelJob redacts the complete abort error before truncating it and leaves
   const secret = 'registered-secret-value';
   registerSecret(secret);
   const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
-    api: { async abort() { throw new Error(`failed ${secret}`); }, async sessionStatus() { return {}; } },
+    api: { async interrupt() { throw new Error(`failed ${secret}`); }, async sessionStatus() { return {}; } },
   });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'CANCEL_FAILED');
@@ -312,16 +312,15 @@ test('cancelJob redacts the complete abort error before truncating it and leaves
   }
 });
 
-test('cancelJob returns failure and preserves status when abort returns false', async (t) => {
+test('cancelJob treats interrupted:false (session already idle) as a confirmed cancel', async (t) => {
   const dir = stateDir(t);
   const job = await createJob(dir, base({ sessionID: 'ses_false' }));
   await updateJob(dir, job.id, { status: 'running' });
   const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
-    api: { async abort() { return false; }, async sessionStatus() { return {}; } },
+    api: { async interrupt() { return false; }, async sessionStatus() { return {}; } },
   });
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'CANCEL_FAILED');
-  assert.equal(readJob(dir, job.id).status, 'running');
+  assert.equal(result.job.status, 'cancelled');
+  assert.equal(result.report.idle, true);
 });
 
 test('cancelJob returns failure and preserves status when the session stays busy', async (t) => {
@@ -330,7 +329,7 @@ test('cancelJob returns failure and preserves status when the session stays busy
   await updateJob(dir, job.id, { status: 'running' });
   const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
     idleWaitMs: 1,
-    api: { async abort() { return true; }, async sessionStatus() { return { ses_busy: { type: 'busy' } }; } },
+    api: { async interrupt() { return true; }, async sessionStatus() { return { ses_busy: { type: 'busy' } }; } },
   });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'CANCEL_FAILED');
@@ -344,7 +343,7 @@ test('cancelJob preserves a completed record when the worker finishes during abo
   const completedAt = '2026-09-27T12:00:00.000Z';
   const result = await cancelJob({ stateDir: dir, env: {} }, job.id, {
     api: {
-      async abort() {
+      async interrupt() {
         await updateJob(dir, job.id, { status: 'completed', phase: 'done', completedAt, result: { finalText: 'finished' } });
         return true;
       },

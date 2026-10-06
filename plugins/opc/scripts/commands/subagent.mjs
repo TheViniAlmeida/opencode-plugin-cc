@@ -160,7 +160,7 @@ export async function runWorker(ctx, groupJob, request, {
         try {
           res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
             mechanism: req.mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
-            onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.abort(sessionID).catch(() => {}); },
+            onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.interrupt(sessionID).catch(() => {}); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
             onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
             onRequestResolved: (event) => bridge.onResolved(event) });

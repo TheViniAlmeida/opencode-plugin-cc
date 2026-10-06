@@ -33,8 +33,8 @@ export function newMessageId(now = Date.now()) {
 }
 
 const shown = (value) => {
-  const text = safeOutputText(value);
-  return text ? `${text.slice(0, 12)}…` : '';
+  const text = safeOutputText(value) ?? '';
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 };
 
 export function phaseFromPart(part) {

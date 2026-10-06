@@ -121,13 +121,14 @@ function safeConfigInfo(content) {
   }
 }
 
-// Tests assert recorded bodies (prompt text, permission rules), so only credential-like keys are masked, at any depth.
+// Request history is persisted. Free-form content may contain secrets even without a sensitive key.
 const SENSITIVE_BODY_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential/i;
+const FREE_FORM_BODY_KEY = /^(?:text|note|prompt|message|description|content)$/i;
 
 export function safeRequestBody(body) {
   if (Array.isArray(body)) return body.map(safeRequestBody);
   if (!body || typeof body !== 'object') return body;
-  return Object.fromEntries(Object.entries(body).map(([key, value]) => [key, SENSITIVE_BODY_KEY.test(key) ? '[REDACTED]' : safeRequestBody(value)]));
+  return Object.fromEntries(Object.entries(body).map(([key, value]) => [key, SENSITIVE_BODY_KEY.test(key) || FREE_FORM_BODY_KEY.test(key) ? '[REDACTED]' : safeRequestBody(value)]));
 }
 
 export const DEFAULT_ROUTES = {

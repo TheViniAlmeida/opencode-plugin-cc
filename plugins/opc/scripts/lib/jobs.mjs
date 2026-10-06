@@ -667,7 +667,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   if (client && job.sessionID && job.phase !== 'fallback' && !previousFinished) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
-        if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
+        await client.interrupt(sessionID); // V2: {interrupted:false} just means it was already idle
       }
       report.aborted = true;
       report.idle = await waitSessionIdle(client, job.sessionID, idleWaitMs);
@@ -691,7 +691,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     if (client && latest.sessionID && !report.aborted) {
       try {
         for (const sessionID of [latest.sessionID, ...(latest.childSessionIDs ?? [])]) {
-          if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
+          await client.interrupt(sessionID); // V2: {interrupted:false} just means it was already idle
         }
         report.aborted = true;
       } catch (err) {

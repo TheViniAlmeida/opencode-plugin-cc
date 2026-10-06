@@ -116,13 +116,13 @@ test('fake catalogs retain sensitive V2 settings for consumer redaction', () => 
   }
 });
 
-test('request history masks credential keys at any depth and keeps asserted content', () => {
-  const body = { text: 'short', nested: { apiKey: 'key-value', input: ['kept', { password: 'hidden', note: 'kept-note' }] }, headers: { Authorization: 'Basic abc' } };
+test('request history masks free-form prompt content and credential keys at any depth', () => {
+  const body = { text: 'prompt-secret-value', nested: { apiKey: 'key-value', input: ['kept', { password: 'hidden', note: 'note-secret-value', message: 'message-secret-value' }] }, headers: { Authorization: 'Basic abc' } };
   const safe = safeRequestBody(body);
   const json = JSON.stringify(safe);
-  for (const leaked of ['key-value', 'hidden', 'Basic abc']) assert.equal(json.includes(leaked), false, leaked);
-  assert.equal(safe.text, 'short');
-  assert.deepEqual(safe.nested.input, ['kept', { password: '[REDACTED]', note: 'kept-note' }]);
+  for (const leaked of ['prompt-secret-value', 'note-secret-value', 'message-secret-value', 'key-value', 'hidden', 'Basic abc']) assert.equal(json.includes(leaked), false, leaked);
+  assert.equal(safe.text, '[REDACTED]');
+  assert.deepEqual(safe.nested.input, ['kept', { password: '[REDACTED]', note: '[REDACTED]', message: '[REDACTED]' }]);
   assert.equal(JSON.stringify(body).includes('hidden'), true);
 });
 

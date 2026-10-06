@@ -79,7 +79,7 @@ test('aprovador claude responde solicitação segura sem confirmação do usuár
   const sent = replies(env);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].body.decision, 'reject');
-  assert.equal(sent[0].body.message, '--not now');
+  assert.equal(sent[0].body.message, '[REDACTED]');
 });
 
 test('aprovador user aplica a mesma regra da CLI sem confirmedByUser', async (t) => {
