@@ -154,7 +154,7 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
   const model = resolveModel(ctx, discovery, 'summarize', flags.model);
   return withSessionGuard(ctx, api, sessionID, async () => {
     await api.setModel(sessionID, { providerID: model.providerID, id: model.modelID });
-    await api.compact(sessionID);
+    await api.compact(sessionID, { timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000 });
     if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true }));
     else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\nVeja o resultado: opc session show ${safeOutputText(sessionID)}\n`);
     return ExitCode.OK;

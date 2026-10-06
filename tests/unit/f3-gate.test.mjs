@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { registerSecret, redactTurnOutput } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { renderSession, renderSessions, renderTodos, renderSessionDiff, renderRevertPreview } from '../../plugins/opc/scripts/lib/render.mjs';
+import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../../plugins/opc/scripts/lib/render.mjs';
 import { createGroup, readJob, cancelJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { runWorker } from '../../plugins/opc/scripts/commands/subagent.mjs';
 import { run as result } from '../../plugins/opc/scripts/commands/result.mjs';
@@ -25,8 +25,6 @@ test('C1: renderizadores mascaram títulos, tarefas, prévias e patches antes de
     renderSessions([session], { statusMap: { ses_gate: { type: text } } }),
     renderSession(session, { messages: [{ id: 'msg_gate', type: 'user', time: { created: 0 }, text }] }),
     renderSession({ id: 'ses_gate' }, { messages: [{ id: 'msg_long', type: 'assistant', content: [{ type: 'text', text: `${'x '.repeat(47)}${token}` }] }] }),
-    renderTodos([{ content: text, status: text, priority: text }]),
-    renderTodos([{ content: `${'x '.repeat(77)}${token}` }]),
     renderSessionDiff([{ file: text, status: text, patch: `+${text}` }]),
     renderRevertPreview({ action: 'unrevert', sessionID: 'ses_gate', rawDiff: text, command: 'opc session unrevert ses_gate' }),
   ];
@@ -35,10 +33,6 @@ test('C1: renderizadores mascaram títulos, tarefas, prévias e patches antes de
     assert.equal(output.includes('ghp_'), false, 'prévia não pode vazar prefixo de token truncado');
     assert.ok(output.includes('***'));
   }
-});
-
-test('M1: cabeçalho das tarefas em PT-BR', () => {
-  assert.match(renderTodos([{ content: 'verificar' }], { sessionID: 'ses_gate' }), /^# Tarefas da sessão ses_gate/);
 });
 
 test('C2: redactTurnOutput mascara todos os campos do erro de provedor', () => {

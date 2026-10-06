@@ -173,3 +173,15 @@ test('summarize: sets the session model then compacts; model from --model (alias
   const shown = JSON.parse((await runCli(['session', 'show', SEED.session, '--json'], { env, cwd })).stdout);
   assert.ok(shown.messages.some((message) => message.type === 'assistant' && message.agent === 'compaction'));
 });
+
+test('summarize: --timeout bounds the compact request (default is long; a short flag fails a slow compaction)', async (t) => {
+  const cwd = makeWorkspace(t);
+  const env = testEnv(t, { scenario: 'f3-sessions', extra: { FAKE_COMPACT_DELAY_MS: '2500' } });
+  writeGlobalConfig(env, F3_TEST_CONFIG);
+  const slow = await runCli(['session', 'summarize', SEED.session, '--timeout', '1'], { env, cwd });
+  assert.notEqual(slow.code, 0, 'the short --timeout aborts the slow compact request');
+  assert.match(slow.stderr + slow.stdout, /TIMEOUT|sem resposta em 1000 ms/);
+  const patient = await runCli(['session', 'summarize', SEED.session, '--timeout', '30', '--json'], { env, cwd });
+  assert.equal(patient.code, 0, patient.stderr);
+  assert.equal(JSON.parse(patient.stdout).summarized, true);
+});

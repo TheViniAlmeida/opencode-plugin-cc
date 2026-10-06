@@ -77,7 +77,7 @@ export function sessionWriteMethods(client) {
     },
     revertCommit: (id) => client.post(`${sessionPath(id)}/revert/commit`, undefined),
     revertClear: (id) => client.delete(`${sessionPath(id)}/revert`),
-    compact: (id) => client.post(`${sessionPath(id)}/compact`, undefined),
+    compact: (id, { timeoutMs } = {}) => client.post(`${sessionPath(id)}/compact`, undefined, given(timeoutMs) ? { timeoutMs } : {}),
     runCommand: (id, { name, text } = {}) => {
       if (!name) throw new UsageError('MISSING_COMMAND', 'runCommand exige o nome do comando.');
       return client.post(`${sessionPath(id)}/command`, { name, text: text ?? '' });

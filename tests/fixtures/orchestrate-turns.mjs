@@ -1,6 +1,6 @@
 // Shared behaviour of the F4b fake scenarios. Runs inside the fake OpenCode process.
 import { appendFileSync } from 'node:fs';
-import { redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { createHash } from 'node:crypto';
 
 export function turnLogPath(stateFile = process.env.FAKE_OPENCODE_STATE) {
   return `${stateFile}.turns.jsonl`;
@@ -20,6 +20,21 @@ export function classifyTurn(body) {
   return { role: 'other', subtaskId: null, text };
 }
 
+// Prompts are never logged (they carry user text). Only what the assertions need survives: the prompt length and
+// hash, plus dependency/result blocks whose body has the exact shape this fake emits (`RESULT[<id>] by <model>`).
+const FIXTURE_RESULT = String.raw`(RESULT\[[^\]\n]*\] by [^\n]*)`;
+const DEPENDENCY_BLOCK = new RegExp(String.raw`<dependency id="([^"]+)">\n${FIXTURE_RESULT}\n</dependency>`, 'g');
+const RESULT_BLOCK = new RegExp(String.raw`<result id="([^"]+)" kind="([^"]+)" status="([^"]+)">\n${FIXTURE_RESULT}\n</result>`, 'g');
+
+export function summarizePrompt(text) {
+  return {
+    promptLength: text.length,
+    promptSha256: createHash('sha256').update(text).digest('hex'),
+    dependencies: [...text.matchAll(DEPENDENCY_BLOCK)].map((m) => ({ id: m[1], result: m[2] })),
+    results: [...text.matchAll(RESULT_BLOCK)].map((m) => ({ id: m[1], kind: m[2], status: m[3], result: m[4] })),
+  };
+}
+
 export function makeOrchestrateScenario({ plan = null, plannerText = null, failSubtasks = [], subtaskDelayMs = 300, synthesisText = 'SYNTHESIS-OK: combined answer' } = {}) {
   return {
     onPrompt(fake, sessionID, body) {
@@ -37,7 +52,7 @@ export function makeOrchestrateScenario({ plan = null, plannerText = null, failS
         } else {
           await fake.emitTurn(sessionID, { text: `RESULT[${turn.subtaskId ?? turn.role}] by ${model}` });
         }
-        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), prompt: redactText(turn.text) })}\n`, { mode: 0o600 });
+        appendFileSync(turnLogPath(), `${JSON.stringify({ role: turn.role, subtaskId: turn.subtaskId, model, sessionID, start, end: Date.now(), ...summarizePrompt(turn.text) })}\n`, { mode: 0o600 });
       }, delay);
     },
   };

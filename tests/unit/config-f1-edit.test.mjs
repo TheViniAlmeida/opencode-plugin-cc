@@ -8,11 +8,13 @@ import {
   validateAgainstServer, policyViolations, configPaths,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
+import { toAgent } from '../../plugins/opc/scripts/lib/opencode-v2.mjs';
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
 const catalog = buildCatalog({ providers: load('provider.json'), models: load('model.json') });
-const agents = load('agent.json').map((agent) => ({ ...agent, name: agent.id }));
+// The product consumes agents through api.agents(), i.e. normalized by toAgent (model: { providerID, modelID }).
+const agents = load('agent.json').map(toAgent);
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const fresh = () => JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -119,7 +121,8 @@ test('policyViolations: denied defaults, aliases and pinned agent models', () =>
   }, {}).config;
   const v = policyViolations(cfg, { catalog, agents });
   const paths = v.map((e) => e.path).sort();
-  assert.deepEqual(paths, ['aliases.eqk3', 'defaultModel', 'defaultProvider', 'reviewModel']);
+  assert.deepEqual(paths, ['aliases.eqk3', 'defaultAgent', 'defaultModel', 'defaultProvider', 'reviewModel']);
+  assert.match(v.find((e) => e.path === 'defaultAgent').rule, /modelo fixado/);
   assert.ok(v.every((e) => e.code === 'POLICY_DENIED'));
 });
 

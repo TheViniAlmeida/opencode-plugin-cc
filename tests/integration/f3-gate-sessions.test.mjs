@@ -23,7 +23,7 @@ function fixture(t) {
     requests.push({ method, path: url.pathname, query });
     let reply;
     if (url.pathname === '/api/info') reply = { status: 200, body: { version: '2.0.22', pid: 1, urls: {}, paths: {} } };
-    else if (url.pathname === '/api/model/default') reply = { status: 200, body: { data: { 'omniroute-personal': 'opencode-go/deepseek-v4.1-flash' } } };
+    else if (url.pathname === '/api/model/default') reply = { status: 200, body: { data: { id: 'opencode-go/deepseek-v4.1-flash', modelID: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' } } };
     else if (F3_DATA[`${url.pathname.slice(5)}.json`]) reply = { status: 200, body: { data: F3_DATA[`${url.pathname.slice(5)}.json`] } };
     else {
       for (const [route, handler] of Object.entries(F3_SESSION_ROUTES)) {

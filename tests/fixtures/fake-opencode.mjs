@@ -133,7 +133,7 @@ export function safeRequestBody(body) {
 
 export const DEFAULT_ROUTES = {
   'GET /api/info': (fake) => ({ body: { version: fake.version, pid: process.pid, urls: [fake.url], paths: { tmp: '<tmp>' } } }),
-  'GET /api/model/default': () => ({ body: { data: { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' } } }),
+  'GET /api/model/default': () => ({ body: { data: { id: 'opencode-go/deepseek-v4.1-flash', modelID: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' } } }),
   'GET /api/event': (fake, ctx) => {
     fake.openEventStream(ctx.req, ctx.res);
     return 'handled';

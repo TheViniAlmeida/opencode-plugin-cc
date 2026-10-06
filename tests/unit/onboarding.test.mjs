@@ -199,7 +199,8 @@ test('rankProviders / suggestModels / suggestAliases / modelFamilies', () => {
   assert.equal(top.length, 3);
   assert.ok(top.every((m) => m.status !== 'deprecated'));
   assert.ok(top.every((model) => model.providerID === MV && model.connected));
-  assert.ok(Object.values(suggestAliases(catalog, MV, policy)).every((id) => catalog.byFull.has(id)));
+  assert.deepEqual(top.map((m) => m.full), [`${MV}/cx/gpt-5.6-sol`, `${MV}/opencode-go/deepseek-v4.1-flash`, `${MV}/opencode-go/kimi-k2.6`]);
+  assert.deepEqual(suggestAliases(catalog, MV, policy), { fast: `${MV}/opencode-go/deepseek-v4.1-flash`, strong: `${MV}/opencode-go/kimi-k3` });
   assert.deepEqual(modelFamilies(catalog, MV)[0], { family: 'opencode-go', count: 5, glob: `${MV}/opencode-go/*` });
   assert.deepEqual(modelFamilies(catalog, 'opencode').map((f) => f.glob), ['opencode/big-pickle*', 'opencode/space-bunny-free*']);
 });

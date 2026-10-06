@@ -16,8 +16,8 @@ const model = (value) => { const [providerID, ...rest] = value.split('/'); retur
 export const F3_PROVIDERS = [{ id: 'omniroute-personal', name: 'OmniRoute pessoal', activation: 'enabled' }, { id: 'omniroute-work', name: 'OmniRoute trabalho', activation: 'enabled' }];
 export const F3_MODEL_CATALOG = Object.values(F3_MODELS).map((value) => {
   const selected = model(value);
-  return { id: value, modelID: selected.id, providerID: selected.providerID, name: selected.id,
-    capabilities: { toolcall: true, reasoning: false }, variants: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }], status: 'active' };
+  return { id: selected.id, modelID: selected.id, providerID: selected.providerID, name: selected.id,
+    capabilities: { tools: true, input: ['text'], output: ['text'] }, variants: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }], status: 'active' };
 });
 const agent = (id, mode, extra = {}) => ({ id, name: id, mode, hidden: false, description: '', permissions: [], ...extra });
 export const F3_AGENTS = [agent('build', 'primary'), agent('plan', 'primary'), agent('general', 'subagent'), agent('explore', 'subagent'), agent('work-secret', 'subagent'), agent('pinned-sub', 'subagent')];
@@ -117,12 +117,17 @@ export const F3_SESSION_ROUTES = {
     persist(fake);
     return ok(session);
   },
-  'POST /api/session/:id/compact': (fake, { params, body = {} }) => {
+  'POST /api/session/:id/compact': (fake, { params }) => {
     if (!fake.state.sessions[params.id]) return notFound();
-    const selected = fake.state.sessions[params.id].model;
-    fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
-    persist(fake);
-    return { status: 204 };
+    const compact = () => {
+      const selected = fake.state.sessions[params.id].model;
+      fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
+      persist(fake);
+      return { status: 204 };
+    };
+    // FAKE_COMPACT_DELAY_MS makes the request slow (tests of the --timeout flag); synchronous otherwise.
+    const delayMs = Number(process.env.FAKE_COMPACT_DELAY_MS ?? 0);
+    return delayMs > 0 ? new Promise((resolve) => setTimeout(() => resolve(compact()), delayMs)) : compact();
   },
   'POST /api/session/:id/command': (fake, { params, body = {} }) => {
     if (typeof body.name !== 'string' || typeof body.text !== 'string') return bad('Comando e argumentos obrigatórios');

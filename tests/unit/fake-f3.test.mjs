@@ -7,7 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { loadScenario, startFake } from '../fixtures/fake-opencode.mjs';
 import { pickFreePort } from '../../plugins/opc/scripts/lib/server.mjs';
-import { SEED, userMessage, assistantMessage } from '../fixtures/f3-fake.mjs';
+import { SEED, userMessage, assistantMessage, F3_MODEL_CATALOG } from '../fixtures/f3-fake.mjs';
+import { assertShape, loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 async function boot(t, scenario = 'f3-sessions') {
   const dir = trackTempDir(t, makeTempDir('opc-f3fake-'));
@@ -164,4 +165,27 @@ test('f3 fake: children scenario seeds two children of the seed session', async 
   const { call } = await boot(t, 'children');
   const res = await call('GET', `/api/session?parentID=${SEED.session}`);
   assert.equal(res.body.length, 2);
+});
+
+test('f3 fake: model catalog follows the recorded V2 sample (id relative to the provider, capabilities.tools)', () => {
+  const sample = loadContractSample('model.json').data[0];
+  for (const model of F3_MODEL_CATALOG) {
+    assertShape('model', model);
+    assert.equal(model.id, model.modelID, 'id is relative to the provider, like the sample');
+    assert.ok(!model.id.startsWith(`${model.providerID}/`), 'the provider is not embedded in the id');
+    assert.equal(sample.id, sample.modelID);
+    assert.equal(model.capabilities.tools, true);
+    assert.equal('toolcall' in model.capabilities, false);
+  }
+});
+
+test('f3 fake: GET /api/model/default is a model object like the sample', async (t) => {
+  const { call } = await boot(t);
+  const res = await call('GET', '/api/model/default');
+  assert.equal(res.status, 200);
+  const sample = loadContractSample('model-default.json').data;
+  for (const key of ['id', 'modelID', 'providerID']) assert.equal(typeof res.body[key], typeof sample[key], key);
+  assert.ok(typeof res.body.id === 'string' && typeof res.body.providerID === 'string');
+  assert.equal(Array.isArray(res.body), false);
+  assert.equal(res.body.id, res.body.modelID);
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
 import {
-  renderSessions, renderSession, renderSessionDiff, renderTodos, renderRevertPreview,
+  renderSessions, renderSession, renderSessionDiff, renderRevertPreview,
   renderPendingLines, renderGroupStatus, renderGroupResult, renderCommandResult, renderAttach,
 } from '../../plugins/opc/scripts/lib/render.mjs';
 
@@ -58,14 +58,6 @@ test('renderSessionDiff: small patches inline, huge ones listed but omitted, saf
   assert.match(out, /1 arquivo\(s\) fora do diff inline/);
   assert.ok(Buffer.byteLength(out) < 4096);
   assert.match(renderSessionDiff([]), /Nenhuma alteração registrada/);
-});
-
-test('renderTodos lists status, priority and content', () => {
-  const out = renderTodos([{ content: 'check alpha', status: 'completed', priority: 'high' }], { sessionID: 'ses_a' });
-  assert.match(out, /ses_a/);
-  assert.match(out, /completed/);
-  assert.match(out, /check alpha/);
-  assert.match(renderTodos([]), /Nenhum todo/);
 });
 
 test('renderRevertPreview shows the scope notice and the exact confirmation command', () => {

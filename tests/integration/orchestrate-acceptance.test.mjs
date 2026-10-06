@@ -110,9 +110,11 @@ test('F4b: dependency results are injected into the dependent prompt', async (t)
   const a = turnOf(env, 'a');
   const b = turnOf(env, 'b');
   const c = turnOf(env, 'c');
-  assert.match(c.prompt, new RegExp(`<dependency id="a">\\nRESULT\\[a\\] by ${modelID(M1).replace(/\./g, '\\.')}\\n</dependency>`));
-  assert.match(c.prompt, /<dependency id="b">\nRESULT\[b\] by /);
-  assert.ok(!a.prompt.includes('<dependency'));
+  assert.deepEqual(c.dependencies, [
+    { id: 'a', result: `RESULT[a] by ${modelID(M1)}` },
+    { id: 'b', result: `RESULT[b] by ${modelID(M2)}` },
+  ]);
+  assert.deepEqual(a.dependencies, [], 'a subtask without dependencies receives no dependency block');
   assert.ok(c.start >= Math.max(a.end, b.end), 'dependent started after its dependencies finished');
 });
 
@@ -155,8 +157,8 @@ test('F4b: model synthesis runs a read-only session with every result', async (t
   assert.deepEqual([synthesis.mode, synthesis.status, synthesis.model, synthesis.text], ['model', 'completed', M3, 'SYNTHESIS-OK: A and B agree']);
   const synthTurn = readTurnLog(env).find((e) => e.role === 'synthesizer');
   assert.equal(synthTurn.model, modelID(M3));
-  assert.match(synthTurn.prompt, /<result id="a" kind="ask" status="completed">\nRESULT\[a\] by /);
-  assert.match(synthTurn.prompt, /<result id="b" kind="ask" status="completed">\nRESULT\[b\] by /);
+  assert.deepEqual(synthTurn.results.map(({ id, kind, status }) => [id, kind, status]), [['a', 'ask', 'completed'], ['b', 'ask', 'completed']]);
+  assert.ok(synthTurn.results.every((r) => r.result.startsWith(`RESULT[${r.id}] by `)));
   const synthSession = sessionPosts(env).find((r) => r.body.title.startsWith('OPC: orch-synth: '));
   assert.deepEqual(synthSession.body.permissions[0], DENY_ALL, 'synthesizer runs read-only');
   const rendered = await runCli(['result', out.jobId], { env, cwd: ws });

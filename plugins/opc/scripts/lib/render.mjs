@@ -803,13 +803,6 @@ export function renderSessionDiff(diffs, { maxInlineBytes = F3_MAX_INLINE_DIFF, 
   return f3Finish([`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)]);
 }
 
-export function renderTodos(todos, { sessionID = null } = {}) {
-  todos = maskDeep(todos);
-  const heading = `# Tarefas${sessionID ? ` da sessão ${safeOutputText(sessionID)}` : ''}`;
-  if (!todos.length) return f3Finish([heading, '', 'Nenhum todo.']);
-  return f3Finish([heading, '', f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))]);
-}
-
 export function renderRevertPreview({ action, sessionID, messageID = null, affected = null, rawDiff = null, notice = null, command }) {
   affected = maskDeep(affected);
   sessionID = safeOutputText(sessionID);
