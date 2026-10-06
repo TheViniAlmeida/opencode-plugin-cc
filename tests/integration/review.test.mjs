@@ -19,7 +19,7 @@ const JOB_ID = /review-[a-z0-9]+-[a-z0-9]+/;
 test('review --wait renders findings in severity order', async (t) => {
   const { cwd, env } = setup(t); makeDirty(cwd);
   const result = await runCli(['review', '--wait'], { env, cwd });
-  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /^# OPC Revisão\n/);
   assert.match(result.stdout, /Alvo: diff da árvore de trabalho/);
   assert.match(result.stdout, /Veredito: needs-attention/);
@@ -28,11 +28,12 @@ test('review --wait renders findings in severity order', async (t) => {
   assert.match(result.stdout, /\(src\/app\.js:2\)/);
   const [prompt] = promptBodies(env);
   assert.equal(Object.hasOwn(prompt, 'format'), false);
+  assert.match(promptText(prompt), /Reply with only one JSON object/);
   assert.match(promptText(prompt), /REVIEW_DIFF_MARKER/);
   assert.match(promptText(prompt), /Use o contexto do repositório abaixo como evidência principal\./);
   const [session] = sessionCreateBodies(env);
   assert.match(session.title, /^OPC: review: /);
-  assert.deepEqual(session.permission[0], { permission: '*', pattern: '*', action: 'deny' });
+  assert.deepEqual(session.permissions[0], { action: '*', resource: '*', effect: 'deny' });
 });
 
 test('review --json returns the structured review', async (t) => {
@@ -158,7 +159,7 @@ test('reviewModel routes the review turn', async (t) => {
   const ids = fixtureModelIds(); if (ids.length < 2) return t.skip('fixture has a single model');
   const { cwd, env } = setup(t, { config: { defaultModel: ids[0], reviewModel: ids[1] } }); makeDirty(cwd);
   const result = await runCli(['review', '--wait'], { env, cwd }); assert.equal(result.code, 0, result.stderr);
-  const expected = parseFullId(ids[1]); assert.deepEqual(promptBodies(env)[0].model, { providerID: expected.providerID, modelID: expected.modelID });
+  const expected = parseFullId(ids[1]); assert.deepEqual(sessionCreateBodies(env)[0].model, { providerID: expected.providerID, id: expected.modelID });
 });
 
 test('denied review model exits 4 before creating a session', async (t) => {
@@ -176,16 +177,16 @@ test('estimate recommends waiting for a tiny change without starting server', as
 });
 
 for (const command of ['review', 'adversarial-review']) {
-  test(`${command} tool mode sends schema and renders tool output`, async (t) => {
+  test(`${command} migrates tool config and requests JSON in text`, async (t) => {
     const { cwd, env } = setup(t, { config: { review: { structuredOutput: 'tool' } } });
     makeDirty(cwd);
     const result = await runCli([command, '--wait', '--json'], { env, cwd });
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout).review, REVIEW_OK_STRUCTURED);
     const [prompt] = promptBodies(env);
-    assert.equal(prompt.format.type, 'json_schema');
-    assert.deepEqual(prompt.format.schema.required, ['verdict', 'summary', 'findings', 'next_steps']);
-    assert.equal(prompt.format.schema.$schema, undefined);
+    assert.equal(Object.hasOwn(prompt, 'format'), false);
+    assert.match(prompt.text, /Reply with only one JSON object/);
+    assert.match(prompt.text, /"required":\["verdict","summary","findings","next_steps"\]/);
   });
   test(`${command} default text mode completes when the fake drops all SSE events`, async (t) => {
     const { cwd, env } = setup(t, { scenario: 'review-dropped-events' });
@@ -197,12 +198,12 @@ for (const command of ['review', 'adversarial-review']) {
   });
 }
 
-test('tool mode with lost SSE fails after idle grace instead of waiting for the turn timeout', async (t) => {
+test('legacy tool config with lost SSE still recovers text from the session', async (t) => {
   const { cwd, env } = setup(t, { scenario: 'review-dropped-events', config: { review: { structuredOutput: 'tool' } } });
   makeDirty(cwd);
   const started = performance.now();
   const result = await runCli(['review', '--wait', '--json'], { env, cwd, timeoutMs: 40_000 });
-  assert.equal(result.code, 7, result.stderr);
-  assert.equal(JSON.parse(result.stdout).errorType, 'NoAssistantMessage');
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).review, REVIEW_OK_STRUCTURED);
   assert.ok(performance.now() - started < 35_000);
 });

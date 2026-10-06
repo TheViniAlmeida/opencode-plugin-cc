@@ -34,7 +34,7 @@ test('executa plano válido, espalha modelos e mantém síntese Claude pendente'
   assert.equal(pkg.outcome, 'completed');
   assert.deepEqual(pkg.subtasks.map((s) => [s.id, s.status, s.result]), [['a', 'completed', 'RESULT[a]'], ['b', 'completed', 'RESULT[b]'], ['c', 'completed', 'RESULT[c]']]);
   assert.deepEqual(pkg.synthesis, { mode: 'claude', status: 'pending', model: null, text: null, errorMessage: null, attempts: [] });
-  assert.equal(calls[0].format, null);
+  assert.equal(calls[0].format.type, 'json_schema');
   assert.equal(calls[0].profile, 'read-only');
 });
 
@@ -228,21 +228,15 @@ for (const structured of [['bad'], 'bad']) {
 }
 
 for (const mode of ['text', 'tool']) {
-  test(`I4: planner requests ${mode} output with the effective schema`, async () => {
+  test(`planner requests JSON in text with the effective schema for ${mode} config`, async () => {
     const { deps, calls } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] } });
     await runOrchestration({ ctx: ctxOf({ orchestrate: { structuredOutput: mode } }), task: 't', flags: { maxSubtasks: 2 }, deps });
-    if (mode === 'text') {
-      assert.equal(calls[0].format, null);
-      assert.equal(typeof calls[0].textJson, 'function');
-      assert.equal(calls[0].textJson({}), null);
-      assert.match(calls[0].prompt, /apenas.*objeto JSON.*única cerca ```json/);
-      assert.match(calls[0].prompt, /"maxItems": 2/);
-      assert.match(calls[0].prompt, /"dependsOn"/);
-    } else {
-      assert.equal(calls[0].format.type, 'json_schema');
-      assert.equal(calls[0].format.schema.properties.subtasks.maxItems, 2);
-      assert.equal(calls[0].textJson, null);
-    }
+    assert.equal(calls[0].format.type, 'json_schema');
+    assert.equal(calls[0].format.schema.properties.subtasks.maxItems, 2);
+    assert.equal(calls[0].textJson, undefined);
+    assert.match(calls[0].prompt, /only one JSON object/);
+    assert.match(calls[0].prompt, /"maxItems":2/);
+    assert.match(calls[0].prompt, /"dependsOn"/);
   });
 }
 

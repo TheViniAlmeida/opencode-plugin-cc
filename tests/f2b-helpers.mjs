@@ -61,18 +61,18 @@ export function readJsonLines(file) {
 
 export function promptBodies(env) {
   return fakeRequests(env)
-    .filter((request) => request.method === 'POST' && /^\/session\/[^/]+\/prompt_async$/.test(request.path))
+    .filter((request) => request.method === 'POST' && /^\/api\/session\/[^/]+\/prompt$/.test(request.path))
     .map((request) => request.body);
 }
 
 export function sessionCreateBodies(env) {
   return fakeRequests(env)
-    .filter((request) => request.method === 'POST' && request.path === '/session')
+    .filter((request) => request.method === 'POST' && request.path === '/api/session')
     .map((request) => request.body);
 }
 
 export function promptText(body) {
-  return (body?.parts ?? []).map((part) => part.text ?? '').join('\n');
+  return body?.text ?? '';
 }
 
 export function makeFailingOpencodeBin(t) {

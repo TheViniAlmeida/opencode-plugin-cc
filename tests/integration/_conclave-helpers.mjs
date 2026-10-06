@@ -22,12 +22,12 @@ export async function conclave(args, { env, cwd, stdin = '', timeoutMs = 90_000 
   try { json = JSON.parse(res.stdout); } catch {}
   return { ...res, json };
 }
-export function promptRequests(env) { return fakeRequests(env).filter((r) => r.method === 'POST' && /^\/session\/[^/]+\/prompt_async$/.test(r.path)); }
-export function sessionOfRequest(request) { return request.path.split('/')[2]; }
+export function promptRequests(env) { return fakeRequests(env).filter((r) => r.method === 'POST' && /^\/api\/session\/[^/]+\/prompt$/.test(r.path)); }
+export function sessionOfRequest(request) { return request.path.split('/')[3]; }
 const KIND_BY_TITLE = { ConclaveSynthesis: 'judge', ConclaveDebate: 'debate', ConclaveMember: 'member' };
 export function requestsBySchema(env, title) { return promptRequests(env).filter((r) => kindOf(r.body) === KIND_BY_TITLE[title]); }
 export function reviewRequests(env) { return promptRequests(env).filter((r) => kindOf(r.body) === 'review'); }
-export function textOf(body) { return (body?.parts ?? []).filter((p) => p.type === 'text').map((p) => p.text).join('\n'); }
+export function textOf(body) { return body?.text ?? ''; }
 export function section(text, tag) { const start = text.indexOf(`<${tag}>`); const end = text.indexOf(`</${tag}>`); return start >= 0 && end > start ? text.slice(start, end) : ''; }
 export function labelOf(pkg, full) { return pkg.composition.find((c) => c.model === full)?.label ?? null; }
 export function writeReviewChanges(cwd) {

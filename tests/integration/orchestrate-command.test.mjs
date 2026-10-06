@@ -9,7 +9,7 @@ function orchestrateConfig(extra = {}) {
   return { defaultProvider: 'omniroute-personal', defaultModel: M1, orchestrate: { planner: M2, maxSubtasks: 5, synthesizer: 'claude' }, routing: { tasks: { ask: list, plan: list, review: list, task: list }, tiers: { light: list, heavy: list }, fallback: { enabled: false, maxAttempts: 1, maxProviderRetries: 3, maxRetryWaitSec: 60 } }, jobs: { maxActive: 8, maxParallel: 4 }, ...extra };
 }
 function setup(t, scenario, config = orchestrateConfig()) { const ws = makeWorkspace(t); const env = testEnv(t, { scenario }); writeGlobalConfig(env, config); return { ws, env }; }
-const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/session');
+const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session');
 
 test('orchestrate sem tarefa é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); const { code, stdout, stderr } = await runCli(['orchestrate'], { env, cwd: ws }); assert.equal(code, 2); assert.match(stdout + stderr, /tarefa ausente/); });
 test('--max fora de 2..10 é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); for (const max of ['1', '11']) { const { code } = await runCli(['orchestrate', '--max', max, 'tarefa'], { env, cwd: ws }); assert.equal(code, 2); } });
@@ -26,12 +26,10 @@ for (const mode of ['text', 'tool']) {
     const result = await runCli(['orchestrate', '--json', 'Audit'], { env, cwd: ws, timeoutMs: 120000 });
     assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.equal(JSON.parse(result.stdout).orchestration.subtasks.length, 3);
-    const request = readFakeState(env).requests.find((r) => r.method === 'POST' && /\/prompt_async$/.test(r.path));
+    const request = readFakeState(env).requests.find((r) => r.method === 'POST' && /\/api\/session\/[^/]+\/prompt$/.test(r.path));
     assert.ok(request);
-    if (mode === 'text') {
-      assert.equal(Object.hasOwn(request.body, 'format'), false);
-      assert.match(request.body.parts[0].text, /apenas.*objeto JSON.*única cerca ```json/);
-    } else assert.equal(request.body.format.type, 'json_schema');
+    assert.equal(Object.hasOwn(request.body, 'format'), false);
+    assert.match(request.body.text, /Reply with only one JSON object/);
   });
 }
 

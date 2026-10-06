@@ -73,7 +73,7 @@ test('presenter handles failed refreshed group summaries in text and JSON modes'
   assert.deepEqual(json, { jobId: 'conc-test', status: 'failed', errorCode: 'coordinator_error', errorMessage: 'provider unavailable' });
 });
 
-async function workerFixture(t, { structuredOutput = 'text', wrapAnswer = false } = {}) {
+async function workerFixture(t, { structuredOutput = 'text' } = {}) {
   const dir = stateDir(t);
   const { group, members } = await createGroup(dir, { kind: 'conclave' }, [
     ...MEMBERS.map((m) => ({ kind: 'conclave-member', role: `member:${m.label}`, model: m.full })),
@@ -82,19 +82,22 @@ async function workerFixture(t, { structuredOutput = 'text', wrapAnswer = false 
   const listeners = new Set();
   const prompts = [];
   const fake = { state: {}, persist() {}, emit(event) { for (const fn of listeners) fn(structuredClone(event)); },
-    scenario: { async onPromptAsync(f, id, body) {
+    scenario: { async onPrompt(f, id) {
       prompts.push(id);
       const isJudge = f.state.sessions[id].title === 'OPC: conclave: judge';
       const response = isJudge ? synthesis(['A', 'B', 'C']) : answer();
-      const structured = wrapAnswer ? { title: isJudge ? 'ConclaveSynthesis' : 'ConclaveMember', properties: response } : response;
-      f.emitTurn(id, { text: `\`\`\`json\n${JSON.stringify(structured)}\n\`\`\``, ...(body.format ? { structured } : {}), delayMs: 1 });
+      f.emitTurn(id, { text: JSON.stringify(response), delayMs: 1 });
     } },
   };
   const routes = installSessionApi(fake);
   const handle = async (method, route, body, options) => {
-    const response = await routes.handle(method, route, new URLSearchParams(options?.query), body);
-    assert.ok(response.status < 400, `${method} ${route}: ${response.status}`);
-    return response.body;
+    // Task 8 migrates policy rules; adapt that unrelated V1 profile at this test boundary.
+    const v2Body = route === '/api/session' && method === 'POST'
+      ? { ...body, permissions: body.permissions.map((rule) => ({ action: rule.permission, resource: rule.pattern, effect: rule.action })) }
+      : body;
+    const response = await routes.handle(method, route, new URLSearchParams(options?.query), v2Body);
+    assert.ok((response.status ?? 200) < 400, `${method} ${route}: ${response.status}`);
+    return response.body?.data ?? response.body;
   };
   const api = createApi({ get: (route, options) => handle('GET', route, undefined, options), post: (route, body) => handle('POST', route, body), patch: (route, body) => handle('PATCH', route, body) });
   api.providers = async () => fixtureData('provider.json');
@@ -108,7 +111,7 @@ async function workerFixture(t, { structuredOutput = 'text', wrapAnswer = false 
 
 for (const mode of ['text', 'tool']) {
   test(`${mode} worker accepts schema-shaped values from the real runner without losing members`, async (t) => {
-    const f = await workerFixture(t, { structuredOutput: mode, wrapAnswer: true });
+    const f = await workerFixture(t, { structuredOutput: mode });
     assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 0);
     const group = readJob(f.ctx.stateDir, f.group.id);
     assert.equal(group.status, 'completed');

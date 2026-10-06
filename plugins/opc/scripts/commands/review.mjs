@@ -110,7 +110,7 @@ export async function runReviewCommand(ctx, argv, { variant }) {
   const request = turnJobRequest({
     kind: 'review', profile: 'read-only', prompt,
     model: resolved.model, modelFull: resolved.full, variant: resolved.variant,
-    format: ctx.config?.review?.structuredOutput === 'tool' ? { type: 'json_schema', schema: loadSchema('review-output') } : null, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
+    format: { type: 'json_schema', schema: loadSchema('review-output') }, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
     config: ctx.config ?? {}, extra: {
       ...routingFields(resolved.resolution, { resume: false, catalog: resolved.catalog, warningsReported: true }),
       review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus },

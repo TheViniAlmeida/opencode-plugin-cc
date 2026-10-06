@@ -6,6 +6,7 @@ import { toPermissionRequest, toQuestion } from './opencode-v2.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
 import { readSessionMessages, readTurnMessages } from './session-messages.mjs';
 import { extractTextJson } from './text-json.mjs';
+import { jsonInstruction, schemaValidator } from './structured-text.mjs';
 import { validateReviewOutput } from './render.mjs';
 
 const ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -330,7 +331,8 @@ export async function runTurn({
       if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
       if (!settled) {
         const text = (request.parts ?? []).filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('\n');
-        await sendPrompt(api, sessionID, { id: messageID, text });
+        const promptText = request.format?.type === 'json_schema' ? `${text}\n\n${jsonInstruction(request.format.schema)}` : text;
+        await sendPrompt(api, sessionID, { id: messageID, text: promptText });
         promptAccepted = true;
       }
     } catch (err) {
@@ -393,7 +395,8 @@ export async function runTurn({
       if (!safetyFailure) { if (isServerDown(err)) return serverLost(); throw err; }
       collected = extractTurn([]);
     }
-    const textJson = request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : request.kind === 'task' ? () => null : null);
+    const textJson = request.format?.type === 'json_schema' ? schemaValidator(request.format.schema)
+      : request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : request.kind === 'task' ? () => null : null);
     if (outcome.reason === 'idle' && !collected.error && !forcedError && typeof textJson === 'function') collected.structured = extractTextJson(collected.finalText, textJson);
     collected = redactOutput({ ...collected, structuredSource: collected.structured === null ? null : 'text' });
     const toolsRan = collected.toolsRan || toolsRanLive;

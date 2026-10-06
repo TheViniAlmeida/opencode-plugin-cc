@@ -96,16 +96,16 @@ test('quorum met: text mode reports MissingStructuredOutput for a member without
   assert.ok(pkg.synthesisInput);
 });
 
-test('quorum met: tool mode discards and lists a StructuredOutputError member; the rest synthesize', async (t) => {
+test('quorum met: legacy tool mode uses text and discards a malformed member', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-structured-error', config: { conclave: { structuredOutput: 'tool' } } });
   const res = await conclave(['--models', TRIO, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   const pkg = res.json;
   const qwen = labelOf(pkg, QW);
   assert.equal(pkg.status, 'completed');
-  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'StructuredOutputError']]);
-  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => r.body.format?.type === 'json_schema'));
-  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
+  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'MissingStructuredOutput']]);
+  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !r.body.format));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => !r.body.format));
   assert.ok(pkg.synthesisInput);
 });
 
@@ -239,14 +239,14 @@ test('judge failure in text mode keeps the conclave completed with MissingStruct
   assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
 });
 
-test('judge StructuredOutputError in tool mode keeps the conclave completed with a warning', async (t) => {
+test('judge malformed text in legacy tool mode keeps the conclave completed with a warning', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-opinion', config: { conclave: { structuredOutput: 'tool' } } });
   const res = await conclave(['--models', `${DS},${QW}`, '--judge', KM, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   assert.equal(res.json.judge.status, 'failed');
-  assert.equal(res.json.judge.error.errorType, 'StructuredOutputError');
+  assert.equal(res.json.judge.error.errorType, 'MissingStructuredOutput');
   assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
-  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => !r.body.format));
 });
 
 test('--allow-judge-member: required when the judge is also a member', async (t) => {

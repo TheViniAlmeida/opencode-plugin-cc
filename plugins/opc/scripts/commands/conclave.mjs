@@ -11,8 +11,6 @@ import { renderConclave } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { redactOutput, redactText, safeOutputText } from '../lib/redact.mjs';
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
 const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode: { type: 'string', default: 'opinion' }, rounds: { type: 'number' }, judge: { type: 'string' }, quorum: { type: 'number' }, 'allow-judge-member': { type: 'boolean', default: false }, background: { type: 'boolean', default: false }, 'wait-timeout': { type: 'number' }, base: { type: 'string' }, scope: { type: 'string' }, json: { type: 'boolean', default: false }, 'raw-args-stdin': { type: 'boolean' } }, allowPositionals: true };
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
 
@@ -104,7 +102,7 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
       let result;
       try {
         result = await turnRunner({ api: conn.api, hub: conn.hub,
-          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, ...(ctx.config.conclave?.structuredOutput === 'tool' ? { format: { type: 'json_schema', schema: spec.schema } } : {}), textJson: ctx.config.conclave?.structuredOutput === 'tool' ? null : (value) => isPlainObject(value) ? null : 'resposta deve ser um objeto JSON', messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
+          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, format: { type: 'json_schema', schema: spec.schema }, messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
           isCancelled: () => isCancelled(id),
           onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.abort(sessionID); }),
           onPermission: (p) => conn.api.replyPermission(p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),

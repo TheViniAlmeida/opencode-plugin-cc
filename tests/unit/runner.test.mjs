@@ -80,6 +80,25 @@ test('V2 task preserves a JSON object returned as text', async () => {
   assert.deepEqual((await pending).structured, { verdict: 'approve' });
 });
 
+test('V2 JSON schema request adds text instruction and accepts only matching output', async () => {
+  const schema = { type: 'object', required: ['files'], properties: { files: { type: 'array', items: { type: 'string' } } }, additionalProperties: false };
+  for (const [reply, expected] of [['{"files":["a"]}', { files: ['a'] }], ['{"files":"a"}', null]]) {
+    const { api, hub, emit } = memoryV2();
+    const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'List files' }], format: { type: 'json_schema', schema }, newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+    const sessionID = await api.created;
+    await api.promptSettled;
+    assert.deepEqual(Object.keys(api.promptCalls[0]).sort(), ['id', 'text']);
+    assert.match(api.promptCalls[0].text, /List files\n\nReply with only one JSON object/);
+    assert.match(api.promptCalls[0].text, /"required":\["files"\]/);
+    api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: reply }] }, { type: 'idle', outcome: 'succeeded' }]);
+    emit({ type: 'session.execution.succeeded', data: { sessionID } });
+    const result = await pending;
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.structured, expected);
+    assert.equal(result.structuredSource, expected ? 'text' : null);
+  }
+});
+
 test('V2 execution.failed before assistant is a classified provider failure', async () => {
   const { api, hub, emit } = memoryV2();
   const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'missing' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
