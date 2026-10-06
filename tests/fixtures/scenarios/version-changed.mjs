@@ -1,12 +1,12 @@
-// /global/health reports the version written in `<stateFile>.version` (simulates an OpenCode upgrade).
+// /api/info reports the version written in `<stateFile>.version`.
 import fs from 'node:fs';
 
 export default {
   routes: {
-    'GET /global/health': (fake) => {
+    'GET /api/info': (fake) => {
       try {
         const version = fs.readFileSync(`${fake.stateFile}.version`, 'utf8').trim();
-        return { body: { healthy: true, version } };
+        return { body: { version, pid: process.pid, urls: [fake.url], paths: { tmp: '<tmp>' } } };
       } catch {
         return undefined;
       }

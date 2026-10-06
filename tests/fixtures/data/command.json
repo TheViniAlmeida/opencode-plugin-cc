@@ -1,7 +1,27 @@
 [
-  {"name":"init","description":"create/update AGENTS.md","source":"command","template":"Please analyze this codebase and create an AGENTS.md file.","hints":[]},
-  {"name":"review","description":"review changes [commit|branch|pr], defaults to uncommitted","source":"command","agent":"plan","subtask":true,"template":"Review the following changes: $ARGUMENTS","hints":["$ARGUMENTS"]},
-  {"name":"docs","description":"Update the docs for a module","source":"command","agent":"docs-writer","model":"omniroute-personal/opencode-go/qwen3.8-max","template":"Update docs for $1","hints":["$1"]},
-  {"name":"gitlab:list-mrs","description":"List open merge requests (MCP prompt)","source":"mcp","template":"List MRs","hints":[]},
-  {"name":"brainstorm","description":"Brainstorm before building","source":"skill","template":"Use the brainstorm skill.","hints":[]}
+  {
+    "id": "init",
+    "name": "init",
+    "description": "create/update AGENTS.md"
+  },
+  {
+    "id": "review",
+    "name": "review",
+    "description": "review changes [commit|branch|pr], defaults to uncommitted"
+  },
+  {
+    "id": "docs",
+    "name": "docs",
+    "description": "Update the docs for a module"
+  },
+  {
+    "id": "gitlab:list-mrs",
+    "name": "gitlab:list-mrs",
+    "description": "List open merge requests (MCP prompt)"
+  },
+  {
+    "id": "brainstorm",
+    "name": "brainstorm",
+    "description": "Brainstorm before building"
+  }
 ]

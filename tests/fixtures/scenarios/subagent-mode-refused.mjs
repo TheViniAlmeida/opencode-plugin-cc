@@ -5,7 +5,7 @@ import { withF3, seedSession, createSessionRecord, bad, notFound, F3_AGENTS } fr
 export default withF3({
   setup: seedSession,
   routes: {
-    'POST /session/:id/prompt_async': (fake, { params, body = {} }) => {
+    'POST /api/session/:id/prompt_async': (fake, { params, body = {} }) => {
       const session = fake.state.sessions[params.id];
       if (!session) return notFound(`session ${params.id} not found`);
       const mode = F3_AGENTS.find((a) => a.name === body.agent)?.mode;

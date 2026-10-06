@@ -11,7 +11,7 @@ const normal = makeOrchestrateScenario({ plan: {
 export default {
   ...normal,
   routes: {
-    async 'POST /session'(fake, { body }) {
+    async 'POST /api/session'(fake, { body }) {
       if (!body?.title?.startsWith('OPC: orch-task:')) return;
       fake.state.delayedCreateStartedAt = Date.now();
       fake.persist();

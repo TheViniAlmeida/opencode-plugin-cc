@@ -1,10 +1,10 @@
 // Emits caller-provided error text so integration tests can exercise runtime masking.
 export default {
-  onPromptAsync(fake, sessionID) {
+  onPrompt(fake, sessionID) {
     const value = process.env.FAKE_ERROR_TEXT ?? 'fixture-error';
     fake.emitTurn(sessionID, {
       text: '',
-      error: { name: `APIError-${value}`, data: { message: `provider failed: ${value}`, statusCode: 429, isRetryable: true } },
+      error: { type: 'provider.transport', message: `Falha do provider: ${String(value).slice(0, 12)}…` },
       delayMs: 20,
     });
   },

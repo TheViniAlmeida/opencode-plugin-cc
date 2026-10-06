@@ -14,29 +14,15 @@ const agentItem = {
   variant: 'default', temperature: 0.5,
 };
 
-test('F1 fixtures cover optional real-server provider model and agent fields', () => {
+test('V2 fixtures provide separate provider, model and agent lists without settings', () => {
   const provider = fixtureData('provider.json');
-  const models = provider.all.flatMap((entry) => Object.values(entry.models ?? {}));
-  assert.ok(models.some((model) => model.capabilities?.interleaved && typeof model.capabilities.interleaved.field === 'string'));
-  assert.ok(models.some((model) => {
-    const cost = model.cost;
-    return cost?.experimentalOver200K
-      && ['input', 'output'].every((key) => typeof cost.experimentalOver200K[key] === 'number')
-      && ['read', 'write'].every((key) => typeof cost.experimentalOver200K.cache?.[key] === 'number');
-  }));
-  assert.ok(models.some((model) => {
-    const tier = model.cost?.tiers?.[0];
-    return tier?.tier?.type === 'context' && typeof tier.tier.size === 'number'
-      && typeof tier.input === 'number' && typeof tier.output === 'number'
-      && ['read', 'write'].every((key) => typeof tier.cache?.[key] === 'number');
-  }));
-  assert.ok(models.some((model) => typeof model.limit?.input === 'number'));
-
+  const models = fixtureData('model.json');
+  assert.ok(provider.some((item) => item.id && item.name && item.activation));
+  assert.ok(models.some((item) => item.id && item.modelID && item.providerID && Array.isArray(item.variants)));
+  assert.ok(provider.every((item) => !Object.hasOwn(item, 'settings')));
+  assert.ok(models.every((item) => !Object.hasOwn(item, 'settings')));
   const agents = fixtureData('agent.json');
-  assert.ok(agents.some((agent) => typeof agent.color === 'string'));
-  assert.ok(agents.some((agent) => typeof agent.steps === 'number'));
-  assert.ok(agents.some((agent) => typeof agent.temperature === 'number'));
-  assert.ok(agents.some((agent) => typeof agent.topP === 'number'));
+  assert.ok(agents.some((agent) => agent.id === 'build' && Array.isArray(agent.permissions)));
 });
 
 test('agent array snapshots preserve all 12 known properties regardless of size', () => {

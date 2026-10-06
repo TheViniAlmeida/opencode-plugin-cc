@@ -1,9 +1,9 @@
-// /global/health never answers in the process whose pid is written in `<stateFile>.hang`.
+// /api/info never answers in the process whose pid is written in `<stateFile>.hang`.
 import fs from 'node:fs';
 
 export default {
   routes: {
-    'GET /global/health': (fake) => {
+    'GET /api/info': (fake) => {
       let target = null;
       try {
         target = fs.readFileSync(`${fake.stateFile}.hang`, 'utf8').trim();

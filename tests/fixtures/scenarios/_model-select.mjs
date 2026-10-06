@@ -3,7 +3,7 @@ const firstSeen = { key: null };
 
 export function modelKey(body) {
   const m = body?.model;
-  return m?.providerID && m?.modelID ? `${m.providerID}/${m.modelID}` : null;
+  return m?.providerID && m?.id ? `${m.providerID}/${m.id}` : null;
 }
 
 // FAKE_FAIL_MODELS="prov/model[,prov/model2]" escolhe quem falha; sem a variável, falha o primeiro modelo visto.
@@ -21,7 +21,5 @@ export function reviewStructured() {
 }
 
 export function successTurn(body) {
-  return body?.format
-    ? { text: 'Revisão concluída.', structured: reviewStructured(), delayMs: 20 }
-    : { text: `resposta falsa de ${modelKey(body)}`, delayMs: 20 };
+  return { text: `resposta falsa de ${modelKey(body)}`, delayMs: 20 };
 }

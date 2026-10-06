@@ -1,8 +1,8 @@
-// OpenCode retries a 429 by itself (session.status retry) and then completes.
+// OpenCode schedules a provider retry and then completes.
 export default {
-  async onPromptAsync(fake, sessionID) {
+  async onPrompt(fake, sessionID) {
     fake.setStatus(sessionID, { type: 'busy' });
-    fake.setStatus(sessionID, { type: 'retry', attempt: 1, message: 'APIError 429: rate limited', next: Date.now() + 500 });
+    fake.event('session.retry.scheduled', { sessionID, assistantMessageID: 'msg_retry', attempt: 1, at: Date.now() + 500, error: { type: 'provider.transport', message: 'Limite de requisições.' } });
     const retryWait = await fake.waitFor(sessionID, 500);
     if (retryWait.aborted || fake.isAborted(sessionID)) return;
     fake.setStatus(sessionID, { type: 'busy' });

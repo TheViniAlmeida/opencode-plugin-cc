@@ -1,262 +1,88 @@
 {
   "info": {
-    "id": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-    "slug": "brave-eagle",
+    "id": "ses_eee5dd6dfffeG77IxRlsoqsF8V",
     "projectID": "global",
-    "directory": "/tmp/opc-fixture/proj",
-    "path": "tmp/opc-fixture/proj",
-    "title": "fixture session",
     "agent": "build",
     "model": {
-      "id": "example/model-a",
-      "providerID": "example-provider",
+      "id": "does-not-exist",
+      "providerID": "omniroute-personal",
       "variant": "default"
-    },
-    "version": "1.18.32",
-    "summary": {
-      "additions": 0,
-      "deletions": 0,
-      "files": 0
     },
     "cost": 0,
     "tokens": {
-      "input": 50108,
-      "output": 58,
-      "reasoning": 16,
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
       "cache": {
-        "read": 74368,
+        "read": 0,
         "write": 0
       }
     },
-    "permission": [
+    "outcome": "failed",
+    "time": {
+      "created": 1791297202473,
+      "updated": 1791297202492,
+      "idle": 1791297202502
+    },
+    "title": "OPC: transfer: sample",
+    "permissions": [
       {
-        "permission": "bash",
-        "pattern": "*",
-        "action": "ask"
+        "action": "*",
+        "resource": "*",
+        "effect": "deny"
       }
     ],
-    "time": {
-      "created": 1790390152335,
-      "updated": 1790390192005
+    "location": {
+      "directory": "<workspace>"
     }
   },
   "messages": [
     {
-      "info": {
-        "role": "user",
-        "time": {
-          "created": 1790390153047
-        },
-        "agent": "build",
-        "model": {
-          "providerID": "example-provider",
-          "modelID": "example/model-a"
-        },
-        "summary": {
-          "diffs": []
-        },
-        "id": "msg_0db91af57001HXhiu4QNpx5GLd",
-        "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ"
+      "id": "msg_111a2293b001qYhSkFTa5YMAyy",
+      "time": {
+        "created": 1791297202498
       },
-      "parts": [
-        {
-          "type": "text",
-          "text": "Run a harmless command and report the output.",
-          "id": "prt_0db91af5b00155t8DFEPYPzZy0",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db91af57001HXhiu4QNpx5GLd"
-        }
-      ]
+      "type": "synthetic",
+      "text": "transfer header"
     },
     {
-      "info": {
-        "parentID": "msg_0db91af57001HXhiu4QNpx5GLd",
-        "role": "assistant",
-        "mode": "build",
-        "agent": "build",
-        "path": {
-          "cwd": "/tmp/opc-fixture/proj",
-          "root": "/"
-        },
-        "cost": 0,
-        "tokens": {
-          "total": 62244,
-          "input": 49913,
-          "output": 37,
-          "reasoning": 6,
-          "cache": {
-            "write": 0,
-            "read": 12288
-          }
-        },
-        "modelID": "example/model-a",
-        "providerID": "example-provider",
-        "time": {
-          "created": 1790390153466,
-          "completed": 1790390173909
-        },
-        "finish": "tool-calls",
-        "id": "msg_0db91b0fa001dcTw4BzZ1lB5ae",
-        "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ"
+      "id": "msg_111a2293b001qYhSkFTa5YMA4Q",
+      "time": {
+        "created": 1791297202499
       },
-      "parts": [
-        {
-          "type": "step-start",
-          "id": "prt_0db91ffc10012MKX6ts9fD6fF8",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db91b0fa001dcTw4BzZ1lB5ae"
-        },
-        {
-          "type": "reasoning",
-          "text": "Plan the step.",
-          "time": {
-            "start": 1790390173636,
-            "end": 1790390173640
-          },
-          "metadata": {
-            "openai": {
-              "itemId": "item_fixture_1",
-              "reasoningEncryptedContent": null
-            }
-          },
-          "id": "prt_0db91ffc40016AXfYvZM1p12kt",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db91b0fa001dcTw4BzZ1lB5ae"
-        },
-        {
-          "type": "tool",
-          "tool": "bash",
-          "callID": "call_fixture_1",
-          "state": {
-            "status": "error",
-            "input": {
-              "command": "echo fixture"
-            },
-            "error": "fixture rejection",
-            "time": {
-              "start": 1790390173762,
-              "end": 1790390173893
-            }
-          },
-          "metadata": {
-            "openai": {
-              "itemId": "item_fixture_2"
-            }
-          },
-          "id": "prt_0db91ffcd001JhoQIgbP9J8bc2",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db91b0fa001dcTw4BzZ1lB5ae"
-        },
-        {
-          "reason": "tool-calls",
-          "type": "step-finish",
-          "tokens": {
-            "total": 62244,
-            "input": 49913,
-            "output": 37,
-            "reasoning": 6,
-            "cache": {
-              "write": 0,
-              "read": 12288
-            }
-          },
-          "cost": 0,
-          "id": "prt_0db9200c8001H4wcDL7Y9Pg2vA",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db91b0fa001dcTw4BzZ1lB5ae"
-        }
-      ]
+      "text": "hi",
+      "type": "user"
     },
     {
-      "info": {
-        "parentID": "msg_0db91af57001HXhiu4QNpx5GLd",
-        "role": "assistant",
-        "mode": "build",
-        "agent": "build",
-        "path": {
-          "cwd": "/tmp/opc-fixture/proj",
-          "root": "/"
-        },
-        "cost": 0,
-        "tokens": {
-          "total": 62306,
-          "input": 195,
-          "output": 21,
-          "reasoning": 10,
-          "cache": {
-            "write": 0,
-            "read": 62080
-          }
-        },
-        "modelID": "example/model-a",
-        "providerID": "example-provider",
-        "time": {
-          "created": 1790390173913,
-          "completed": 1790390191993
-        },
-        "finish": "stop",
-        "id": "msg_0db9200d90013z5ewXcn0B3pOJ",
-        "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ"
+      "id": "msg_111a2293b001qYhSkFTa5YMAzz",
+      "time": {
+        "created": 1791297202500,
+        "completed": 1791297202501
       },
-      "parts": [
-        {
-          "type": "step-start",
-          "id": "prt_0db9246650017QAd6vUjOEYNw8",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db9200d90013z5ewXcn0B3pOJ"
-        },
-        {
-          "type": "reasoning",
-          "text": "The command was rejected: fixture rejection.",
-          "time": {
-            "start": 1790390191721,
-            "end": 1790390191753
-          },
-          "metadata": {
-            "openai": {
-              "itemId": "item_fixture_3",
-              "reasoningEncryptedContent": null
-            }
-          },
-          "id": "prt_0db9246690013WhFgrwLGJfjIP",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db9200d90013z5ewXcn0B3pOJ"
-        },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "does-not-exist",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "content": [
         {
           "type": "text",
-          "text": "Summarize the outcome.",
-          "time": {
-            "start": 1790390191755,
-            "end": 1790390191919
-          },
-          "metadata": {
-            "openai": {
-              "itemId": "item_fixture_4"
-            }
-          },
-          "id": "prt_0db92468b001NBlnQAYUTskYi5",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db9200d90013z5ewXcn0B3pOJ"
-        },
-        {
-          "reason": "stop",
-          "type": "step-finish",
-          "tokens": {
-            "total": 62306,
-            "input": 195,
-            "output": 21,
-            "reasoning": 10,
-            "cache": {
-              "write": 0,
-              "read": 62080
-            }
-          },
-          "cost": 0,
-          "id": "prt_0db92476d001E0ZDMLAtz8R0p0",
-          "sessionID": "ses_f246e5370ffeRHyqkGfyUsIYTQ",
-          "messageID": "msg_0db9200d90013z5ewXcn0B3pOJ"
+          "text": "hello back"
         }
-      ]
+      ],
+      "finish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
     }
   ]
 }

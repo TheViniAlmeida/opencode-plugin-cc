@@ -1,59 +1,38 @@
-// Session, prompt, permission and question routes of the fake OpenCode server (F2a).
-// Shapes follow the OpenAPI of OpenCode 1.18.32; PATCH /session/:id appends permission rules,
-// like the 1.18.32 binary (`merge(old, new)` = concatenation).
+// In-memory OpenCode V2 session API for the HTTP fake and scenario tests.
 import { randomBytes } from 'node:crypto';
 import { redactText } from '../../plugins/opc/scripts/lib/redact.mjs';
 
-const SESSION_KEYS = new Set(['parentID', 'title', 'agent', 'model', 'metadata', 'permission', 'workspaceID']);
-const PATCH_KEYS = new Set(['title', 'metadata', 'permission', 'time']);
-const PROMPT_KEYS = new Set(['messageID', 'model', 'agent', 'noReply', 'tools', 'format', 'system', 'variant', 'parts']);
-const REPLIES = new Set(['once', 'always', 'reject']);
-const ACTIONS = new Set(['allow', 'deny', 'ask']);
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-
-const nextId = (prefix) => `${prefix}_${randomBytes(6).toString('hex')}${Array.from(randomBytes(14), (b) => BASE62[b % 62]).join('')}`;
-const invalid = (message) => ({ status: 400, body: { _tag: 'InvalidRequestError', message } });
-const notFound = (tag, message) => ({ status: 404, body: { _tag: tag, message } });
-const ok = (body) => ({ status: 200, body });
-const extraKeys = (body, allowed) => Object.keys(body ?? {}).filter((key) => !allowed.has(key));
-const validRules = (rules) => Array.isArray(rules) && rules.every((r) => r && typeof r.permission === 'string' && typeof r.pattern === 'string' && ACTIONS.has(r.action) && Object.keys(r).length === 3);
+const id = (prefix) => `${prefix}_${randomBytes(6).toString('hex')}${Array.from(randomBytes(14), (b) => BASE62[b % 62]).join('')}`;
+const ok = (data) => ({ body: { data } });
+const empty = () => ({ status: 204 });
+const bad = (message) => ({ status: 400, body: { _tag: 'InvalidRequestError', message } });
+const missing = () => ({ status: 404, body: { _tag: 'NotFoundError', message: 'Recurso não encontrado' } });
+const TOKENS = { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } };
+const MODEL = { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' };
+const validRules = (rules) => Array.isArray(rules) && rules.every((r) => r && typeof r.action === 'string' && typeof r.resource === 'string' && ['allow', 'deny', 'ask'].includes(r.effect));
+const message = (type, extra = {}) => ({ id: id('msg'), type, time: { created: Date.now() }, ...extra });
 
 export function installSessionApi(fake) {
   const state = fake.state;
-  for (const key of ['sessions', 'messages', 'permissions', 'questions', 'statuses', 'diffs']) state[key] ??= {};
-  for (const key of ['permissionReplies', 'questionReplies', 'questionRejects', 'aborts']) state[key] ??= [];
+  for (const key of ['sessions', 'messages', 'permissions', 'forms', 'statuses', 'diffs']) state[key] ??= {};
+  for (const key of ['permissionReplies', 'formReplies', 'formCancels', 'aborts']) state[key] ??= [];
   const waiters = new Map();
   const turns = new Map();
+  const persist = () => fake.persist?.();
+  const event = (type, data) => { if (!fake.scenario?.dropSseEvents) fake.emit({ type, data }); };
+  const settle = (requestID, answer) => { waiters.get(requestID)?.(answer); waiters.delete(requestID); };
   const getTurn = (sessionID) => {
-    let turn = turns.get(sessionID);
-    if (!turn) {
-      turn = { aborted: false, timers: new Map() };
-      turns.set(sessionID, turn);
-    }
-    return turn;
+    if (!turns.has(sessionID)) turns.set(sessionID, { aborted: false, timers: new Map() });
+    return turns.get(sessionID);
   };
-  const persist = () => fake.persist();
-  const event = (type, properties) => {
-    if (!fake.scenario?.dropSseEvents) fake.emit({ id: nextId('evt'), type, properties });
-  };
-
-  const settle = (requestID, outcome) => {
-    const resolve = waiters.get(requestID);
-    waiters.delete(requestID);
-    resolve?.(outcome);
-  };
-
   fake.event = event;
-
   fake.setStatus = (sessionID, status) => {
     if (status.type === 'busy' && turns.get(sessionID)?.aborted) turns.delete(sessionID);
-    if (status.type === 'busy' || status.type === 'retry') getTurn(sessionID);
-    if (status.type === 'idle') delete state.statuses[sessionID];
-    else state.statuses[sessionID] = status;
+    if (status.type === 'busy') { getTurn(sessionID); state.statuses[sessionID] = { type: 'running' }; }
+    else delete state.statuses[sessionID];
     persist();
-    event('session.status', { sessionID, status });
   };
-
   fake.isAborted = (sessionID) => Boolean(turns.get(sessionID)?.aborted);
   fake.waitFor = (sessionID, ms) => {
     const turn = getTurn(sessionID);
@@ -63,261 +42,226 @@ export function installSessionApi(fake) {
       turn.timers.set(timer, resolve);
     });
   };
-
   fake.createSession = (body = {}, directory = '') => {
-    const time = Date.now();
-    const session = {
-      id: nextId('ses'), slug: `fake-${randomBytes(3).toString('hex')}`, projectID: 'prj_fake', directory,
-      title: body.title ?? 'New session', version: '1.18.32', time: { created: time, updated: time },
-      permission: body.permission ?? [],
-      ...(body.parentID ? { parentID: body.parentID } : {}),
-      ...(body.agent ? { agent: body.agent } : {}),
-    };
+    const now = Date.now();
+    const session = { id: id('ses'), projectID: 'global', agent: body.agent ?? 'build', model: body.model ?? MODEL,
+      permissions: structuredClone(body.permissions ?? []), time: { created: now, updated: now },
+      title: body.title ?? 'Nova sessão', location: { directory }, cost: 0, tokens: structuredClone(TOKENS),
+      ...(body.parentID ? { parentID: body.parentID } : {}) };
     state.sessions[session.id] = session;
     state.messages[session.id] = [];
     persist();
-    event('session.created', { sessionID: session.id, info: session });
+    event('session.created', { sessionID: session.id, ...(session.parentID ? { parentID: session.parentID } : {}) });
     return session;
   };
-
-  fake.createChildSession = (parentID, { title = 'child (@general subagent)', agent = 'general' } = {}) =>
-    fake.createSession({ parentID, title, agent }, state.sessions[parentID]?.directory ?? '');
-
-  fake.askPermission = (sessionID, { permission, patterns, metadata = {}, always = [] }) => {
-    const request = { id: nextId('per'), sessionID, permission, patterns, metadata, always };
+  fake.createChildSession = (parentID, { title = 'OPC: subagente', agent = 'general' } = {}) => {
+    const parent = state.sessions[parentID];
+    if (!parent) throw new Error('Sessão pai não encontrada');
+    return fake.createSession({ parentID, title, agent, model: structuredClone(parent.model), permissions: structuredClone(parent.permissions) }, parent.location.directory);
+  };
+  fake.askPermission = (sessionID, { action, resources, save = [] }) => {
+    const request = { id: id('per'), sessionID, action, resources, save,
+      source: { type: 'tool', messageID: id('msg'), id: id('call') } };
     state.permissions[request.id] = request;
     persist();
     event('permission.asked', request);
     return new Promise((resolve) => waiters.set(request.id, resolve));
   };
-
-  fake.askQuestion = (sessionID, questions) => {
-    const request = { id: nextId('que'), sessionID, questions };
-    state.questions[request.id] = request;
+  fake.askQuestion = (sessionID, fields) => {
+    const form = { id: id('frm'), sessionID, title: 'Perguntas', metadata: { kind: 'question' }, fields };
+    state.forms[form.id] = form;
     persist();
-    event('question.asked', request);
-    return new Promise((resolve) => waiters.set(request.id, resolve));
+    event('form.created', { form });
+    return new Promise((resolve) => waiters.set(form.id, resolve));
   };
-
-  fake.emitTurn = async (sessionID, {
-    text = 'fake-opencode: ok', structured, tools = [], error, delayMs = 20, parentID,
-    tokens = { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost = 0,
-  } = {}) => {
+  fake.failExecution = (sessionID, error) => {
+    if (fake.isAborted(sessionID)) return;
+    state.messages[sessionID] ??= [];
+    state.messages[sessionID].push(message('idle', { outcome: 'failed' }));
+    fake.setStatus(sessionID, { type: 'idle' });
+    event('session.execution.failed', { sessionID, error });
+  };
+  fake.emitTurn = async (sessionID, { text = 'ok', tools = [], delayMs = 20, error, tokens = TOKENS, cost = 0 } = {}) => {
     const session = state.sessions[sessionID];
-    const turn = getTurn(sessionID);
-    const wait = (ms) => fake.waitFor(sessionID, ms);
-    const info = {
-      id: nextId('msg'), sessionID, role: 'assistant', parentID: parentID ?? session.lastUserMessageID,
-      time: { created: Date.now() }, modelID: session.lastModel?.modelID ?? 'fake-model',
-      providerID: session.lastModel?.providerID ?? 'fake', mode: 'build', agent: 'build',
-      path: { cwd: session.directory, root: session.directory }, cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    };
-    const message = { info, parts: [] };
+    if (!session) throw new Error('Sessão não encontrada');
+    if (fake.isAborted(sessionID)) return;
     fake.setStatus(sessionID, { type: 'busy' });
-    state.messages[sessionID].push(message);
-    persist();
-    event('message.updated', { sessionID, info });
+    const turn = getTurn(sessionID);
+    const wait = async () => (await fake.waitFor(sessionID, delayMs)).aborted || turn.aborted;
+    event('session.execution.started', { sessionID });
+    if (error && tools.length === 0) { fake.failExecution(sessionID, error); return; }
+    const assistant = message('assistant', { agent: session.agent, model: session.model, content: [], cost, tokens,
+      finish: tools.length ? 'tool-calls' : 'stop' });
+    event('session.step.started', { sessionID, assistantMessageID: assistant.id, agent: session.agent, model: session.model });
     for (const tool of tools) {
-      if ((await wait(delayMs)).aborted || turn.aborted) return;
-      const start = Date.now();
-      const part = { id: nextId('prt'), sessionID, messageID: info.id, type: 'tool', callID: nextId('call'), tool: tool.tool, state: { status: 'running', input: tool.input ?? {}, time: { start } } };
-      message.parts.push(part);
-      event('message.part.updated', { sessionID, part, time: Date.now() });
-      if ((await wait(delayMs)).aborted || turn.aborted) return;
-      part.state = { status: 'completed', input: tool.input ?? {}, output: tool.output ?? '', title: tool.tool, metadata: tool.metadata ?? {}, time: { start, end: Date.now() } };
-      persist();
-      event('message.part.updated', { sessionID, part, time: Date.now() });
+      if (await wait()) return;
+      const callID = id('call');
+      const content = [{ type: 'text', text: String(tool.output ?? '') }];
+      const part = { type: 'tool', id: callID, name: tool.tool,
+        state: { status: 'running', input: tool.input ?? {}, content: [], metadata: tool.metadata ?? {} } };
+      assistant.content.push(part);
+      event('session.tool.called', { sessionID, assistantMessageID: assistant.id, id: callID, name: tool.tool, input: part.state.input });
+      if (await wait()) return;
+      part.state = tool.error ? { ...part.state, status: 'error', error: tool.error } : { ...part.state, status: 'completed', content };
+      event(tool.error ? 'session.tool.failed' : 'session.tool.success', { sessionID, assistantMessageID: assistant.id, id: callID,
+        ...(tool.error ? { error: tool.error } : { content }) });
     }
-    if ((await wait(delayMs)).aborted || turn.aborted) return;
+    if (error) {
+      assistant.time.completed = Date.now();
+      state.messages[sessionID].push(assistant);
+      event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: 'error', cost, tokens });
+      event('session.usage.updated', { sessionID, cost, tokens });
+      fake.failExecution(sessionID, error);
+      return;
+    }
+    if (await wait()) return;
     if (text) {
-      const part = { id: nextId('prt'), sessionID, messageID: info.id, type: 'text', text, time: { start: Date.now(), end: Date.now() } };
-      message.parts.push(part);
-      event('message.part.updated', { sessionID, part, time: Date.now() });
+      assistant.content.push({ type: 'text', text });
+      event('session.text.delta', { sessionID, assistantMessageID: assistant.id, text });
+      event('session.text.ended', { sessionID, assistantMessageID: assistant.id, text });
     }
-    if ((await wait(delayMs)).aborted || turn.aborted) return;
-    info.time.completed = Date.now();
-    info.finish = structured === undefined ? 'stop' : 'tool-calls';
-    info.tokens = tokens;
-    info.cost = cost;
-    if (structured !== undefined) info.structured = structured;
-    if (error) info.error = error;
-    persist();
-    event('message.updated', { sessionID, info });
-    if (error) event('session.error', { sessionID, error });
+    assistant.time.completed = Date.now();
+    state.messages[sessionID].push(assistant, message('idle', { outcome: 'succeeded' }));
+    event('session.step.ended', { sessionID, assistantMessageID: assistant.id, finish: assistant.finish, cost, tokens });
+    event('session.usage.updated', { sessionID, cost, tokens });
     turns.delete(sessionID);
     fake.setStatus(sessionID, { type: 'idle' });
-    event('session.idle', { sessionID });
+    event('session.execution.succeeded', { sessionID });
   };
-
   fake.abortSession = (sessionID) => {
+    const running = Boolean(state.statuses[sessionID]);
     state.aborts.push(sessionID);
     const turn = turns.get(sessionID);
     if (turn) {
       turn.aborted = true;
-      for (const [timer, resolve] of turn.timers) {
-        clearTimeout(timer);
-        turn.timers.delete(timer);
-        resolve({ aborted: true });
+      for (const [timer, resolve] of turn.timers) { clearTimeout(timer); resolve({ aborted: true }); }
+      turn.timers.clear();
+    }
+    for (const collection of [state.permissions, state.forms]) {
+      for (const [requestID, request] of Object.entries(collection)) {
+        if (request.sessionID !== sessionID) continue;
+        delete collection[requestID];
+        settle(requestID, { aborted: true });
       }
     }
-    for (const [id, request] of [...Object.entries(state.permissions), ...Object.entries(state.questions)]) {
-      if (request.sessionID !== sessionID) continue;
-      delete state.permissions[id];
-      delete state.questions[id];
-      settle(id, { reply: 'reject', aborted: true });
-    }
-    if (state.statuses[sessionID]) {
-      const messages = state.messages[sessionID] ?? [];
-      let last = messages.at(-1);
-      if (!last || last.info.role !== 'assistant' || last.info.time.completed) {
-        last = { info: { id: nextId('msg'), sessionID, role: 'assistant', parentID: state.sessions[sessionID]?.lastUserMessageID, time: { created: Date.now() }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [] };
-        messages.push(last);
-      }
-      last.info.error = { name: 'MessageAbortedError', data: { message: 'The operation was aborted.' } };
-      last.info.time.completed = Date.now();
-      event('message.updated', { sessionID, info: last.info });
+    if (running) {
+      state.messages[sessionID].push(message('idle', { outcome: 'interrupted' }));
       fake.setStatus(sessionID, { type: 'idle' });
-      event('session.idle', { sessionID });
+      event('session.execution.interrupted', { sessionID, reason: 'user' });
     }
     persist();
+    return running;
   };
 
   const routes = [
-    ['POST', /^\/session$/, (m, query, body) => {
-      const extra = extraKeys(body, SESSION_KEYS);
-      if (extra.length) return invalid(`unexpected keys: ${extra.join(', ')}`);
-      if (body?.permission !== undefined && !validRules(body.permission)) return invalid('permission must be an array of {permission, pattern, action}');
-      if (body?.parentID !== undefined && !/^ses/.test(body.parentID)) return invalid('parentID must start with ses');
-      return ok(fake.createSession(body ?? {}, query.get('directory') ?? ''));
-    }],
-    ['GET', /^\/session$/, () => ok(Object.values(state.sessions))],
-    ['GET', /^\/session\/status$/, () => ok({ ...state.statuses })],
-    ['GET', /^\/session\/(ses[^/]+)$/, (m) => (state.sessions[m[1]] ? ok(state.sessions[m[1]]) : notFound('NotFoundError', `session ${m[1]} not found`))],
-    ['PATCH', /^\/session\/(ses[^/]+)$/, (m, query, body) => {
+    ['POST', /^\/api\/session$/, (_m, _q, body, directory) =>
+      body && validRules(body.permissions) && body.model?.id && body.model?.providerID
+        ? ok(fake.createSession(body, directory ?? '')) : bad('Modelo e permissões inválidos')],
+    ['GET', /^\/api\/session$/, (_m, q) => ok(Object.values(state.sessions).filter((s) => !q.get('parentID') || s.parentID === q.get('parentID')).sort((a, b) => b.time.updated - a.time.updated))],
+    ['GET', /^\/api\/session\/active$/, () => ok({ ...state.statuses })],
+    ['GET', /^\/api\/session\/(ses[^/]+)$/, (m) => state.sessions[m[1]] ? ok(state.sessions[m[1]]) : missing()],
+    ['PATCH', /^\/api\/session\/(ses[^/]+)$/, (m, _q, body) => {
       const session = state.sessions[m[1]];
-      if (!session) return notFound('NotFoundError', `session ${m[1]} not found`);
-      const extra = extraKeys(body, PATCH_KEYS);
-      if (extra.length) return invalid(`unexpected keys: ${extra.join(', ')}`);
-      if (body?.permission !== undefined) {
-        if (!validRules(body.permission)) return invalid('permission must be an array of {permission, pattern, action}');
-        session.permission = [...(session.permission ?? []), ...body.permission];
-      }
-      if (typeof body?.title === 'string') session.title = body.title;
+      if (!session) return missing();
+      if (!validRules(body?.permissions)) return bad('Permissões inválidas');
+      session.permissions = structuredClone(body.permissions);
       session.time.updated = Date.now();
       persist();
-      event('session.updated', { sessionID: session.id, info: session });
-      return ok(session);
+      return empty();
     }],
-    ['POST', /^\/session\/(ses[^/]+)\/prompt_async$/, (m, query, body) => {
+    ['POST', /^\/api\/session\/(ses[^/]+)\/(model|agent)$/, (m, _q, body) => {
       const session = state.sessions[m[1]];
-      if (!session) return notFound('NotFoundError', `session ${m[1]} not found`);
-      const extra = extraKeys(body, PROMPT_KEYS);
-      if (extra.length) return invalid(`unexpected keys: ${extra.join(', ')}`);
-      if (!Array.isArray(body?.parts)) return invalid('parts is required');
-      if (body.messageID !== undefined && !/^msg/.test(body.messageID)) return invalid('messageID must start with msg');
-      if (body.model !== undefined && (typeof body.model.providerID !== 'string' || typeof body.model.modelID !== 'string' || Object.keys(body.model).length !== 2)) return invalid('model must be {providerID, modelID}');
-      const id = body.messageID ?? nextId('msg');
-      state.messages[session.id].push({
-        info: { id, sessionID: session.id, role: 'user', time: { created: Date.now() }, agent: body.agent ?? 'build', ...(body.model ? { model: body.model } : {}), ...(body.format ? { format: body.format } : {}) },
-        parts: body.parts.map((part) => ({ id: nextId('prt'), sessionID: session.id, messageID: id, ...part })),
-      });
-      session.lastUserMessageID = id;
-      session.lastModel = body.model ?? null;
+      if (!session) return missing();
+      if (m[2] === 'model') {
+        if (!body?.model?.id || !body?.model?.providerID) return bad('Modelo inválido');
+        session.model = body.model;
+        state.messages[m[1]].push(message('model-switched', { model: body.model }));
+      } else {
+        if (!body?.agent) return bad('Agente inválido');
+        session.agent = body.agent;
+      }
+      persist();
+      return empty();
+    }],
+    ['POST', /^\/api\/session\/(ses[^/]+)\/prompt$/, (m, _q, body) => {
+      const session = state.sessions[m[1]];
+      if (!session) return missing();
+      if (typeof body?.text !== 'string') return bad('Texto obrigatório');
+      if (Object.keys(body).some((key) => !['id', 'text', 'files', 'agents', 'skills', 'delivery', 'resume'].includes(key))) return bad('Campos do prompt inválidos');
+      if (body.id !== undefined && !/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(body.id)) return bad('ID da mensagem inválido');
+      const existing = body.id && state.messages[session.id].find((item) => item.id === body.id);
+      if (existing) return ok(existing);
+      const user = message('user', { id: body.id ?? id('msg'), text: body.text });
+      state.messages[session.id].push(user);
+      fake.setStatus(session.id, { type: 'busy' });
       persist();
       setImmediate(() => {
-        const hook = fake.scenario?.onPromptAsync;
+        if (fake.isAborted(session.id)) return;
+        const hook = fake.scenario?.onPrompt;
         Promise.resolve(hook ? hook(fake, session.id, body) : fake.emitTurn(session.id)).catch((err) => {
-          process.stderr.write(`${redactText(`fake-opencode scenario error: ${err?.message ?? String(err)}`).replace(/[\r\n]+/g, ' ')}\n`);
+          const preview = redactText(String(err?.message ?? err)).replace(/[\r\n]+/g, ' ').slice(0, 12);
+          process.stderr.write(`Erro no cenário do servidor falso: ${preview}…\n`);
         });
       });
-      return { status: 204, body: null };
+      return ok(user);
     }],
-    ['POST', /^\/session\/(ses[^/]+)\/abort$/, (m) => {
-      fake.abortSession(m[1]);
-      return ok(true);
+    ['POST', /^\/api\/session\/(ses[^/]+)\/interrupt$/, (m) => ({ body: { interrupted: fake.abortSession(m[1]) } })],
+    ['GET', /^\/api\/session\/(ses[^/]+)\/message$/, (m, q) => {
+      if (!state.messages[m[1]]) return missing();
+      const ordered = q.get('order') === 'asc' ? [...state.messages[m[1]]] : [...state.messages[m[1]]].reverse();
+      const limit = Number(q.get('limit'));
+      return ok(limit > 0 ? ordered.slice(0, limit) : ordered);
     }],
-    ['GET', /^\/session\/(ses[^/]+)\/message\/(msg[^/]+)$/, (m) => {
-      const message = state.messages[m[1]]?.find((item) => item.info.id === m[2]);
-      return message ? ok(message) : notFound('NotFoundError', 'message not found');
-    }],
-    ['GET', /^\/session\/(ses[^/]+)\/message$/, (m, query) => {
-      const messages = state.messages[m[1]];
-      if (!messages) return notFound('NotFoundError', `session ${m[1]} not found`);
-      if ((fake.scenario?.formatListError && messages.some((message) => message.info?.format?.type === 'json_schema')) || process.env.FAKE_FORMAT_LIST_BUG === '1') return invalid('Expected OutputFormatJsonSchema, got {...}');
-      const limit = Number(query.get('limit'));
-      return ok(Number.isFinite(limit) && limit > 0 ? messages.slice(-limit) : messages);
-    }],
-    ['GET', /^\/session\/(ses[^/]+)\/children$/, (m) => ok(Object.values(state.sessions).filter((s) => s.parentID === m[1]))],
-    ['GET', /^\/session\/(ses[^/]+)\/diff$/, (m) => ok(state.diffs[m[1]] ?? [])],
-    ['GET', /^\/session\/(ses[^/]+)\/todo$/, () => ok([])],
-    ['GET', /^\/permission$/, () => ok(Object.values(state.permissions))],
-    ['POST', /^\/permission\/(per[^/]+)\/reply$/, (m, query, body) => {
-      const extra = extraKeys(body, new Set(['reply', 'message']));
-      if (extra.length || !REPLIES.has(body?.reply)) return invalid('body must be {reply: once|always|reject, message?}');
-      const request = state.permissions[m[1]];
-      if (!request) return { status: 404, body: { _tag: 'PermissionNotFoundError', requestID: m[1], message: 'not found' } };
-      delete state.permissions[m[1]];
-      state.permissionReplies.push({ requestID: m[1], reply: body.reply, message: body.message ?? null });
-      event('permission.replied', { sessionID: request.sessionID, requestID: m[1], reply: body.reply });
-      settle(m[1], { reply: body.reply, message: body.message });
-      if (body.reply === 'reject') {
-        for (const sibling of Object.values(state.permissions)) {
-          if (sibling.sessionID !== request.sessionID) continue;
-          delete state.permissions[sibling.id];
-          state.permissionReplies.push({ requestID: sibling.id, reply: 'reject', message: null, sibling: true });
-          event('permission.replied', { sessionID: sibling.sessionID, requestID: sibling.id, reply: 'reject' });
-          settle(sibling.id, { reply: 'reject' });
-        }
-      }
+    ['GET', /^\/api\/session\/(ses[^/]+)\/permission$/, (m) => ok(Object.values(state.permissions).filter((r) => r.sessionID === m[1]))],
+    ['POST', /^\/api\/session\/(ses[^/]+)\/permission\/(per[^/]+)\/reply$/, (m, _q, body) => {
+      const request = state.permissions[m[2]];
+      if (!request || request.sessionID !== m[1]) return missing();
+      if (!['once', 'always', 'reject'].includes(body?.decision)) return bad('Decisão inválida');
+      delete state.permissions[m[2]];
+      state.permissionReplies.push({ requestID: m[2], decision: body.decision });
+      event('permission.replied', { sessionID: m[1], requestID: m[2], reply: body.decision });
+      if (body.decision === 'reject') event('session.tool.failed', { sessionID: m[1], id: request.source.id, error: { type: 'permission.rejected', message: 'Permissão recusada' } });
+      settle(m[2], body.decision);
       persist();
-      return ok(true);
+      return empty();
     }],
-    ['GET', /^\/question$/, () => ok(Object.values(state.questions))],
-    ['POST', /^\/question\/(que[^/]+)\/reply$/, (m, query, body) => {
-      const answers = body?.answers;
-      if (extraKeys(body, new Set(['answers'])).length || !Array.isArray(answers) || !answers.every((a) => Array.isArray(a) && a.every((x) => typeof x === 'string'))) {
-        return invalid('body must be {answers: string[][]}');
-      }
-      const request = state.questions[m[1]];
-      if (!request) return { status: 404, body: { _tag: 'QuestionNotFoundError', requestID: m[1], message: 'not found' } };
-      delete state.questions[m[1]];
-      state.questionReplies.push({ requestID: m[1], answers });
+    ['GET', /^\/api\/session\/(ses[^/]+)\/form$/, (m) => ok(Object.values(state.forms).filter((r) => r.sessionID === m[1]))],
+    ['POST', /^\/api\/session\/(ses[^/]+)\/form\/(frm[^/]+)\/reply$/, (m, _q, body) => {
+      const form = state.forms[m[2]];
+      if (!form || form.sessionID !== m[1]) return missing();
+      if (!body?.answer || typeof body.answer !== 'object' || Array.isArray(body.answer)) return bad('Resposta inválida');
+      delete state.forms[m[2]];
+      state.formReplies.push({ id: m[2], answer: body.answer });
+      event('form.replied', { id: m[2], sessionID: m[1], answer: body.answer });
+      settle(m[2], body.answer);
       persist();
-      event('question.replied', { sessionID: request.sessionID, requestID: m[1], answers });
-      settle(m[1], { answers });
-      return ok(true);
+      return empty();
     }],
-    ['POST', /^\/question\/(que[^/]+)\/reject$/, (m) => {
-      const request = state.questions[m[1]];
-      if (!request) return { status: 404, body: { _tag: 'QuestionNotFoundError', requestID: m[1], message: 'not found' } };
-      delete state.questions[m[1]];
-      state.questionRejects.push({ requestID: m[1] });
+    ['DELETE', /^\/api\/session\/(ses[^/]+)\/form\/(frm[^/]+)$/, (m) => {
+      const form = state.forms[m[2]];
+      if (!form || form.sessionID !== m[1]) return missing();
+      delete state.forms[m[2]];
+      state.formCancels.push(m[2]);
+      event('form.cancelled', { id: m[2], sessionID: m[1] });
+      settle(m[2], { cancelled: true });
       persist();
-      event('question.rejected', { sessionID: request.sessionID, requestID: m[1] });
-      settle(m[1], { rejected: true });
-      return ok(true);
+      return empty();
     }],
   ];
-
-  return {
-    handle(method, pathname, query, body) {
-      for (const [routeMethod, pattern, handler] of routes) {
-        if (routeMethod !== method) continue;
-        const match = pattern.exec(pathname);
-        if (match) return handler(match, query, body);
-      }
-      return null;
-    },
-  };
+  return { handle(method, pathname, query, body, directory) {
+    for (const [routeMethod, pattern, handler] of routes) {
+      if (routeMethod !== method) continue;
+      const match = pattern.exec(pathname);
+      if (match) return handler(match, query, body, directory);
+    }
+    return null;
+  } };
 }
 
-// Route keys served by installSessionApi; registered over the F0 DEFAULT_ROUTES stubs by the F2a extension
-// at the end of tests/fixtures/fake-opencode.mjs.
 export const SESSION_API_ROUTES = Object.freeze([
-  'POST /session', 'GET /session', 'GET /session/status', 'GET /session/:id', 'PATCH /session/:id',
-  'POST /session/:id/prompt_async', 'POST /session/:id/abort', 'GET /session/:id/message', 'GET /session/:id/message/:messageID',
-  'GET /session/:id/children', 'GET /session/:id/diff', 'GET /session/:id/todo',
-  'GET /permission', 'POST /permission/:id/reply',
-  'GET /question', 'POST /question/:id/reply', 'POST /question/:id/reject',
+  'POST /api/session', 'GET /api/session', 'GET /api/session/active', 'GET /api/session/:id', 'PATCH /api/session/:id',
+  'POST /api/session/:id/model', 'POST /api/session/:id/agent', 'POST /api/session/:id/prompt',
+  'POST /api/session/:id/interrupt', 'GET /api/session/:id/message', 'GET /api/session/:id/permission',
+  'POST /api/session/:id/permission/:requestID/reply', 'GET /api/session/:id/form',
+  'POST /api/session/:id/form/:formID/reply', 'DELETE /api/session/:id/form/:formID',
 ]);

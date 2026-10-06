@@ -19,25 +19,25 @@ async function withFake(t, opts = {}) {
   return { fake, stateFile };
 }
 
-test('fake requires Basic auth and serves the F0 routes', async (t) => {
+test('fake requires Basic auth and serves V2 routes', async (t) => {
   const { fake, stateFile } = await withFake(t, { configContent: '{"share":"disabled"}' });
-  assert.equal((await fetch(`${fake.url}/global/health`)).status, 401);
-  assert.deepEqual(await (await fetch(`${fake.url}/global/health`, { headers: auth })).json(), { healthy: true, version: '1.18.32' });
-  assert.equal(await (await fetch(`${fake.url}/global/dispose`, { method: 'POST', headers: auth })).json(), true);
-  const agents = await (await fetch(`${fake.url}/agent?directory=/x`, { headers: auth })).json();
-  // slice: the F1 agent.json keeps these four first and appends more agents
-  assert.deepEqual(agents.map((a) => a.name).slice(0, 4), ['build', 'plan', 'general', 'explore']);
-  const cfg = await (await fetch(`${fake.url}/config`, { headers: auth })).json();
-  assert.equal(cfg.share, 'disabled', 'OPENCODE_CONFIG_CONTENT is merged over the base config');
-  assert.deepEqual(await (await fetch(`${fake.url}/session/status`, { headers: auth })).json(), {});
-  assert.deepEqual(await (await fetch(`${fake.url}/permission`, { headers: auth })).json(), []);
-  assert.deepEqual(await (await fetch(`${fake.url}/question`, { headers: auth })).json(), []);
-  assert.equal((await fetch(`${fake.url}/nope`, { headers: auth })).status, 404);
+  assert.equal((await fetch(`${fake.url}/api/info`)).status, 401);
+  assert.equal((await (await fetch(`${fake.url}/api/info`, { headers: auth })).json()).version, '2.0.22');
+  const agents = await (await fetch(`${fake.url}/api/agent`, { headers: { ...auth, 'x-opencode-directory': '/x' } })).json();
+  assert.deepEqual(agents.data.map((a) => a.name).slice(0, 4), ['build', 'plan', 'general', 'explore']);
+  const cfg = await (await fetch(`${fake.url}/api/config`, { headers: auth })).json();
+  assert.equal(cfg[0].type, 'document');
+  assert.equal(cfg.at(-1).info.share, 'disabled');
+  assert.deepEqual(await (await fetch(`${fake.url}/api/session/active`, { headers: auth })).json(), { data: {} });
+  assert.equal((await fetch(`${fake.url}/api/nope`, { headers: auth })).status, 404);
+  const spa = await fetch(`${fake.url}/nope`);
+  assert.equal(spa.status, 200);
+  assert.match(spa.headers.get('content-type'), /text\/html/);
   const state = readStateFile(stateFile);
-  assert.ok(state.requests.some((r) => r.path === '/agent' && r.query.directory === '/x'));
+  assert.ok(state.requests.some((r) => r.path === '/api/agent' && r.directory === '/x'));
   const wrongAuth = { authorization: `Basic ${Buffer.from('opencode:wrong-password').toString('base64')}` };
-  assert.equal((await fetch(`${fake.url}/private-probe`, { headers: wrongAuth })).status, 401);
-  assert.ok(!readStateFile(stateFile).requests.some((r) => r.path === '/private-probe'));
+  assert.equal((await fetch(`${fake.url}/api/private-probe`, { headers: wrongAuth })).status, 401);
+  assert.ok(!readStateFile(stateFile).requests.some((r) => r.path === '/api/private-probe'));
   assert.equal(readStateFile(stateFile).unauthorized, 2);
   assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.dirname(stateFile)).mode & 0o777, 0o700);
@@ -49,8 +49,8 @@ test('state read distinguishes missing files from corrupt or unreadable files', 
   assert.equal(readStateFile(missing).bootAttempts, 0);
   const corrupt = path.join(dir, 'corrupt.json');
   fs.writeFileSync(corrupt, '{');
-  assert.throws(() => readStateFile(corrupt), new RegExp(corrupt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.throws(() => readStateFile(dir), new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.throws(() => readStateFile(corrupt), /Falha ao ler estado do servidor falso/);
+  assert.throws(() => readStateFile(dir), /Falha ao ler estado do servidor falso/);
 });
 
 test('state writes preserve existing directory modes and create new directories as 0700', (t) => {
@@ -70,7 +70,7 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
   const { fake } = await withFake(t, { heartbeatMs: 30 });
   const controller = new AbortController();
   t.after(() => controller.abort());
-  const res = await fetch(`${fake.url}/event`, { headers: auth, signal: controller.signal });
+  const res = await fetch(`${fake.url}/api/event`, { headers: auth, signal: controller.signal });
   const reader = res.body.getReader();
   let text = '';
   await waitFor(async () => {
@@ -78,7 +78,7 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
     text += Buffer.from(value).toString();
     return text.includes('server.connected');
   }, { message: 'connected SSE frame' });
-  fake.emit({ type: 'x.test', properties: { n: 1 } });
+  fake.emit({ type: 'x.test', data: { n: 1 } });
   await waitFor(async () => {
     const { value } = await reader.read();
     text += Buffer.from(value).toString();
@@ -89,10 +89,10 @@ test('fake SSE sends server.connected then heartbeats; emit() broadcasts', async
         return [];
       }
     });
-    return text.includes('server.heartbeat') && frames.some((frame) => frame.type === 'x.test' && frame.properties?.n === 1);
+    return text.includes(': heartbeat') && frames.some((frame) => frame.type === 'x.test' && frame.data?.n === 1);
   }, { message: 'emitted SSE event and heartbeat' });
   const frames = text.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
-  assert.ok(frames.some((frame) => frame.type === 'x.test' && frame.properties.n === 1));
+  assert.ok(frames.some((frame) => frame.type === 'x.test' && frame.data.n === 1));
   assert.equal(fake.state.sseConnections, 1);
 });
 
@@ -102,19 +102,19 @@ test('scenario setup failure closes its HTTP listener', async () => {
 
 test('scenarios override routes and setup', async (t) => {
   const { fake } = await withFake(t, { scenario: 'auth-401' });
-  assert.equal((await fetch(`${fake.url}/global/health`, { headers: auth })).status, 401);
+  assert.equal((await fetch(`${fake.url}/api/info`, { headers: auth })).status, 401);
   const old = await loadScenario('old-version');
   assert.equal(old.version, '1.17.9');
-  await assert.rejects(loadScenario('../evil'), /invalid scenario name/);
+  await assert.rejects(loadScenario('../evil'), /Nome de cenário inválido/);
 });
 
 test('fake binary: --version and serve announce the listening line', async (t) => {
   const dir = trackTempDir(t, makeTempDir('opc-fakebin-'));
   const bin = path.join(FAKE_BIN_DIR, 'opencode');
   const version = await runProcess(bin, ['--version'], { env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'ok' } });
-  assert.equal(version.stdout.trim(), '1.18.32');
+  assert.equal(version.stdout.trim(), 'opencode v2.0.22');
   const oldVersion = await runProcess(bin, ['--version'], { env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'old-version' } });
-  assert.equal(oldVersion.stdout.trim(), '1.17.9');
+  assert.equal(oldVersion.stdout.trim(), 'opencode v1.17.9');
   const failing = await runProcess(bin, ['serve', '--port', '1', '--hostname', '127.0.0.1'], {
     env: { ...process.env, FAKE_OPENCODE_SCENARIO: 'eaddrinuse', FAKE_OPENCODE_STATE: path.join(dir, 's.json') },
   });
@@ -140,7 +140,7 @@ test('fake binary: --version and serve announce the listening line', async (t) =
   }));
   let stdout = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
-  await waitFor(() => stdout.includes(`opencode server listening on http://127.0.0.1:${port}`), { message: 'fake binary listening announcement' });
-  assert.match(stdout, new RegExp(`opencode server listening on http://127\\.0\\.0\\.1:${port}`));
-  assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/global/health`, { headers: auth })).json(), { healthy: true, version: '1.18.32' });
+  await waitFor(() => stdout.includes(`server listening on http://127.0.0.1:${port}`), { message: 'fake binary listening announcement' });
+  assert.match(stdout, new RegExp(`server listening on http://127\\.0\\.0\\.1:${port}`));
+  assert.equal((await (await fetch(`http://127.0.0.1:${port}/api/info`, { headers: auth })).json()).version, '2.0.22');
 });

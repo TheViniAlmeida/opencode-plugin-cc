@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fake `opencode` binary: `--version` and `serve --port N --hostname H` (starts tests/fixtures/fake-opencode.mjs).
+// Fake `opencode` binary: V2 version, serve and session import.
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -7,7 +7,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fakeModule = await import(pathToFileURL(path.join(here, '..', 'fake-opencode.mjs')).href);
 const { startFake, loadScenario, readStateFile, writeStateFile, DEFAULT_VERSION } = fakeModule;
 
-const argv = process.argv.slice(2);
+let argv = process.argv.slice(2);
+if (argv[0] === '--server' && argv[1]) argv = argv.slice(2);
 const scenarioName = process.env.FAKE_OPENCODE_SCENARIO || 'ok';
 const stateFile = process.env.FAKE_OPENCODE_STATE || null;
 const scenario = await loadScenario(scenarioName);
@@ -21,17 +22,17 @@ function flag(name) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 if (argv[0] === '--version' || argv[0] === '-v') {
-  await new Promise((resolve) => process.stdout.write(`${version}\n`, resolve));
+  await new Promise((resolve) => process.stdout.write(`opencode v${version}\n`, resolve));
   process.exit(0);
 }
 
-if (argv[0] === 'import') {
+if (argv[0] === 'session' && argv[1] === 'import') {
   const { runFakeImport } = await import(pathToFileURL(path.join(here, '..', 'fake-import.mjs')).href);
-  process.exit(await runFakeImport(argv.slice(1)));
+  process.exit(await runFakeImport(argv.slice(2)));
 }
 
 if (argv[0] !== 'serve') {
-  process.stderr.write(`fake opencode: unsupported command ${argv.join(' ')}\n`);
+  process.stderr.write('Comando do OpenCode falso não suportado\n');
   process.exit(2);
 }
 
@@ -75,13 +76,13 @@ if (plan.exitCode !== undefined) {
   process.exit(plan.exitCode);
 }
 
-if (!password) process.stdout.write('Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.\n');
+if (!password) process.stdout.write('Aviso: servidor sem senha configurada.\n');
 
 const listenPort = plan.listenPort ?? requestedPort;
 try {
   fake = await startFake({ port: listenPort, password, scenario: scenarioName, stateFile, version });
 } catch (err) {
-  process.stderr.write(`Error: listen ${err.code ?? 'FAILED'}: ${err.message}\n`);
+  process.stderr.write(`Falha ao iniciar servidor: ${err.code ?? 'FAILED'}\n`);
   process.exit(1);
 }
 fake.state.boots.push({
@@ -93,9 +94,8 @@ fake.state.boots.push({
   hasPassword: Boolean(password),
   insideServer: process.env.OPC_INSIDE_SERVER ?? null,
   username: process.env.OPENCODE_SERVER_USERNAME ?? null,
-  configContent: process.env.OPENCODE_CONFIG_CONTENT ?? null,
   cwd: process.cwd(),
   startedAt: Date.now(),
 });
 fake.persist();
-process.stdout.write(`opencode server listening on http://${hostname}:${plan.printPort ?? fake.port}\n`);
+process.stdout.write(`server listening on http://${hostname}:${plan.printPort ?? fake.port}\n`);

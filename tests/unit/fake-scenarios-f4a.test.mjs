@@ -7,149 +7,131 @@ const scenarioUrl = (name) => new URL(`../fixtures/scenarios/${name}.mjs`, impor
 const P = 'omniroute-personal';
 const FAST = `${P}/opencode-go/deepseek-v4.1-flash`;
 const K3 = `${P}/opencode-go/kimi-k3`;
-
-function body(full, extra = {}) {
-  const [providerID, ...rest] = full.split('/');
-  return { model: { providerID, modelID: rest.join('/') }, parts: [{ type: 'text', text: 'oi' }], ...extra };
-}
-
+const RULES = [{ action: '*', resource: '*', effect: 'deny' }];
+const sessionBody = (full) => { const [providerID, ...rest] = full.split('/'); return { model: { providerID, id: rest.join('/') }, permissions: RULES }; };
 function stubFake() {
   const calls = { turns: [], events: [] };
-  return {
-    calls,
-    state: { requests: [], aborts: [] },
+  const fake = { calls, state: { sessions: {}, aborts: [] },
     emitTurn(sessionID, opts) { calls.turns.push({ sessionID, ...opts }); },
-    emit(event) { calls.events.push(event); },
-    setStatus(sessionID, status) { calls.events.push({ type: 'session.status', properties: { sessionID, status } }); },
-  };
+    failExecution(sessionID, error) { calls.turns.push({ sessionID, error }); },
+    event(type, data) { calls.events.push({ type, data }); },
+    setStatus() {} };
+  fake.state.sessions.ses_1 = sessionBody(FAST);
+  fake.state.sessions.ses_2 = sessionBody(K3);
+  return fake;
 }
-
 function realFake(scenario) {
-  const fake = { state: { requests: [] }, scenario, events: [], persist() {}, emit(event) { this.events.push(event); } };
+  const fake = { state: {}, scenario, events: [], persist() {}, emit(event) { this.events.push(event); } };
   const api = installSessionApi(fake);
   return { fake, api };
 }
-
 function withFailModel(t, value) {
   const previous = process.env.FAKE_FAIL_MODELS;
   process.env.FAKE_FAIL_MODELS = value;
-  t.after(() => {
-    if (previous === undefined) delete process.env.FAKE_FAIL_MODELS;
-    else process.env.FAKE_FAIL_MODELS = previous;
-  });
+  t.after(() => { if (previous === undefined) delete process.env.FAKE_FAIL_MODELS; else process.env.FAKE_FAIL_MODELS = previous; });
 }
 
-test('isFailingModel honours FAKE_FAIL_MODELS (comma list) and ignores bodies without a model', async () => {
+test('isFailingModel honours FAKE_FAIL_MODELS and ignores sessions without a model', async () => {
   const { isFailingModel } = await import(`${scenarioUrl('_model-select')}?case=list`);
   const env = { FAKE_FAIL_MODELS: `${FAST}, ${P}/other` };
-  assert.equal(isFailingModel(body(FAST), env), true);
-  assert.equal(isFailingModel(body(K3), env), false);
+  assert.equal(isFailingModel(sessionBody(FAST), env), true);
+  assert.equal(isFailingModel(sessionBody(K3), env), false);
   assert.equal(isFailingModel({}, env), false);
 });
 
 test('without FAKE_FAIL_MODELS the first model seen is the failing one', async () => {
   const { isFailingModel } = await import(`${scenarioUrl('_model-select')}?case=first`);
-  assert.equal(isFailingModel(body(K3), {}), true);
-  assert.equal(isFailingModel(body(FAST), {}), false);
-  assert.equal(isFailingModel(body(K3), {}), true);
+  assert.equal(isFailingModel(sessionBody(K3), {}), true);
+  assert.equal(isFailingModel(sessionBody(FAST), {}), false);
+  assert.equal(isFailingModel(sessionBody(K3), {}), true);
 });
 
-test('successTurn returns review-shaped structured output when a format is requested', async () => {
+test('successTurn returns V2 text', async () => {
   const { successTurn } = await import(`${scenarioUrl('_model-select')}?case=success`);
-  assert.deepEqual(successTurn(body(K3, { format: { type: 'json_schema' } })).structured, { verdict: 'approve', summary: 'Sem achados relevantes.', findings: [], next_steps: [] });
-  assert.match(successTurn(body(K3)).text, /resposta falsa de omniroute-personal\/opencode-go\/kimi-k3/);
+  assert.equal(successTurn(sessionBody(K3)).structured, undefined);
+  assert.match(successTurn(sessionBody(K3)).text, /resposta falsa de omniroute-personal\/opencode-go\/kimi-k3/);
 });
 
-test('model-429 fails the selected model with a retryable APIError 429', async (t) => {
+test('model-429 fails the selected model with a provider rate limit', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('model-429'));
   const fake = stubFake();
-  scenario.onPromptAsync(fake, 'ses_1', body(FAST));
-  scenario.onPromptAsync(fake, 'ses_2', body(K3));
-  assert.deepEqual(fake.calls.turns[0].error, { name: 'APIError', data: { message: 'Limite de requisições excedido (429 falso)', statusCode: 429, isRetryable: true } });
+  scenario.onPrompt(fake, 'ses_1', { text: 'oi' });
+  scenario.onPrompt(fake, 'ses_2', { text: 'oi' });
+  assert.equal(fake.calls.turns[0].error.type, 'provider.rate-limit');
   assert.equal(fake.calls.turns[1].error, undefined);
-  assert.equal(fake.calls.turns[1].sessionID, 'ses_2');
 });
 
-test('failing F4a scenarios end with error info and no default success text', async (t) => {
+test('failing scenarios end with idle failed and no default success text', async (t) => {
   withFailModel(t, FAST);
   for (const name of ['model-429', 'model-fatal', 'write-then-fail']) {
     const { default: scenario } = await import(scenarioUrl(name));
     const { fake } = realFake(scenario);
-    const session = fake.createSession();
-    scenario.onPromptAsync(fake, session.id, body(FAST));
+    const session = fake.createSession({ ...sessionBody(FAST), title: 'OPC: t' });
+    await scenario.onPrompt(fake, session.id, { text: 'oi' });
     await delay(name === 'write-then-fail' ? 130 : 90);
-    const message = fake.state.messages[session.id].find((m) => m.info.error);
-    assert.ok(message, `${name} should store an error message`);
-    assert.ok(message.info.error);
-    assert.equal(message.parts.some((part) => part.type === 'text'), false, `${name} should not emit default success text`);
-    if (name === 'write-then-fail') assert.equal(message.parts[0]?.tool, 'edit');
+    const messages = fake.state.messages[session.id];
+    assert.equal(messages.at(-1).outcome, 'failed', name);
+    assert.equal(messages.some((m) => m.content?.some((part) => part.type === 'text')), false, name);
+    if (name === 'write-then-fail') assert.equal(messages.find((m) => m.type === 'assistant')?.content[0]?.name, 'edit');
   }
 });
 
-test('model-fatal fails the selected model with ProviderAuthError', async (t) => {
+test('model-fatal fails the selected model with provider auth error', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('model-fatal'));
   const fake = stubFake();
-  scenario.onPromptAsync(fake, 'ses_1', body(FAST));
-  assert.equal(fake.calls.turns[0].error.name, 'ProviderAuthError');
-  assert.equal(fake.calls.turns[0].error.data.providerID, P);
+  scenario.onPrompt(fake, 'ses_1', { text: 'oi' });
+  assert.equal(fake.calls.turns[0].error.type, 'provider.auth');
 });
 
-test('write-then-fail completes an edit tool and then fails with a retryable APIError', async (t) => {
+test('write-then-fail completes an edit tool before failing', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('write-then-fail'));
   const fake = stubFake();
-  scenario.onPromptAsync(fake, 'ses_1', body(FAST));
+  scenario.onPrompt(fake, 'ses_1', { text: 'oi' });
   const turn = fake.calls.turns[0];
   assert.equal(turn.tools[0].tool, 'edit');
   assert.equal(turn.tools[0].input.filePath, 'src/app.js');
-  assert.equal(turn.error.name, 'APIError');
-  assert.equal(turn.error.data.isRetryable, true);
+  assert.equal(turn.error.type, 'provider.transport');
 });
 
-test('retry-over-cap emits increasing retry statuses until the session is aborted', async (t) => {
+test('retry-over-cap emits increasing retry scheduled events until interruption', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('retry-over-cap'));
   const fake = stubFake();
-  scenario.onPromptAsync(fake, 'ses_1', body(FAST));
+  scenario.onPrompt(fake, 'ses_1', { text: 'oi' });
   await delay(170);
-  const retries = fake.calls.events.filter((e) => e.properties.status.type === 'retry').map((e) => e.properties.status);
-  assert.ok(retries.length >= 2, `esperados >= 2 eventos de retry, recebidos ${retries.length}`);
-  retries.forEach((s, i) => assert.equal(s.attempt, i + 1));
-  assert.ok(retries[1].next > retries[0].next);
-  // the fake's abort route closes the turn itself; the scenario only stops retrying
+  const retries = fake.calls.events.filter((e) => e.type === 'session.retry.scheduled').map((e) => e.data);
+  assert.ok(retries.length >= 2);
+  retries.forEach((r, i) => assert.equal(r.attempt, i + 1));
+  assert.ok(retries[1].at > retries[0].at);
   fake.state.aborts.push('ses_1');
   await delay(120);
-  assert.equal(fake.calls.turns.length, 0);
   const count = fake.calls.events.length;
   await delay(100);
-  assert.equal(fake.calls.events.length, count, 'nenhum evento após o cancelamento');
+  assert.equal(fake.calls.events.length, count);
 });
 
-test('retry-over-cap updates polled fake status and abort finishes idle', async (t) => {
+test('retry-over-cap exposes running active status and interrupt finishes idle', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('retry-over-cap'));
   const { fake, api } = realFake(scenario);
-  const session = fake.createSession();
-  scenario.onPromptAsync(fake, session.id, body(FAST));
+  const session = fake.createSession({ ...sessionBody(FAST), title: 'OPC: t' });
+  scenario.onPrompt(fake, session.id, { text: 'oi' });
   await delay(110);
-  const status = api.handle('GET', '/session/status', new URLSearchParams(), {}).body[session.id];
-  assert.equal(status.type, 'retry');
-  assert.ok(status.attempt >= 2);
-  assert.equal(api.handle('POST', `/session/${session.id}/abort`, new URLSearchParams(), {}).status, 200);
+  assert.equal(api.handle('GET', '/api/session/active', new URLSearchParams(), {}).body.data[session.id].type, 'running');
+  assert.equal(api.handle('POST', `/api/session/${session.id}/interrupt`, new URLSearchParams(), {}).body.interrupted, true);
   await delay(150);
   assert.equal(fake.state.statuses[session.id], undefined);
-  assert.equal(api.handle('GET', '/session/status', new URLSearchParams(), {}).body[session.id], undefined);
-  const aborted = fake.state.messages[session.id].find((m) => m.info.error?.name === 'MessageAbortedError');
-  assert.ok(aborted, 'aborted turn should finish with MessageAbortedError');
+  assert.equal(fake.state.messages[session.id].at(-1).outcome, 'interrupted');
 });
 
 test('retry-over-cap lets non-selected models succeed', async (t) => {
   withFailModel(t, FAST);
   const { default: scenario } = await import(scenarioUrl('retry-over-cap'));
   const fake = stubFake();
-  scenario.onPromptAsync(fake, 'ses_2', body(K3));
+  scenario.onPrompt(fake, 'ses_2', { text: 'oi' });
   assert.equal(fake.calls.events.length, 0);
   assert.equal(fake.calls.turns[0].error, undefined);
 });

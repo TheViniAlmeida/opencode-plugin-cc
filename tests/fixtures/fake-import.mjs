@@ -1,62 +1,38 @@
-// Independent import oracle: OpenCode 1.18.32 Session/Message/TextPart contract.
-// This module deliberately does not import the plugin's converter or validator.
+// Independent OpenCode 2.0.22 session import oracle.
 import fs from 'node:fs';
 import path from 'node:path';
 
-const REQUIRED = {
-  session: ['id', 'slug', 'projectID', 'directory', 'title', 'version', 'time'],
-  user: ['id', 'sessionID', 'role', 'time', 'agent', 'model'],
-  assistant: ['id', 'sessionID', 'role', 'time', 'parentID', 'modelID', 'providerID', 'mode', 'agent', 'path', 'cost', 'tokens'],
-  text: ['id', 'sessionID', 'messageID', 'type', 'text'],
-};
-const ID = { ses: /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/, msg: /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/, prt: /^prt_[0-9a-f]{12}[0-9A-Za-z]{14}$/ };
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const SESSION_KEYS = ['id', 'projectID', 'agent', 'model', 'cost', 'tokens', 'time', 'title', 'permissions', 'location'];
+const MESSAGE_KEYS = { user: ['id', 'type', 'time', 'text'], assistant: ['id', 'type', 'time', 'agent', 'model', 'content', 'cost', 'tokens'], idle: ['id', 'type', 'time', 'outcome'], synthetic: ['id', 'type', 'time', 'text'] };
+const ID = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+const preview = (value) => `${String(value ?? '').slice(0, 12)}…`;
 
 export function checkImportShape(data) {
-  if (!object(data?.info) || !Array.isArray(data?.messages)) return ['expected { info, messages[] }'];
+  if (!object(data?.info) || !Array.isArray(data?.messages)) return ['Esperado { info, messages[] }'];
   const errors = [];
-  const required = (value, keys, where) => {
-    for (const key of keys) if (value[key] === undefined) errors.push(`${where}.${key} missing`);
-  };
-  required(data.info, REQUIRED.session, 'info');
-  if (!ID.ses.test(data.info.id)) errors.push('info.id invalid');
-  if (!Number.isFinite(data.info.time?.created) || !Number.isFinite(data.info.time?.updated)) errors.push('info.time invalid');
-  const ids = new Set([data.info.id]);
-  const users = new Set();
-  const unique = (id, where) => {
-    if (ids.has(id)) errors.push(`${where} duplicated`);
-    ids.add(id);
-  };
-  data.messages.forEach((message, i) => {
-    const where = `messages[${i}]`;
-    const m = message?.info;
-    if (!object(m) || !Array.isArray(message.parts) || !['user', 'assistant'].includes(m.role)) {
-      errors.push(`${where} invalid`);
-      return;
+  for (const key of SESSION_KEYS) if (data.info[key] === undefined) errors.push(`info.${key} ausente`);
+  if (!ID.test(data.info.id)) errors.push('info.id inválido');
+  if (!Number.isFinite(data.info.cost)) errors.push('info.cost inválido');
+  if (!object(data.info.model) || typeof data.info.model.id !== 'string' || typeof data.info.model.providerID !== 'string') errors.push('info.model inválido');
+  if (!Array.isArray(data.info.permissions)) errors.push('info.permissions inválidas');
+  if (typeof data.info.location?.directory !== 'string') errors.push('info.location inválido');
+  if (!Number.isFinite(data.info.time?.created) || !Number.isFinite(data.info.time?.updated)) errors.push('info.time inválido');
+  for (const key of ['input', 'output', 'reasoning']) if (!Number.isFinite(data.info.tokens?.[key])) errors.push(`info.tokens.${key} inválido`);
+  const seen = new Set();
+  data.messages.forEach((item, index) => {
+    const at = `messages[${index}]`;
+    if (!object(item) || !MESSAGE_KEYS[item.type]) { errors.push(`${at} inválida`); return; }
+    for (const key of MESSAGE_KEYS[item.type]) if (item[key] === undefined) errors.push(`${at}.${key} ausente`);
+    if (!/^msg_/.test(item.id)) errors.push(`${at}.id inválido`);
+    if (seen.has(item.id)) errors.push(`${at}.id duplicado`);
+    seen.add(item.id);
+    if (!Number.isFinite(item.time?.created)) errors.push(`${at}.time inválido`);
+    if (item.type === 'assistant') {
+      if (!Array.isArray(item.content)) errors.push(`${at}.content inválido`);
+      else if (item.content.some((part) => !object(part) || !['text', 'reasoning', 'tool'].includes(part.type))) errors.push(`${at}.content inválido`);
+      if (!Number.isFinite(item.cost) || !object(item.tokens)) errors.push(`${at}.usage inválido`);
     }
-    required(m, REQUIRED[m.role], `${where}.info`);
-    if (!ID.msg.test(m.id)) errors.push(`${where}.info.id invalid`);
-    unique(m.id, `${where}.info.id`);
-    if (m.sessionID !== data.info.id) errors.push(`${where}.info.sessionID mismatch`);
-    if (!Number.isFinite(m.time?.created)) errors.push(`${where}.info.time invalid`);
-    if (m.role === 'user') {
-      users.add(m.id);
-      if (typeof m.model?.providerID !== 'string' || typeof m.model?.modelID !== 'string') errors.push(`${where}.info.model invalid`);
-    } else {
-      if (!users.has(m.parentID)) errors.push(`${where}.info.parentID invalid`);
-      if (m.path?.cwd !== data.info.directory || m.path?.root !== data.info.directory) errors.push(`${where}.info.path mismatch`);
-      for (const key of ['input', 'output', 'reasoning']) if (!Number.isFinite(m.tokens?.[key])) errors.push(`${where}.info.tokens.${key} invalid`);
-      for (const key of ['read', 'write']) if (!Number.isFinite(m.tokens?.cache?.[key])) errors.push(`${where}.info.tokens.cache.${key} invalid`);
-    }
-    message.parts.forEach((part, j) => {
-      const wherePart = `${where}.parts[${j}]`;
-      if (!object(part)) { errors.push(`${wherePart} invalid`); return; }
-      required(part, REQUIRED.text, wherePart);
-      if (!ID.prt.test(part.id)) errors.push(`${wherePart}.id invalid`);
-      unique(part.id, `${wherePart}.id`);
-      if (part.messageID !== m.id || part.sessionID !== data.info.id) errors.push(`${wherePart} reference mismatch`);
-      if (part.type !== 'text' || typeof part.text !== 'string') errors.push(`${wherePart} must be text`);
-    });
   });
   return errors;
 }
@@ -64,41 +40,41 @@ export function checkImportShape(data) {
 function recordImport(entry) {
   const stateFile = process.env.FAKE_OPENCODE_STATE;
   if (!stateFile) return;
-  let state = { requests: [], sessions: {}, messages: {}, permissions: {}, questions: {}, signals: [], sseConnections: 0, bootAttempts: 0, boots: [] };
+  let state = { requests: [], sessions: {}, messages: {}, permissions: {}, forms: {}, signals: [], sseConnections: 0, bootAttempts: 0, boots: [] };
   try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   state.imports = [...(state.imports ?? []), entry];
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
 }
 
 export async function runFakeImport(args) {
+  let directory = null;
+  if (args[0] === '--directory') { directory = args[1]; args = args.slice(2); }
   const file = args[0];
-  if (!file || args.length !== 1) { process.stderr.write('Expected one export file\n'); return 1; }
+  if (!file || args.length !== 1) { process.stderr.write('Informe um arquivo de exportação\n'); return 1; }
   let stat;
-  try { stat = fs.statSync(file); } catch { process.stderr.write('Export file not found\n'); return 1; }
-  const entry = {
-    file, cwd: process.cwd(), mode: (stat.mode & 0o777).toString(8),
-    dirMode: (fs.statSync(path.dirname(file)).mode & 0o777).toString(8),
-    errors: [], sessionID: null, messageCount: 0, partCount: 0, texts: [],
-  };
+  try { stat = fs.statSync(file); } catch { process.stderr.write('Arquivo de exportação não encontrado\n'); return 1; }
+  const entry = { file: preview(file), directory: directory ? preview(directory) : null, mode: (stat.mode & 0o777).toString(8),
+    dirMode: (fs.statSync(path.dirname(file)).mode & 0o777).toString(8), errors: [], sessionID: null,
+    messageCount: 0, partCount: 0, texts: [] };
   const mode = process.env.FAKE_OPENCODE_IMPORT ?? 'ok';
   if (mode === 'fail' || mode === 'crash') {
     recordImport(entry);
-    process.stdout.write('Failed to read session data\n');
-    process.stderr.write('RAW_TRANSCRIPT_SENTINEL password=fixture-sensitive-value /home/private-person/session.jsonl\n');
+    process.stdout.write('Falha ao ler dados da sessão\n');
+    process.stderr.write('Falha simulada na importação\n');
     return mode === 'fail' ? 0 : 1;
   }
   let data;
   try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
-    entry.errors.push('Invalid JSON'); recordImport(entry); process.stderr.write('Invalid export JSON\n'); return 1;
+    entry.errors.push('JSON inválido'); recordImport(entry); process.stderr.write('JSON de exportação inválido\n'); return 1;
   }
   entry.errors = checkImportShape(data);
   entry.sessionID = data?.info?.id ?? null;
-  entry.title = data?.info?.title ?? null;
+  entry.title = data?.info?.title ? preview(data.info.title) : null;
   entry.messageCount = data?.messages?.length ?? 0;
-  entry.partCount = (data?.messages ?? []).reduce((n, m) => n + (m.parts?.length ?? 0), 0);
-  entry.texts = (data?.messages ?? []).flatMap((m) => (m.parts ?? []).filter((p) => p.type === 'text').map((p) => p.text));
+  entry.partCount = (data?.messages ?? []).reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  entry.texts = (data?.messages ?? []).flatMap((m) => [...(m.type === 'user' || m.type === 'synthetic' ? [m.text] : []), ...(m.content ?? []).filter((c) => c.type === 'text').map((c) => c.text)]).map(preview);
   recordImport(entry);
-  if (entry.errors.length) { process.stderr.write('Session export decode failed\n'); return 1; }
+  if (entry.errors.length) { process.stderr.write('Formato de exportação inválido\n'); return 1; }
   const reportedID = mode === 'mismatch' ? 'ses_0000000000000123456789ABCD' : data.info.id;
   process.stdout.write(`Imported session: ${reportedID}\n`);
   return mode === 'success-nonzero' ? 1 : 0;

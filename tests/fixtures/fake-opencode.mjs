@@ -1,4 +1,4 @@
-// Fake OpenCode 1.18.32 server (HTTP + SSE) for integration tests. Phases add routes and scenarios.
+// Fake OpenCode 2.0.22 server (HTTP + SSE) for integration tests.
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_DATA_DIR = path.join(HERE, 'data');
 export const SCENARIO_DIR = path.join(HERE, 'scenarios');
-export const DEFAULT_VERSION = '1.18.32';
+export const DEFAULT_VERSION = '2.0.22';
 
 export function freshState() {
   return {
@@ -17,7 +17,7 @@ export function freshState() {
     sessions: {},
     messages: {},
     permissions: {},
-    questions: {},
+    forms: {},
     signals: [],
     sseConnections: 0,
     bootAttempts: 0,
@@ -30,7 +30,7 @@ export function readStateFile(stateFile) {
     return { ...freshState(), ...JSON.parse(fs.readFileSync(stateFile, 'utf8')) };
   } catch (err) {
     if (err.code === 'ENOENT') return freshState();
-    throw new Error(`failed to read fake state file ${stateFile}: ${err.message}`, { cause: err });
+    throw new Error(`Falha ao ler estado do servidor falso: ${err.code ?? 'ERRO'}`);
   }
 }
 
@@ -48,7 +48,7 @@ export function writeStateFile(stateFile, state) {
 }
 
 export async function loadScenario(name = 'ok') {
-  if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`invalid scenario name: ${name}`);
+  if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`Nome de cenário inválido: ${String(name).slice(0, 12)}…`);
   const mod = await import(pathToFileURL(path.join(SCENARIO_DIR, `${name}.mjs`)).href);
   return mod.default ?? {};
 }
@@ -108,25 +108,35 @@ export function routeSpecificity(route) {
   return (route.names.length === 0 ? 1000 : 0) + route.staticSegments;
 }
 
-function parseConfigContent(text) {
-  if (!text) return {};
+function safeConfigInfo(content) {
   try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const source = JSON.parse(content ?? '{}');
+    const info = {};
+    for (const key of ['share', 'model', 'small_model', 'agent']) {
+      if (typeof source?.[key] === 'string') info[key] = source[key];
+    }
+    return info;
   } catch {
     return {};
   }
 }
 
+function safeRequestBody(body) {
+  if (!body || typeof body !== 'object') return body;
+  const safe = structuredClone(body);
+  for (const key of ['text', 'prompt', 'message']) {
+    if (typeof safe[key] === 'string') safe[key] = `${safe[key].slice(0, 12)}…`;
+  }
+  delete safe.settings;
+  delete safe.apiKey;
+  delete safe.password;
+  return safe;
+}
+
 export const DEFAULT_ROUTES = {
-  'GET /global/health': (fake) => ({ body: { healthy: true, version: fake.version } }),
-  'POST /global/dispose': () => ({ body: true }),
-  'GET /agent': (fake) => ({ body: readFixture(fake.dataDir, 'agent') }),
-  'GET /config': (fake) => ({ body: { ...fake.baseConfig, ...fake.configOverride } }),
-  'GET /session/status': () => ({ body: {} }),
-  'GET /permission': () => ({ body: [] }),
-  'GET /question': () => ({ body: [] }),
-  'GET /event': (fake, ctx) => {
+  'GET /api/info': (fake) => ({ body: { version: fake.version, pid: process.pid, urls: [fake.url], paths: { tmp: '<tmp>' } } }),
+  'GET /api/model/default': () => ({ body: { data: { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' } } }),
+  'GET /api/event': (fake, ctx) => {
     fake.openEventStream(ctx.req, ctx.res);
     return 'handled';
   },
@@ -146,7 +156,7 @@ export async function startFake({
   scenario = 'ok',
   stateFile = null,
   dataDir = FIXTURE_DATA_DIR,
-  heartbeatMs = Number(process.env.FAKE_HEARTBEAT_MS || 10000),
+  heartbeatMs = Number(process.env.FAKE_HEARTBEAT_MS || 15000),
   version = process.env.FAKE_OPENCODE_VERSION || DEFAULT_VERSION,
   configContent = process.env.OPENCODE_CONFIG_CONTENT,
 } = {}) {
@@ -164,8 +174,7 @@ export async function startFake({
     password,
     rejectAllAuth: false,
     heartbeatMs,
-    baseConfig: readFixture(dataDir, 'config'),
-    configOverride: parseConfigContent(configContent),
+    configOverride: safeConfigInfo(configContent),
     sseClients,
     persist() {
       writeStateFile(stateFile, state);
@@ -175,7 +184,9 @@ export async function startFake({
       writeStateFile(stateFile, state);
     },
     emit(event) {
-      const full = { id: newEventId(), properties: {}, ...event };
+      const directory = state.sessions?.[event.data?.sessionID]?.location?.directory ?? '<workspace>';
+      const full = { id: newEventId(), created: Date.now(), location: { directory }, ...event };
+      if (!full.data) full.data = {};
       for (const client of sseClients) client.send(full);
     },
     openEventStream(req, res) {
@@ -187,13 +198,14 @@ export async function startFake({
       const stream = {
         index: state.sseConnections,
         send(event) {
-          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ id: newEventId(), properties: {}, ...event })}\n\n`);
+          const full = event.id ? event : { id: newEventId(), created: Date.now(), location: { directory: '<workspace>' }, type: event.type, data: event.data ?? {} };
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify(full)}\n\n`);
         },
         sendConnected() {
-          stream.send({ type: 'server.connected', properties: {} });
+          stream.send({ type: 'server.connected', data: {} });
         },
         startHeartbeat() {
-          heartbeat = setInterval(() => stream.send({ type: 'server.heartbeat', properties: {} }), fake.heartbeatMs);
+          heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': heartbeat\n\n'); }, fake.heartbeatMs);
         },
         close() {
           clearInterval(heartbeat);
@@ -229,14 +241,19 @@ export async function startFake({
   }
 
   const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (!url.pathname.startsWith('/api/')) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><html><body>OpenCode</body></html>');
+      return;
+    }
     if (!authorized(req)) {
       state.unauthorized = (state.unauthorized ?? 0) + 1;
       writeStateFile(stateFile, state);
-      res.writeHead(401, { 'content-type': 'text/plain' });
-      res.end('Unauthorized');
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ _tag: 'UnauthorizedError', message: 'Authentication required' }));
       return;
     }
-    const url = new URL(req.url, 'http://127.0.0.1');
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks).toString('utf8');
@@ -249,19 +266,25 @@ export async function startFake({
       }
     }
     const query = Object.fromEntries(url.searchParams.entries());
-    state.requests.push({ method: req.method, path: url.pathname, query, body, at: Date.now() });
+    const directory = req.headers['x-opencode-directory'] ?? url.searchParams.get('location[directory]') ?? null;
+    state.requests.push({ method: req.method, path: url.pathname, query, body: safeRequestBody(body), directory, at: Date.now() });
     writeStateFile(stateFile, state);
+    if (directory && !path.isAbsolute(directory)) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ _tag: 'InvalidLocationError', message: 'Diretório precisa ser absoluto' }));
+      return;
+    }
     let scenarioHit = matchRoute(scenarioRoutes, req.method, url.pathname);
     const baseHit = matchRoute(baseRoutes, req.method, url.pathname);
     // A scenario route only shadows a base route that is not more specific (e.g. scenario
-    // 'GET /session/:id' must not capture the base 'GET /session/status').
+    // A parameter route must not capture a more specific static API route.
     if (scenarioHit && baseHit && routeSpecificity(baseHit.route) > routeSpecificity(scenarioHit.route)) scenarioHit = null;
     if (!scenarioHit && !baseHit) {
       res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ name: 'NotFoundError', data: { message: `no route ${req.method} ${url.pathname}` } }));
+      res.end(JSON.stringify({ _tag: 'NotFoundError', message: 'Rota da API não encontrada' }));
       return;
     }
-    const routeCtx = (hit) => ({ method: req.method, path: url.pathname, query, body, params: hit.params, req, res });
+    const routeCtx = (hit) => ({ method: req.method, path: url.pathname, query, body, directory, params: hit.params, req, res });
     try {
       let final = scenarioHit ? await scenarioHit.handler(fake, routeCtx(scenarioHit)) : undefined;
       if (final === 'handled') return;
@@ -277,7 +300,7 @@ export async function startFake({
       res.end(JSON.stringify(final.body));
     } catch (err) {
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ name: 'UnknownError', data: { message: String(err?.message ?? err) } }));
+      res.end(JSON.stringify({ _tag: 'UnknownError', message: 'Falha no servidor falso' }));
     }
   });
 
@@ -314,17 +337,18 @@ export function loadFixtureData(name, { dataDir = FIXTURE_DATA_DIR, scenario = n
 }
 
 export const F1_DATA_ROUTES = Object.freeze({
-  'GET /provider': 'provider.json',
-  'GET /agent': 'agent.json',
-  'GET /command': 'command.json',
-  'GET /skill': 'skill.json',
-  'GET /config': 'config.json',
+  'GET /api/provider': 'provider.json',
+  'GET /api/model': 'model.json',
+  'GET /api/agent': 'agent.json',
+  'GET /api/command': 'command.json',
+  'GET /api/skill': 'skill.json',
+  'GET /api/config': 'config.json',
 });
 
 registerFakeExtension(() => Object.fromEntries(Object.entries(F1_DATA_ROUTES).map(([key, file]) => [key, (fake) => {
   const data = loadFixtureData(file, { dataDir: fake.dataDir, scenario: fake.scenario });
-  // GET /config keeps the F0 contract: OPENCODE_CONFIG_CONTENT (configOverride) is merged over the file.
-  return { body: file === 'config.json' ? { ...data, ...fake.configOverride } : data };
+  if (file === 'config.json') return { body: Object.keys(fake.configOverride).length ? [...data, { type: 'document', info: fake.configOverride }] : data };
+  return { body: { data } };
 }])));
 // ---- end F1 ----
 
@@ -333,9 +357,9 @@ import { SESSION_API_ROUTES, installSessionApi } from './fake-session-api.mjs';
 
 registerFakeExtension((fake) => {
   const api = installSessionApi(fake);
-  const handler = (_fake, { method, path: pathname, query, body }) =>
-    api.handle(method, pathname, new URLSearchParams(query), body)
-    ?? { status: 404, body: { name: 'NotFoundError', data: { message: `no route ${method} ${pathname}` } } };
+  const handler = (_fake, { method, path: pathname, query, body, directory }) =>
+    api.handle(method, pathname, new URLSearchParams(query), body, directory)
+    ?? { status: 404, body: { _tag: 'NotFoundError', message: 'Rota da API não encontrada' } };
   return Object.fromEntries(SESSION_API_ROUTES.map((key) => [key, handler]));
 });
 // ---- end F2a ----
