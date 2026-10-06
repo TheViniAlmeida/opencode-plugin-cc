@@ -1,7 +1,11 @@
-// V2 dispatches a subagent through the subagent tool and gives the child inherited policy/model.
-import { withF3 } from '../f3-fake.mjs';
+// Reject a direct subagent session; the tool-created child inherits the carrier policy/model.
+import { bad, withF3 } from '../f3-fake.mjs';
 
 export default withF3({
+  routes: {
+    'POST /api/session': (_fake, { body }) => body?.agent === 'explore'
+      ? bad('agent "explore" has subagent mode and cannot start a direct session') : undefined,
+  },
   async onPrompt(fake, sessionID, body = {}) {
     const agent = body.agents?.[0] ?? 'explore';
     const child = fake.createChildSession(sessionID, { agent, title: 'OPC: subagente' });

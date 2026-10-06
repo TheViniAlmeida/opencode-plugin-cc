@@ -4,6 +4,7 @@ import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { dispatchSubagent, extractTaskOutput, isAgentModeRefusal, runTurn, SUBAGENT_MECHANISMS } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { memoryV2 } from './_memory-v2.mjs';
+import refusedScenario from '../fixtures/scenarios/subagent-mode-refused.mjs';
 
 const RULES = [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: '*', effect: 'allow' }];
 const member = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, title: 'OPC: sub: explore' };
@@ -75,6 +76,15 @@ test('a refused child agent falls back to the subagent tool', async () => {
   const result = await pending;
   assert.equal(result.fellBack, true);
   assert.equal(result.mechanism, 'subagent-tool');
+});
+
+test('integration refusal scenario rejects only direct explore session creation', () => {
+  const handler = refusedScenario.routes['POST /api/session'];
+  assert.equal(typeof handler, 'function');
+  const rejected = handler({}, { body: { agent: 'explore', parentID: 'ses_parent' } });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.message, /agent.*mode|agent.*subagent/i);
+  assert.equal(handler({}, { body: { parentID: 'ses_parent' } }), undefined);
 });
 
 test('a prompt refusal mentioning agent mode remains available for fallback', async () => {

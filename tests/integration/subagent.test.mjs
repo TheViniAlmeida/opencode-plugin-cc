@@ -69,7 +69,7 @@ test('--write executa membros em série com as regras de escrita', async (t) => 
 test('recusas de política e uso ocorrem antes de criar sessão', async (t) => {
   const { cwd, env } = await setup(t);
   const cases = [
-    [['subagent', '--agent', 'work-secret', 'hi'], 4], [['subagent', '--agent', 'pinned-sub', 'hi'], 4],
+    [['subagent', '--agent', 'work-secret', 'hi'], 4],
     [['subagent', '--agent', 'build', 'hi'], 2], [['subagent', '--agent', 'general', '--model', 'omniroute-work/cx/gpt-5.5', 'hi'], 4],
     [['subagent', '--agent', 'general,explore', '--model', 'fast,strong,k3', 'hi'], 2], [['subagent', 'hi'], 2],
     [['subagent', '--agent', 'general'], 2], [['subagent', '--agent', 'general', '--mechanism', 'magic', 'hi'], 2],
@@ -104,6 +104,25 @@ test('usa subagent-tool e a filha herda modelo e permissões', async (t) => {
   const sent = prompts(env); assert.deepEqual(sent[0].agents, ['explore']);
   const carrier = created(env).find((body) => body.parentID && !body.agent);
   assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  const sessions = readFakeState(env).sessions;
+  const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);
+  assert.deepEqual(child.permissions, sessions[member.sessionID].permissions);
+  assert.deepEqual(child.model, sessions[member.sessionID].model);
+});
+
+test('recusa de agente na criação aciona fallback automático e preserva a herança', async (t) => {
+  const { cwd, env } = await setup(t, { scenario: 'subagent-mode-refused' });
+  const res = await runCli(['subagent', '--agent', 'explore', '--model', 'fast', '--json', 'p'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const [member] = JSON.parse(res.stdout).members;
+  assert.equal(member.result.mechanism, 'subagent-tool');
+  assert.equal(member.result.fellBack, true);
+  const bodies = created(env);
+  assert.equal(bodies.filter((body) => body.agent === 'explore').length, 1);
+  const carrier = bodies.find((body) => body.parentID && !body.agent);
+  assert.ok(carrier);
+  assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  assert.deepEqual(prompts(env)[0].agents, ['explore']);
   const sessions = readFakeState(env).sessions;
   const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);
   assert.deepEqual(child.permissions, sessions[member.sessionID].permissions);
