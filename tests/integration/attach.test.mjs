@@ -149,7 +149,11 @@ test('attach mode (OPC_SERVER_URL) uses an external V2 server without managing i
   const pane = await runCli(['attach', sid, '--pane'], { env, cwd });
   assert.equal(pane.code, 2);
   assert.equal(existsSync(log), false);
-  assert.equal(ext.fake.state.f3.disposed, 0);
+  const health = await fetch(`${ext.url}/api/info`, {
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${ext.password}`).toString('base64')}` },
+  });
+  assert.equal(health.status, 200, 'external server must remain available after attach --pane');
+  assert.equal((await health.json()).version, '2.0.22');
 
   const stateDir = await stateDirFor(env, cwd);
   assert.equal(existsSync(join(stateDir, 'server.json')), false);
