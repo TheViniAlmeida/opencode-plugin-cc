@@ -4,7 +4,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
-import { persistManagedAttachSecret, run } from '../../plugins/opc/scripts/commands/attach.mjs';
+import { buildAttachArgs, persistManagedAttachSecret, run } from '../../plugins/opc/scripts/commands/attach.mjs';
+
+test('attach builds the V2 TUI command', () => {
+  assert.deepEqual(buildAttachArgs({ url: 'http://127.0.0.1:4096', sessionID: 'ses_a', directory: '/w' }), ['--server', 'http://127.0.0.1:4096', '-s', 'ses_a']);
+  assert.deepEqual(buildAttachArgs({ url: 'http://127.0.0.1:4096', directory: '/w' }), ['--server', 'http://127.0.0.1:4096']);
+});
 
 test('attach rejects extra positionals with the bounded usage preview before opening the API', async () => {
   await assert.rejects(run({}, ['ses_valid', 'unexpected-value-long']), (error) => {

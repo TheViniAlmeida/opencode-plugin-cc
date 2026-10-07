@@ -2,6 +2,172 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { newMessageId, phaseFromPart, runTurn, turnMessages, extractTurn, toolErrorSummary } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { ConnectionError, RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
+import { memoryV2 } from './_memory-v2.mjs';
+
+
+test('V2 turn completes on execution.succeeded and reads idle-bounded messages', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  const sample = loadContractSample('messages-turn.json').data;
+  api.messagesFor(sessionID, [{ ...sample[0], id: api.lastPromptId() }, ...sample.slice(1)]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  const result = await pending;
+  assert.equal(result.status, 'completed');
+  assert.equal(result.finalText, 'hello');
+  assert.deepEqual(result.toolNames, ['read']);
+  assert.equal(result.usage.input, 5573);
+  assert.equal(api.createdBody.permissions.length, 1);
+  assert.deepEqual(api.createdBody.model, { providerID: 'p', id: 'm' });
+});
+
+test('V2 task preserves a JSON object returned as text', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { kind: 'task', model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'give me json' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: '{"verdict":"approve"}' }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  assert.deepEqual((await pending).structured, { verdict: 'approve' });
+});
+
+test('V2 JSON schema request adds text instruction and accepts only matching output', async () => {
+  const schema = { type: 'object', required: ['files'], properties: { files: { type: 'array', items: { type: 'string' } } }, additionalProperties: false };
+  for (const [reply, expected] of [['{"files":["a"]}', { files: ['a'] }], ['{"files":"a"}', null], ['{"title":"Example","properties":{"files":["a"]}}', null]]) {
+    const { api, hub, emit } = memoryV2();
+    const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'List files' }], format: { type: 'json_schema', schema }, newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+    const sessionID = await api.created;
+    await api.promptSettled;
+    assert.deepEqual(Object.keys(api.promptCalls[0]).sort(), ['id', 'text']);
+    assert.match(api.promptCalls[0].text, /List files\n\nReply with only one JSON object/);
+    assert.match(api.promptCalls[0].text, /"required":\["files"\]/);
+    api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: reply }] }, { type: 'idle', outcome: 'succeeded' }]);
+    emit({ type: 'session.execution.succeeded', data: { sessionID } });
+    const result = await pending;
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.structured, expected);
+    assert.equal(result.structuredSource, expected ? 'text' : null);
+  }
+});
+
+test('V2 runner retains a review finding without a file for conclave clustering', async () => {
+  const finding = { severity: 'low', title: 'Missing tests', body: 'No test covers this behavior.', confidence: 0.5, recommendation: 'Add a test.' };
+  const schema = { type: 'object', required: ['findings'], properties: { findings: { type: 'array', items: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, file: { type: ['string', 'null'] } } } } } };
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'Review changes' }], format: { type: 'json_schema', schema }, newSession: { title: 'OPC: review', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  const response = { findings: [finding] };
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_reply', type: 'assistant', content: [{ type: 'text', text: JSON.stringify(response) }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  const result = await pending;
+  assert.deepEqual(result.structured, response);
+  assert.equal(result.structuredSource, 'text');
+});
+
+test('V2 execution.failed before assistant is a classified provider failure', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'missing' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user', text: 'hi' }, { id: 'msg_i', type: 'idle', outcome: 'failed' }]);
+  emit({ type: 'session.execution.failed', data: { sessionID, error: { type: 'provider.no-route', message: 'Model unavailable: p/missing' } } });
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.notEqual(result.errorCode, 'NO_ASSISTANT_MESSAGE');
+  assert.match(result.errorMessage, /p\/missing/);
+  assert.match(result.error.data.message, /p\/missing/);
+});
+
+test('V2 completed turn beyond 200 messages retains its text', async () => {
+  const { api, hub, emit } = memoryV2();
+  const original = api.messages;
+  api.messages = async (id, { limit } = {}) => (await original(id)).slice(0, limit);
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [...Array.from({ length: 201 }, (_, i) => ({ id: `msg_old${i}`, type: 'user' })), { id: api.lastPromptId(), type: 'user' }, { id: 'msg_final', type: 'assistant', content: [{ type: 'text', text: 'long session result' }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  assert.equal((await pending).finalText, 'long session result');
+});
+
+test('V2 missing prompt in a completed session fails explicitly', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [{ id: 'old', type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorCode, 'TURN_MESSAGE_NOT_FOUND');
+});
+
+for (const method of ['sessionStatus', 'children', 'listPermissions', 'listQuestions', 'messages']) {
+  test(`V2 resync reports ${method} API failure without waiting for timeout`, async () => {
+    const { api, hub } = memoryV2();
+    let reconnect;
+    hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+    const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], timeoutMs: 1000 } });
+    const id = await api.created;
+    await api.promptSettled;
+    api.sessionStatus = async () => ({});
+    api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }]);
+    api[method] = async () => { throw new RequestError('API_FAILED', `${method} failed`); };
+    reconnect();
+    const result = await pending;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorCode, 'API_FAILED');
+    assert.match(result.errorMessage, new RegExp(method));
+  });
+}
+
+test('V2 resync failure interrupts an active session before returning failure', async () => {
+  const { api, hub } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], idleWaitMs: 50, timeoutMs: 1000 } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.children = async () => { throw new RequestError('API_FAILED', 'children failed'); };
+  api.interrupt = async (sessionID) => { api.calls.push(['interrupt', sessionID]); api.sessionStatus = async () => ({}); return true; };
+  reconnect();
+  const result = await pending;
+  assert.equal(result.errorCode, 'API_FAILED');
+  assert.deepEqual(api.calls.filter(([name]) => name === 'interrupt'), [['interrupt', id]]);
+  assert.equal(result.abortConfirmed, true);
+});
+
+test('V2 resync failure reports an unconfirmed interrupt', async () => {
+  const { api, hub } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], idleWaitMs: 5, timeoutMs: 1000 } });
+  await api.created;
+  await api.promptSettled;
+  api.children = async () => { throw new RequestError('API_FAILED', 'children failed'); };
+  api.interrupt = async () => false;
+  reconnect();
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.abortConfirmed, false);
+  assert.deepEqual(result.sessionAborts.map(({ aborted }) => aborted), [false]);
+});
+
+test('V2 prompt timeout resends same id without reading messages', async () => {
+  const { api, hub, emit } = memoryV2({ promptFailsOnce: 'TIMEOUT' });
+  const pending = runTurn({ api, hub, request: { model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] } } });
+  const sessionID = await api.created;
+  await api.promptSettled;
+  assert.equal(api.promptCalls.length, 2);
+  assert.equal(api.promptCalls[0].id, api.promptCalls[1].id);
+  assert.equal(api.messageReadsBeforeEnd, 0);
+  api.messagesFor(sessionID, [{ id: api.lastPromptId(), type: 'user', text: 'hi' }, { id: 'msg_b', type: 'assistant', content: [{ type: 'text', text: 'ok' }], cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }, { id: 'msg_c', type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID } });
+  assert.equal((await pending).finalText, 'ok');
+});
 
 function stubHub() {
   const handlers = new Map();
@@ -59,480 +225,214 @@ function completeTurn(hub, api, sessionID, body, opts = {}) {
   hub.emit({ type: 'session.idle', properties: { sessionID } });
 }
 
-test('newMessageId: msg_ + 26 chars, strictly ascending', () => {
+
+test('newMessageId keeps the V2 ascending id layout', () => {
   const ids = Array.from({ length: 50 }, () => newMessageId());
   for (const id of ids) assert.match(id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
-  for (let i = 1; i < ids.length; i += 1) assert.ok(ids[i - 1] < ids[i], `${ids[i - 1]} < ${ids[i]}`);
+  for (let i = 1; i < ids.length; i++) assert.ok(ids[i - 1] < ids[i]);
 });
 
-test('phaseFromPart maps tools to phases', () => {
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'grep', state: {} }), 'investigating');
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'apply_patch', state: {} }), 'editing');
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'bash', state: { input: { command: 'npm test' } } }), 'verifying');
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } }), 'running');
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'task', state: {} }), 'subagent');
-  assert.equal(phaseFromPart({ type: 'text', text: 'x' }), 'running');
-  assert.equal(phaseFromPart({ type: 'step-finish' }), null);
-  assert.equal(phaseFromPart({ type: 'tool', tool: 'StructuredOutput', state: {} }), 'finalizing');
+test('V2 tool names map to progress phases', () => {
+  for (const name of ['read', 'grep', 'glob', 'webfetch', 'websearch']) assert.equal(phaseFromPart({ type: 'tool', name }), 'investigating');
+  for (const name of ['edit', 'write', 'apply_patch', 'patch']) assert.equal(phaseFromPart({ type: 'tool', name }), 'editing');
+  assert.equal(phaseFromPart({ type: 'tool', name: 'subagent' }), 'subagent');
+  assert.equal(phaseFromPart({ type: 'tool', name: 'shell', state: { input: { command: 'npm test' } } }), 'verifying');
+  assert.equal(phaseFromPart({ type: 'tool', name: 'shell', state: { input: { command: 'ls' } } }), 'running');
+  assert.equal(phaseFromPart({ type: 'text' }), 'running');
 });
 
-test('completed turn: text, structured, tools, touched files, usage, body', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body, { text: 'final answer', structured: { ok: true }, tools: [{ tool: 'edit', input: { filePath: 'src/a.js' } }, { tool: 'read', input: { filePath: 'b.js' } }], tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 0 } } }) });
-  api.diffs.ses_new = [{ file: 'src/c.js', additions: 1, deletions: 0 }];
-  const phases = [];
-  const r = await runTurn({ api, hub, request: baseRequest({ agent: 'build', variant: 'high' }), onProgress: (e) => e.phase && phases.push(e.phase) });
-  assert.equal(r.status, 'completed');
-  assert.equal(r.finalText, 'final answer');
-  assert.deepEqual(r.structured, { ok: true });
-  assert.deepEqual(r.touchedFiles, ['src/a.js', 'src/c.js']);
-  assert.equal(r.toolsRan, true);
-  assert.equal(r.usage.input, 10);
-  assert.equal(r.usage.cost, 0.5);
-  const prompt = api.calls.find((c) => c[0] === 'promptAsync');
-  assert.deepEqual(prompt[2].model, MODEL);
-  assert.equal(prompt[2].agent, 'build');
-  assert.equal(prompt[2].variant, 'high');
-  assert.match(prompt[2].messageID, /^msg_/);
-  assert.ok(phases.includes('starting'));
-  assert.ok(phases.includes('running'));
+test('turnMessages stops at first idle and excludes prior turns', () => {
+  const messages = [
+    { id: 'old', type: 'user' }, { id: 'old_a', type: 'assistant' }, { type: 'idle', outcome: 'succeeded' },
+    { id: 'current', type: 'user' }, { id: 'a', type: 'assistant' }, { type: 'idle', outcome: 'succeeded' },
+    { id: 'future', type: 'user' }, { id: 'future_a', type: 'assistant' },
+  ];
+  assert.deepEqual(turnMessages(messages, 'current'), messages.slice(4, 6));
+  assert.deepEqual(turnMessages(messages, 'missing'), []);
 });
 
-test('stale idle before any activity is ignored', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => {
-    hub.emit({ type: 'session.idle', properties: { sessionID: sid } });
-    setTimeout(() => completeTurn(hub, api, sid, body, { text: 'late' }), 120);
-  } });
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'completed');
-  assert.equal(r.finalText, 'late');
+test('extractTurn uses last assistant text and V2 tool, error and usage shapes', () => {
+  const turn = [
+    { type: 'assistant', id: 'a', content: [{ type: 'text', text: 'old' }, { type: 'tool', name: 'edit', state: { status: 'completed', input: { path: 'a.js' } } }], cost: 0.5, tokens: { input: 2, output: 3, reasoning: 1, cache: { read: 4, write: 5 } } },
+    { type: 'assistant', id: 'b', content: [{ type: 'text', text: 'final' }], error: { type: 'provider.rate-limit', message: '429' }, cost: 0.1, tokens: { input: 7, output: 8 } },
+  ];
+  const result = extractTurn(turn, { diffs: [{ file: 'b.js' }] });
+  assert.equal(result.finalText, 'final');
+  assert.deepEqual(result.toolNames, ['edit']);
+  assert.deepEqual(result.touchedFiles, ['a.js', 'b.js']);
+  assert.equal(result.usage.input, 9);
+  assert.equal(result.usage.cacheRead, 4);
+  assert.equal(result.usage.cost, 0.6);
+  assert.deepEqual(result.error, { name: 'provider.rate-limit', data: { message: '429' } });
 });
 
-test('idle after busy without this turn completed assistant message fails clearly', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => {
-    api.store[sid].push(assistant(sid, 'msg_prior_turn', { text: 'stale answer' }));
-    setStatus(hub, api, sid, { type: 'busy' });
-    setStatus(hub, api, sid, { type: 'idle' });
-  } });
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'NO_ASSISTANT_MESSAGE');
+test('extractTurn keeps the last assistant text when a later assistant has tools only', () => {
+  const turn = [
+    { type: 'assistant', content: [{ type: 'text', text: 'resposta' }] },
+    { type: 'assistant', content: [{ type: 'tool', name: 'read', state: { status: 'completed', input: { path: 'a' } } }] },
+  ];
+  assert.equal(extractTurn(turn).finalText, 'resposta');
 });
 
-test('session.error ends the turn with the received error', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => {
-    setStatus(hub, api, sid, { type: 'busy' });
-    hub.emit({ type: 'session.error', properties: { sessionID: sid, error: { name: 'ProviderAuthError', data: { providerID: 'p', message: 'bad key' } } } });
-  } });
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorType, 'ProviderAuthError');
-  assert.equal(r.errorClass, 'fatal');
+test('V2 session model and agent are changed only when different on resume', async () => {
+  const { api, hub, emit } = memoryV2();
+  api.createdBody = { model: { providerID: 'p', id: 'm' }, agent: 'build', permissions: [{ action: '*', resource: '*', effect: 'deny' }] };
+  const pending = runTurn({ api, hub, request: { sessionID: 'ses_mem1', model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  await api.promptSettled;
+  api.messagesFor('ses_mem1', [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: 'ses_mem1' } });
+  assert.equal((await pending).status, 'completed');
+  assert.deepEqual(api.calls, []);
 });
 
-test('retry status reports retrying; over cap aborts and is recoverable', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => {
-    setStatus(hub, api, sid, { type: 'retry', attempt: 1, message: '429', next: Date.now() + 1000 });
-    setStatus(hub, api, sid, { type: 'retry', attempt: 4, message: '429', next: Date.now() + 1000 });
-    setTimeout(() => {
-      api.store[sid].push(assistant(sid, body.messageID, { text: '', error: { name: 'MessageAbortedError', data: { message: 'aborted' } } }));
-      setStatus(hub, api, sid, { type: 'idle' });
-      hub.emit({ type: 'session.idle', properties: { sessionID: sid } });
-    }, 50);
-  } });
-  const phases = [];
-  const r = await runTurn({ api, hub, request: baseRequest(), onProgress: (e) => e.phase && phases.push(e.phase) });
-  assert.ok(phases.includes('retrying'));
-  assert.ok(api.calls.some((c) => c[0] === 'abort'));
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorType, 'RetryCapExceeded');
-  assert.equal(r.errorClass, 'recoverable');
+test('V2 resume replaces permissions and switches model and agent when needed', async () => {
+  const { api, hub, emit } = memoryV2();
+  api.createdBody = { model: { providerID: 'other', id: 'old' }, agent: 'plan', permissions: [] };
+  const rules = [{ action: '*', resource: '*', effect: 'deny' }];
+  api.setPermissions = async (id, value) => { api.calls.push(['setPermissions', id, value]); api.createdBody.permissions = value; };
+  const pending = runTurn({ api, hub, request: { sessionID: 'ses_mem1', model: { providerID: 'p', modelID: 'm' }, agent: 'build', patchPermission: rules, parts: [{ type: 'text', text: 'hi' }] } });
+  await api.promptSettled;
+  api.messagesFor('ses_mem1', [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: 'ses_mem1' } });
+  assert.equal((await pending).status, 'completed');
+  assert.deepEqual(api.calls.map(([name]) => name), ['setPermissions', 'setModel', 'setAgent']);
 });
 
-test('turn timeout aborts and is recoverable', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => setStatus(hub, api, sid, { type: 'busy' }) });
-  api.statusMap.ses_new = { type: 'busy' };
-  const r = await runTurn({ api, hub, request: baseRequest({ timeoutMs: 150 }) });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorType, 'Timeout');
-  assert.equal(r.errorCode, 'turn_timeout');
-  assert.equal(r.errorClass, 'recoverable');
-  assert.ok(api.calls.some((c) => c[0] === 'abort'));
+test('V2 reconnect resync recovers a completed turn without SSE', async () => {
+  const { api, hub, emit } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], statusPollMs: 20 } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { id: 'msg_a', type: 'assistant', content: [{ type: 'text', text: 'recovered' }] }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.started', data: { sessionID: 'other' } });
+  api.sessionStatus = async () => ({});
+  reconnect();
+  assert.equal((await pending).finalText, 'recovered');
 });
 
-test('abort signal cancels the turn', async () => {
-  const hub = stubHub();
-  const controller = new AbortController();
-  const api = stubApi({ hub, onPrompt: (sid) => { setStatus(hub, api, sid, { type: 'busy' }); setTimeout(() => controller.abort(), 30); } });
-  const r = await runTurn({ api, hub, request: baseRequest(), signal: controller.signal });
-  assert.equal(r.status, 'cancelled');
-  assert.ok(api.calls.some((c) => c[0] === 'abort'));
-});
-
-test('already aborted signal cancels before prompt_async', async () => {
-  const hub = stubHub();
-  const controller = new AbortController();
-  controller.abort();
-  const api = stubApi({ hub });
-  const r = await runTurn({ api, hub, request: baseRequest(), signal: controller.signal });
-  assert.equal(r.status, 'cancelled');
-  assert.ok(!api.calls.some((c) => c[0] === 'promptAsync'));
-});
-
-test('SERVER_DOWN during session creation is returned as server_lost', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub });
-  api.createSession = async () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'server_lost');
-  assert.equal(r.sessionID, null);
-});
-
-test('SERVER_DOWN during resume permission patch is returned as server_lost', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub });
-  api.patchSession = async () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
-  const r = await runTurn({ api, hub, request: baseRequest({ newSession: undefined, sessionID: 'ses_old', patchPermission: [{ permission: '*', pattern: '*', action: 'deny' }] }) });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'server_lost');
-  assert.equal(r.sessionID, 'ses_old');
-});
-
-test('retry recovered by resync still enforces retry cap', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => {
-    api.statusMap[sid] = { type: 'retry', attempt: 4, message: '429' };
-  } });
-  const phases = [];
-  const r = await runTurn({ api, hub, request: baseRequest({ fallbackCfg: { maxProviderRetries: 3, maxRetryWaitSec: 60 } }), onProgress: (e) => e.phase && phases.push(e.phase) });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorType, 'RetryCapExceeded');
-  assert.equal(r.errorClass, 'recoverable');
-  assert.ok(phases.includes('retrying'));
-  assert.ok(api.calls.some((c) => c[0] === 'abort'));
-});
-
-test('server down during polling → server_lost, session preserved', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => setStatus(hub, api, sid, { type: 'busy' }) });
-  api.sessionStatus = async () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'server_lost');
-  assert.equal(r.sessionID, 'ses_new');
-  assert.match(r.errorMessage, /--resume/);
-});
-
-test('400 on prompt_async is a fatal BadRequest', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub });
-  api.promptAsync = async () => { throw new RequestError('BAD_REQUEST', 'invalid body'); };
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorType, 'BadRequest');
-  assert.equal(r.errorClass, 'fatal');
-});
-
-test('400 on prompt_async keeps the server reason, masked and first line only', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub });
-  const token = ['sk', 'proj', 'Z9y8X7w6V5u4T3s2'].join('-');
-  api.promptAsync = async () => {
-    throw new RequestError('BAD_REQUEST', 'recusada', { details: { status: 400, body: { name: 'BadRequest', data: { message: `Agent explore is a subagent (${token})\nsecond line` } } } });
-  };
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.errorType, 'BadRequest');
-  assert.match(r.errorMessage, /^A requisição do turno foi rejeitada: Agent explore is a subagent/);
-  assert.ok(!r.errorMessage.includes(token), r.errorMessage);
-  assert.ok(!r.errorMessage.includes('second line'), r.errorMessage);
-});
-
-test('prompt_async timeout: resend only when the messageID did not arrive', async () => {
-  for (const arrived of [true, false]) {
-    const hub = stubHub();
-    let attempts = 0;
-    const api = stubApi({ hub });
-    api.promptAsync = async (sid, body) => {
-      attempts += 1;
-      const deliver = () => {
-        api.store[sid].push({ info: { id: body.messageID, role: 'user' }, parts: [] });
-        setTimeout(() => completeTurn(hub, api, sid, body), 20);
-      };
-      if (attempts === 1) {
-        if (arrived) deliver();
-        throw new ConnectionError('TIMEOUT', 'timed out');
-      }
-      deliver();
-      return null;
-    };
-    const r = await runTurn({ api, hub, request: baseRequest() });
-    assert.equal(r.status, 'completed');
-    assert.equal(attempts, arrived ? 1 : 2);
-  }
-});
-
-test('permissions/questions from session and child reach callbacks; resync recovers missed ones', async () => {
-  const hub = stubHub();
+test('V2 request events are normalized and child permissions are inherited', async () => {
+  const { api, hub, emit } = memoryV2();
   const seen = [];
-  const resolved = [];
-  const api = stubApi({ hub, onPrompt: (sid, body) => {
-    setStatus(hub, api, sid, { type: 'busy' });
-    hub.emit({ type: 'session.created', properties: { sessionID: 'ses_child', info: { id: 'ses_child', parentID: sid } } });
-    hub.emit({ type: 'permission.asked', properties: { id: 'per_1', sessionID: 'ses_child', permission: 'bash', patterns: ['rm -rf x'], metadata: {}, always: [] } });
-    hub.emit({ type: 'permission.asked', properties: { id: 'per_other', sessionID: 'ses_unrelated', permission: 'bash', patterns: ['ls'], metadata: {}, always: [] } });
-    api.questions.push({ id: 'que_1', sessionID: sid, questions: [{ question: 'Q?', header: 'Q', options: [] }] });
-    setTimeout(() => hub.reconnect(), 20);
-    setTimeout(() => {
-      hub.emit({ type: 'permission.replied', properties: { sessionID: 'ses_child', requestID: 'per_1', reply: 'reject' } });
-      completeTurn(hub, api, sid, body);
-    }, 80);
-  } });
-  const r = await runTurn({
-    api, hub, request: baseRequest({ childPermission: [{ permission: 'bash', pattern: 'rm -rf*', action: 'ask' }] }),
-    onPermission: async (req) => seen.push(req.id),
-    onQuestion: async (req) => seen.push(req.id),
-    onRequestResolved: async (ev) => resolved.push(ev.requestID),
-  });
-  assert.equal(r.status, 'completed');
-  assert.deepEqual(seen.sort(), ['per_1', 'que_1']);
-  assert.deepEqual(resolved, ['per_1']);
-  assert.deepEqual(r.childSessionIDs, ['ses_child']);
-  assert.ok(api.calls.some((c) => c[0] === 'patchSession' && c[1] === 'ses_child'));
-  assert.deepEqual(api.calls.find((c) => c[0] === 'patchSession' && c[1] === 'ses_child')[2].permission, [{ permission: 'bash', pattern: 'rm -rf*', action: 'ask' }]);
+  const rules = [{ action: '*', resource: '*', effect: 'deny' }];
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: rules }, childPermission: [{ action: 'shell', resource: '*', effect: 'allow' }], model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] }, onPermission: async (req) => seen.push(req), onQuestion: async (req) => seen.push(req), onRequestResolved: async (req) => seen.push(req) });
+  const id = await api.created;
+  await api.promptSettled;
+  emit({ type: 'session.created', data: { sessionID: 'ses_child', parentID: id } });
+  emit({ type: 'permission.asked', data: { id: 'per_1', sessionID: 'ses_child', action: 'shell', resources: ['ls'], save: [], source: { type: 'tool' } } });
+  emit({ type: 'form.created', data: { form: { id: 'frm_1', sessionID: id, title: 'Pergunta', metadata: { kind: 'question' }, fields: [{ key: 'choice', title: 'Escolha', type: 'select', options: [] }] } } });
+  emit({ type: 'permission.replied', data: { sessionID: 'ses_child', requestID: 'per_1', reply: 'reject' } });
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  const result = await pending;
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.childSessionIDs, ['ses_child']);
+  assert.equal(seen[0].permission, 'shell');
+  assert.equal(seen[1].id, 'frm_1');
+  assert.equal(seen[2].requestID, 'per_1');
+  assert.deepEqual(api.createdBody.permissions, rules);
+  assert.deepEqual((await api.getSession('ses_child')).permissions, rules);
+  assert.equal(api.calls.some(([name]) => name === 'setPermissions'), false);
 });
 
-test('child permission patch failure fails the turn', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => {
-    setStatus(hub, api, sid, { type: 'busy' });
-    hub.emit({ type: 'session.created', properties: { sessionID: 'ses_child', info: { id: 'ses_child', parentID: sid } } });
-    setTimeout(() => completeTurn(hub, api, sid, body), 20);
-  } });
-  api.patchSession = async (id, body) => {
-    api.calls.push(['patchSession', id, body]);
-    return { id, permission: [] };
-  };
-  const r = await runTurn({ api, hub, request: baseRequest({ childPermission: [{ permission: 'bash', pattern: '*', action: 'ask' }] }) });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'CHILD_PERMISSION_FAILED');
+test('V2 callback failure interrupts child before parent', async () => {
+  const { api, hub, emit } = memoryV2();
+  api.interrupt = async (id) => { api.calls.push(['interrupt', id]); return true; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], idleWaitMs: 5 }, onPermission: async () => { throw new Error('falha na ponte'); } });
+  const id = await api.created;
+  await api.promptSettled;
+  emit({ type: 'session.created', data: { sessionID: 'ses_child', parentID: id } });
+  emit({ type: 'permission.asked', data: { id: 'per_1', sessionID: 'ses_child', action: 'shell', resources: [], save: [] } });
+  const result = await pending;
+  assert.equal(result.errorCode, 'CALLBACK_FAILED');
+  assert.deepEqual(api.calls.filter(([name]) => name === 'interrupt').map(([, sid]) => sid), ['ses_child', id]);
 });
 
-test('permission callback failure fails instead of only reporting progress', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => {
-    setStatus(hub, api, sid, { type: 'busy' });
-    hub.emit({ type: 'permission.asked', properties: { id: 'per_throw', sessionID: sid, permission: 'bash', patterns: [] } });
-  } });
-  const r = await runTurn({ api, hub, request: baseRequest(), onPermission: async () => { throw new Error('callback broke'); } });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'CALLBACK_FAILED');
+test('V2 retry cap interrupts and classifies the failure', async () => {
+  const { api, hub, emit } = memoryV2();
+  api.interrupt = async (id) => { api.calls.push(['interrupt', id]); api.sessionStatus = async () => ({}); return true; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }], fallbackCfg: { maxProviderRetries: 3 } } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }]);
+  emit({ type: 'session.retry.scheduled', data: { sessionID: id, attempt: 4, at: Date.now() + 1000, error: { type: 'provider.transport', message: 'retry' } } });
+  const result = await pending;
+  assert.equal(result.errorCode, 'retry_cap');
+  assert.equal(result.errorClass, 'recoverable');
+  assert.ok(api.calls.some(([name]) => name === 'interrupt'));
 });
 
-test('question callback failure fails instead of only reporting progress', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid) => {
-    setStatus(hub, api, sid, { type: 'busy' });
-    hub.emit({ type: 'question.asked', properties: { id: 'que_throw', sessionID: sid, questions: [] } });
-  } });
-  const r = await runTurn({ api, hub, request: baseRequest(), onQuestion: async () => { throw new Error('callback broke'); } });
-  assert.equal(r.status, 'failed');
-  assert.equal(r.errorCode, 'CALLBACK_FAILED');
+test('V2 cancellation interrupts the active session', async () => {
+  const { api, hub } = memoryV2();
+  const controller = new AbortController();
+  api.interrupt = async (id) => { api.calls.push(['interrupt', id]); api.sessionStatus = async () => ({}); return true; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] }, signal: controller.signal });
+  await api.promptSettled;
+  api.messagesFor('ses_mem1', [{ id: api.lastPromptId(), type: 'user' }]);
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.status, 'cancelled');
+  assert.ok(api.calls.some(([name]) => name === 'interrupt'));
 });
 
-test('resume with patchPermission verifies the returned rules', async () => {
-  const hub = stubHub();
-  const rules = [{ permission: '*', pattern: '*', action: 'deny' }];
-  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body), extra: { existingPermission: [{ permission: 'x', pattern: '*', action: 'allow' }] } });
-  api.store.ses_old = [];
-  const r = await runTurn({ api, hub, request: baseRequest({ newSession: undefined, sessionID: 'ses_old', patchPermission: rules }) });
-  assert.equal(r.status, 'completed');
-  assert.equal(r.sessionID, 'ses_old');
-  assert.ok(!api.calls.some((c) => c[0] === 'createSession'));
+test('tool error summary never echoes long external input', () => {
+  assert.equal(toolErrorSummary('abcdefghijklmnop'), 'abcdefghijkl…');
 });
 
-test('turnMessages falls back to messages after the user message', () => {
-  const list = [{ info: { id: 'msg_u', role: 'user' } }, { info: { id: 'msg_a', role: 'assistant' }, parts: [] }];
-  assert.equal(turnMessages(list, 'msg_u').length, 1);
-  assert.equal(turnMessages(list, 'msg_missing').length, 0);
+test('V2 shell events use the called command to report verification', async () => {
+  const { api, hub, emit } = memoryV2();
+  const phases = [];
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] }, onProgress: (event) => { if (event.phase) phases.push(event.phase); } });
+  const id = await api.created;
+  await api.promptSettled;
+  emit({ type: 'session.tool.input.started', data: { sessionID: id, id: 'call_1', name: 'shell' } });
+  emit({ type: 'session.tool.called', data: { sessionID: id, id: 'call_1', input: { command: 'npm test' } } });
+  emit({ type: 'session.tool.success', data: { sessionID: id, id: 'call_1' } });
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  const result = await pending;
+  assert.ok(phases.includes('verifying'));
+  assert.equal(result.toolsRan, true);
 });
 
-test('extractTurn: apply_patch files and structured error keeps raw text', () => {
-  const turn = [{ info: { role: 'assistant', error: { name: 'StructuredOutputError', data: { message: 'bad', retries: 1 } } }, parts: [
-    { type: 'tool', tool: 'apply_patch', state: { status: 'completed', input: { patchText: '*** Begin Patch\n*** Update File: a/b.js\n*** Add File: c.txt\n*** End Patch' } } },
-    { type: 'text', text: 'raw answer' },
-  ] }];
-  const r = extractTurn(turn);
-  assert.deepEqual(r.touchedFiles, ['a/b.js', 'c.txt']);
-  assert.equal(r.finalText, 'raw answer');
-  assert.equal(r.error.name, 'StructuredOutputError');
+test('V2 resync classifies failed idle even without assistant', async () => {
+  const { api, hub } = memoryV2();
+  let reconnect;
+  hub.onReconnect = (handler) => { reconnect = handler; return () => {}; };
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.sessionStatus = async () => ({});
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'failed' }]);
+  reconnect();
+  const result = await pending;
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorType, 'execution.failed');
+  assert.equal(result.errorMessage, 'A execução falhou.');
 });
 
-test('StructuredOutput tool does not count as tools ran (StructuredOutputError stays recoverable)', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body, { text: 'raw', tools: [{ tool: 'StructuredOutput', input: { x: 1 } }], error: { name: 'StructuredOutputError', data: { message: 'invalid', retries: 1 } } }) });
-  const r = await runTurn({ api, hub, request: baseRequest() });
-  assert.equal(r.toolsRan, false);
-  assert.equal(r.errorType, 'StructuredOutputError');
-  assert.equal(r.errorClass, 'recoverable');
-  assert.equal(r.finalText, 'raw');
+test('V2 aborted provider error cancels the turn', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, parts: [{ type: 'text', text: 'hi' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'failed' }]);
+  emit({ type: 'session.execution.failed', data: { sessionID: id, error: { type: 'aborted', message: 'private value' } } });
+  const result = await pending;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.errorCode, 'cancelled');
+  assert.equal(result.errorMessage, 'Turno cancelado.');
 });
 
-for (const failure of ['patch', 'permission', 'question', 'resolved']) {
-  for (const abortMode of ['idle', 'refused', 'throws', 'busy']) {
-    test(`gate 3: ${failure} aborts children before parent (${abortMode})`, async () => {
-      const hub = stubHub();
-      const childID = 'ses_child_gate';
-      const api = stubApi({ hub, onPrompt: (sid) => {
-        api.statusMap[sid] = { type: 'busy' };
-        api.statusMap[childID] = { type: 'busy' };
-        hub.emit({ type: 'session.created', properties: { info: { id: childID, parentID: sid } } });
-        const type = failure === 'question' ? 'question.asked' : failure === 'resolved' ? 'permission.replied' : 'permission.asked';
-        hub.emit({ type, properties: { id: 'per_gate', requestID: 'per_gate', sessionID: childID, permission: 'bash', patterns: [] } });
-      } });
-      if (failure === 'patch') api.patchSession = async () => { throw new Error('falha no PATCH'); };
-      const abort = api.abort;
-      api.abort = async (id) => {
-        if (id === childID && abortMode !== 'idle') {
-          api.calls.push(['abort', id]);
-          if (abortMode === 'throws') throw new Error('falha no abort');
-          return abortMode === 'busy';
-        }
-        return abort(id);
-      };
-      const fail = async () => { throw new Error('falha na ponte'); };
-      const result = await runTurn({ api, hub,
-        request: baseRequest({ idleWaitMs: 5, childPermission: [{ permission: 'bash', pattern: '*', action: 'ask' }] }),
-        onPermission: failure === 'permission' ? fail : async () => {},
-        onQuestion: failure === 'question' ? fail : async () => {},
-        onRequestResolved: failure === 'resolved' ? fail : async () => {},
-      });
-      assert.equal(result.status, 'failed');
-      assert.equal(result.errorCode, failure === 'patch' ? 'CHILD_PERMISSION_FAILED' : 'CALLBACK_FAILED');
-      assert.deepEqual(api.calls.filter(([name]) => name === 'abort').map(([, id]) => id), [childID, 'ses_new']);
-      assert.equal(result.abortConfirmed, abortMode === 'idle');
-      assert.equal(result.sessionAborts.length, 2);
-      assert.ok(api.calls.some(([name]) => name === 'sessionStatus'));
-    });
-  }
-}
-
-test('gate 5: progress prints full server IDs and redacts them', async () => {
-  const { registerSecret } = await import('../../plugins/opc/scripts/lib/redact.mjs');
-  const secret = 'fake-gate-progress-secret';
-  registerSecret(secret);
-  const sid = 'ses_parent_identifier_long';
-  const child = `ses_child_identifier_long_${secret}`;
-  const permission = 'per_permission_identifier_long';
-  const question = 'que_question_identifier_long';
-  const hub = stubHub();
-  const lines = [];
-  const api = stubApi({ hub, onPrompt: (id, body) => {
-    hub.emit({ type: 'session.created', properties: { info: { id: child, parentID: id } } });
-    hub.emit({ type: 'permission.asked', properties: { id: permission, sessionID: id, permission: 'bash' } });
-    hub.emit({ type: 'question.asked', properties: { id: question, sessionID: id } });
-    completeTurn(hub, api, id, body);
-  } });
-  await runTurn({ api, hub, request: baseRequest({ sessionID: sid }), onProgress: (event) => lines.push(event.message ?? '') });
-  for (const id of [sid, child.replace(secret, '***'), permission, question]) assert.ok(lines.some((line) => line.includes(id)), id);
-  assert.equal(lines.join('\n').includes(secret), false);
+test('V2 prompt joins only text parts and places model and variant on session', async () => {
+  const { api, hub, emit } = memoryV2();
+  const pending = runTurn({ api, hub, request: { newSession: { title: 'OPC: t', permission: [{ action: '*', resource: '*', effect: 'deny' }] }, model: { providerID: 'p', modelID: 'm' }, variant: 'high', parts: [{ type: 'text', text: 'one' }, { type: 'file', path: 'ignored' }, { type: 'text', text: 'two' }] } });
+  const id = await api.created;
+  await api.promptSettled;
+  assert.deepEqual(api.createdBody.model, { providerID: 'p', id: 'm', variant: 'high' });
+  assert.deepEqual(api.promptCalls[0], { id: api.lastPromptId(), text: 'one\ntwo' });
+  api.messagesFor(id, [{ id: api.lastPromptId(), type: 'user' }, { type: 'idle', outcome: 'succeeded' }]);
+  emit({ type: 'session.execution.succeeded', data: { sessionID: id } });
+  assert.equal((await pending).status, 'completed');
 });
-
-test('toolErrorSummary drops the echoed rule list and caps free text', () => {
-  const denial = 'The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{"permission":"*","pattern":"~/private/**","action":"allow"}]';
-  assert.equal(toolErrorSummary(denial), 'The user has specified a rule which prevents you from using this specific tool call.');
-  assert.equal(toolErrorSummary('first line\nsecond line'), 'first line');
-  const long = toolErrorSummary('x'.repeat(500));
-  assert.equal(long.length, 201);
-  assert.ok(long.endsWith('…'));
-  assert.equal(toolErrorSummary(undefined), '');
-});
-
-for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
-  test(`F4a C1: retry cap requires confirmed abort (${mode})`, async () => {
-    const hub = stubHub();
-    const api = stubApi({ hub, onPrompt: (sid) => setStatus(hub, api, sid, { type: 'retry', attempt: 4 }) });
-    let idleObserved = false;
-    api.abort = async (sid) => {
-      if (mode === 'throws') throw new Error('abort unavailable');
-      if (mode === 'delayed-idle') setTimeout(() => { delete api.statusMap[sid]; idleObserved = true; }, 10);
-      return mode !== 'false';
-    };
-    const result = await runTurn({ api, hub, request: baseRequest({ timeoutMs: 400, idleWaitMs: mode === 'delayed-idle' ? 350 : 20 }) });
-    assert.equal(result.errorType, mode === 'delayed-idle' ? 'RetryCapExceeded' : 'AbortUnconfirmed');
-    assert.equal(result.errorClass, mode === 'delayed-idle' ? 'recoverable' : 'fatal');
-    if (mode === 'delayed-idle') assert.equal(idleObserved, true);
-  });
-}
-
-test('I4: generic textJson validator extracts a planner JSON fence without sending format', async () => {
-  const plan = { rationale: 'r', subtasks: [] };
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body, { text: '\x60\x60\x60json\n' + JSON.stringify(plan) + '\n\x60\x60\x60' }) });
-  const result = await runTurn({ api, hub, request: baseRequest({ textJson: () => null }) });
-  assert.deepEqual(result.structured, plan);
-  assert.equal(result.structuredSource, 'text');
-  assert.equal(Object.hasOwn(api.calls.find(([name]) => name === 'promptAsync')[2], 'format'), false);
-});
-
-test('C1: session callback completes before prompt and tracks children', async () => {
-  const saved = [];
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => {
-    assert.deepEqual(saved, [{ sessionID: sid, childSessionIDs: [] }]);
-    hub.emit({ type: 'session.created', properties: { info: { id: 'ses_child', parentID: sid } } });
-    completeTurn(hub, api, sid, body);
-  } });
-  await runTurn({ api, hub, request: baseRequest(), onSession: async (event) => { await new Promise((r) => setImmediate(r)); saved.push(event); } });
-  assert.deepEqual(saved.at(-1), { sessionID: 'ses_new', childSessionIDs: ['ses_child'] });
-});
-
-test('C2: failed session persistence aborts before sending the prompt', async () => {
-  const hub = stubHub();
-  const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body) });
-  const result = await runTurn({ api, hub, request: baseRequest(), onSession: async () => { throw new Error('storage failed'); } });
-  assert.equal(result.errorType, 'CallbackFailed');
-  assert.equal(result.abortConfirmed, true);
-  assert.equal(api.calls.some(([name]) => name === 'promptAsync'), false);
-  assert.ok(api.calls.some(([name]) => name === 'abort'));
-});
-
-for (const stage of ['createSession', 'onSession']) {
-  for (const abortMode of ['ok', 'server-down']) {
-    test(`F4b fix2: cancellation during ${stage} prevents prompting (${abortMode})`, async () => {
-      const hub = stubHub();
-      const api = stubApi({ hub, onPrompt: (sid, body) => completeTurn(hub, api, sid, body) });
-      let entered, release;
-      const started = new Promise((resolve) => { entered = resolve; });
-      const blocked = new Promise((resolve) => { release = resolve; });
-      let cancelled = false;
-      const pause = async () => { entered(); await blocked; };
-      if (stage === 'createSession') {
-        const create = api.createSession;
-        api.createSession = async (body) => { await pause(); return create(body); };
-      }
-      if (abortMode === 'server-down') api.abort = async (id) => {
-        api.calls.push(['abort', id]);
-        throw new ConnectionError('SERVER_DOWN', 'connection refused');
-      };
-      const running = runTurn({ api, hub, request: baseRequest(),
-        isCancelled: () => cancelled, onSession: stage === 'onSession' ? pause : async () => {},
-      });
-      await started;
-      cancelled = true;
-      release();
-      const result = await running;
-      assert.equal(api.calls.some(([name]) => name === 'promptAsync'), false);
-      assert.ok(api.calls.some(([name, id]) => name === 'abort' && id === 'ses_new'));
-      assert.equal(result.status, 'cancelled');
-      assert.equal(result.errorType, 'Cancelled');
-      assert.equal(result.toolsRan, false);
-      assert.deepEqual(hub.tracked, []);
-    });
-  }
-}

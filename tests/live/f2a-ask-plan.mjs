@@ -13,9 +13,9 @@ test('live: /opc:ask answers read-only with file:line', { skip: LIVE_SKIP }, asy
   const job = liveJob(ctx, jobIdIn(r.stderr));
   assert.ok(job?.sessionID, 'job has a session id');
   const session = await liveApi(ctx).getSession(job.sessionID);
-  assert.deepEqual(session.permission[0], { permission: '*', pattern: '*', action: 'deny' });
-  assert.ok(session.permission.some((x) => x.permission === 'grep' && x.pattern === '*' && x.action === 'deny'));
-  assert.ok(session.permission.some((x) => x.permission === 'doom_loop' && x.action === 'deny'));
+  assert.deepEqual(session.permissions[0], { action: '*', resource: '*', effect: 'deny' });
+  assert.ok(session.permissions.some((x) => x.action === 'grep' && x.resource === '*' && x.effect === 'deny'));
+  assert.ok(session.permissions.some((x) => x.action === 'external_directory' && x.resource === '*' && x.effect === 'deny'));
   report('ask somente leitura', true, `sessão ${job.sessionID}`);
 });
 

@@ -1,12 +1,86 @@
 [
-  {"name":"build","description":"The default agent. Executes tools based on configured permissions.","mode":"primary","native":true,"color":"#888888","steps":12,"temperature":0.2,"topP":0.9,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"plan","description":"Plan mode. Disallows all edit tools.","mode":"primary","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"},{"permission":"edit","pattern":"*","action":"deny"}],"options":{}},
-  {"name":"general","description":"General-purpose agent for researching complex questions and executing multi-step tasks.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"explore","description":"Fast agent specialized for exploring codebases.","mode":"subagent","native":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"title","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"summary","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"compaction","mode":"primary","native":true,"hidden":true,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"docs-writer","description":"Writes and updates documentation in PT-BR.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"model":{"providerID":"omniroute-personal","modelID":"opencode-go/qwen3.8-max"},"variant":"high","prompt":"You write docs.","options":{}},
-  {"name":"work-deploy","description":"Work deploy helper.","mode":"subagent","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}},
-  {"name":"work-reviewer","description":"Work code reviewer.","mode":"all","native":false,"permission":[{"permission":"*","pattern":"*","action":"allow"}],"options":{}}
+  {
+    "id": "build",
+    "name": "build",
+    "mode": "primary",
+    "hidden": false,
+    "description": "The default agent. Executes tools based on configured permissions.",
+    "permissions": []
+  },
+  {
+    "id": "plan",
+    "name": "plan",
+    "mode": "primary",
+    "hidden": false,
+    "description": "Plan mode. Disallows all edit tools.",
+    "permissions": []
+  },
+  {
+    "id": "general",
+    "name": "general",
+    "mode": "subagent",
+    "hidden": false,
+    "description": "General-purpose agent for researching complex questions and executing multi-step tasks.",
+    "permissions": []
+  },
+  {
+    "id": "explore",
+    "name": "explore",
+    "mode": "subagent",
+    "hidden": false,
+    "description": "Fast agent specialized for exploring codebases.",
+    "permissions": []
+  },
+  {
+    "id": "title",
+    "name": "title",
+    "mode": "primary",
+    "hidden": true,
+    "description": "",
+    "permissions": []
+  },
+  {
+    "id": "summary",
+    "name": "summary",
+    "mode": "primary",
+    "hidden": true,
+    "description": "",
+    "permissions": []
+  },
+  {
+    "id": "compaction",
+    "name": "compaction",
+    "mode": "primary",
+    "hidden": true,
+    "description": "",
+    "permissions": []
+  },
+  {
+    "id": "docs-writer",
+    "name": "docs-writer",
+    "mode": "subagent",
+    "hidden": false,
+    "description": "Writes and updates documentation in PT-BR.",
+    "permissions": [],
+    "model": {
+      "providerID": "omniroute-personal",
+      "id": "opencode-go/qwen3.8-max"
+    }
+  },
+  {
+    "id": "work-deploy",
+    "name": "work-deploy",
+    "mode": "subagent",
+    "hidden": false,
+    "description": "Work deploy helper.",
+    "permissions": []
+  },
+  {
+    "id": "work-reviewer",
+    "name": "work-reviewer",
+    "mode": "all",
+    "hidden": false,
+    "description": "Work code reviewer.",
+    "permissions": []
+  }
 ]

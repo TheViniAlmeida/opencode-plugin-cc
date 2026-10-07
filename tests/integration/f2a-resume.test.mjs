@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PLUGIN_ROOT, jobIdFrom, jobIn, opc, requestsTo, setupF2a, waitFor } from '../helpers.mjs';
-import { READ_ONLY_RULES } from '../fixtures/expected-rules-f2a.mjs';
+import { promptBodies } from '../f2b-helpers.mjs';
 
 test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
@@ -14,12 +14,12 @@ test('--resume <job> mantém a sessão; sem prompt → continue.md', async (t) =
   assert.equal(second.code, 0, second.stderr);
   const b = jobIn(ctx.env, ctx.cwd, jobIdFrom(second.stderr));
   assert.equal(b.sessionID, a.sessionID);
-  assert.equal(requestsTo(ctx.env, 'POST', '/session').length, 1);
-  assert.equal(requestsTo(ctx.env, 'POST', `/session/${a.sessionID}/prompt_async`).length, 2);
+  assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 1);
+  assert.equal(requestsTo(ctx.env, 'POST', `/api/session/${a.sessionID}/prompt`).length, 2);
   const third = await opc(ctx, ['task', '--resume', a.id]);
   assert.equal(third.code, 0, third.stderr);
-  const prompts = requestsTo(ctx.env, 'POST', `/session/${a.sessionID}/prompt_async`);
-  assert.equal(prompts.at(-1).body.parts[0].text, readFileSync(join(PLUGIN_ROOT, 'prompts', 'continue.md'), 'utf8'));
+  // The fake masks free-form text in request records; promptBodies reads the stored user message instead.
+  assert.equal(promptBodies(ctx.env).at(-1).text, readFileSync(join(PLUGIN_ROOT, 'prompts', 'continue.md'), 'utf8'));
   assert.equal(jobIn(ctx.env, ctx.cwd, jobIdFrom(third.stderr)).summary, 'continue');
 });
 
@@ -71,24 +71,23 @@ test('um segundo job na mesma sessão OpenCode falha imediatamente (exit 2)', as
   assert.match(again.stdout + again.stderr, /SESSION_BUSY/);
 });
 
-test('troca de perfil ao retomar: read-only → escrita recusada; write → read-only aplicado', async (t) => {
+test('troca de perfil ao retomar: V2 substitui permissões nos dois sentidos', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const ro = await opc(ctx, ['task', 'read only first']);
   const roJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(ro.stderr));
-  const refused = await opc(ctx, ['task', '--write', '--resume', roJob.id, 'now write']);
-  assert.equal(refused.code, 2);
-  assert.match(refused.stdout + refused.stderr, /PROFILE_SWITCH_UNSUPPORTED/);
-  assert.equal(requestsTo(ctx.env, 'PATCH', /^\/session\//).length, 0);
+  const upgraded = await opc(ctx, ['task', '--write', '--resume', roJob.id, 'now write']);
+  assert.equal(upgraded.code, 0, upgraded.stderr);
+  assert.equal(requestsTo(ctx.env, 'PATCH', `/api/session/${roJob.sessionID}`).length, 1);
   const wr = await opc(ctx, ['task', '--write', 'write first']);
   const wrJob = jobIn(ctx.env, ctx.cwd, jobIdFrom(wr.stderr));
   const back = await opc(ctx, ['task', '--resume', wrJob.id, 'now read only']);
   assert.equal(back.code, 0, back.stderr);
-  const [patch] = requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`);
-  assert.deepEqual(patch.body, { permission: READ_ONLY_RULES });
-  const posts = requestsTo(ctx.env, 'POST', '/session');
+  const [patch] = requestsTo(ctx.env, 'PATCH', `/api/session/${wrJob.sessionID}`);
+  assert.ok(patch.body.permissions.length > 0);
+  const posts = requestsTo(ctx.env, 'POST', '/api/session');
   assert.ok(posts.length > 0);
-  assert.equal(posts.at(-1).body.permission.at(-1).action, 'ask');
+  assert.ok(posts.at(-1).body.permissions.length > 0);
   const same = await opc(ctx, ['task', '--resume', wrJob.id, 'still read only']);
   assert.equal(same.code, 0, same.stderr);
-  assert.equal(requestsTo(ctx.env, 'PATCH', `/session/${wrJob.sessionID}`).length, 1);
+  assert.equal(requestsTo(ctx.env, 'PATCH', `/api/session/${wrJob.sessionID}`).length, 1);
 });

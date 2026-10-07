@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const COMMANDS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugins', 'opc', 'commands');
 const AGENTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugins', 'opc', 'agents');
 const F1 = {
-  setup: { tools: ['Bash(opc:*)', 'Bash(npm:*)', 'AskUserQuestion'], disableModel: false },
+  setup: { tools: ['Bash(opc:*)', 'AskUserQuestion'], disableModel: false },
   config: { tools: ['Bash(opc:*)'], disableModel: true },
   providers: { tools: ['Bash(opc:*)'], disableModel: false },
   models: { tools: ['Bash(opc:*)'], disableModel: false },
@@ -85,9 +85,11 @@ test('all command heredocs have an explicit reserved-delimiter guard and closed 
   }
 });
 
-test('setup.md: install offer, heredoc payloads, commit', () => {
+test('setup.md: install guidance without a package manager, heredoc payloads, commit', () => {
   const { body, bashBlocks } = parse('setup');
-  assert.ok(bashBlocks.some((b) => b.trim() === 'npm install -g opencode-ai'));
+  // npm's opencode-ai is still V1; setup only points to the official install and server.opencodeBin.
+  assert.ok(!bashBlocks.some((b) => /\bnpm\b/.test(b)));
+  assert.match(body, /OpenCode 2\.0\.22 or newer[\s\S]*server\.opencodeBin/);
   assert.ok(bashBlocks.some((b) => b.includes("opc setup apply --json --stdin <<'OPC_JSON_5f1d0c7a_EOF'")));
   assert.ok(bashBlocks.some((b) => b.includes('opc setup commit --json')));
   assert.ok(bashBlocks.some((b) => b.includes('--stop-server --force --confirmed-by-user')));

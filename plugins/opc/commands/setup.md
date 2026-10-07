@@ -1,7 +1,7 @@
 ---
-description: Diagnostica o OpenCode, oferece a instalação e conduz o onboarding guiado do opc (provider, modelos, política, projeto)
+description: Diagnostica o OpenCode, orienta a instalação e conduz o onboarding guiado do opc (provider, modelos, política, projeto)
 argument-hint: '[--reconfigure] [--stop-server [--force]] [--enable-review-gate|--disable-review-gate]'
-allowed-tools: Bash(opc:*), Bash(npm:*), AskUserQuestion
+allowed-tools: Bash(opc:*), AskUserQuestion
 ---
 
 If `$ARGUMENTS` contains `--stop-server --force`, first run `opc setup --stop-server` without `--force`. If it refuses with exit code `2` and lists active jobs, show that list verbatim and use `AskUserQuestion`: "Encerrar o servidor do OpenCode mesmo com jobs ativos? Os jobs serão interrompidos." Options: `Encerrar agora`, `Cancelar`. On `Cancelar`, stop. Only on explicit `Encerrar agora`, run:
@@ -29,14 +29,7 @@ Read the JSON. The diagnostic fields come from the server check; the `onboarding
 
 ## B. OpenCode not installed (`onboarding.opencodeInstalled` is false)
 
-- If `onboarding.npmAvailable` is true, use `AskUserQuestion` exactly once: "O OpenCode não está instalado. Instalar agora com `npm install -g opencode-ai`?" Options, in this order: `Instalar o OpenCode (Recomendado)`, `Agora não`.
-- On install, run the command below and then rerun the first command of this file:
-
-```bash
-npm install -g opencode-ai
-```
-
-- If the user skips or npm is not available, present the setup output, explain how to install OpenCode (<https://opencode.ai>) and stop.
+- Do not install anything and do not run a package manager. Present the setup output and tell the user, in PT-BR, to install OpenCode 2.0.22 or newer following the official documentation (<https://opencode.ai>), or to point `server.opencodeBin` (or the `OPC_OPENCODE_BIN` variable) to an existing binary, and then run `/opc:setup` again. Stop.
 
 ## C. No connected provider (`onboarding.connectedProviders` is empty and `onboarding.serverError` is null)
 

@@ -1,0 +1,189 @@
+{
+  "location": {
+    "directory": "<workspace>"
+  },
+  "data": [
+    {
+      "id": "opencode-go/deepseek-v4.1-flash",
+      "modelID": "opencode-go/deepseek-v4.1-flash",
+      "providerID": "omniroute-personal",
+      "name": "DeepSeek V4.1 Flash",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "apiKey": "fake-provider-key",
+        "baseURL": "http://127.0.0.1:9/v1",
+        "provider": "omniroute-personal"
+      },
+      "capabilities": {
+        "tools": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "variants": [
+        {
+          "id": "low",
+          "settings": {
+            "reasoningEffort": "low"
+          }
+        },
+        {
+          "id": "medium",
+          "settings": {
+            "reasoningEffort": "medium"
+          }
+        },
+        {
+          "id": "high",
+          "settings": {
+            "reasoningEffort": "high"
+          }
+        }
+      ],
+      "time": {
+        "released": 0
+      },
+      "cost": [],
+      "status": "active",
+      "enabled": true,
+      "limit": {
+        "context": 200000,
+        "output": 32000
+      }
+    },
+    {
+      "id": "opencode-go/qwen3.8-max",
+      "modelID": "opencode-go/qwen3.8-max",
+      "providerID": "omniroute-personal",
+      "name": "Qwen 3.8 Max",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "apiKey": "fake-provider-key",
+        "baseURL": "http://127.0.0.1:9/v1",
+        "provider": "omniroute-personal"
+      },
+      "capabilities": {
+        "tools": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "variants": [
+        {
+          "id": "low",
+          "settings": {
+            "reasoningEffort": "low"
+          }
+        },
+        {
+          "id": "medium",
+          "settings": {
+            "reasoningEffort": "medium"
+          }
+        },
+        {
+          "id": "high",
+          "settings": {
+            "reasoningEffort": "high"
+          }
+        }
+      ],
+      "time": {
+        "released": 0
+      },
+      "cost": [],
+      "status": "active",
+      "enabled": true,
+      "limit": {
+        "context": 200000,
+        "output": 32000
+      }
+    },
+    {
+      "id": "space-bunny-free",
+      "modelID": "space-bunny-free",
+      "providerID": "opencode",
+      "name": "Space Bunny Free",
+      "compatibility": {
+        "reasoningField": "reasoning_content"
+      },
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "apiKey": "public",
+        "baseURL": "https://opencode.ai/zen/v1",
+        "provider": "opencode"
+      },
+      "capabilities": {
+        "tools": true,
+        "input": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "variants": [
+        {
+          "id": "low",
+          "settings": {
+            "reasoningEffort": "low"
+          }
+        },
+        {
+          "id": "medium",
+          "settings": {
+            "reasoningEffort": "medium"
+          }
+        },
+        {
+          "id": "high",
+          "settings": {
+            "reasoningEffort": "high"
+          }
+        },
+        {
+          "id": "xhigh",
+          "settings": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        {
+          "id": "max",
+          "settings": {
+            "reasoningEffort": "max"
+          }
+        }
+      ],
+      "time": {
+        "released": 1790121600000
+      },
+      "cost": [
+        {
+          "input": 0,
+          "output": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      ],
+      "status": "active",
+      "enabled": true,
+      "limit": {
+        "context": 1048576,
+        "input": 524288,
+        "output": 524288
+      }
+    }
+  ]
+}

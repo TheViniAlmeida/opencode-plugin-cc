@@ -10,7 +10,7 @@ const M1 = `${P}deepseek-v4.1-flash`;
 const M2 = `${P}qwen3.8-max`;
 const M3 = `${P}kimi-k3`;
 const modelID = (full) => full.slice(full.indexOf('/') + 1);
-const DENY_ALL = { permission: '*', pattern: '*', action: 'deny' };
+const DENY_ALL = { action: '*', resource: '*', effect: 'deny' };
 
 function orchestrateConfig(extra = {}) {
   const list = [M1, M2, M3];
@@ -36,7 +36,7 @@ async function orchestrate(t, scenario, args) {
   return { ...res, env, ws };
 }
 
-const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/session');
+const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session');
 const subtaskTurns = (env) => readTurnLog(env).filter((e) => e.role === 'subtask');
 const turnOf = (env, id) => subtaskTurns(env).find((e) => e.subtaskId === id);
 const overlaps = (x, y) => x.start < y.end && y.start < x.end;
@@ -53,7 +53,7 @@ test('F4b: valid plan is decomposed, validated and executed', async (t) => {
   assert.deepEqual(pkg.subtasks.map((s) => s.status), ['completed', 'completed', 'completed']);
   const planner = sessionPosts(env).find((r) => r.body.title.startsWith('OPC: orch-plan: '));
   assert.ok(planner, 'planner session created');
-  assert.deepEqual(planner.body.permission[0], DENY_ALL, 'planner runs read-only');
+  assert.deepEqual(planner.body.permissions[0], DENY_ALL, 'planner runs read-only');
   assert.equal(readTurnLog(env).filter((e) => e.role === 'planner').length, 1);
   const stateDir = workspaceStateDir(env.OPC_DATA_DIR, resolveWorkspaceRoot(ws));
   const roles = listJobs(stateDir, { all: true }).filter((j) => j.groupId === out.jobId).map((j) => j.role).sort();
@@ -89,17 +89,19 @@ test('F4b: write subtasks run in series (non-overlapping windows); reads run in 
   assert.equal(overlaps(w1, w2), false, `write windows overlap: w1=[${w1.start},${w1.end}] w2=[${w2.start},${w2.end}]`);
   assert.equal(overlaps(r1, r2), true, 'read subtasks should overlap');
   const sessionOf = (id) => sessionPosts(env).find((r) => new RegExp(`^OPC: orch-\\w+: ${id}\\b`).test(r.body.title));
-  const has = (session, permission, action) => session.body.permission.some((r) => r.permission === permission && r.pattern === '*' && r.action === action);
+  const has = (session, action, effect) => session.body.permissions.some((r) => r.action === action && r.resource === '*' && r.effect === effect);
+  const asksShell = (session) => session.body.permissions.some((r) => r.action === 'shell' && r.effect === 'ask');
   const w1Session = sessionOf('w1');
   const r1Session = sessionOf('r1');
   assert.ok(w1Session && r1Session, 'write and read subtask sessions were created');
-  // write-only invariants (policy.mjs invariantRules): no blanket grep deny, doom_loop asks
+  // write-only invariants (policy.mjs invariantRules): no blanket grep deny, destructive shell commands ask
   assert.equal(has(w1Session, 'grep', 'deny'), false, 'write subtask uses the write profile (grep allowed)');
-  assert.equal(has(w1Session, 'doom_loop', 'ask'), true, 'write subtask uses the write profile (doom_loop asks)');
-  assert.notDeepEqual(w1Session.body.permission[0], DENY_ALL, 'write subtask is not read-only');
+  assert.equal(asksShell(w1Session), true, 'write subtask uses the write profile (destructive shell asks)');
+  assert.notDeepEqual(w1Session.body.permissions[0], DENY_ALL, 'write subtask is not read-only');
   // read subtasks keep the read-only invariants
   assert.equal(has(r1Session, 'grep', 'deny'), true, 'read subtask denies grep');
-  assert.equal(has(r1Session, 'doom_loop', 'deny'), true, 'read subtask denies doom_loop');
+  assert.equal(asksShell(r1Session), false, 'read subtask never asks for shell (blanket deny)');
+  assert.deepEqual(r1Session.body.permissions[0], DENY_ALL, 'read subtask is read-only');
 });
 
 test('F4b: dependency results are injected into the dependent prompt', async (t) => {
@@ -108,9 +110,11 @@ test('F4b: dependency results are injected into the dependent prompt', async (t)
   const a = turnOf(env, 'a');
   const b = turnOf(env, 'b');
   const c = turnOf(env, 'c');
-  assert.match(c.prompt, new RegExp(`<dependency id="a">\\nRESULT\\[a\\] by ${modelID(M1).replace(/\./g, '\\.')}\\n</dependency>`));
-  assert.match(c.prompt, /<dependency id="b">\nRESULT\[b\] by /);
-  assert.ok(!a.prompt.includes('<dependency'));
+  assert.deepEqual(c.dependencies, [
+    { id: 'a', result: `RESULT[a] by ${modelID(M1)}` },
+    { id: 'b', result: `RESULT[b] by ${modelID(M2)}` },
+  ]);
+  assert.deepEqual(a.dependencies, [], 'a subtask without dependencies receives no dependency block');
   assert.ok(c.start >= Math.max(a.end, b.end), 'dependent started after its dependencies finished');
 });
 
@@ -153,20 +157,22 @@ test('F4b: model synthesis runs a read-only session with every result', async (t
   assert.deepEqual([synthesis.mode, synthesis.status, synthesis.model, synthesis.text], ['model', 'completed', M3, 'SYNTHESIS-OK: A and B agree']);
   const synthTurn = readTurnLog(env).find((e) => e.role === 'synthesizer');
   assert.equal(synthTurn.model, modelID(M3));
-  assert.match(synthTurn.prompt, /<result id="a" kind="ask" status="completed">\nRESULT\[a\] by /);
-  assert.match(synthTurn.prompt, /<result id="b" kind="ask" status="completed">\nRESULT\[b\] by /);
+  assert.deepEqual(synthTurn.results.map(({ id, kind, status }) => [id, kind, status]), [['a', 'ask', 'completed'], ['b', 'ask', 'completed']]);
+  assert.ok(synthTurn.results.every((r) => r.result.startsWith(`RESULT[${r.id}] by `)));
   const synthSession = sessionPosts(env).find((r) => r.body.title.startsWith('OPC: orch-synth: '));
-  assert.deepEqual(synthSession.body.permission[0], DENY_ALL, 'synthesizer runs read-only');
+  assert.deepEqual(synthSession.body.permissions[0], DENY_ALL, 'synthesizer runs read-only');
   const rendered = await runCli(['result', out.jobId], { env, cwd: ws });
   assert.match(rendered.stdout, /Sintetizador: `omniroute-personal\/opencode-go\/kimi-k3`\n\nSYNTHESIS-OK/);
   assert.match(rendered.stdout, /RESULT\[a\] by /, 'raw results are delivered with the synthesis');
   assert.match(rendered.stdout, /RESULT\[b\] by /, 'raw results are delivered with the synthesis');
 });
 
-test('F4b: StructuredOutputError in the planner fails the group', async (t) => {
+test('F4b: a planner reply without a valid JSON plan fails the group (OpenCode 2 has no StructuredOutputError)', async (t) => {
   const { code, stdout, env } = await orchestrate(t, 'planner-structured-error', ['--json', 'Anything']);
   assert.equal(code, 7);
   const out = JSON.parse(stdout);
-  assert.equal(out.errorCode, 'planner_structured_output');
+  assert.equal(out.errorCode, 'planner_failed');
+  assert.match(out.orchestration.errorMessage, /nenhum plano estruturado foi retornado/);
+  assert.match(out.orchestration.rawPlan, /Resposta fora do esquema JSON/);
   assert.equal(subtaskTurns(env).length, 0);
 });

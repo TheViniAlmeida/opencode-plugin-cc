@@ -1,11 +1,10 @@
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "fake-provider/fake-model",
-  "small_model": "fake-provider/fake-small",
-  "share": "manual",
-  "autoupdate": false,
-  "agent": {},
-  "mcp": {},
-  "provider": {},
-  "permission": {}
-}
+[
+  {
+    "type": "document",
+    "path": "<workspace>/opencode.json",
+    "info": {
+      "model": "fake-provider/main",
+      "small_model": "fake-provider/small"
+    }
+  }
+]

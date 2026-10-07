@@ -27,11 +27,7 @@ export const REVIEW_OK_STRUCTURED = {
 };
 
 export default {
-  onPromptAsync(fake, sessionID, body) {
-    if (body?.format?.type === 'json_schema') {
-      fake.emitTurn(sessionID, { text: '', structured: REVIEW_OK_STRUCTURED });
-      return;
-    }
+  onPrompt(fake, sessionID) {
     fake.emitTurn(sessionID, { text: `\`\`\`json\n${JSON.stringify(REVIEW_OK_STRUCTURED)}\n\`\`\`` });
   },
 };

@@ -1,0 +1,14 @@
+{
+  "data": {
+    "id": "msg_111a1af8b000iOgfUumUSBKZpj",
+    "sessionID": "ses_eee5e96b1ffelQCavzDVYTlNHI",
+    "time": {
+      "created": 1791297171358
+    },
+    "type": "user",
+    "payload": {
+      "text": "say hi"
+    },
+    "delivery": "steer"
+  }
+}

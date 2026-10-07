@@ -1,0 +1,411 @@
+[
+  {
+    "id": "omniroute-personal/opencode-go/deepseek-v4.1-flash",
+    "modelID": "opencode-go/deepseek-v4.1-flash",
+    "providerID": "omniroute-personal",
+    "name": "DeepSeek V4.1 Flash",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-personal/opencode-go/qwen3.8-max",
+    "modelID": "opencode-go/qwen3.8-max",
+    "providerID": "omniroute-personal",
+    "name": "Qwen3.8 Max",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-personal/opencode-go/kimi-k3",
+    "modelID": "opencode-go/kimi-k3",
+    "providerID": "omniroute-personal",
+    "name": "Kimi K3",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    },
+    "limit": {
+      "context": 262144,
+      "output": 32768
+    }
+  },
+  {
+    "id": "omniroute-personal/opencode-go/qwen3.8-flash",
+    "modelID": "opencode-go/qwen3.8-flash",
+    "providerID": "omniroute-personal",
+    "name": "Qwen3.8 Flash",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-personal/opencode-go/kimi-k2.6",
+    "modelID": "opencode-go/kimi-k2.6",
+    "providerID": "omniroute-personal",
+    "name": "Kimi K2.6",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-personal/cx/gpt-5.6-sol",
+    "modelID": "cx/gpt-5.6-sol",
+    "providerID": "omniroute-personal",
+    "name": "GPT-5.6 Sol",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-personal/opencode/big-pickle",
+    "modelID": "opencode/big-pickle",
+    "providerID": "omniroute-personal",
+    "name": "Big Pickle (via omniroute)",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-personal"
+    }
+  },
+  {
+    "id": "omniroute-work/opencode-go/kimi-k3",
+    "modelID": "opencode-go/kimi-k3",
+    "providerID": "omniroute-work",
+    "name": "Kimi K3 (EQ)",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
+  },
+  {
+    "id": "omniroute-work/opencode-go/deepseek-v4-flash",
+    "modelID": "opencode-go/deepseek-v4-flash",
+    "providerID": "omniroute-work",
+    "name": "DeepSeek V4 Flash (EQ)",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
+  },
+  {
+    "id": "omniroute-work/cx/gpt-5.5",
+    "modelID": "cx/gpt-5.5",
+    "providerID": "omniroute-work",
+    "name": "GPT-5.5 (EQ)",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "omniroute-work"
+    }
+  },
+  {
+    "id": "opencode/big-pickle",
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "name": "Big Pickle",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "opencode"
+    }
+  },
+  {
+    "id": "opencode/space-bunny-free",
+    "modelID": "space-bunny-free",
+    "providerID": "opencode",
+    "name": "Space Bunny (free)",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "opencode"
+    }
+  },
+  {
+    "id": "anthropic/claude-opus-5-5",
+    "modelID": "claude-opus-5-5",
+    "providerID": "anthropic",
+    "name": "Claude Opus 5.5",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "anthropic"
+    }
+  },
+  {
+    "id": "anthropic/claude-haiku-4-5",
+    "modelID": "claude-haiku-4-5",
+    "providerID": "anthropic",
+    "name": "Claude Haiku 4.5",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "anthropic"
+    }
+  },
+  {
+    "id": "openai/gpt-5.6",
+    "modelID": "gpt-5.6",
+    "providerID": "openai",
+    "name": "GPT-5.6",
+    "capabilities": {
+      "reasoning": false,
+      "tools": true
+    },
+    "variants": [
+      {
+        "id": "low"
+      },
+      {
+        "id": "medium"
+      },
+      {
+        "id": "high"
+      }
+    ],
+    "status": "active",
+    "settings": {
+      "apiKey": "YOUR_API_KEY_HERE",
+      "baseURL": "https://example.invalid/v1",
+      "provider": "openai"
+    }
+  }
+]

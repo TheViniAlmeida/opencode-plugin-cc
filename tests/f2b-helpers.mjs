@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { REPO_ROOT, fakeRequests, makeWorkspace } from './helpers.mjs';
+import { REPO_ROOT, fakeRequests, makeWorkspace, readFakeState } from './helpers.mjs';
 import { buildCatalog } from '../plugins/opc/scripts/lib/models.mjs';
 import { getProcessIdentity } from '../plugins/opc/scripts/lib/process.mjs';
 import { readServerRecord, serverMatcher } from '../plugins/opc/scripts/lib/server.mjs';
@@ -34,8 +34,9 @@ export function makeMainRepo(t) {
 }
 
 export function fixtureModelIds() {
-  const file = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'provider.json');
-  const catalog = buildCatalog(JSON.parse(fs.readFileSync(file, 'utf8')));
+  const data = path.join(REPO_ROOT, 'tests', 'fixtures', 'data');
+  const catalog = buildCatalog({ providers: JSON.parse(fs.readFileSync(path.join(data, 'provider.json'), 'utf8')),
+    models: JSON.parse(fs.readFileSync(path.join(data, 'model.json'), 'utf8')) });
   return catalog.models.filter((model) => catalog.connected.has(model.providerID)).map((model) => model.full);
 }
 
@@ -59,20 +60,26 @@ export function readJsonLines(file) {
   return records;
 }
 
+// The fake records request bodies with free-form text masked: the prompt text comes from the stored user message.
 export function promptBodies(env) {
-  return fakeRequests(env)
-    .filter((request) => request.method === 'POST' && /^\/session\/[^/]+\/prompt_async$/.test(request.path))
-    .map((request) => request.body);
+  const state = readFakeState(env);
+  return (state.requests ?? [])
+    .filter((request) => request.method === 'POST' && /^\/api\/session\/[^/]+\/prompt$/.test(request.path))
+    .map((request) => {
+      const sessionID = request.path.split('/')[3];
+      const user = request.body?.id && (state.messages?.[sessionID] ?? []).find((message) => message.type === 'user' && message.id === request.body.id);
+      return user ? { ...request.body, text: user.text } : request.body;
+    });
 }
 
 export function sessionCreateBodies(env) {
   return fakeRequests(env)
-    .filter((request) => request.method === 'POST' && request.path === '/session')
+    .filter((request) => request.method === 'POST' && request.path === '/api/session')
     .map((request) => request.body);
 }
 
 export function promptText(body) {
-  return (body?.parts ?? []).map((part) => part.text ?? '').join('\n');
+  return body?.text ?? '';
 }
 
 export function makeFailingOpencodeBin(t) {

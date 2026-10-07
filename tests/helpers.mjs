@@ -520,9 +520,9 @@ export const FIXTURE_MODELS = Object.freeze({
   k3: 'omniroute-personal/opencode-go/kimi-k3',
 });
 
+// V2 prompts carry no model: the fake records the session model at each prompt (state.prompts).
 export function promptModels(env) {
-  return requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/)
-    .map((r) => `${r.body?.model?.providerID}/${r.body?.model?.modelID}`);
+  return (readFakeState(env).prompts ?? []).map((p) => `${p.model?.providerID}/${p.model?.id}`);
 }
 
 export function parseFrontmatter(text) {

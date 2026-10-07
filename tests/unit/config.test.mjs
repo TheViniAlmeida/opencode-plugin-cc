@@ -23,7 +23,15 @@ test('DEFAULT_CONFIG is neutral and LOCKED_KEYS match spec §3.3', () => {
   assert.equal(DEFAULT_CONFIG.policy.approver, 'user');
   assert.deepEqual(DEFAULT_CONFIG.server, { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' } });
   assert.deepEqual(DEFAULT_CONFIG.jobs, { maxActive: 8, maxParallel: 4 });
-  assert.deepEqual([...LOCKED_KEYS], ['policy', 'permissionProfiles', 'server.configOverride']);
+  assert.deepEqual([...LOCKED_KEYS], ['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin']);
+});
+
+test('server.opencodeBin is an optional global string and unavailable to workspace overrides', () => {
+  assert.deepEqual(validateConfigShape({ server: { opencodeBin: '/tmp/opencode' } }).errors, []);
+  assert.ok(validateConfigShape({ server: { opencodeBin: 4 } }).errors.some((error) => error.path === 'server.opencodeBin'));
+  const merged = mergeConfig({ server: { opencodeBin: '/tmp/opencode' } }, { server: { opencodeBin: '/other/opencode' } });
+  assert.equal(merged.config.server.opencodeBin, '/tmp/opencode');
+  assert.ok(merged.warnings.some((warning) => warning.path === 'server.opencodeBin' || warning.path === 'server'));
 });
 
 test('getPath/setPath use dotted paths and setPath is immutable', () => {
@@ -107,7 +115,7 @@ test('locked keys in the workspace are ignored with a warning (only restrictive 
     { policy: { approver: 'user', permissionTimeoutSec: 600 } },
     {
       policy: { approver: 'claude', permissionTimeoutSec: 5, sensitivePaths: ['*.secret'] },
-      permissionProfiles: { yolo: [{ permission: '*', pattern: '*', action: 'allow' }] },
+      permissionProfiles: { yolo: [{ action: '*', resource: '*', effect: 'allow' }] },
       server: { configOverride: { share: 'auto' }, bootTimeoutSec: 1 },
     },
   );

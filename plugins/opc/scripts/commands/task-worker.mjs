@@ -82,7 +82,7 @@ export function createRequestBridge({ update, jobId, stateDir, api, profileKind,
     async onPermission(req) {
       if (autoReject) {
         log(`permissão ${req.id} (${req.permission}) recusada automaticamente: perfil somente leitura`);
-        await api.replyPermission(req.id, { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' });
+        await api.replyPermission(req.sessionID, req.id, { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' });
         return;
       }
       await addPending({
@@ -91,17 +91,12 @@ export function createRequestBridge({ update, jobId, stateDir, api, profileKind,
         requiresUser: requiresUser(req, policy), askedAt: nowIso(),
       });
       log(`aguardando decisão sobre ${req.id} (${req.permission})`);
-      arm(req.id, () => api.replyPermission(req.id, { reply: 'reject', message: 'opc: nenhum aprovador disponível' }));
+      arm(req.id, () => api.replyPermission(req.sessionID, req.id, { reply: 'reject', message: 'opc: nenhum aprovador disponível' }));
     },
     async onQuestion(req) {
-      if (autoReject) {
-        log(`pergunta ${req.id} recusada automaticamente: perfil somente leitura`);
-        await api.rejectQuestion(req.id);
-        return;
-      }
       await addPending({ type: 'question', id: req.id, sessionID: req.sessionID, questions: req.questions ?? [], askedAt: nowIso() });
       log(`aguardando resposta para ${req.id}`);
-      arm(req.id, () => api.rejectQuestion(req.id));
+      arm(req.id, () => api.rejectQuestion(req.sessionID, req.id));
     },
     async onResolved({ requestID, outcome }) {
       clearTimer(requestID);

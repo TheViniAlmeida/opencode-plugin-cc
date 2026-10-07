@@ -4,6 +4,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { checkImportShape } from '../fixtures/fake-import.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 import {
   buildExport,
@@ -26,8 +28,36 @@ import {
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const SAMPLE_JSONL = path.join(DATA, 'claude-transcript-sample.jsonl');
-const EXPORT_SAMPLE = JSON.parse(fs.readFileSync(path.join(DATA, 'export-sample.json'), 'utf8'));
+const EXPORT_SAMPLE = loadContractSample('export.json');
 const MODEL = { providerID: 'example-provider', modelID: 'example/model-a', full: 'example-provider/example/model-a' };
+
+test('V2 export is accepted by the independent import oracle', async () => {
+  const conversion = await sampleConversion();
+  const exported = buildExport(conversion, { model: MODEL, directory: '/tmp/opc-fixture/proj', version: '2.0.22' });
+  assert.deepEqual(checkImportShape(exported), []);
+  assert.deepEqual(exported.info.permissions, [{ action: '*', resource: '*', effect: 'deny' }]);
+  assert.equal(exported.messages[0].type, 'synthetic');
+  assert.equal(exported.messages[1].type, 'user');
+  assert.equal(exported.messages[2].type, 'assistant');
+});
+
+test('buildExport emits the OpenCode 2 export shape', () => {
+  const conversion = convertClaudeRecords([
+    { type: 'user', message: { content: 'hello' }, timestamp: '2026-10-06T10:00:00Z' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] }, timestamp: '2026-10-06T10:00:01Z' },
+  ], { now: 1 });
+  const out = buildExport(conversion, { model: { providerID: 'omniroute-personal', modelID: 'opencode-go/deepseek-v4.1-flash' }, directory: '/w' });
+  assert.deepEqual(validateExportShape(out), []);
+  assert.deepEqual(Object.keys(out.info.tokens).sort(), ['cache', 'input', 'output', 'reasoning']);
+  assert.deepEqual(out.info.location, { directory: '/w' });
+  assert.deepEqual(out.info.model, { id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal', variant: 'default' });
+  assert.ok(out.messages.every((m) => typeof m.type === 'string' && !('info' in m) && !('parts' in m)));
+  assert.equal(out.messages.at(-1).content[0].text, 'hi');
+});
+
+test('the import oracle refuses the V1 shape', () => {
+  assert.ok(checkImportShape({ info: { id: 'ses_x', title: 't' }, messages: [] }).some((e) => /info\.cost ausente/.test(e)));
+});
 
 function tempDir(t) {
   return trackTempDir(t, makeTempDir('opc-f5-transfer-'));
@@ -205,8 +235,7 @@ test('convertClaudeRecords preserves prompts and attachments mixed with tool res
   assert.deepEqual(conversion.stats, { records: 4, skipped: { meta: 0, sidechain: 0, command: 0, thinking: 0, other: 0 } });
   const exported = buildExport(conversion, { model: MODEL, directory: '/w', version: '1.18.32' });
   assert.deepEqual(validateExportShape(exported), []);
-  assert.equal(exported.messages[1].info.parentID, exported.messages[0].info.id);
-  assert.equal(exported.messages[3].info.parentID, exported.messages[2].info.id);
+  assert.deepEqual(exported.messages.map((message) => message.type), ['synthetic', 'user', 'assistant', 'user', 'assistant']);
 });
 
 test('long texts and tool payloads are truncated with an explicit marker', () => {
@@ -244,34 +273,32 @@ test('createIdGenerator reproduces real OpenCode 1.18.32 id prefixes', () => {
   assert.ok(createIdGenerator({ now: () => 1790390127520 })('ses', 'descending').startsWith('ses_f246eb45fffe'));
 });
 
-test('buildExport produces a valid export with a synthetic header and linked parents', async () => {
+test('buildExport produces a valid V2 export with a synthetic header and flat messages', async () => {
   const conversion = await sampleConversion();
-  const exported = buildExport(conversion, { model: MODEL, directory: '/tmp/opc-fixture/proj', version: '1.18.32' });
+  const exported = buildExport(conversion, { model: MODEL, directory: '/tmp/opc-fixture/proj', version: '2.0.22' });
   assert.deepEqual(validateExportShape(exported), []);
+  assert.deepEqual(checkImportShape(exported), []);
   assert.equal(exported.info.title, 'OPC: transfer: Fixture transfer');
-  assert.equal(exported.messages.length, 4);
-  const [u1, a1, u2, a2] = exported.messages;
-  assert.equal(u1.parts[0].synthetic, true);
-  assert.equal(u1.parts[0].text, transferHeader('11111111-2222-4333-8444-555555555555'));
-  assert.equal(u1.parts[1].text, 'List the files in src and explain main.mjs.');
-  assert.equal(a1.info.parentID, u1.info.id);
-  assert.equal(a2.info.parentID, u2.info.id);
-  assert.deepEqual(u1.info.model, { providerID: 'example-provider', modelID: 'example/model-a' });
-  assert.equal(a1.info.providerID, 'example-provider');
-  assert.equal(a1.info.path.cwd, '/tmp/opc-fixture/proj');
+  assert.deepEqual(exported.messages.map((message) => message.type), ['synthetic', 'user', 'assistant', 'user', 'assistant']);
+  const [header, u1, a1] = exported.messages;
+  assert.equal(header.text, transferHeader('11111111-2222-4333-8444-555555555555'));
+  assert.equal(u1.text, 'List the files in src and explain main.mjs.');
+  assert.deepEqual(a1.model, { id: 'example/model-a', providerID: 'example-provider', variant: 'default' });
+  assert.equal(a1.content[0].text, "I'll look at the directory first.");
+  assert.deepEqual(exported.info.location, { directory: '/tmp/opc-fixture/proj' });
   assert.equal(exported.info.time.created, Date.parse('2026-09-26T10:00:00.000Z'));
   assert.equal(exported.info.time.updated, Date.parse('2026-09-26T10:02:03.000Z'));
-  const ids = exported.messages.map((m) => m.info.id);
-  assert.deepEqual([...ids].sort(), ids, 'message ids ascend in conversation order');
+  const ids = exported.messages.map((message) => message.id);
+  assert.deepEqual([...ids].sort(), ids);
 });
 
 test('buildExport inserts an empty user turn when the transcript starts with the assistant', () => {
   const conversion = convertClaudeRecords([{ type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] }, timestamp: '2026-09-26T10:00:00.000Z' }]);
-  const exported = buildExport(conversion, { model: MODEL, directory: '/w', version: '1.18.32' });
+  const exported = buildExport(conversion, { model: MODEL, directory: '/w', version: '2.0.22' });
   assert.deepEqual(validateExportShape(exported), []);
-  assert.equal(exported.messages[0].info.role, 'user');
-  assert.equal(exported.messages[0].parts.length, 1);
-  assert.equal(exported.messages[1].info.parentID, exported.messages[0].info.id);
+  assert.deepEqual(exported.messages.map((message) => message.type), ['synthetic', 'user', 'assistant']);
+  assert.equal(exported.messages[1].text, '');
+  assert.equal(exported.messages[2].content[0].text, 'hello');
 });
 
 test('buildExport refuses an empty conversion and buildTitle truncates to 56 chars', () => {
@@ -280,20 +307,18 @@ test('buildExport refuses an empty conversion and buildTitle truncates to 56 cha
   assert.equal(title.length, 'OPC: transfer: '.length + 56);
 });
 
-test('validateExportShape accepts the real (scrubbed) export and rejects malformed ones', () => {
+test('validateExportShape accepts the V2 fixture and rejects malformed flat messages', () => {
   assert.deepEqual(validateExportShape(EXPORT_SAMPLE), []);
   const broken = structuredClone(EXPORT_SAMPLE);
-  delete broken.info.slug;
-  broken.info.extra = true;
-  broken.messages[0].info.id = 'bad_1';
-  broken.messages[1].info.parentID = 'msg_unknown';
-  broken.messages[2].parts[0].messageID = 'msg_other';
+  delete broken.info.permissions;
+  broken.messages[0].id = 'bad_1';
+  broken.messages[1].id = broken.messages[2].id;
+  broken.messages[2].content = [{ type: 'tool' }];
   const errors = validateExportShape(broken);
-  assert.ok(errors.includes('info.slug: obrigatório'));
-  assert.ok(errors.includes('info.extra…: chave inválida para exportação'));
-  assert.ok(errors.includes('messages[0].info.id: deve começar com "msg"'));
-  assert.ok(errors.includes('messages[1].info.parentID: deve apontar para uma mensagem anterior do usuário'));
-  assert.ok(errors.includes('messages[2].parts[0].messageID: deve ser igual ao ID da mensagem'));
+  assert.ok(errors.includes('info.permissions: obrigatório'));
+  assert.ok(errors.includes('messages[0].id: inválido'));
+  assert.ok(errors.includes('messages[2].id: duplicado'));
+  assert.ok(errors.includes('messages[2].content: inválido'));
   assert.deepEqual(validateExportShape([]), ['$: esperado { info: objeto, messages: lista }']);
 });
 
@@ -329,22 +354,35 @@ function fakeExec(result) {
 
 test('runImport returns the session id and maps failures to exit 7 / 5', async () => {
   const ok = fakeExec({ stdout: 'Imported session: ses_abc123\n', stderr: '[autotitle] Module loaded\n' });
-  assert.deepEqual(await runImport({ file: '/f.json', cwd: '/w', env: {}, execFileImpl: ok.impl }), { sessionID: 'ses_abc123', exitCode: 0 });
-  assert.deepEqual(ok.calls[0].args, ['import', '/f.json']);
+  const env = { PATH: '/configured/bin', OPENCODE_SERVER_PASSWORD: 'old-placeholder' };
+  const password = 'YOUR_API_KEY_HERE';
+  assert.deepEqual(await runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env, password, execFileImpl: ok.impl }), { sessionID: 'ses_abc123', exitCode: 0 });
+  assert.deepEqual(ok.calls[0].args, ['session', 'import', '--server', 'http://127.0.0.1:4096', '--directory', '/w', '/f.json']);
   assert.equal(ok.calls[0].options.cwd, '/w');
+  assert.deepEqual(ok.calls[0].options.env, { PATH: '/configured/bin', OPENCODE_SERVER_PASSWORD: password });
+  assert.equal(env.OPENCODE_SERVER_PASSWORD, 'old-placeholder');
+  assert.ok(!ok.calls[0].args.includes(password));
+  const withoutServer = fakeExec({ stdout: 'Imported session: ses_abc123\n' });
+  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: withoutServer.impl }), (e) => e.code === 'SERVER_URL_REQUIRED');
+  assert.equal(withoutServer.calls.length, 0);
+  const withoutPassword = fakeExec({ stdout: 'Imported session: ses_abc123\n' });
+  await assert.rejects(runImport({ serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', env: {}, execFileImpl: withoutPassword.impl }), (e) => e.code === 'SERVER_PASSWORD_REQUIRED');
+  assert.equal(withoutPassword.calls.length, 0);
+  const args = { serverUrl: 'http://127.0.0.1:4096', file: '/f.json', cwd: '/w', password };
   const soft = fakeExec({ stdout: 'Failed to read session data\n' });
-  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
+  await assert.rejects(runImport({ ...args, execFileImpl: soft.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7 && /A importação pelo opencode falhou/.test(e.message) && !e.message.includes('Failed to read session data'));
   const crash = fakeExec({ error: Object.assign(new Error('x'), { code: 1 }), stderr: 'Error: boom' });
-  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: crash.impl }), (e) => e.code === 'IMPORT_FAILED' && /saída 1/.test(e.message) && !e.message.includes('boom'));
+  await assert.rejects(runImport({ ...args, execFileImpl: crash.impl }), (e) => e.code === 'IMPORT_FAILED' && /saída 1/.test(e.message) && !e.message.includes('boom'));
   const falseSuccess = fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: 'Imported session: ses_abc123\n' });
-  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: falseSuccess.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7);
+  await assert.rejects(runImport({ ...args, execFileImpl: falseSuccess.impl }), (e) => e.code === 'IMPORT_FAILED' && e.exitCode === 7);
   const missing = fakeExec({ error: Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' }) });
-  await assert.rejects(runImport({ file: '/f.json', cwd: '/w', execFileImpl: missing.impl }), (e) => e.code === 'OPENCODE_NOT_FOUND' && e.exitCode === 5);
+  await assert.rejects(runImport({ ...args, execFileImpl: missing.impl }), (e) => e.code === 'OPENCODE_NOT_FOUND' && e.exitCode === 5);
 });
 
 test('detectOpencodeVersion enforces the minimum OpenCode version', async () => {
-  assert.equal(await detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.18.32\n' }).impl }), '1.18.32');
-  await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.17.9\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
+  assert.equal(await detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: 'opencode v2.0.22\n' }).impl }), '2.0.22');
+  await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ stdout: '1.18.34\n' }).impl }), (e) =>
+    e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5 && e.message.includes('server.opencodeBin') && e.message.includes('OPC_OPENCODE_BIN'));
   await assert.rejects(detectOpencodeVersion({ execFileImpl: fakeExec({ error: Object.assign(new Error('failed'), { code: 1 }), stdout: '1.18.32\n' }).impl }), (e) => e.code === 'UNSUPPORTED_VERSION' && e.exitCode === 5);
 });
 

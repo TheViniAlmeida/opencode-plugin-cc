@@ -72,7 +72,7 @@ test('a list where every entry is denied fails with exit 4 before any session', 
   const r = await runCli(['ask', 'Where is main?'], { env, cwd: ws });
   assert.equal(r.code, 4, output(r));
   assert.match(output(r), /nenhum modelo utilizável/);
-  assert.equal(requestsTo(env, 'POST', /^\/session$/).length, 0);
+  assert.equal(requestsTo(env, 'POST', /^\/api\/session$/).length, 0);
 });
 
 test('--tier heavy uses routing.tiers.heavy and keeps fallback', async (t) => {

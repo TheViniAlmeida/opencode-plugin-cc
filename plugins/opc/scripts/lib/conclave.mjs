@@ -8,6 +8,8 @@ import { normalizeModelId } from './models.mjs';
 import { evaluate } from './policy.mjs';
 // Single home of the prompt helpers (F2b); conclave never redefines them.
 import { fillTemplate, loadPrompt, projectContextBlock } from './prompts.mjs';
+import { jsonInstruction } from './structured-text.mjs';
+import { extractTextJson } from './text-json.mjs';
 
 export const CONCLAVE_MODES = Object.freeze(['opinion', 'review', 'debate']);
 export const LABEL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -611,7 +613,7 @@ function truncateText(text, max) {
 function byLabel(a, b) { return a.label.localeCompare(b.label); }
 
 function outputContract(mode, schema) {
-  return mode === 'tool' ? 'Return your answer only through the structured output.' : `Return only one JSON object inside a single \`\`\`json fence, with no text outside it. Return a JSON instance with field values, not the schema. Follow this JSON Schema:\n${JSON.stringify(schema, null, 2)}`;
+  return `Return a JSON instance with field values, not the schema. ${jsonInstruction(schema)}`;
 }
 
 export class ConclavePersistenceError extends Error {
@@ -637,20 +639,23 @@ function checkTurn(turn, schema) {
     const errorType = turn?.status === 'cancelled' ? 'Cancelled' : (turn?.errorType ?? 'Failed');
     return { ok: false, errorType, message: turn?.errorMessage ?? `turn ended with status ${turn?.status ?? 'unknown'}` };
   }
-  if (turn.structured === null || turn.structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
-  const errors = validateSchema(turn.structured, schema);
-  if (errors.length && typeOf(turn.structured) === 'object') {
+  let structured = turn.structured;
+  // The runner only returns strictly valid text JSON; recover echoed schema shapes from the raw text here.
+  if ((structured === null || structured === undefined) && turn.finalText) structured = extractTextJson(turn.finalText, () => null);
+  if (structured === null || structured === undefined) return { ok: false, errorType: 'MissingStructuredOutput', message: 'turn completed without structured output' };
+  const errors = validateSchema(structured, schema);
+  if (errors.length && typeOf(structured) === 'object') {
     // Models sometimes echo the schema shape: values under `properties`, or schema keywords beside the values.
-    if (typeOf(turn.structured.properties) === 'object' && validateSchema(turn.structured.properties, schema).length === 0) {
-      return { ok: true, structured: turn.structured.properties };
+    if (typeOf(structured.properties) === 'object' && validateSchema(structured.properties, schema).length === 0) {
+      return { ok: true, structured: structured.properties };
     }
-    const stripped = Object.fromEntries(Object.entries(turn.structured).filter(([key]) => !SCHEMA_ECHO_KEYS.has(key) || Object.hasOwn(schema.properties ?? {}, key)));
-    if (Object.keys(stripped).length < Object.keys(turn.structured).length && validateSchema(stripped, schema).length === 0) {
+    const stripped = Object.fromEntries(Object.entries(structured).filter(([key]) => !SCHEMA_ECHO_KEYS.has(key) || Object.hasOwn(schema.properties ?? {}, key)));
+    if (Object.keys(stripped).length < Object.keys(structured).length && validateSchema(stripped, schema).length === 0) {
       return { ok: true, structured: stripped };
     }
   }
   if (errors.length) return { ok: false, errorType: 'InvalidStructuredOutput', message: errors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('; ') };
-  return { ok: true, structured: turn.structured };
+  return { ok: true, structured };
 }
 
 function failureRecord({ label, round, role, turn, check }) {
@@ -861,8 +866,7 @@ function reviewTemplateVars(context, question, projectContext = '') {
   };
 }
 
-// Members receive the strict review schema; validation accepts findings without a location,
-// which then become singleton clusters (spec §11.2).
+// Findings without a location are valid singleton clusters (spec §11.2).
 function lenientReviewSchema(reviewSchemaFile) {
   const schema = stripMeta(reviewSchemaFile);
   const item = schema?.properties?.findings?.items;
@@ -891,18 +895,17 @@ async function runReview(run) {
   } catch (err) {
     return { ok: false, roundsData: [], completedRounds: 0, review: null, failure: { code: 'REVIEW_CONTEXT_FAILED', message: err?.message ?? String(err) } };
   }
-  const schema = stripMeta(assets.schemas.review);
-  const validation = lenientReviewSchema(assets.schemas.review);
+  const schema = lenientReviewSchema(assets.schemas.review);
   let prompt = fillTemplate(assets.prompts.review, reviewTemplateVars(context, run.question, run.projectContext), { strict: true });
+  prompt = prompt.replace('Cada achado deve apontar para um arquivo e intervalo de linhas reais da alteração ou de um arquivo lido.', 'A finding may omit file, line_start and line_end when no verifiable location exists.');
   // F2b's review.md has no {{USER_FOCUS}} (only adversarial-review.md does): the question (review
   // focus, A19) is appended instead of silently dropped.
   const focus = run.question.trim();
   if (focus && !assets.prompts.review.includes('{{USER_FOCUS}}')) prompt = `${prompt}\n\n<user_focus>\n${focus}\n</user_focus>`;
-  // review.md (F2b) asks for a ```json fence; in tool mode that instruction is overridden explicitly.
-  const contract = run.structuredOutput === 'tool'
-    ? `This overrides the <output_contract> above: do not write a \`\`\`json fence. ${outputContract('tool', schema)}`
-    : outputContract(run.structuredOutput, schema);
-  prompt = `${prompt}\n\n${contract}`;
+  const contract = outputContract(run.structuredOutput, schema);
+  prompt = prompt.includes('<output_contract>')
+    ? prompt.replace(/<output_contract>[\s\S]*?<\/output_contract>/, `<output_contract>\n${contract}\n</output_contract>`)
+    : `${prompt}\n\n${contract}`;
   await emit({ type: 'round-start', round: 1, labels: flags.members.map((m) => m.label) });
   const outcomes = await mapLimit(flags.members, run.maxParallel, async (member) => {
     await emit({ type: 'member-start', role: 'member', label: member.label, round: 1 });
@@ -910,7 +913,7 @@ async function runReview(run) {
       role: 'member', label: member.label, round: 1, member, sessionID: null, prompt, schema,
       title: `OPC: conclave: review ${member.label}`,
     });
-    return { label: member.label, sessionID: turn?.sessionID ?? null, turn, check: checkTurn(turn, validation) };
+    return { label: member.label, sessionID: turn?.sessionID ?? null, turn, check: checkTurn(turn, schema) };
   });
   const entry = await collectRound(run, 1, outcomes);
   if (entry.responses.length < flags.quorum) {

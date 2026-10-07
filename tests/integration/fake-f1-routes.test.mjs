@@ -18,14 +18,15 @@ async function boot(t, scenario = 'ok') {
   return { fake, api: createApi(client) };
 }
 
-test('fake serves /provider, /command, /skill and /agent from fixtures (raw, with keys)', async (t) => {
+test('fake serves /api/provider, /api/command, /api/skill and /api/agent from fixtures (raw, with settings)', async (t) => {
   const { api } = await boot(t);
   const providers = await api.providers();
-  assert.deepEqual(providers.connected, fixtureData('provider.json').connected);
-  const rawKey = providers.all.find((p) => p.id === 'omniroute-personal').key;
-  assert.equal(rawKey, 'FAKE-PROVIDER-KEY-0001');
+  assert.deepEqual(providers.map((p) => p.id), fixtureData('provider.json').map((p) => p.id));
+  assert.deepEqual(providers.filter((p) => p.activation === 'enabled').map((p) => p.id), fixtureData('provider.json').filter((p) => p.activation === 'enabled').map((p) => p.id));
+  const rawKey = providers.find((p) => p.id === 'omniroute-personal').settings.apiKey;
+  assert.equal(rawKey, fixtureData('provider.json').find((p) => p.id === 'omniroute-personal').settings.apiKey);
   const cliJson = JSON.stringify(redact(providers));
-  assert.ok(!cliJson.includes(rawKey), 'provider key is redacted from CLI JSON by its property name');
+  assert.ok(!cliJson.includes(rawKey), 'provider apiKey is redacted from CLI JSON by its property name');
   assert.deepEqual((await api.commands()).map((c) => c.name), fixtureData('command.json').map((c) => c.name));
   assert.deepEqual((await api.skills()).map((s) => s.name), ['brainstorm', 'release-notes']);
   assert.ok((await api.agents()).some((a) => a.name === 'work-deploy'));
@@ -36,16 +37,18 @@ test('provider fixture has unambiguous keys and CLI JSON redacts them', () => {
   assert.equal(duplicateObjectKeys(raw).length, 0, 'JSON source has no duplicate object properties');
   assert.ok(!raw.includes('fixture-marker'), 'fixture marker must not leak into provider responses');
   const parsed = JSON.parse(raw);
-  for (const provider of parsed.all) {
+  assert.ok(Array.isArray(parsed), 'V2 /api/provider data is a list');
+  for (const provider of parsed) {
     assert.ok(!('fixture-marker' in provider));
-    if ('key' in provider) {
-      assert.equal(typeof provider.key, 'string');
-      assert.ok(!/^(sk-|gh[pousr]_|xox[baprs]-)/i.test(provider.key), 'fixture key does not resemble a token');
+    const apiKey = provider.settings?.apiKey;
+    if (apiKey !== undefined) {
+      assert.equal(typeof apiKey, 'string');
+      assert.ok(!/^(sk-|gh[pousr]_|xox[baprs]-)/i.test(apiKey), 'fixture key does not resemble a token');
     }
   }
   const cliJson = JSON.stringify(redact(parsed));
-  for (const provider of parsed.all) {
-    if (provider.key) assert.ok(!cliJson.includes(provider.key), 'provider key must not appear in CLI JSON');
+  for (const provider of parsed) {
+    if (provider.settings?.apiKey) assert.ok(!cliJson.includes(provider.settings.apiKey), 'provider apiKey must not appear in CLI JSON');
   }
 });
 

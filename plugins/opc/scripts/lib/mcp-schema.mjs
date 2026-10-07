@@ -5,15 +5,18 @@ const TYPE_CHECKS = {
   number: (value) => typeof value === 'number' && Number.isFinite(value),
   integer: (value) => Number.isInteger(value),
   boolean: (value) => typeof value === 'boolean',
+  null: (value) => value === null,
 };
 
 export function validateInput(schema, value, where = '$') {
   const errors = [];
-  if (schema.type && !TYPE_CHECKS[schema.type](value)) {
-    errors.push(`${where}: esperado ${schema.type}`);
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (types.length && !types.some((type) => TYPE_CHECKS[type]?.(value))) {
+    errors.push(`${where}: esperado ${types.join(' ou ')}`);
     return errors;
   }
   if (schema.enum && !schema.enum.includes(value)) errors.push(`${where}: valor fora das opções permitidas`);
+  if (value === null) return errors;
   if (typeof value === 'string') {
     if (schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${where}: comprimento inferior a ${schema.minLength}`);
     if (schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${where}: mais de ${schema.maxLength} caracteres`);

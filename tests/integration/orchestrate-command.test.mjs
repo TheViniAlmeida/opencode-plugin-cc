@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeWorkspace, testEnv, runCli, readFakeState, writeGlobalConfig, waitFor, jobsIn, jobIn } from '../helpers.mjs';
+import { promptBodies, promptText } from '../f2b-helpers.mjs';
 
 const P = 'omniroute-personal/opencode-go/';
 const M1 = `${P}deepseek-v4.1-flash`; const M2 = `${P}qwen3.8-max`; const M3 = `${P}kimi-k3`;
@@ -9,7 +10,7 @@ function orchestrateConfig(extra = {}) {
   return { defaultProvider: 'omniroute-personal', defaultModel: M1, orchestrate: { planner: M2, maxSubtasks: 5, synthesizer: 'claude' }, routing: { tasks: { ask: list, plan: list, review: list, task: list }, tiers: { light: list, heavy: list }, fallback: { enabled: false, maxAttempts: 1, maxProviderRetries: 3, maxRetryWaitSec: 60 } }, jobs: { maxActive: 8, maxParallel: 4 }, ...extra };
 }
 function setup(t, scenario, config = orchestrateConfig()) { const ws = makeWorkspace(t); const env = testEnv(t, { scenario }); writeGlobalConfig(env, config); return { ws, env }; }
-const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/session');
+const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session');
 
 test('orchestrate sem tarefa é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); const { code, stdout, stderr } = await runCli(['orchestrate'], { env, cwd: ws }); assert.equal(code, 2); assert.match(stdout + stderr, /tarefa ausente/); });
 test('--max fora de 2..10 é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); for (const max of ['1', '11']) { const { code } = await runCli(['orchestrate', '--max', max, 'tarefa'], { env, cwd: ws }); assert.equal(code, 2); } });
@@ -26,12 +27,10 @@ for (const mode of ['text', 'tool']) {
     const result = await runCli(['orchestrate', '--json', 'Audit'], { env, cwd: ws, timeoutMs: 120000 });
     assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.equal(JSON.parse(result.stdout).orchestration.subtasks.length, 3);
-    const request = readFakeState(env).requests.find((r) => r.method === 'POST' && /\/prompt_async$/.test(r.path));
+    const [request] = promptBodies(env);
     assert.ok(request);
-    if (mode === 'text') {
-      assert.equal(Object.hasOwn(request.body, 'format'), false);
-      assert.match(request.body.parts[0].text, /apenas.*objeto JSON.*única cerca ```json/);
-    } else assert.equal(request.body.format.type, 'json_schema');
+    assert.equal(Object.hasOwn(request, 'format'), false);
+    assert.match(promptText(request), /Reply with only one JSON object/);
   });
 }
 
@@ -43,7 +42,7 @@ test('C1: cancel group aborts an in-flight member and returns a cancelled group'
   // Observe the server, not the member metadata: this fails the original early-ID bug.
   const sessionID = await waitFor(() => {
     const state = readFakeState(env);
-    return Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-ask: ') && state.statuses?.[s.id]?.type === 'busy')?.id;
+    return Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-ask: ') && state.statuses?.[s.id]?.type === 'running')?.id;
   }, { timeoutMs: 20000, message: 'active worker session' });
   const member = jobsIn(env, ws).find((m) => m.groupId === jobId && m.role.startsWith('worker:'));
   assert.ok(member?.attemptInFlight);

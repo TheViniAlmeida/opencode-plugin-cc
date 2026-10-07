@@ -42,7 +42,7 @@ test('BLOCK: blocks the stop with decision=block and exit 0', async (t) => {
   assert.match(text, /- ALLOW: <motivo breve>/);
   const [session] = sessionCreateBodies(env);
   assert.match(session.title, /^OPC: stop-gate/);
-  assert.deepEqual(session.permission[0], { permission: '*', pattern: '*', action: 'deny' });
+  assert.deepEqual(session.permissions[0], { action: '*', resource: '*', effect: 'deny' });
 });
 
 test('ALLOW: allows the stop silently', async (t) => {
@@ -132,5 +132,5 @@ test('gate reports the fake API failure cause on stdout and stderr', async (t) =
   assert.equal(result.code, 0, result.stderr);
   const payload = parseStdout(result);
   assert.equal(payload.decision, undefined);
-  for (const text of [payload.systemMessage, result.stderr]) assert.match(text, /STOP_GATE_FAILED \(APIError: \[402\] Saldo insuficiente\.\)/);
+  for (const text of [payload.systemMessage, result.stderr]) assert.match(text, /STOP_GATE_FAILED \(provider\.payment-required: Erro do OpenCode\.\)/);
 });

@@ -33,7 +33,7 @@ test('setup --json reports the onboarding state on first run', async (t) => {
   assert.equal(s.mode, 'bootstrap');
   assert.equal(s.configExists, false);
   assert.equal(s.opencodeInstalled, true);
-  assert.equal(s.opencodeVersion, '1.18.32');
+  assert.equal(s.opencodeVersion, '2.0.22');
   assert.deepEqual(s.connectedProviders.map((p) => p.id), [MV, EQ, 'anthropic', 'opencode']);
   assert.deepEqual(s.providerChoices, [MV, EQ, 'anthropic']);
   assert.equal(s.needsOtherProvider, true);
@@ -53,7 +53,7 @@ test('setup --json without opencode on PATH: install offer data', async (t) => {
   const report = JSON.parse(r.stdout);
   assert.equal(report.opencode.installed, false);
   assert.equal(report.server.status, 'skipped');
-  assert.ok(report.nextSteps.some((step) => /npm install -g opencode-ai/.test(step)));
+  assert.ok(report.nextSteps.some((step) => /Instale o OpenCode 2\.0\.22 ou mais novo/.test(step)));
   const s = report.onboarding;
   assert.equal(s.opencodeInstalled, false);
   assert.equal(s.npmAvailable, false);
@@ -67,8 +67,8 @@ test('setup models: top suggestions, aliases, families and search', async (t) =>
   assert.equal(r.code, 0, r.stderr);
   const v = JSON.parse(r.stdout);
   assert.equal(v.total, 7);
-  assert.deepEqual(v.suggestions.map((m) => m.full), [`${MV}/opencode-go/qwen3.8-flash`, `${MV}/opencode-go/qwen3.8-max`, `${MV}/opencode-go/kimi-k3`]);
-  assert.deepEqual(v.aliases, { fast: `${MV}/opencode-go/qwen3.8-flash`, strong: `${MV}/opencode-go/qwen3.8-max` });
+  assert.deepEqual(v.suggestions.map((m) => m.full), [`${MV}/cx/gpt-5.6-sol`, `${MV}/opencode-go/deepseek-v4.1-flash`, `${MV}/opencode-go/kimi-k2.6`]);
+  assert.deepEqual(v.aliases, { fast: `${MV}/opencode-go/deepseek-v4.1-flash`, strong: `${MV}/opencode-go/kimi-k3` });
   assert.equal(v.families[0].glob, `${MV}/opencode-go/*`);
   assert.deepEqual(v.matches.map((m) => m.full), [`${MV}/opencode-go/qwen3.8-flash`, `${MV}/opencode-go/qwen3.8-max`]);
   const multiword = await cli(['setup', 'models', '--args-stdin', '--json'], { stdin: `--provider ${MV} --query 'deepseek v4'` });

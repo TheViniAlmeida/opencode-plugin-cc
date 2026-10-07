@@ -4,6 +4,7 @@ import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { configModelLabel, expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
 import { assertAgentUsable, evaluate } from './policy.mjs';
 import { safeOutputText } from './redact.mjs';
+import { loadOpencodeConfig, opencodeConfigUnavailable } from './opencode-config.mjs';
 
 const LIST_SOURCES = new Set(['tier', 'route']);
 const echo = (value) => {
@@ -44,8 +45,13 @@ function pickLevel({ kind, flags, config, opencodeConfig }) {
   const route = config.routing?.tasks?.[kind];
   if (Array.isArray(route) && route.length > 0) return { source: 'route', values: route };
   if (typeof config.defaultModel === 'string' && config.defaultModel) return { source: 'default', values: [config.defaultModel] };
+  // Only the `model` the user declared in the OpenCode config; never the server's GET /api/model/default.
   if (typeof opencodeConfig?.model === 'string' && opencodeConfig.model) return { source: 'opencode', values: [opencodeConfig.model] };
-  throw new UsageError('NO_MODEL', 'nenhum modelo foi resolvido (sem --model, --tier, rota, defaultModel ou modelo padrão do OpenCode); informe --model <provider>/<model>');
+  const unavailable = opencodeConfigUnavailable(opencodeConfig);
+  if (unavailable) {
+    throw new UsageError('NO_MODEL', `nenhum modelo foi resolvido: sem --model, --tier, rota ou defaultModel, e a configuração do OpenCode (GET /api/config) não pôde ser lida (${safeOutputText(unavailable)}); o modelo padrão do servidor não é usado como fallback. Informe --model <provider>/<model> ou configure defaultModel com /opc:setup`);
+  }
+  throw new UsageError('NO_MODEL', 'nenhum modelo foi resolvido (sem --model, --tier, rota, defaultModel ou "model" declarado na configuração do OpenCode; o modelo padrão do servidor não é usado como fallback); informe --model <provider>/<model> ou configure defaultModel com /opc:setup');
 }
 
 function checkCandidate(value, { catalog, config, fromConfig = false }) {
@@ -198,8 +204,8 @@ export function validateSelection({ candidate, variant = null, agentName = null,
 import { buildCatalog } from './models.mjs';
 
 export async function resolveTurnModel({ api, kind, flags = {}, config }) {
-  const [providerResponse, opencodeConfig] = await Promise.all([api.providers(), api.getConfig()]);
-  const catalog = buildCatalog(providerResponse);
+  const [providers, models, defaultModel, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api)]);
+  const catalog = buildCatalog({ providers, models, defaultModel });
   const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
   const chosen = resolution.candidates[0];
   const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, catalog, policy: config?.policy ?? {} });

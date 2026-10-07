@@ -102,6 +102,7 @@ export function renderSetup(report) {
     '',
     `- node: ${check(report.node?.ok)} (${report.node?.version})`,
     `- opencode: ${report.opencode?.installed ? `${check(report.opencode.supported)} (${report.opencode.version ?? 'versão desconhecida'})` : 'não encontrado'}`,
+    `- binário OpenCode: ${report.opencode?.bin ?? '<valor>'}`,
     `- diretório de dados: ${report.dataDir}`,
     `- workspace: ${report.workspaceRoot}`,
     `- estado: ${report.stateDir}`,
@@ -712,7 +713,8 @@ function fenceFor(text) {
 const f3Table = (headers, rows) => renderTable(headers, rows).trimEnd();
 
 function messageText(message) {
-  return (message.parts ?? []).filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text ?? '').join(' ');
+  if (message.type === 'user') return message.text ?? '';
+  return (message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join(' ');
 }
 
 function modelLabel(model) {
@@ -772,7 +774,7 @@ export function renderSession(session, { status = null, messages = [], note = nu
   const lines = [`# Sessão ${session.id}`, ''];
   lines.push(`- Título: ${session.title ?? '-'}`);
   lines.push(`- Status: ${status ?? '-'}`);
-  lines.push(`- Diretório: ${session.directory ?? '-'}`);
+  lines.push(`- Diretório: ${session.location?.directory ?? '-'}`);
   lines.push(`- Agente: ${session.agent ?? '-'} · Modelo: ${modelLabel(session.model)}`);
   if (session.parentID) lines.push(`- Pai: ${session.parentID}`);
   lines.push(`- Criada: ${fmtTime(session.time?.created)} · Atualizada: ${fmtTime(session.time?.updated)} (UTC)`);
@@ -785,9 +787,9 @@ export function renderSession(session, { status = null, messages = [], note = nu
     lines.push('', `## Mensagens (${messages.length})`, '');
     lines.push(f3Table(['#', 'ID', 'Papel', 'Agente/Modelo', 'Texto'], messages.map((m, i) => [
       String(i + 1),
-      m.info?.id ?? '-',
-      m.info?.role ?? '-',
-      m.info?.role === 'assistant' ? `${m.info.agent ?? '-'} · ${m.info.providerID ?? '-'}/${m.info.modelID ?? '-'}${m.info.summary ? ' (resumo)' : ''}` : (m.info?.agent ?? '-'),
+      m.id ?? '-',
+      m.type ?? '-',
+      m.type === 'assistant' ? `${m.agent ?? '-'} · ${modelLabel(m.model)}` : (m.agent ?? '-'),
       oneLine(messageText(m), 100),
     ])));
   }
@@ -801,14 +803,7 @@ export function renderSessionDiff(diffs, { maxInlineBytes = F3_MAX_INLINE_DIFF, 
   return f3Finish([`# ${title}`, '', ...diffBody(diffs, maxInlineBytes)]);
 }
 
-export function renderTodos(todos, { sessionID = null } = {}) {
-  todos = maskDeep(todos);
-  const heading = `# Tarefas${sessionID ? ` da sessão ${safeOutputText(sessionID)}` : ''}`;
-  if (!todos.length) return f3Finish([heading, '', 'Nenhum todo.']);
-  return f3Finish([heading, '', f3Table(['Status', 'Prioridade', 'Tarefa'], todos.map((t) => [t.status ?? '-', t.priority ?? '-', oneLine(t.content, 160)]))]);
-}
-
-export function renderRevertPreview({ action, sessionID, messageID = null, affected = [], rawDiff = null, command }) {
+export function renderRevertPreview({ action, sessionID, messageID = null, affected = null, rawDiff = null, notice = null, command }) {
   affected = maskDeep(affected);
   sessionID = safeOutputText(sessionID);
   messageID = messageID === null ? null : safeOutputText(messageID);
@@ -816,9 +811,8 @@ export function renderRevertPreview({ action, sessionID, messageID = null, affec
   const lines = [`# opc: confirmação necessária (${action})`, ''];
   if (action === 'revert') {
     lines.push(`Sessão ${sessionID} · a partir da mensagem ${messageID}.`);
-    lines.push('O revert remove do histórico as mensagens a partir dessa e restaura os arquivos abaixo ao estado anterior:', '');
-    if (affected.length) lines.push(...diffBody(affected, F3_MAX_INLINE_DIFF));
-    else lines.push('(nenhuma alteração de arquivo registrada para essas mensagens; só o histórico muda)');
+    lines.push('O revert remove do histórico as mensagens a partir dessa e pode restaurar arquivos ao estado anterior.', '');
+    if (notice) lines.push(safeOutputText(notice));
   } else {
     lines.push(`Sessão ${sessionID} · revert ativo a partir de ${messageID ?? '-'}.`);
     lines.push('O unrevert devolve as mensagens e reaplica nos arquivos o diff abaixo:', '');
@@ -910,7 +904,7 @@ export function renderAttach(info) {
     return f3Finish(lines);
   }
   lines.push('Rode no seu terminal (a senha não aparece na linha de comando; vem', info.authSource?.type === 'file' ? 'do arquivo de modo 600 para a variável de ambiente):' : 'da variável OPC_SERVER_PASSWORD que você já usa:', '');
-  lines.push(`    ${secret} ${args}`, '');
+  lines.push(`    cd ${shellQuote(info.directory)} && ${secret} ${args}`, '');
   if (!info.attached) lines.push(`Dentro do tmux: /opc:attach --pane${info.sessionID ? ` ${info.sessionID}` : ''}`);
   return f3Finish(lines);
 }

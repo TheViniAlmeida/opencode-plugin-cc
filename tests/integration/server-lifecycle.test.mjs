@@ -18,11 +18,11 @@ test('ensureServer spawns a detached server, records it (600) and reuses it; sto
   assert.equal(first.attached, false);
   assert.notEqual(first.port, 4096);
   assert.equal(first.url, `http://127.0.0.1:${first.port}`);
-  assert.equal(first.version, '1.18.32');
+  assert.equal(first.version, '2.0.22');
   const record = readJsonFile(path.join(stateDir, 'server.json'));
   assert.deepEqual(
     { schemaVersion: record.schemaVersion, pid: record.pid, port: record.port, spawnedBy: record.spawnedBy, version: record.version, password: record.password },
-    { schemaVersion: 1, pid: first.pid, port: first.port, spawnedBy: 'opc', version: '1.18.32', password: first.password },
+    { schemaVersion: 1, pid: first.pid, port: first.port, spawnedBy: 'opc', version: '2.0.22', password: first.password },
   );
   assert.equal(record.password.length, 48);
   assert.ok(serverMatcher(first.port)(record.cmdline));
@@ -65,7 +65,7 @@ test('stale-server-pid: a record pointing to a foreign live process is discarded
   const sleeper = spawnSleeper(t);
   writeFileAtomic(path.join(stateDir, 'server.json'), {
     schemaVersion: 1, pid: sleeper.pid, startTime: getProcessIdentity(sleeper.pid).startTime, port: 45678,
-    url: 'http://127.0.0.1:45678', version: '1.18.32', spawnedBy: 'opc',
+    url: 'http://127.0.0.1:45678', version: '2.0.22', spawnedBy: 'opc',
   });
   const server = await ensureServer(ctx);
   assert.equal(server.reused, false);
@@ -75,7 +75,7 @@ test('stale-server-pid: a record pointing to a foreign live process is discarded
   assert.deepEqual(await stopServer({ ...ctx }), { stopped: true, reason: 'terminated' });
   writeFileAtomic(path.join(stateDir, 'server.json'), {
     schemaVersion: 1, pid: sleeper.pid, startTime: getProcessIdentity(sleeper.pid).startTime, port: 45678,
-    url: 'http://127.0.0.1:45678', version: '1.18.32', password: 'stale-password-0123456789', spawnedBy: 'opc',
+    url: 'http://127.0.0.1:45678', version: '2.0.22', password: 'stale-password-0123456789', spawnedBy: 'opc',
   });
   assert.deepEqual(await stopServer(ctx), { stopped: false, reason: 'identity-mismatch' });
   assert.ok(processAlive(sleeper.pid));
@@ -114,10 +114,10 @@ test('server-killed-externally (client level): clientFor re-ensures the server a
   const { ctx, stateDir } = makeServerCtx(t);
   const server = await ensureServer(ctx);
   const client = clientFor(ctx, server);
-  assert.equal((await client.get('/global/health')).healthy, true);
+  assert.equal((await client.get('/api/info')).version, '2.0.22');
   process.kill(-server.pid, 'SIGKILL');
   await waitFor(() => !processAlive(server.pid), { message: 'killed' });
-  assert.equal((await client.get('/global/health')).healthy, true);
+  assert.equal((await client.get('/api/info')).version, '2.0.22');
   assert.notEqual(readJsonFile(path.join(stateDir, 'server.json')).pid, server.pid);
   assert.notEqual(client.baseUrl, server.url);
 });
@@ -136,16 +136,16 @@ test('hung-server: identity ok but health silent → terminated and replaced', a
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {
   const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'version-changed' });
   const first = await ensureServer(ctx);
-  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.version`, '1.18.40');
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.version`, '2.0.23');
   const busy = await ensureServer({ ...ctx, hasActiveJobs: () => true });
   assert.equal(busy.pid, first.pid);
   assert.equal(busy.reused, true);
   assert.ok(busy.warnings.some((w) => /mudou de versão/.test(w)));
   const idle = await ensureServer(ctx);
   assert.notEqual(idle.pid, first.pid);
-  assert.equal(idle.version, '1.18.40');
+  assert.equal(idle.version, '2.0.23');
   assert.ok(idle.warnings.some((w) => /versão mudou/.test(w)));
-  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).version, '1.18.40');
+  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).version, '2.0.23');
 });
 
 test('stopServer: refuses with active jobs, --force requires confirmation, attach mode is never stopped', async (t) => {
@@ -175,15 +175,16 @@ test('stale-lock: an orphan server.lock is broken and ensureServer proceeds', as
   assert.equal(fs.readdirSync(stateDir).filter((n) => n.startsWith('server.lock.stale-')).length, 1);
 });
 
-test('the spawned server receives the password, username, override and OPC_INSIDE_SERVER; warm-up hits /agent', async (t) => {
+test('the spawned server receives the password, override and OPC_INSIDE_SERVER; warm-up hits V2 catalogs', async (t) => {
   const { env, ctx, ws } = makeServerCtx(t, { config: { server: { configOverride: { share: 'disabled', small_model: 'p/small' } } } });
   await ensureServer(ctx);
   const fake = readFakeState(env);
   const boot = fake.boots[0];
   assert.deepEqual(
     { insideServer: boot.insideServer, hasPassword: boot.hasPassword, username: boot.username, hostname: boot.hostname, cwd: boot.cwd },
-    { insideServer: '1', hasPassword: true, username: 'opencode', hostname: '127.0.0.1', cwd: ws },
+    { insideServer: '1', hasPassword: true, username: null, hostname: '127.0.0.1', cwd: ws },
   );
   assert.deepEqual(JSON.parse(boot.configContent), { share: 'disabled', small_model: 'p/small' });
-  assert.ok(fake.requests.some((r) => r.path === '/agent' && r.query.directory === ws));
+  assert.ok(fake.requests.some((r) => r.path === '/api/agent' && r.directory === ws));
+  assert.ok(fake.requests.some((r) => r.path === '/api/model'));
 });

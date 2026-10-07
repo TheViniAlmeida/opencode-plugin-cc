@@ -16,14 +16,14 @@ async function harness(t, { profileKind = 'write', timeoutMs = 60000, policy = {
     stateDir,
     update: async (patch) => updateJob(stateDir, jobId, (job) => (typeof patch === 'function' ? patch(job) : patch)),
     api: {
-      async replyPermission(id, body) { calls.push(['reply', id, body]); return true; },
-      async rejectQuestion(id) { calls.push(['rejectQuestion', id]); return true; },
+      async replyPermission(sessionID, id, body) { calls.push(['reply', sessionID, id, body]); return true; },
+      async rejectQuestion(sessionID, id) { calls.push(['rejectQuestion', sessionID, id]); return true; },
     },
     profileKind, policy, timeoutMs, log: (l) => logs.push(l),
   });
   return { bridge, calls, logs, stateDir, jobId, get job() { return readJob(stateDir, jobId); } };
 }
-const perm = (id, patterns = ['rm -rf build'], sessionID = 'ses_1') => ({ id, sessionID, permission: 'bash', patterns, metadata: { command: patterns[0] }, always: [] });
+const perm = (id, patterns = ['rm -rf build'], sessionID = 'ses_1') => ({ id, sessionID, permission: 'shell', patterns, metadata: { command: patterns[0] } });
 
 test('serial updater keeps later writes alive and flush rejects with the first write failure', async () => {
   const failure = new Error('write failed once');
@@ -66,12 +66,16 @@ test('cancel + failed final state write ends failed with STATE_WRITE_FAILED and 
   assert.match(cancellationLog, /cancelamento solicitado/i);
 });
 
-test('read-only profile rejects permissions and questions immediately', async (t) => {
+test('read-only profile rejects permissions immediately and routes questions to the bridge', async (t) => {
+  // V2 read-only profile allows the `question` action (READ_ONLY_ALLOW), so a form is a legitimate pending request.
   const h = await harness(t, { profileKind: 'read-only' });
   await h.bridge.onPermission(perm('per_1'));
-  await h.bridge.onQuestion({ id: 'que_1', sessionID: 'ses_1', questions: [] });
-  assert.deepEqual(h.calls, [['reply', 'per_1', { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' }], ['rejectQuestion', 'que_1']]);
+  assert.deepEqual(h.calls, [['reply', 'ses_1', 'per_1', { reply: 'reject', message: 'opc: perfil somente leitura; solicitação recusada' }]]);
   assert.equal(h.job.status, 'running');
+  await h.bridge.onQuestion({ id: 'frm_1', sessionID: 'ses_1', questions: [] });
+  assert.equal(h.calls.length, 1, 'the question is not auto-rejected');
+  assert.equal(h.job.status, 'waiting_permission');
+  assert.deepEqual(h.job.pendingRequest.map((r) => [r.type, r.id]), [['question', 'frm_1']]);
   h.bridge.dispose();
 });
 
@@ -93,9 +97,9 @@ test('write profile: pending → waiting_permission with requiresUser; resolutio
 test('timeout rejects with "opc: nenhum aprovador disponível"; questions get question reject', async (t) => {
   const h = await harness(t, { timeoutMs: 30 });
   await h.bridge.onPermission(perm('per_1'));
-  await h.bridge.onQuestion({ id: 'que_1', sessionID: 'ses_1', questions: [{ question: 'Q', header: 'Q', options: [] }] });
+  await h.bridge.onQuestion({ id: 'frm_1', sessionID: 'ses_1', questions: [{ question: 'Q', header: 'Q', options: [] }] });
   await new Promise((r) => setTimeout(r, 80));
-  assert.deepEqual(h.calls, [['reply', 'per_1', { reply: 'reject', message: 'opc: nenhum aprovador disponível' }], ['rejectQuestion', 'que_1']]);
+  assert.deepEqual(h.calls, [['reply', 'ses_1', 'per_1', { reply: 'reject', message: 'opc: nenhum aprovador disponível' }], ['rejectQuestion', 'ses_1', 'frm_1']]);
   h.bridge.dispose();
 });
 

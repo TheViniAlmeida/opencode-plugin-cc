@@ -67,8 +67,8 @@ test('review prompts include the text structured output contract and review sche
   const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`));
   await h.run();
   const [prompt] = new Set(h.calls.map((c) => c.prompt));
-  assert.match(prompt, /Return only one JSON object inside a single ```json fence, with no text outside it\./);
-  assert.match(prompt, /Follow this JSON Schema:/);
+  assert.match(prompt, /Reply with only one JSON object, no prose and no code fence/);
+  assert.match(prompt, /validates against this JSON Schema:/);
   assert.match(prompt, /Return a JSON instance with field values, not the schema\./);
   assert.match(prompt, /"findings"/);
 });
@@ -92,14 +92,12 @@ for (const mode of ['text', 'tool']) {
   });
 }
 
-test('review prompts include the tool structured output contract', async () => {
+test('legacy tool setting still requests V2 text JSON without a code fence', async () => {
   const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`), { structuredOutput: 'tool', promptAssets: realAssets });
   await h.run();
   const [prompt] = new Set(h.calls.map((c) => c.prompt));
-  assert.match(prompt, /Return your answer only through the structured output\./);
-  assert.match(prompt, /This overrides the <output_contract> above: do not write a ```json fence\./);
-  assert.ok(prompt.includes('<output_contract>') && prompt.lastIndexOf('only through the structured output') > prompt.lastIndexOf('</output_contract>'));
-  assert.doesNotMatch(prompt, /Follow this JSON Schema:/);
+  assert.match(prompt, /Reply with only one JSON object, no prose and no code fence/);
+  assert.doesNotMatch(prompt, /Return your answer only through the structured output|single ```json fence/);
 });
 
 test('with the real F2b review prompt (no {{USER_FOCUS}}) the question still reaches the members as <user_focus>', async () => {
@@ -108,6 +106,8 @@ test('with the real F2b review prompt (no {{USER_FOCUS}}) the question still rea
   const [prompt] = new Set(h.calls.map((c) => c.prompt));
   assert.ok(prompt.includes('focus on math'));
   assert.ok(prompt.includes('diff --git a/src/calc.js'));
+  assert.match(prompt, /A finding may omit file, line_start and line_end/);
+  assert.doesNotMatch(prompt, /única cerca|Cada achado deve apontar/);
   assert.doesNotMatch(prompt, /\{\{[A-Z0-9_]+\}\}/);
 });
 
@@ -144,7 +144,8 @@ test('findings without a location pass validation even when the review schema re
   h.deps.assets = strictAssets;
   const pkg = await h.run();
   assert.equal(pkg.failures.length, 0);
-  assert.equal(h.calls[0].schema.properties.findings.items.properties.file.minLength, 1, 'members still get the strict schema');
+  assert.equal(h.calls[0].schema.properties.findings.items.properties.file.minLength, undefined, 'runner receives the schema that accepts unlocated findings');
+  assert.equal(h.calls[0].schema.properties.findings.items.required.includes('file'), false);
   assert.equal(pkg.review.clusters.filter((c) => c.file === null).length, 4);
 });
 

@@ -1,11 +1,11 @@
 // Shared behavior for the conclave scenarios (not a scenario by itself).
 // Every scenario decides per request: member (round 1), debate (rounds 2..N), judge or review,
-// using the json_schema title sent by the plugin and the model family in body.model.modelID.
+// using the schema embedded in the V2 text prompt and the session model.
 
 export const HANG = Symbol('hang');
 
 export function textOf(body) {
-  return (body?.parts ?? []).filter((p) => p.type === 'text').map((p) => p.text).join('\n');
+  return body?.text ?? '';
 }
 
 export function kindOf(body) {
@@ -14,7 +14,7 @@ export function kindOf(body) {
   // carry their own "title" fields earlier in the prompt, so look for the known schema titles.
   const embedded = new Set([...prompt.matchAll(/"title"\s*:\s*"(Conclave(?:Synthesis|Debate|Member))"/g)].map((m) => m[1]));
   const embeddedTitle = ['ConclaveSynthesis', 'ConclaveDebate', 'ConclaveMember'].find((t) => embedded.has(t));
-  const title = body?.format?.schema?.title ?? embeddedTitle ?? null;
+  const title = embeddedTitle ?? null;
   if (title === 'ConclaveMember') return 'member';
   if (title === 'ConclaveDebate') return 'debate';
   if (title === 'ConclaveSynthesis') return 'judge';
@@ -22,7 +22,7 @@ export function kindOf(body) {
 }
 
 export function familyOf(body) {
-  const id = String(body?.model?.modelID ?? '').toLowerCase();
+  const id = String(body?.model?.id ?? '').toLowerCase();
   for (const family of ['deepseek', 'qwen', 'kimi']) if (id.includes(family)) return family;
   return 'other';
 }
@@ -78,7 +78,7 @@ export function reviewAnswer() {
   return { verdict: 'approve', summary: 'No material issues.', findings: [], next_steps: [] };
 }
 
-export const STRUCTURED_ERROR = { name: 'StructuredOutputError', data: { message: 'Model did not produce valid structured output', retries: 2 } };
+export const STRUCTURED_ERROR = { type: 'provider.output', message: 'O modelo não produziu JSON válido.' };
 
 const DEFAULTS = {
   member: ({ family }) => ({ structured: memberAnswer(family) }),
@@ -89,20 +89,15 @@ const DEFAULTS = {
 
 export function makeConclaveScenario(handlers = {}) {
   return {
-    onPromptAsync(fake, sessionID, body) {
-      const kind = kindOf(body);
+    onPrompt(fake, sessionID, body) {
+      const context = { ...body, model: fake.state.sessions[sessionID]?.model };
+      const kind = kindOf(context);
       const handler = handlers[kind] ?? DEFAULTS[kind];
-      const outcome = handler({ fake, sessionID, body, family: familyOf(body) });
+      const outcome = handler({ fake, sessionID, body: context, family: familyOf(context) });
       if (outcome === HANG) return;
       const turn = { delayMs: 20, text: '', ...outcome };
-      if (!body?.format) {
-        const structuredError = turn.error?.name === 'StructuredOutputError';
-        if (!structuredError && turn.structured !== undefined) {
-          turn.text = `\`\`\`json\n${JSON.stringify(turn.structured)}\n\`\`\``;
-        }
-        delete turn.structured;
-        if (structuredError) delete turn.error;
-      }
+      if (turn.structured !== undefined) turn.text = `\`\`\`json\n${JSON.stringify(turn.structured)}\n\`\`\``;
+      delete turn.structured;
       fake.emitTurn(sessionID, turn);
     },
   };

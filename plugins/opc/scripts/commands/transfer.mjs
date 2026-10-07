@@ -6,6 +6,8 @@ import { ExitCode, OpcError } from '../lib/opc-error.mjs';
 import { redactOutput } from '../lib/redact.mjs';
 import { renderTransfer } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
+import { ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
+import { serverContext } from '../lib/jobs.mjs';
 import {
   buildExport, convertClaudeRecords, detectOpencodeVersion, readTranscript,
   resolveTranscriptPath, resolveTransferModel, runImport, validateExportShape, writeExportFile,
@@ -22,6 +24,7 @@ const SPEC = {
 
 export async function execute(ctx, { source = null, model = null } = {}) {
   const options = { env: ctx.env, cwd: ctx.cwd };
+  const opencodeBin = resolveOpencodeBin({ env: ctx.env, config: ctx.config });
   const transcript = resolveTranscriptPath({ source, ...options });
   const resolvedModel = resolveTransferModel({ flag: model, config: ctx.config });
   // Revalidate and read the source before invoking OpenCode, including --version.
@@ -30,7 +33,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   if (conversion.turns.length === 0) {
     throw new OpcError('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.', { exitCode: ExitCode.USAGE });
   }
-  const version = await detectOpencodeVersion({ env: ctx.env });
+  const version = await detectOpencodeVersion({ env: ctx.env, opencodeBin });
   const exported = buildExport(conversion, { model: resolvedModel, directory: ctx.workspaceRoot, version });
   const errors = validateExportShape(exported);
   if (errors.length) {
@@ -39,23 +42,27 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   ensurePrivateDir(ctx.stateDir);
   const file = writeExportFile(ctx.stateDir, exported);
   let imported;
+  let server;
   try {
-    imported = await runImport({ file, cwd: ctx.workspaceRoot, env: ctx.env });
+    server = await ensureServer(serverContext(ctx));
+    imported = await runImport({ file, cwd: ctx.workspaceRoot,
+      env: ctx.env, password: server.password, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {
       throw new OpcError('IMPORT_FAILED', 'O OpenCode informou um ID de sessão diferente do exportado.', { exitCode: ExitCode.JOB_FAILED });
     }
   } finally {
     fs.rmSync(file, { force: true });
   }
-  const user = exported.messages.filter((message) => message.info.role === 'user').length;
+  const user = exported.messages.filter((message) => message.type === 'user').length;
+  const assistant = exported.messages.filter((message) => message.type === 'assistant').length;
   return redactOutput({
     sessionID: imported.sessionID,
     title: exported.info.title,
     model: resolvedModel.full,
     workspaceRoot: ctx.workspaceRoot,
-    messages: { total: exported.messages.length, user, assistant: exported.messages.length - user },
+    messages: { total: user + assistant, user, assistant },
     skipped: { ...conversion.stats.skipped, invalidLines: invalid },
-    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && opencode -s ${imported.sessionID}`,
+    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && opencode --server ${shellQuote(server.url)} -s ${imported.sessionID}`,
     warnings: [],
   });
 }

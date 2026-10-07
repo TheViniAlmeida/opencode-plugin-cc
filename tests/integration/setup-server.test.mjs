@@ -103,7 +103,7 @@ test('workspace-with-spaces: git (from a subdir) and non-git dirs with spaces/ac
   assert.equal(res.report.workspaceRoot, plain);
   assert.notEqual(res.report.stateDir, fromSub.report.stateDir);
   const fake = readFakeState(env);
-  const dirs = fake.requests.filter((r) => r.path === '/agent').map((r) => r.query.directory);
+  const dirs = fake.requests.filter((r) => r.path === '/api/agent').map((r) => r.directory);
   assert.ok(dirs.includes(gitWs));
   assert.ok(dirs.includes(plain));
   assert.ok(fake.boots.some((b) => b.cwd === plain));

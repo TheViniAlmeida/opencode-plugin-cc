@@ -2,20 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { startFake } from '../fixtures/fake-opencode.mjs';
-import { makeTempDir } from '../helpers.mjs';
+import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 const PASSWORD = 'f2a-fake-session-password-0000';
 const AUTH = { authorization: `Basic ${Buffer.from(`opencode:${PASSWORD}`).toString('base64')}` };
 
 async function openFake(t, scenario) {
-  const fake = await startFake({ port: 0, password: PASSWORD, scenario, stateFile: join(makeTempDir(), 'state.json') });
+  const fake = await startFake({ port: 0, password: PASSWORD, scenario, stateFile: join(trackTempDir(t, makeTempDir()), 'state.json') });
   const controller = new AbortController();
   t.after(() => {
     controller.abort();
     fake.close();
   });
   const events = [];
-  const response = await fetch(`${fake.url}/event`, { headers: AUTH, signal: controller.signal });
+  const response = await fetch(`${fake.url}/api/event`, { headers: AUTH, signal: controller.signal });
   (async () => {
     const decoder = new TextDecoder();
     let buffer = '';
@@ -51,69 +51,74 @@ async function openFake(t, scenario) {
   return { fake, call, events, waitEvent };
 }
 
-test('fake session API: create, prompt_async (204), turn events, messages, status', async (t) => {
+const MODEL = { providerID: 'omniroute-personal', id: 'opencode-go/deepseek-v4.1-flash' };
+const RULES = [{ action: '*', resource: '*', effect: 'deny' }];
+const sessionBody = (title = 'OPC: task: t', permissions = RULES) => ({ title, model: MODEL, permissions });
+
+test('fake V2 session API: create, prompt, turn events, messages, status', async (t) => {
   const { call, waitEvent } = await openFake(t, 'ok');
-  const bad = await call('POST', '/session', { title: 'x', share: true });
+  const bad = await call('POST', '/api/session', { title: 'x' });
   assert.equal(bad.status, 400);
-  const session = (await call('POST', '/session', { title: 'OPC: task: t', permission: [{ permission: '*', pattern: '*', action: 'deny' }] })).body;
+  const session = (await call('POST', '/api/session', sessionBody())).body.data;
   assert.match(session.id, /^ses_/);
-  const prompt = await call('POST', `/session/${session.id}/prompt_async`, { messageID: 'msg_0000000000000000000000abcd', model: { providerID: 'p', modelID: 'm/x' }, parts: [{ type: 'text', text: 'hi' }] });
-  assert.equal(prompt.status, 204);
-  await waitEvent((e) => e.type === 'session.idle' && e.properties.sessionID === session.id);
-  const messages = (await call('GET', `/session/${session.id}/message?limit=10`)).body;
-  assert.equal(messages[0].info.id, 'msg_0000000000000000000000abcd');
-  assert.equal(messages[1].info.parentID, 'msg_0000000000000000000000abcd');
-  assert.equal(messages[1].parts.at(-1).text, 'fake-opencode: ok');
-  assert.deepEqual((await call('GET', '/session/status')).body, {});
+  const prompt = await call('POST', `/api/session/${session.id}/prompt`, { id: 'msg_0000000000000000000000abcd', text: 'hi' });
+  assert.equal(prompt.status, 200);
+  await waitEvent((e) => e.type === 'session.execution.succeeded' && e.data.sessionID === session.id);
+  const messages = (await call('GET', `/api/session/${session.id}/message?order=asc&limit=10`)).body.data;
+  assert.equal(messages[0].id, 'msg_0000000000000000000000abcd');
+  assert.equal(messages[1].content.at(-1).text, 'ok');
+  assert.equal(messages.at(-1).outcome, 'succeeded');
+  assert.deepEqual((await call('GET', '/api/session/active')).body.data, {});
 });
 
-test('fake session API: PATCH appends permission rules (as OpenCode 1.18.32)', async (t) => {
+test('fake V2 session API: PATCH replaces permission rules', async (t) => {
   const { call } = await openFake(t, 'ok');
-  const a = [{ permission: 'bash', pattern: '*', action: 'deny' }];
-  const b = [{ permission: 'edit', pattern: '*', action: 'deny' }];
-  const session = (await call('POST', '/session', { title: 't', permission: a })).body;
-  const patched = (await call('PATCH', `/session/${session.id}`, { permission: b })).body;
-  assert.deepEqual(patched.permission, [...a, ...b]);
+  const a = [{ action: 'shell', resource: '*', effect: 'deny' }];
+  const b = [{ action: 'edit', resource: '*', effect: 'deny' }];
+  const session = (await call('POST', '/api/session', sessionBody('OPC: t', a))).body.data;
+  assert.equal((await call('PATCH', `/api/session/${session.id}`, { permissions: b })).status, 204);
+  assert.deepEqual((await call('GET', `/api/session/${session.id}`)).body.data.permissions, b);
 });
 
 test('fake session API: reject rejects the sibling; always stays accepted by the fake (the client refuses it)', async (t) => {
   const { call, waitEvent, fake } = await openFake(t, 'reject-siblings');
-  const session = (await call('POST', '/session', { title: 't' })).body;
-  await call('POST', `/session/${session.id}/prompt_async`, { parts: [{ type: 'text', text: 'go' }] });
-  const asked = await waitEvent((e) => e.type === 'permission.asked' && e.properties.permission === 'edit');
+  const session = (await call('POST', '/api/session', sessionBody())).body.data;
+  await call('POST', `/api/session/${session.id}/prompt`, { text: 'go' });
+  const asked = await waitEvent((e) => e.type === 'permission.asked' && e.data.action === 'edit');
   assert.equal(asked.length, 1);
-  const pending = (await call('GET', '/permission')).body;
+  const pending = (await call('GET', `/api/session/${session.id}/permission`)).body.data;
   assert.equal(pending.length, 2);
-  assert.equal((await call('POST', `/permission/${pending[0].id}/reply`, { reply: 'reject' })).status, 200);
-  const replied = await waitEvent((e) => e.type === 'permission.replied' && e.properties.requestID === pending[1].id);
-  assert.equal(replied[0].properties.reply, 'reject');
-  await waitEvent((e) => e.type === 'session.idle');
+  assert.equal((await call('POST', `/api/session/${session.id}/permission/${pending[0].id}/reply`, { decision: 'reject' })).status, 204);
+  const replied = await waitEvent((e) => e.type === 'permission.replied' && e.data.requestID === pending[0].id);
+  assert.equal(replied[0].data.reply, 'reject');
   assert.equal(fake.state.permissionReplies.length, 2);
+  assert.equal((await call('GET', `/api/session/${session.id}/permission`)).body.data.length, 0);
+  assert.equal((await call('POST', `/api/session/${session.id}/permission/${pending[1].id}/reply`, { decision: 'once' })).status, 404);
+  await waitEvent((e) => e.type === 'session.execution.succeeded');
 });
 
-test('fake session API: question reply validates string[][]; abort ends a busy turn with MessageAbortedError', async (t) => {
+test('fake V2 session API: form reply validates answer object; interrupt ends busy turn', async (t) => {
   const { call, waitEvent } = await openFake(t, 'question-ask');
-  const session = (await call('POST', '/session', { title: 't' })).body;
-  await call('POST', `/session/${session.id}/prompt_async`, { parts: [{ type: 'text', text: 'ask' }] });
-  const [asked] = await waitEvent((e) => e.type === 'question.asked');
-  assert.equal((await call('POST', `/question/${asked.properties.id}/reply`, { answers: ['Postgres'] })).status, 400);
-  assert.equal((await call('POST', `/session/${session.id}/abort`)).status, 200);
-  await waitEvent((e) => e.type === 'session.idle');
-  const messages = (await call('GET', `/session/${session.id}/message`)).body;
-  assert.equal(messages.at(-1).info.error.name, 'MessageAbortedError');
+  const session = (await call('POST', '/api/session', sessionBody())).body.data;
+  await call('POST', `/api/session/${session.id}/prompt`, { text: 'ask' });
+  const [asked] = await waitEvent((e) => e.type === 'form.created');
+  assert.equal((await call('POST', `/api/session/${session.id}/form/${asked.data.form.id}/reply`, { answer: ['Postgres'] })).status, 400);
+  assert.equal((await call('POST', `/api/session/${session.id}/interrupt`)).body.interrupted, true);
+  await waitEvent((e) => e.type === 'session.execution.interrupted');
+  const messages = (await call('GET', `/api/session/${session.id}/message?order=asc`)).body.data;
+  assert.equal(messages.at(-1).outcome, 'interrupted');
 });
 
-test('fake session API: abort during retry settles the scenario and prevents recovery messages', async (t) => {
+test('fake V2 session API: interrupt during retry prevents recovery messages', async (t) => {
   const { call, waitEvent } = await openFake(t, 'retry-status');
-  const session = (await call('POST', '/session', { title: 'retry abort' })).body;
-  await call('POST', `/session/${session.id}/prompt_async`, { parts: [{ type: 'text', text: 'retry' }] });
-  await waitEvent((e) => e.type === 'session.status' && e.properties.sessionID === session.id && e.properties.status.type === 'retry');
-  await call('POST', `/session/${session.id}/abort`);
-  await waitEvent((e) => e.type === 'session.idle' && e.properties.sessionID === session.id);
+  const session = (await call('POST', '/api/session', sessionBody('OPC: retry abort'))).body.data;
+  await call('POST', `/api/session/${session.id}/prompt`, { text: 'retry' });
+  await waitEvent((e) => e.type === 'session.retry.scheduled' && e.data.sessionID === session.id);
+  await call('POST', `/api/session/${session.id}/interrupt`);
+  await waitEvent((e) => e.type === 'session.execution.interrupted' && e.data.sessionID === session.id);
   await new Promise((resolve) => setTimeout(resolve, 600));
-  const messages = (await call('GET', `/session/${session.id}/message`)).body;
-  const aborted = messages.filter((m) => m.info.error?.name === 'MessageAbortedError');
-  assert.equal(aborted.length, 1);
-  assert.equal(messages.filter((m) => m.info.role === 'assistant').length, 1);
-  assert.deepEqual((await call('GET', '/session/status')).body, {});
+  const messages = (await call('GET', `/api/session/${session.id}/message?order=asc`)).body.data;
+  assert.equal(messages.at(-1).outcome, 'interrupted');
+  assert.equal(messages.filter((m) => m.type === 'assistant').length, 0);
+  assert.deepEqual((await call('GET', '/api/session/active')).body.data, {});
 });

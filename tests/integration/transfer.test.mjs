@@ -6,10 +6,12 @@ import { test } from 'node:test';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
 import { MAX_TRANSCRIPT_BYTES } from '../../plugins/opc/scripts/lib/transfer.mjs';
 import { checkImportShape } from '../fixtures/fake-import.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 import {
   cliJson, makeTempDir, makeWorkspace, PLUGIN_ROOT, readFakeState, REPO_ROOT,
-  runCli, stateDirFor, testEnv, trackTempDir, writeTestConfig,
+  runCli, stateDirFor, testEnv, trackTempDir, trackWorkspace, writeTestConfig, startExternalFake,
 } from '../helpers.mjs';
+import { readServerRecord } from '../../plugins/opc/scripts/lib/server.mjs';
 
 const SAMPLE = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'claude-transcript-sample.jsonl');
 const MODEL = 'example-provider/example/model-a';
@@ -50,6 +52,7 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(imp.mode, '600');
   assert.equal(imp.dirMode, '700');
   assert.equal(imp.cwd, ws);
+  assert.equal(imp.directory, ws);
   assert.equal((fs.statSync(stateDirFor(env, ws)).mode & 0o777).toString(8), '700');
   assertTemporaryRemoved(env, ws);
   assert.match(r.data.sessionID, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
@@ -60,17 +63,38 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.deepEqual(r.data.skipped, { meta: 1, sidechain: 1, command: 1, thinking: 1, other: 1, invalidLines: 1 });
   assert.equal(r.data.model, MODEL);
   assert.equal(r.data.workspaceRoot, ws);
-  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && opencode -s ${r.data.sessionID}`);
+  const server = readServerRecord(stateDirFor(env, ws));
+  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(server.url)} -s ${r.data.sessionID}`);
   assert.deepEqual(r.data.warnings, []);
   assert.equal(Object.hasOwn(r.data, 'source'), false);
   assert.doesNotMatch(r.stdout + r.stderr, /List the files|Now add a --verbose|session\.jsonl|\[tool call:/);
   assert.ok(imp.texts.includes('List the files in src and explain main.mjs.'));
-  assert.ok(imp.texts.includes('Now add a --verbose flag. Keep `$(echo hi)` and "quotes" intact: ção ✓'));
+  // A V2 user message carries a single text, so the omitted-image marker is appended to the same message.
+  assert.ok(imp.texts.includes('Now add a --verbose flag. Keep `$(echo hi)` and "quotes" intact: ção ✓\n\n[imagem omitida]'));
   assert.ok(imp.texts.includes('[chamada de ferramenta: Bash] {"command":"ls src"}'));
   assert.ok(imp.texts.includes('[resultado da ferramenta: sucesso] main.mjs\nutil.mjs'));
-  assert.ok(imp.texts.includes('[imagem omitida]'));
   assert.ok(!imp.texts.some((text) => text.includes('Sidechain prompt') || text.includes('Plan the listing.')));
-  assert.equal(readFakeState(env).bootAttempts, 0, 'no server is started for transfer');
+  assert.equal(readFakeState(env).bootAttempts, 1, 'import uses the managed V2 server');
+});
+
+test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t) => {
+  const { env, ws, source } = setup(t);
+  const external = await startExternalFake(t, { scenario: 'ok' });
+  env.OPC_SERVER_URL = external.url;
+  env.OPC_SERVER_PASSWORD = external.password;
+  const binDir = trackTempDir(t, makeTempDir('opc-transfer-bin-'));
+  const bin = path.join(binDir, 'configured-opencode.mjs');
+  const calls = path.join(binDir, 'calls.jsonl');
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.OPC_BIN_CALLS, JSON.stringify(args) + '\\n');\nif (args[0] === '--version') process.stdout.write('opencode v2.0.22\\n');\nelse if (args[0] === 'session' && args[1] === 'import' && args[2] === '--server' && args[4] === '--directory') process.stdout.write('Imported session: ' + JSON.parse(fs.readFileSync(args[6], 'utf8')).info.id + '\\n');\nelse process.exitCode = 2;\n`, { mode: 0o700 });
+  env.OPC_OPENCODE_BIN = bin;
+  env.OPC_BIN_CALLS = calls;
+  const result = await cliJson(transferArgs(source), { env, cwd: ws });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(external.url)} -s ${result.data.sessionID}`);
+  const invoked = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(invoked.map((args) => args[0]), ['--version', 'session']);
+  assert.deepEqual(invoked[1].slice(1, 3), ['import', '--server']);
+  assert.deepEqual(invoked[1].slice(4, 6), ['--directory', ws]);
 });
 
 test('transfer uses the SessionStart source and default model alias and renders Markdown', async (t) => {
@@ -79,7 +103,7 @@ test('transfer uses the SessionStart source and default model alias and renders 
   const r = await runCli(['transfer'], { env: { ...env, OPC_COMPANION_TRANSCRIPT_PATH: source }, cwd: ws });
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^# opc transfer\n/);
-  assert.match(r.stdout, /opencode -s ses_[0-9A-Za-z]+/);
+  assert.match(r.stdout, /opencode --server http:\/\/127\.0\.0\.1:\d+ -s ses_[0-9A-Za-z]+/);
   assert.match(r.stdout, /4 \(2 do usuário, 2 do assistente\)/);
   assert.doesNotMatch(r.stdout + r.stderr, /Origem:|session\.jsonl|Now add a --verbose/);
   assert.equal(imports(env).length, 1);
@@ -88,6 +112,7 @@ test('transfer uses the SessionStart source and default model alias and renders 
 test('transfer resolves relative source and --cwd using ctx.env and ctx.cwd', async (t) => {
   const { env, root, source } = setup(t);
   const cwd = path.dirname(source);
+  trackWorkspace(t, cwd); // the V2 import boots the managed server for --cwd, so cleanup must stop it
   const r = await cliJson(['transfer', '--cwd', cwd, '--source', 'session.jsonl', '-m', MODEL], { env, cwd: root });
   assert.equal(r.code, 0, r.stderr);
   assert.equal(imports(env)[0].cwd, cwd);
@@ -212,11 +237,8 @@ test('/opc:transfer is user-only, uses a guarded quoted heredoc and does not run
 });
 
 test('fake import oracle independently rejects malformed export references', () => {
-  assert.deepEqual(checkImportShape({ info: {}, messages: [] }).includes('info.id invalid'), true);
-  const sample = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'export-sample.json'), 'utf8'));
-  // Real exports may contain non-text parts; the transfer fake accepts only transfer output.
-  sample.messages = sample.messages.filter((m) => ['user', 'assistant'].includes(m.info.role));
-  for (const message of sample.messages) message.parts = message.parts.filter((part) => part.type === 'text');
-  sample.messages[0].parts[0].sessionID = 'ses_wrong';
-  assert.ok(checkImportShape(sample).some((error) => /reference mismatch/.test(error)));
+  assert.ok(checkImportShape({ info: {}, messages: [] }).includes('info.id inválido'));
+  const sample = loadContractSample('export.json');
+  sample.messages[1].id = sample.messages[0].id;
+  assert.ok(checkImportShape(sample).some((error) => /id duplicado/.test(error)));
 });

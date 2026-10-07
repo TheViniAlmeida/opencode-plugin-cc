@@ -21,15 +21,15 @@ export function parseFullId(full) {
   return { providerID: text.slice(0, slash), modelID: text.slice(slash + 1) };
 }
 
-export function buildCatalog(providerResponse) {
-  const all = Array.isArray(providerResponse?.all) ? providerResponse.all : [];
-  const connected = new Set(Array.isArray(providerResponse?.connected) ? providerResponse.connected : []);
-  const defaults = providerResponse?.default && typeof providerResponse.default === 'object' ? providerResponse.default : {};
+export function buildCatalog({ providers: all = [], models: modelList = [], defaultModel = null } = {}) {
+  const connected = new Set(all.filter((provider) => provider.activation === 'enabled').map((provider) => provider.id));
+  const defaults = defaultModel?.providerID && defaultModel?.id
+    ? { [defaultModel.providerID]: defaultModel.modelID ?? defaultModel.id } : {};
   const models = [];
   const byFull = new Map();
   const providers = [];
   for (const provider of all) {
-    const entries = Object.values(provider.models ?? {});
+    const entries = modelList.filter((model) => model.providerID === provider.id);
     providers.push({
       id: provider.id,
       name: provider.name ?? provider.id,
@@ -39,7 +39,7 @@ export function buildCatalog(providerResponse) {
       defaultModel: defaults[provider.id] ? `${provider.id}/${defaults[provider.id]}` : null,
     });
     for (const m of entries) {
-      const modelID = m.id;
+      const modelID = m.modelID ?? m.id;
       const full = `${provider.id}/${modelID}`;
       const entry = {
         providerID: provider.id,
@@ -48,12 +48,12 @@ export function buildCatalog(providerResponse) {
         name: m.name ?? modelID,
         family: m.family ?? null,
         status: m.status ?? null,
-        releaseDate: m.release_date ?? null,
-        variants: Object.keys(m.variants ?? {}),
+        releaseDate: m.time?.released ?? null,
+        variants: (m.variants ?? []).map((variant) => variant.id),
         limit: { context: m.limit?.context ?? null, output: m.limit?.output ?? null },
-        cost: { input: m.cost?.input ?? null, output: m.cost?.output ?? null },
+        cost: { input: m.cost?.[0]?.input ?? null, output: m.cost?.[0]?.output ?? null },
         reasoning: Boolean(m.capabilities?.reasoning),
-        toolcall: Boolean(m.capabilities?.toolcall),
+        toolcall: Boolean(m.capabilities?.tools),
         connected: connected.has(provider.id),
       };
       models.push(entry);
@@ -62,7 +62,7 @@ export function buildCatalog(providerResponse) {
   }
   models.sort((a, b) => a.full.localeCompare(b.full));
   providers.sort((a, b) => a.id.localeCompare(b.id));
-  return { connected, models, byFull, providers, defaults };
+  return { connected, models, entries: models, byFull, byFullId: byFull, providers, defaults };
 }
 
 export function expandAlias(value, aliases = {}) {
@@ -121,7 +121,7 @@ export function normalizeModelId(input, { catalog, defaultProvider = null, alias
   const known = providerID ? catalog.byFull.get(expanded) : null;
   const reason = known && !catalog.connected.has(known.providerID)
     ? `o provider "${known.providerID}" não está conectado (execute: opencode auth login)`
-    : 'não encontrado em /provider';
+    : 'não encontrado em /api/model';
   throw new UsageError('UNKNOWN_MODEL', `modelo desconhecido "${label}": ${reason}`,
     { details: { inputPreview: label, suggestions: suggestionsFor(catalog, expanded) } });
 }

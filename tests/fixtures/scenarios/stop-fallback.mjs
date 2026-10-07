@@ -3,7 +3,7 @@ import failure from './model-429.mjs';
 import success from './stop-allow.mjs';
 
 export default {
-  onPromptAsync(fake, sessionID, body) {
-    return (isFailingModel(body) ? failure : success).onPromptAsync(fake, sessionID, body);
+  onPrompt(fake, sessionID, body) {
+    return (isFailingModel(fake.state.sessions[sessionID]) ? failure : success).onPrompt(fake, sessionID, body);
   },
 };

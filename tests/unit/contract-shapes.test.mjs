@@ -14,29 +14,15 @@ const agentItem = {
   variant: 'default', temperature: 0.5,
 };
 
-test('F1 fixtures cover optional real-server provider model and agent fields', () => {
+test('V2 fixtures provide separate provider, model and agent lists with sensitive settings', () => {
   const provider = fixtureData('provider.json');
-  const models = provider.all.flatMap((entry) => Object.values(entry.models ?? {}));
-  assert.ok(models.some((model) => model.capabilities?.interleaved && typeof model.capabilities.interleaved.field === 'string'));
-  assert.ok(models.some((model) => {
-    const cost = model.cost;
-    return cost?.experimentalOver200K
-      && ['input', 'output'].every((key) => typeof cost.experimentalOver200K[key] === 'number')
-      && ['read', 'write'].every((key) => typeof cost.experimentalOver200K.cache?.[key] === 'number');
-  }));
-  assert.ok(models.some((model) => {
-    const tier = model.cost?.tiers?.[0];
-    return tier?.tier?.type === 'context' && typeof tier.tier.size === 'number'
-      && typeof tier.input === 'number' && typeof tier.output === 'number'
-      && ['read', 'write'].every((key) => typeof tier.cache?.[key] === 'number');
-  }));
-  assert.ok(models.some((model) => typeof model.limit?.input === 'number'));
-
+  const models = fixtureData('model.json');
+  assert.ok(provider.some((item) => item.id && item.name && item.activation));
+  assert.ok(models.some((item) => item.id && item.modelID && item.providerID && Array.isArray(item.variants)));
+  assert.ok(provider.every((item) => typeof item.settings?.apiKey === 'string'));
+  assert.ok(models.every((item) => typeof item.settings?.apiKey === 'string' && item.capabilities?.tools === true));
   const agents = fixtureData('agent.json');
-  assert.ok(agents.some((agent) => typeof agent.color === 'string'));
-  assert.ok(agents.some((agent) => typeof agent.steps === 'number'));
-  assert.ok(agents.some((agent) => typeof agent.temperature === 'number'));
-  assert.ok(agents.some((agent) => typeof agent.topP === 'number'));
+  assert.ok(agents.some((agent) => agent.id === 'build' && Array.isArray(agent.permissions)));
 });
 
 test('agent array snapshots preserve all 12 known properties regardless of size', () => {
@@ -88,17 +74,19 @@ test('live collection prunes real and fake agent responses identically before di
     PROBES, EVENT_TYPES, shapeOf, performance,
     EventHub: class {
       onAny(callback) { this.callback = callback; }
-      async start() { for (const type of EVENT_TYPES) this.callback({ id: 'synthetic', type, properties: {} }); }
+      async start() { for (const type of EVENT_TYPES) this.callback({ id: 'synthetic', type, data: {} }); }
       stop() {}
     },
   });
-  const client = (unknown) => ({ request: async (_method, endpoint) => endpoint === '/agent'
-    ? [{ ...agentItem, options: { [unknown]: true } }] : {} });
+  const client = (unknown) => ({ request: async (_method, endpoint) => endpoint === '/api/agent'
+    ? [{ ...agentItem, id: 'synthetic-agent', permissions: [{ action: 'read', resource: '*', effect: 'allow' }], options: { [unknown]: true } }]
+    : endpoint === '/api/info' ? { version: '2.0.22', pid: 1, urls: [], paths: {} }
+      : endpoint === '/api/session/active' ? {} : [] });
   const real = await collect(client('alice'), {});
   const fake = await collect(client('bob'), {});
   const probe = PROBES.find((entry) => entry.name === 'agent');
   assert.deepEqual(diffShapes(real.agent, fake.agent, probe.used, probe.optionalUsed), []);
-  assert.deepEqual(real.agent, shapeOf([{ ...agentItem, options: { alice: true } }], 'agent'));
+  assert.deepEqual(real.agent, shapeOf([{ ...agentItem, id: 'synthetic-agent', permissions: [{ action: 'read', resource: '*', effect: 'allow' }], options: { alice: true } }], 'agent'));
   assert.deepEqual(fake.agent, real.agent);
   assert.equal(lookup(real.agent, '[].name'), 'string');
   assert.deepEqual(lookup(fake.agent, '[].options'), { '*': 'boolean' });

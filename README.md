@@ -4,16 +4,15 @@ Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F5 — MCP e transfer implementados, em validação**. Descoberta, onboarding,
+> Estado: **F6 — migração para OpenCode V2 implementada, portão em validação**. Descoberta, onboarding,
 > turnos, reviews, sessões, delegação, jobs, orquestração e conclave estão disponíveis.
-> A entrega da F5 depende do portão; uso das ferramentas no Claude Code e retomada de sessão
-> transferida seguem **NÃO VALIDADO**.
+> O portão F6 e os procedimentos manuais no Claude Code/TUI seguem **NÃO VALIDADOS**.
 
 ## Requisitos
 
 - Claude Code com suporte a plugins.
 - Node.js 20 ou mais novo (o `opc` confere a versão ao iniciar).
-- OpenCode 1.18.0 ou mais novo (testado com 1.18.32): `npm install -g opencode-ai`.
+- OpenCode ≥ 2.0.22 (somente V2). Configure `server.opencodeBin` na configuração global ou `OPC_OPENCODE_BIN` para apontar ao executável V2 quando outro `opencode` estiver primeiro no PATH.
 - Pelo menos um provider conectado no OpenCode (`opencode auth login`).
 - Linux validado; macOS e Windows: código portátil, não validado.
 
@@ -71,7 +70,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:conclave` | Consulta vários modelos em paralelo para opinião, debate ou review cruzado |
 | `/opc:status`, `/opc:result`, `/opc:cancel` | Acompanha, lê e cancela jobs |
 | `opc monitor` | Acompanha jobs do workspace no terminal, sem alterar estado |
-| `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo, diff e tarefas |
+| `/opc:sessions`, `/opc:session` | Lista e gerencia sessões, inclusive fork, revert/unrevert, resumo e diff |
 | `/opc:subagent` | Executa agentes/modelos em paralelo como grupo de jobs |
 | `/opc:command` | Roda um slash command do OpenCode em job próprio |
 | `/opc:attach` | Abre a sessão na TUI; `--pane` abre split no tmux e só o usuário invoca |
@@ -83,7 +82,7 @@ Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
 
 ## Servidor MCP
 
-O plugin registra o servidor MCP `opc` (stdio, sem dependências), com 25 ferramentas `opc_*`
+O plugin registra o servidor MCP `opc` (stdio, sem dependências), com as ferramentas `opc_*`
 para descoberta, turnos, subagentes, orquestração, conclave, sessões, jobs e permissões.
 O Claude chama o mesmo despachante dos comandos `/opc:`, com as mesmas políticas e
 confirmações. Jobs longos retornam seu ID em background. Configuração é exposta apenas
@@ -91,9 +90,9 @@ para leitura; revert/unrevert, parada do servidor, review e transfer ficam nos c
 do usuário. Veja o [catálogo e o formato dos resultados](docs/architecture.md#servidor-mcp-f5).
 
 Para levar a conversa atual para o OpenCode, use `/opc:transfer` e depois
-`opencode -s <id>` no terminal. A [referência de comandos](docs/commands.md#opctransfer)
+`opencode --server <url> -s <id>` no terminal, com `OPENCODE_SERVER_PASSWORD` no ambiente. A [referência de comandos](docs/commands.md#opctransfer)
 explica a conversão, os limites e os erros. O uso real no Claude e a retomada interativa
-da sessão transferida ainda precisam de validação no portão F5.
+da sessão transferida ainda precisam de validação no portão F6.
 
 ## Documentação
 
@@ -112,6 +111,7 @@ da sessão transferida ainda precisam de validação no portão F5.
 - [Relatório da F4c](docs/phases/F4c-report.md)
 - [Plano e portão da F5 (em validação)](docs/superpowers/plans/2026-09-26-opc-F5-mcp-transfer.md)
 - [Relatório da F5 (aceite parcial)](docs/phases/F5-report.md)
+- [Relatório e portão da F6](docs/phases/F6-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos

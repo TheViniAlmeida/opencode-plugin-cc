@@ -1,0 +1,10 @@
+{
+  "version": "2.0.22",
+  "pid": 12345,
+  "urls": [
+    "http://127.0.0.1:4096"
+  ],
+  "paths": {
+    "tmp": "<workspace>/opencode"
+  }
+}

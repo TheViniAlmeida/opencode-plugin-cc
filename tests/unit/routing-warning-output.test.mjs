@@ -9,9 +9,10 @@ import { followJob } from '../../plugins/opc/scripts/commands/task.mjs';
 const providerID = 'omniroute-personal';
 const denied = `${providerID}/cmd/long-provider/long-denied-model-name`;
 const unknown = `${providerID}/cmd/long-provider/long-unknown-model-name`;
-const catalog = buildCatalog({ connected: [providerID], all: [{ id: providerID, models: {
-  denied: { id: denied.slice(providerID.length + 1) }, good: { id: 'good' },
-} }] });
+const catalog = buildCatalog({ providers: [{ id: providerID, activation: 'enabled' }], models: [
+  { id: denied.slice(providerID.length + 1), providerID, variants: [] },
+  { id: 'good', providerID, variants: [] },
+] });
 const config = {
   routing: { tasks: { ask: [denied, unknown, `${providerID}/good`] } },
   policy: { models: { deny: [denied] } },

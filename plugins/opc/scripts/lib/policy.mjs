@@ -106,23 +106,23 @@ export function assertCommandUsable(commandInfo, policy, agentsByName = new Map(
 // ---- F2a: permission profiles, invariants, approver (spec §8) ----
 
 export const BUILTIN_DESTRUCTIVE_BASH = Object.freeze([
-  'rm -rf*', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
+  'rm *', 'rm -r *', 'rm -fr*', 'git push --force*', 'git push -f*', 'git push --delete*',
   'git reset --hard*', 'git clean -f*', 'git branch -D*', 'git tag -d*', 'docker rm*',
   'docker rmi*', 'docker volume rm*', 'docker system prune*', 'docker compose down -v*',
   'kubectl delete*', 'mkfs*', 'dd *of=*', 'shred*', 'truncate -s 0*', 'find * -delete*',
   'shutdown*', 'reboot*', 'poweroff*', 'systemctl stop*', '*DROP DATABASE*', '*DROP TABLE*',
   '*TRUNCATE*',
 ]);
-export const READ_ONLY_ALLOW = Object.freeze(['read', 'glob', 'list', 'lsp', 'skill', 'todowrite']);
-export const SENSITIVE_PATH_PERMISSIONS = Object.freeze(['read', 'grep', 'glob', 'list']);
+export const READ_ONLY_ALLOW = Object.freeze(['read', 'glob', 'skill', 'question']);
+export const SENSITIVE_PATH_PERMISSIONS = Object.freeze(['read', 'grep', 'glob']);
 export const DEFAULT_SENSITIVE_PATHS = Object.freeze([
   '*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env',
 ]);
-export const PATCH_PERMISSION_MODE = 'append';
+export const PATCH_PERMISSION_MODE = 'replace';
 const RULE_ACTIONS = new Set(['allow', 'deny', 'ask']);
-const rule = (permission, pattern, action) => ({ permission, pattern, action });
+const r = (action, resource, effect) => ({ action, resource, effect });
 
-function displayValue(value) {
+export function displayValue(value) {
   const text = String(value);
   return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 }
@@ -147,25 +147,25 @@ function customRulesOf(name, permissionProfiles = {}) {
   const rules = permissionProfiles?.[name];
   if (!Array.isArray(rules)) throw new UsageError('UNKNOWN_PROFILE', `permissionProfiles.${displayValue(name)} não está definido na configuração global`);
   return rules.map((r, i) => {
-    if (!r || typeof r.permission !== 'string' || typeof r.pattern !== 'string' || !RULE_ACTIONS.has(r.action)) {
-      throw new UsageError('INVALID_PROFILE', `permissionProfiles.${displayValue(name)}[${i}] deve ser {permission, pattern, action: allow|deny|ask}`);
+    if (!r || typeof r.action !== 'string' || typeof r.resource !== 'string' || !RULE_ACTIONS.has(r.effect)) {
+      throw new UsageError('INVALID_PROFILE', `permissionProfiles.${displayValue(name)}[${i}] deve ser {action, resource, effect: allow|deny|ask}`);
     }
-    return rule(r.permission, r.pattern, r.action);
+    return { action: r.action, resource: r.resource, effect: r.effect };
   });
 }
 
 export function invariantRules(profile, { policy = {}, deniedAgentGlobs = [], bridged = null } = {}) {
   const { kind } = parseProfile(profile);
   const withDestructive = bridged ?? kind === 'write';
-  const rules = [rule('external_directory', '*', 'deny')];
-  if (kind !== 'write') rules.push(rule('grep', '*', 'deny'));
+  const rules = [r('external_directory', '*', 'deny')];
+  if (kind !== 'write') rules.push(r('grep', '*', 'deny'));
   for (const pattern of sensitivePathsOf(policy)) {
-    for (const permission of SENSITIVE_PATH_PERMISSIONS) rules.push(rule(permission, pattern, 'deny'));
+    for (const permission of SENSITIVE_PATH_PERMISSIONS) rules.push(r(permission, pattern, 'deny'));
   }
-  for (const glob of deniedAgentGlobs) rules.push(rule('task', glob, 'deny'));
-  for (const tool of policy.tools?.deny ?? []) rules.push(rule(tool, '*', 'deny'));
-  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(rule('bash', pattern, 'ask'));
-  rules.push(rule('doom_loop', '*', kind === 'write' ? 'ask' : 'deny'));
+  for (const glob of deniedAgentGlobs) rules.push(r('subagent', glob, 'deny'));
+  for (const tool of policy.tools?.deny ?? []) rules.push(r(tool, '*', 'deny'));
+  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(r('shell', pattern, 'ask'));
+  rules.push(r('browser', '*', 'deny'));
   return rules;
 }
 
@@ -174,13 +174,13 @@ export function buildPermissionRules(profile, { policy = {}, permissionProfiles 
   const rules = [];
   let bridged = kind === 'write';
   if (kind !== 'write') {
-    rules.push(rule('*', '*', 'deny'));
-    for (const permission of READ_ONLY_ALLOW) rules.push(rule(permission, '*', 'allow'));
+    rules.push(r('*', '*', 'deny'));
+    for (const permission of READ_ONLY_ALLOW) rules.push(r(permission, '*', 'allow'));
   }
   if (kind === 'custom') {
     const custom = customRulesOf(name, permissionProfiles);
     rules.push(...custom);
-    bridged = custom.some((r) => r.permission === 'bash' && r.action !== 'deny');
+    bridged = custom.some((entry) => entry.action === 'shell' && entry.effect !== 'deny');
   }
   rules.push(...invariantRules(profile, { policy, deniedAgentGlobs, bridged }));
   return rules;
@@ -194,9 +194,8 @@ export function requiresUser(request, policy = {}) {
   if (!request || typeof request.permission !== 'string') return true;
   const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
   if (request.permission === 'external_directory') return true;
-  if (request.permission === 'bash') {
-    const commands = [...patterns];
-    if (typeof request.metadata?.command === 'string') commands.push(request.metadata.command);
+  if (request.permission === 'shell') {
+    const commands = [request.metadata?.command ?? patterns[0]].filter((command) => typeof command === 'string');
     const destructive = destructiveBashOf(policy);
     return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive));
   }
@@ -477,20 +476,11 @@ export function checkReply({ approver = 'user', request, reply, confirmedByUser 
   return { ok: true };
 }
 
-export function endsWithRules(current, desired) {
-  if (desired.length > current.length) return false;
-  const offset = current.length - desired.length;
-  return desired.every((r, i) => {
-    const c = current[offset + i];
-    return c && c.permission === r.permission && c.pattern === r.pattern && c.action === r.action;
-  });
+export function sameRules(current, desired) {
+  return Array.isArray(current) && Array.isArray(desired) && current.length === desired.length
+    && desired.every((rule, i) => current[i]?.action === rule.action && current[i]?.resource === rule.resource && current[i]?.effect === rule.effect);
 }
 
-export function planPermissionSwitch(current, desired, mode = PATCH_PERMISSION_MODE) {
-  const existing = Array.isArray(current) ? current : [];
-  if (endsWithRules(existing, desired)) return 'none';
-  if (mode === 'replace') return 'patch';
-  const first = desired[0];
-  if (first && first.permission === '*' && first.pattern === '*') return 'patch';
-  throw new UsageError('PROFILE_SWITCH_UNSUPPORTED', 'esta sessão foi criada com outro perfil de permissões e o OpenCode 1.18.32 acrescenta (não substitui) regras ao PATCH; a troca não terá efeito. Inicie uma nova sessão com --fresh');
+export function planPermissionSwitch(current, desired) {
+  return sameRules(current, desired) ? { kind: 'none' } : { kind: 'replace', rules: desired };
 }

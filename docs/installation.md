@@ -5,7 +5,7 @@
 | Item | Versão | Como conferir |
 |---|---|---|
 | Node.js | 20 ou mais novo | `node --version` |
-| OpenCode | 1.18.0 ou mais novo (testado 1.18.32) | `opencode --version` |
+| OpenCode | 2.0.22 ou mais novo (somente OpenCode V2) | `opencode --version` |
 | Provider no OpenCode | pelo menos um conectado | `opencode auth list` |
 | git | qualquer versão recente | `git --version` |
 

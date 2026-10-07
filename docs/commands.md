@@ -6,7 +6,7 @@ Os comandos abaixo existem no terminal como `opc …` e, no Claude Code, como `/
 
 Sinopse: `/opc:setup [--reconfigure]`; apoio de terminal: `opc setup [--json]`, `opc setup models`, `opc setup apply --stdin`, `opc setup commit` e `opc setup discard`.
 
-Diagnostica dependências, oferece a instalação do OpenCode e conduz o onboarding. O rascunho pode ser retomado; `--reconfigure` inicia uma reconfiguração controlada. Use o heredoc canônico para payload JSON:
+Diagnostica dependências, orienta a instalação do OpenCode (2.0.22 ou mais novo) e conduz o onboarding. O rascunho pode ser retomado; `--reconfigure` inicia uma reconfiguração controlada. Use o heredoc canônico para payload JSON:
 
 ```bash
 opc setup apply --stdin <<'OPC_JSON_5f1d0c7a_EOF'
@@ -62,7 +62,7 @@ Lista commands ou skills expostos pelo servidor. Para commands, inclui a decisã
 
 ## Saídas e segurança
 
-Use `--json` em integrações. O portão F1 verificou as respostas JSON de providers, modelos e onboarding e não encontrou credenciais. Evite passar segredo como argumento ou gravá-lo na configuração.
+Use `--json` em integrações. Providers, modelos e catálogo omitem o objeto `settings`, inclusive no JSON, porque o V2 pode incluir `settings.apiKey`. Evite passar segredo como argumento ou gravá-lo na configuração.
 
 ## Execução (F2a)
 
@@ -73,7 +73,7 @@ Todo turno roda num **worker destacado** (`opc task-worker`), registrado como jo
 | Código | Quando |
 | --- | --- |
 | 0 | Sucesso |
-| 2 | Uso inválido, id ausente/ambíguo, limite de jobs, sessão ocupada ou troca de perfil não suportada no resume |
+| 2 | Uso inválido, id ausente/ambíguo, limite de jobs ou sessão ocupada |
 | 3 | Job em `waiting_permission`, com pedido de permissão ou pergunta pendente |
 | 4 | Negado por política, aprovador ou recursão (`OPC_INSIDE_SERVER=1`) |
 | 5 | Falha de conexão/servidor |
@@ -177,7 +177,7 @@ Uso: `/opc:review [--wait|--background] [--base <ref>] [--scope auto|working-tre
 - **Espera:** sem `--wait`/`--background`, mede com `opc review --estimate --json` e pergunta entre aguardar ou rodar em segundo plano. Só recomenda aguardar para até 2 arquivos e 300 linhas alteradas.
 - **Diff grande:** até 400 KB vai inteiro; acima disso, envia `--stat` completo e diffs menores primeiro. O modelo pode ler os omitidos com `read`; o perfil não libera Bash.
 - **Segredos:** `policy.sensitivePaths` nunca tem conteúdo enviado e aparece apenas em "Excluded Files"; symlink não rastreado não é seguido.
-- **Modelo:** `--model` → `reviewModel` → `routing.tasks.review` → `defaultModel` → padrão do OpenCode.
+- **Modelo:** `--model` → `reviewModel` → `routing.tasks.review` → `defaultModel` → `model` declarado na configuração do OpenCode. O modelo padrão do servidor (`/api/model/default`, em geral um modelo gratuito do provider `opencode`) nunca é usado; sem modelo resolvido, o erro é `NO_MODEL`.
 - **Correções:** o comando somente revisa. Depois dos achados, o Claude pergunta quais corrigir antes de editar.
 - **Exit codes:** 0 (qualquer veredito), 2 (uso ou fora de Git), 4 (modelo negado), 5 (servidor), 6 (espera expirou; job continua), 7 (falha, inclusive saída inválida; texto bruto impresso), 130 (cancelado).
 
@@ -265,14 +265,14 @@ Status: pronto
 ## Verificações
 
 - node: ok (22.22.1)
-- opencode: ok (1.18.32)
+- opencode: ok (2.0.22)
 - diretório de dados: <tmp>
 - workspace: <tmp>
 
 ## Servidor
 
 - estado: rodando
-- versão: 1.18.32
+- versão: 2.0.22
 - reaproveitado: não (subiu agora)
 
 Gate de parada: ativado (atualizado)
@@ -311,17 +311,16 @@ opc sessions --all --limit 10 --json
 | --- | --- | --- |
 | `new` | `new [--title t] [--agent a] [--model m] [--write]` | Cria sessão `OPC: session: <t>` com perfil `read-only` ou `write`. |
 | `show` | `show <sessionID> [--limit N]` | Mostra sessão, estado e mensagens; os IDs de mensagem servem para `fork` e `revert`. |
-| `fork` | `fork <sessionID> [messageID]` | Cria fork com o histórico anterior à mensagem indicada. |
-| `revert` | `revert <sessionID> <messageID> [--part partID] [--confirmed-by-user]` | Exige confirmação e então aplica o revert. |
-| `unrevert` | `unrevert <sessionID> [--confirmed-by-user]` | Exige confirmação e restaura o revert ativo. |
+| `fork` | `fork <sessionID> [--before messageID]` | Cria fork da sessão; com `--before`, usa o histórico anterior à mensagem indicada. O `messageID` posicional é recusado. |
+| `revert` | `revert <sessionID> <messageID> [--confirmed-by-user]` | Exige confirmação e então aplica o revert (stage) da mensagem inteira: os arquivos voltam e o revert fica pendente, desfazível com `unrevert`. Não há revert por parte no OpenCode 2. Recusa com `SNAPSHOT_DISABLED` quando a config do OpenCode tem `"snapshot": false`. |
+| `unrevert` | `unrevert <sessionID> [--confirmed-by-user]` | Exige confirmação e desfaz o revert pendente, restaurando os arquivos. |
 | `summarize` | `summarize <sessionID> [--model m] [--timeout s]` | Resume sincronamente; o timeout padrão é 600 s. |
 | `children` | `children <sessionID>` | Lista sessões filhas. |
-| `diff` | `diff <sessionID> [--message messageID]` | Mostra diff da sessão ou de uma mensagem. |
-| `todo` | `todo <sessionID>` | Lista tarefas da sessão. |
+| `diff` | `diff <sessionID>` | Mostra o diff da sessão; o OpenCode 2 não oferece diff por mensagem. |
 
-IDs de sessão, mensagem e parte são validados antes de conectar. `revert`, `unrevert` e `summarize` recusam a sessão ocupada por job ou ativa no servidor. A resolução de modelo de `new` e `summarize` segue a política; uma recusa de política retorna exit 4.
+IDs de sessão e mensagem são validados antes de conectar. `revert`, `unrevert` e `summarize` recusam a sessão ocupada por job ou ativa no servidor. A resolução de modelo de `new` e `summarize` segue a política; uma recusa de política retorna exit 4.
 
-Sem `--confirmed-by-user`, `revert` e `unrevert` retornam exit 2, exibem a prévia do diff e não mudam nada. No slash command, depois da confirmação explícita do usuário, repasse a linha de confirmação pelo heredoc, sem pôr IDs na linha de comando:
+Sem `--confirmed-by-user`, `revert` e `unrevert` retornam exit 2 e não mudam nada. A prévia do `revert` mostra o aviso de que o OpenCode 2 não fornece diff restrito às mensagens a partir do alvo (a reversão pode alterar arquivos); a do `unrevert` mostra o diff do revert ativo quando o OpenCode o informa. `revert` com mensagem fora da sessão retorna `UNKNOWN_MESSAGE`. No slash command, depois da confirmação explícita do usuário, repasse a linha de confirmação pelo heredoc, sem pôr IDs na linha de comando:
 
 ```bash
 opc session --args-stdin <<'OPC_ARGS_5f1d0c7a_EOF'
@@ -331,24 +330,25 @@ OPC_ARGS_5f1d0c7a_EOF
 
 Para `unrevert`, o corpo é `unrevert ses_<id> --confirmed-by-user`. Nunca acrescente a flag sem a confirmação daquela ação e daquele alvo.
 
-Em OpenCode 1.18.32, o endpoint de diff da sessão pode devolver uma lista vazia. Sem `--message`, o opc então tenta o diff de cada mensagem de usuário e informa `source: "per-message"`; se as mensagens não puderem ser listadas, use `--message <id>`.
+O revert fica pendente até o `unrevert`. Um prompt novo na sessão (`/opc:task --resume`) ou um `summarize` pode consolidar o revert no OpenCode e apagar as mensagens revertidas; depois disso o `unrevert` não as traz de volta (A CONFIRMAR no OpenCode 2.0.22).
+
+O diff da sessão pode estar vazio. O OpenCode 2 não oferece diff por mensagem; confira o estado do workspace com o git. Com `"snapshot": false` na config do OpenCode, o diff fica sempre vazio e a saída avisa isso.
 
 ```bash
 opc session new --title "investigar login" --model fast
 opc session show ses_<id>
-opc session fork ses_<id> msg_<id>
+opc session fork ses_<id> --before msg_<id>
 opc session diff ses_<id>
-opc session todo ses_<id>
 ```
 
-Saída real (portão F3, 29/09/2026):
+Formato da saída:
 
 ```text
 $ opc session diff ses_<id>
-{"sessionID":"ses_<id>","messageID":null,"source":"per-message","notices":["O OpenCode não calculou o diff agregado da sessão; mostrando o diff de cada mensagem do usuário (da mais antiga para a mais recente)."],"diffs":[{"file":"notes.txt","status":"modified","messageID":"msg_<id>"}]}
+{"sessionID":"ses_<id>","messageID":null,"source":"session","notices":[],"diffs":[…]}
 
 $ opc session summarize ses_<id> --model omniroute-personal/cmd/Qwen/Qwen3.7-Flash --json
-{"sessionID":"ses_<id>","model":"omniroute-personal/cmd/Qwen/Qwen3.7-Flash","summarized":true}
+{"sessionID":"ses_<id>","model":"omniroute-personal/cmd/Qwen/Qwen3.7-Flash","summarized":true,"compactionMessageID":"msg_<id>"}
 ```
 
 ### `/opc:subagent`
@@ -441,7 +441,7 @@ Sessão: ses_<id> · modelo omniroute-personal/cmd/moonshotai/Kimi-K2.6 · agent
 Sem `sessionID`, usa a sessão do job mais recente da sessão atual do Claude; sem job, abre o seletor da TUI. A linha normal lê a senha do arquivo privado e a entrega somente por variável de ambiente:
 
 ```bash
-OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode attach http://127.0.0.1:<porta> -s ses_<id> --dir '<workspace>'
+OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode --server http://127.0.0.1:<porta> -s ses_<id>
 ```
 
 No servidor gerenciado, `attach.secret` é modo 600 e contém apenas a senha vigente. `--pane` requer tmux, cria `attach-pane.sh` modo 700 e lê o segredo dentro do pane; senha nenhuma é posta em argv. Fora do tmux, retorna exit 2. Em servidor externo (`OPC_SERVER_URL`), a linha usa `OPC_SERVER_PASSWORD` e `--pane` é recusado porque o opc não grava o segredo externo.
@@ -554,7 +554,7 @@ Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).
 ## `/opc:transfer`
 
 Converte uma conversa do Claude Code para uma nova sessão OpenCode, retomável no
-terminal com `opencode -s <id>`. O slash command é invocado pelo usuário
+terminal com `opencode --server <url> -s <id>` e `OPENCODE_SERVER_PASSWORD` no ambiente. O slash command é invocado pelo usuário
 (`disable-model-invocation: true`); não há ferramenta MCP de transfer.
 
 ```text
@@ -569,7 +569,7 @@ opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json
   no uso normal.
 - **Modelo:** `--model` (ID completo `provider/model` ou alias) → `defaultModel` →
   `NO_MODEL`. Provider e modelo passam pela política. A transferência não consulta o
-  catálogo nem inicia `opencode serve`; a existência do modelo é conferida pelo OpenCode
+  catálogo; inicia o servidor gerenciado para importar a sessão. A existência do modelo é conferida pelo OpenCode
   ao retomar. O modelo original do Claude não é preservado.
 - **Conversão:** cada prompt real vira uma mensagem `user`; o texto do assistente até
   o próximo prompt vira uma mensagem `assistant`. Chamadas e resultados de ferramentas
@@ -582,9 +582,10 @@ opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json
   sintética de usuário para manter o encadeamento.
 - **Importação:** a conversão gera IDs novos e valida a estrutura do formato
   `opencode export`. O JSON temporário é gravado com modo 600 em `<estado>/transfer/`
-  (diretório 700), importado com `opencode import <arquivo>` no workspace e removido
+  (diretório 700), importado com `opencode session import --server <url> --directory <workspace> <arquivo>` no servidor gerenciado e removido
   ao fim da tentativa. O sucesso exige exit 0 e a linha `Imported session: <id>` com
-  o mesmo ID exportado.
+  o mesmo ID exportado. O comando de retomada usa a URL desse servidor e exige
+  `OPENCODE_SERVER_PASSWORD` no ambiente do terminal.
 - **Título e saída:** a sessão tem prefixo `OPC: transfer:`. A saída mostra ID, título,
   modelo, contagem de mensagens/itens ignorados e comando para retomar. O resumo passa
   por redação; o conteúdo do histórico é preservado no arquivo importado.
@@ -618,12 +619,12 @@ Ignorados: 0 meta, 0 sidechain, 0 comandos locais, 0 blocos de raciocínio, 1 ou
 
 Para retomar no terminal:
 
-    cd '<workspace>' && opencode -s ses_EXAMPLE
+    cd '<workspace>' && opencode --server http://127.0.0.1:4096 -s ses_EXAMPLE
 ```
 
 ### Ferramentas MCP
 
-O servidor MCP `opc` expõe 25 ferramentas `opc_*`, usando o mesmo despachante da CLI.
+O servidor MCP `opc` expõe 24 ferramentas `opc_*`, usando o mesmo despachante da CLI.
 Consultas e ações seguem a política e as confirmações do comando equivalente;
 `opc_config_get` permite apenas leitura. `opc_conclave` aceita `opinion` e `debate`;
 review fica no slash command. A [arquitetura](architecture.md#servidor-mcp-f5) contém o

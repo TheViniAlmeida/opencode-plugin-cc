@@ -73,6 +73,9 @@ export function emitReviewResult(ctx, job, { json }) {
     const structured = job.result?.structured ?? null;
     ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered: renderReviewJob(job) });
   } else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
+  // OpenCode 2 has no structured output: a completed turn whose text is not a valid review JSON degrades to the raw text and exits 7.
+  const structured = job.result?.structured ?? null;
+  if (job.status === 'completed' && (structured === null || validateReviewOutput(structured) !== null)) return ExitCode.JOB_FAILED;
   return exitCodeForJob(job);
 }
 
@@ -110,7 +113,7 @@ export async function runReviewCommand(ctx, argv, { variant }) {
   const request = turnJobRequest({
     kind: 'review', profile: 'read-only', prompt,
     model: resolved.model, modelFull: resolved.full, variant: resolved.variant,
-    format: ctx.config?.review?.structuredOutput === 'tool' ? { type: 'json_schema', schema: loadSchema('review-output') } : null, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
+    format: { type: 'json_schema', schema: loadSchema('review-output') }, timeoutMs: REVIEW_TURN_TIMEOUT_MS, title,
     config: ctx.config ?? {}, extra: {
       ...routingFields(resolved.resolution, { resume: false, catalog: resolved.catalog, warningsReported: true }),
       review: { variant, targetLabel: target.label, inputMode: context.inputMode, focus },

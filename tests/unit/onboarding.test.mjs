@@ -12,8 +12,8 @@ import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
-const catalog = buildCatalog(load('provider.json'));
-const agents = load('agent.json');
+const catalog = buildCatalog({ providers: load('provider.json'), models: load('model.json') });
+const agents = load('agent.json').map((agent) => ({ ...agent, name: agent.id, native: ['build', 'plan', 'general', 'explore'].includes(agent.id) }));
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const NOW = new Date('2026-09-26T12:00:00Z');
@@ -198,10 +198,11 @@ test('rankProviders / suggestModels / suggestAliases / modelFamilies', () => {
   const top = suggestModels(catalog, MV, { top: 3, policy });
   assert.equal(top.length, 3);
   assert.ok(top.every((m) => m.status !== 'deprecated'));
-  assert.deepEqual(top.map((m) => m.full), [`${MV}/opencode-go/qwen3.8-flash`, `${MV}/opencode-go/qwen3.8-max`, `${MV}/opencode-go/kimi-k3`]);
-  assert.deepEqual(suggestAliases(catalog, MV, policy), { fast: `${MV}/opencode-go/qwen3.8-flash`, strong: `${MV}/opencode-go/qwen3.8-max` });
+  assert.ok(top.every((model) => model.providerID === MV && model.connected));
+  assert.deepEqual(top.map((m) => m.full), [`${MV}/cx/gpt-5.6-sol`, `${MV}/opencode-go/deepseek-v4.1-flash`, `${MV}/opencode-go/kimi-k2.6`]);
+  assert.deepEqual(suggestAliases(catalog, MV, policy), { fast: `${MV}/opencode-go/deepseek-v4.1-flash`, strong: `${MV}/opencode-go/kimi-k3` });
   assert.deepEqual(modelFamilies(catalog, MV)[0], { family: 'opencode-go', count: 5, glob: `${MV}/opencode-go/*` });
-  assert.deepEqual(modelFamilies(catalog, 'opencode').map((f) => f.glob), ['opencode/big-pickle*', 'opencode/space-bunny*']);
+  assert.deepEqual(modelFamilies(catalog, 'opencode').map((f) => f.glob), ['opencode/big-pickle*', 'opencode/space-bunny-free*']);
 });
 
 test('projectDirs: non-git folder lists visible directories', (t) => {

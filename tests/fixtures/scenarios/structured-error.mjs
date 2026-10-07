@@ -1,9 +1,6 @@
-// Structured output failure without other tools: raw text + StructuredOutputError (recoverable).
+// V2 returns ordinary text; malformed JSON is rejected by the client.
 export default {
-  async onPromptAsync(fake, sessionID) {
-    await fake.emitTurn(sessionID, {
-      text: 'raw text answer that is not valid JSON',
-      error: { name: 'StructuredOutputError', data: { message: 'model output did not match the schema', retries: 1 } },
-    });
+  async onPrompt(fake, sessionID) {
+    await fake.emitTurn(sessionID, { text: 'raw text answer that is not valid JSON' });
   },
 };

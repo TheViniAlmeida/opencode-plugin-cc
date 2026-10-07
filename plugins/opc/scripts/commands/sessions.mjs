@@ -1,7 +1,6 @@
 import { parseArgs } from '../lib/args.mjs';
-import { ExitCode, UsageError } from '../lib/opc-error.mjs';
+import { ExitCode } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
-import { listJobs, ACTIVE_STATUSES, topLevelJobs, withServerLock } from '../lib/jobs.mjs';
 import { renderSessions } from '../lib/render.mjs';
 import { maskDeep } from '../lib/redact.mjs';
 
@@ -19,26 +18,14 @@ export function isOpcSession(session, workspaceRoot) {
   return typeof session.title === 'string'
     && session.title.startsWith('OPC: ')
     && !session.parentID
-    && (!session.directory || session.directory === workspaceRoot);
+    && (!session.location?.directory || session.location.directory === workspaceRoot);
 }
 
 export async function run(ctx, argv) {
   const { flags } = parseArgs(argv, SPEC);
   const conn = await openApi(ctx);
   try {
-    const { api, server } = conn;
-    if (flags.refresh) {
-      if (server.attached) {
-        throw new UsageError('REFRESH_ATTACHED', '--refresh descarta a instância do servidor e não é permitido num servidor externo (OPC_SERVER_URL)');
-      }
-      await withServerLock(ctx, async () => {
-        const active = topLevelJobs(listJobs(ctx.stateDir, { all: true })).filter((j) => ACTIVE_STATUSES.includes(j.status));
-        if (active.length) {
-          throw new UsageError('ACTIVE_JOBS', `--refresh recusado: há jobs ativos (${active.map((j) => j.id).join(', ')}); aguarde ou cancele`);
-        }
-        await api.dispose();
-      }, { purpose: 'sessions-refresh' });
-    }
+    const { api } = conn;
     const [all, statusMap] = await Promise.all([api.listSessions(), api.sessionStatus()]);
     const list = (all ?? [])
       .filter((s) => flags.all || isOpcSession(s, ctx.workspaceRoot))

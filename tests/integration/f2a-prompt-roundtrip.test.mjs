@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PLUGIN_ROOT, opc, requestsTo, setupF2a } from '../helpers.mjs';
+import { PLUGIN_ROOT, opc, setupF2a } from '../helpers.mjs';
+import { promptBodies } from '../f2b-helpers.mjs';
 
 const HOSTILE = `fix "it" don't \`touch pwned-backtick\` $(touch pwned) \${HOME} $PATH ção 日本語 🚀\nsecond line \\ with backslash; rm -rf / && echo nope | cat`;
 
@@ -33,8 +34,8 @@ test('prompt-roundtrip: the /opc:task heredoc delivers the text verbatim and not
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await runCommandMarkdown(ctx, 'task.md', HOSTILE);
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.equal(prompt.body.parts[0].text, HOSTILE);
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  assert.equal(prompt.text, HOSTILE);
   assertNothingExecuted(ctx.cwd);
 });
 
@@ -43,8 +44,8 @@ test('prompt-roundtrip: --prompt-file bytes arrive intact', async (t) => {
   writeFileSync(join(ctx.cwd, 'prompt.txt'), `${HOSTILE}\n\ttrailing tab line\n`);
   const r = await opc(ctx, ['task', '--prompt-file', 'prompt.txt']);
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.equal(prompt.body.parts[0].text, `${HOSTILE}\n\ttrailing tab line\n`);
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  assert.equal(prompt.text, `${HOSTILE}\n\ttrailing tab line\n`);
   assertNothingExecuted(ctx.cwd);
 });
 
@@ -52,6 +53,6 @@ test('prompt-roundtrip: ask template keeps $& and $1 literally', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });
   const r = await opc(ctx, ['ask', '--raw-args-stdin'], { stdin: 'what does $& and $1 and $$ mean here?' });
   assert.equal(r.code, 0, r.stderr);
-  const [prompt] = requestsTo(ctx.env, 'POST', /\/prompt_async$/);
-  assert.match(prompt.body.parts[0].text, /Question:\nwhat does \$& and \$1 and \$\$ mean here\?/);
+  const [prompt] = promptBodies(ctx.env); // the fake masks free-form text in request records; this reads the stored user message
+  assert.match(prompt.text, /Question:\nwhat does \$& and \$1 and \$\$ mean here\?/);
 });

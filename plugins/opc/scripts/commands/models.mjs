@@ -21,7 +21,8 @@ async function runCommand(ctx, argv) {
   if (positionals.length > 1) throw new UsageError('USAGE', 'uso: opc models [provider] [--verbose] [--allowed] [--all] [--json]');
   const provider = positionals[0] ?? null;
   const { api } = await connectApi(ctx);
-  const catalog = buildCatalog(await api.providers());
+  const [providers, availableModels, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers, models: availableModels, defaultModel });
   if (provider) {
     const known = catalog.providers.find((p) => p.id === provider);
     if (!known) throw new UsageError('UNKNOWN_PROVIDER', `provider desconhecido "${providerEcho(provider)}" (conhecidos: ${catalog.providers.map((p) => p.id).join(', ')})`);

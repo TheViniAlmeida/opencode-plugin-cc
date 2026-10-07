@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, statSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { makeWorkspace, testEnv, runCli, writeGlobalConfig, stateDirFor, startExternalFake, REPO_ROOT } from '../helpers.mjs';
+import { FAKE_BIN_DIR, makeTempDir, trackTempDir, makeWorkspace, testEnv, runCli, writeGlobalConfig, stateDirFor, startExternalFake, REPO_ROOT } from '../helpers.mjs';
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { PANE_SCRIPT } from '../../plugins/opc/scripts/commands/attach.mjs';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
@@ -14,10 +13,16 @@ import { createJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 const ATTACH_PROBE = join(REPO_ROOT, 'tests/fixtures/attach-probe.mjs');
 
+test('attach reports the configured OpenCode binary', async (t) => {
+  const configured = join(FAKE_BIN_DIR, 'opencode');
+  const { cwd, env } = await setup(t, { extra: { OPC_OPENCODE_BIN: configured } });
+  const result = await runCli(['attach', SEED.session, '--json'], { env, cwd });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).argv[0], configured);
+});
+
 function scratch(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'opc-attach-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
+  return trackTempDir(t, makeTempDir('opc-attach-'));
 }
 
 async function setup(t, { name = 'ws', extra = {} } = {}) {
@@ -49,9 +54,10 @@ test('attach prints the command without the password; workspace with spaces is q
   const root = resolveWorkspaceRoot(cwd);
   assert.ok(!res.stdout.includes(password) && !res.stderr.includes(password));
   assert.ok(res.stdout.includes(`OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(join(stateDir, 'attach.secret'))})"`));
-  assert.ok(res.stdout.includes(`opencode attach ${url} -s ${SEED.session} --dir ${shellQuote(root)}`));
+  assert.ok(res.stdout.includes(`cd ${shellQuote(root)} && OPENCODE_SERVER_PASSWORD=`));
+  assert.ok(res.stdout.includes(`opencode --server ${url} -s ${SEED.session}`));
   const json = JSON.parse((await runCli(['attach', SEED.session, '--json'], { env, cwd })).stdout);
-  assert.deepEqual(json.argv, ['opencode', 'attach', url, '-s', SEED.session, '--dir', root]);
+  assert.deepEqual(json.argv, ['opencode', '--server', url, '-s', SEED.session]);
   assert.deepEqual(json.authSource, { type: 'file', path: join(stateDir, 'attach.secret') });
   assert.equal(json.attached, false);
   assert.ok(!JSON.stringify(json).includes(password));
@@ -89,7 +95,7 @@ test('pane: tmux argv has no password and the pane script receives intact args',
   const dir = scratch(t);
   const log = join(dir, 'tmux.log');
   const probeLog = join(dir, 'probe.log');
-  const { cwd, env } = await setup(t, { name: 'pane ws ç', extra: { TMUX: '/tmp/fake-tmux,999,0', FAKE_TMUX_LOG: log, OPC_ATTACH_OPENCODE_BIN: ATTACH_PROBE } });
+  const { cwd, env } = await setup(t, { name: 'pane ws ç', extra: { TMUX: '/tmp/fake-tmux,999,0', FAKE_TMUX_LOG: log, OPC_OPENCODE_BIN: ATTACH_PROBE } });
   const res = await runCli(['attach', SEED.session, '--pane', '--json'], { env, cwd });
   assert.equal(res.code, 0, res.stdout + res.stderr);
   assert.equal(JSON.parse(res.stdout).pane.id, '%42');
@@ -110,34 +116,27 @@ test('pane: tmux argv has no password and the pane script receives intact args',
   const ran = spawnSync('/bin/sh', ['-c', argv[7]], { env: { PATH: process.env.PATH, PROBE_LOG: probeLog, EXPECTED_SHA256: sha }, encoding: 'utf8' });
   assert.equal(ran.status, 0, ran.stderr);
   const probe = JSON.parse(readFileSync(probeLog, 'utf8').trim());
-  assert.deepEqual(probe.argv, ['attach', url, '-s', SEED.session, '--dir', root]);
+  assert.deepEqual(probe.argv, ['--server', url, '-s', SEED.session]);
+  assert.equal(probe.cwd, root);
   assert.equal(probe.passwordMatches, true);
   assert.equal(probe.passwordInArgv, false);
 });
 
 test('pane: tmux failure is reported with exit 2', async (t) => {
-  const { cwd, env } = await setup(t, { extra: { TMUX: '/tmp/fake-tmux,999,0', FAKE_TMUX_FAIL: '1', OPC_ATTACH_OPENCODE_BIN: ATTACH_PROBE } });
+  const { cwd, env } = await setup(t, { extra: { TMUX: '/tmp/fake-tmux,999,0', FAKE_TMUX_FAIL: '1', OPC_OPENCODE_BIN: ATTACH_PROBE } });
   const res = await runCli(['attach', SEED.session, '--pane'], { env, cwd });
   assert.equal(res.code, 2);
   assert.match(res.stdout + res.stderr, /tmux split-window falhou/);
 });
 
-test('attach mode (OPC_SERVER_URL) end to end: sessions, subagent and attach on an external server', async (t) => {
+test('attach mode (OPC_SERVER_URL) uses an external V2 server without managing it', async (t) => {
   const ext = await startExternalFake(t, { scenario: 'f3-sessions' });
   const log = join(scratch(t), 'tmux.log');
   const cwd = makeWorkspace(t);
   const env = testEnv(t, { scenario: 'f3-sessions', extra: { OPC_SERVER_URL: ext.url, OPC_SERVER_PASSWORD: ext.password, TMUX: '/tmp/fake-tmux,1,0', FAKE_TMUX_LOG: log } });
   writeGlobalConfig(env, F3_TEST_CONFIG);
-  const created = await runCli(['session', 'new', '--title', 'ext', '--json'], { env, cwd });
-  assert.equal(created.code, 0, created.stderr);
-  const sid = JSON.parse(created.stdout).session.id;
-  assert.ok(ext.fake.state.sessions[sid], 'session must exist on the external server');
-  const listed = JSON.parse((await runCli(['sessions', '--json'], { env, cwd })).stdout);
-  assert.ok(listed.sessions.some((s) => s.id === sid));
-
-  const sub = await runCli(['subagent', '--agent', 'general', '--model', 'fast', '--json', 'hi'], { env, cwd });
-  assert.equal(sub.code, 0, sub.stdout + sub.stderr);
-  assert.equal(JSON.parse(sub.stdout).group.status, 'completed');
+  const sid = SEED.session;
+  assert.ok(ext.fake.state.sessions[sid], 'seeded session must exist on the external server');
 
   const att = await runCli(['attach', sid, '--json'], { env, cwd });
   assert.equal(att.code, 0, att.stderr);
@@ -152,9 +151,11 @@ test('attach mode (OPC_SERVER_URL) end to end: sessions, subagent and attach on 
   const pane = await runCli(['attach', sid, '--pane'], { env, cwd });
   assert.equal(pane.code, 2);
   assert.equal(existsSync(log), false);
-  const refresh = await runCli(['sessions', '--refresh'], { env, cwd });
-  assert.equal(refresh.code, 2);
-  assert.equal(ext.fake.state.f3.disposed, 0);
+  const health = await fetch(`${ext.url}/api/info`, {
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${ext.password}`).toString('base64')}` },
+  });
+  assert.equal(health.status, 200, 'external server must remain available after attach --pane');
+  assert.equal((await health.json()).version, '2.0.22');
 
   const stateDir = await stateDirFor(env, cwd);
   assert.equal(existsSync(join(stateDir, 'server.json')), false);

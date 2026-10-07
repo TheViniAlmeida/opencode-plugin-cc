@@ -1,0 +1,37 @@
+{
+  "data": [
+    {
+      "id": "msg_111a1af8b000iOgfUumUSBKZpj",
+      "time": {
+        "created": 1791297171370
+      },
+      "text": "say hi",
+      "type": "user"
+    },
+    {
+      "id": "msg_111a1afb30019GkgqPJ46PqqDn",
+      "time": {
+        "created": 1791297173341
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "opencode-go/deepseek-v4.1-flash",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "content": [],
+      "snapshot": {
+        "start": "640ba63b141ba35b527fee65e78140148c8d0a5b"
+      }
+    },
+    {
+      "id": "msg_111a1c400001eeQSjeqbVsXKbp",
+      "time": {
+        "created": 1791297176576
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    }
+  ]
+}

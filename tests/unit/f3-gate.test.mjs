@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { registerSecret, redactTurnOutput } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { renderSession, renderSessions, renderTodos, renderSessionDiff, renderRevertPreview } from '../../plugins/opc/scripts/lib/render.mjs';
+import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../../plugins/opc/scripts/lib/render.mjs';
 import { createGroup, readJob, cancelJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { runWorker } from '../../plugins/opc/scripts/commands/subagent.mjs';
 import { run as result } from '../../plugins/opc/scripts/commands/result.mjs';
@@ -20,13 +20,11 @@ test('C1: renderizadores mascaram títulos, tarefas, prévias e patches antes de
   const registered = 'registered-' + 'gate-value';
   registerSecret(registered);
   const text = `${token} ${registered}`;
-  const session = { id: 'ses_gate', title: text, directory: text, agent: text, model: text };
+  const session = { id: 'ses_gate', title: text, location: { directory: text }, agent: text, model: text };
   const outputs = [
     renderSessions([session], { statusMap: { ses_gate: { type: text } } }),
-    renderSession(session, { messages: [{ info: { id: 'msg_gate', role: 'user' }, parts: [{ type: 'text', text }] }] }),
-    renderSession({ id: 'ses_gate' }, { messages: [{ info: {}, parts: [{ type: 'text', text: `${'x '.repeat(47)}${token}` }] }] }),
-    renderTodos([{ content: text, status: text, priority: text }]),
-    renderTodos([{ content: `${'x '.repeat(77)}${token}` }]),
+    renderSession(session, { messages: [{ id: 'msg_gate', type: 'user', time: { created: 0 }, text }] }),
+    renderSession({ id: 'ses_gate' }, { messages: [{ id: 'msg_long', type: 'assistant', content: [{ type: 'text', text: `${'x '.repeat(47)}${token}` }] }] }),
     renderSessionDiff([{ file: text, status: text, patch: `+${text}` }]),
     renderRevertPreview({ action: 'unrevert', sessionID: 'ses_gate', rawDiff: text, command: 'opc session unrevert ses_gate' }),
   ];
@@ -35,10 +33,6 @@ test('C1: renderizadores mascaram títulos, tarefas, prévias e patches antes de
     assert.equal(output.includes('ghp_'), false, 'prévia não pode vazar prefixo de token truncado');
     assert.ok(output.includes('***'));
   }
-});
-
-test('M1: cabeçalho das tarefas em PT-BR', () => {
-  assert.match(renderTodos([{ content: 'verificar' }], { sessionID: 'ses_gate' }), /^# Tarefas da sessão ses_gate/);
 });
 
 test('C2: redactTurnOutput mascara todos os campos do erro de provedor', () => {
@@ -51,8 +45,8 @@ async function workerFixture(t, dispatch) {
   const stateDir = trackTempDir(t, makeTempDir('opc-gate-worker-'));
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: teste' }, [{ title: 'membro' }]);
   const ctx = { stateDir, config: {}, json: () => {} };
-  const api = { createSession: async () => ({ id: 'ses_parent' }), abort: async () => false };
-  const request = { members: [{ agent: 'general', full: 'p/model' }], mechanism: 'child-session', rules: [], prompt: 'teste' };
+  const api = { createSession: async () => ({ id: 'ses_parent' }), interrupt: async () => { throw new Error('cancelamento recusado'); } };
+  const request = { members: [{ agent: 'general', full: 'p/model', model: { providerID: 'p', modelID: 'model' } }], mechanism: 'child-session', rules: [{ action: '*', resource: '*', effect: 'deny' }], prompt: 'teste' };
   await runWorker(ctx, group, request, {
     openApi: async () => ({ api, close() {} }),
     createBridge: () => ({ dispose() {} }),
@@ -97,25 +91,29 @@ test('I1: cancelamento recusado seguido de conclusão mantém membro completed',
   assert.equal(group.status, 'completed');
 });
 
-test('I3: prévia de 250 mensagens localiza mensagem 10 fora da última página', async () => {
-  const messages = Array.from({ length: 250 }, (_, i) => ({ info: { id: `msg_${i + 1}`, role: 'user' } }));
-  const reads = [];
+test('I3: prévia de 250 mensagens localiza mensagem 240 além da primeira página de 200', async () => {
+  const messages = Array.from({ length: 250 }, (_, i) => ({ id: `msg_${i + 1}`, type: 'user', time: { created: i }, text: `m${i + 1}` }));
+  const limits = [];
   const api = {
-    messages: async (_id, { limit }) => messages.slice(-limit),
-    message: async (_id, id) => { reads.push(id); return messages.find((m) => m.info.id === id); },
-    diff: async (_id, { messageID }) => [{ file: 'notes.txt', patch: `+${messageID}` }],
+    messages: async (_id, { limit }) => { limits.push(limit); return messages.slice(0, limit); },
+    diff: async () => { throw new Error('a prévia do revert não consulta o diff agregado'); },
   };
-  const preview = await collectAffectedDiff(api, 'ses_gate', 'msg_10');
-  assert.deepEqual(reads, ['msg_10']);
-  assert.ok(preview.some((d) => d.patch.includes('msg_10')));
-  assert.equal(preview.previewTruncated, true);
+  assert.equal(await collectAffectedDiff(api, 'ses_gate', 'msg_240'), null);
+  // One complete read: the API follows the V2 cursor pages (200 each) instead of growing `limit`.
+  assert.deepEqual(limits, [undefined]);
+  await assert.rejects(collectAffectedDiff(api, 'ses_gate', 'msg_999'), (error) => error.code === 'UNKNOWN_MESSAGE' && error.exitCode === 2);
 });
 
-test('LIVE-1: directory é string em sessões seed, criadas, filhas e forks', () => {
-  const fake = { state: {}, emit() {} };
+test('LIVE-1: location.directory é string em sessões seed, criadas, filhas e forks', () => {
+  const fake = { state: {}, emit() {}, createSession(body, directory) {
+    const id = `ses_${Object.keys(this.state.sessions).length + 1}`;
+    const session = { ...body, id, location: { directory } };
+    this.state.sessions[id] = session;
+    return session;
+  } };
   seedSession(fake);
   createSessionRecord(fake);
   createSessionRecord(fake, { parentID: SEED.session }, '/workspace');
-  F3_SESSION_ROUTES['POST /session/:id/fork'](fake, { params: { id: SEED.session } });
-  for (const session of Object.values(fake.state.sessions)) assert.equal(typeof session.directory, 'string');
+  F3_SESSION_ROUTES['POST /api/session/:id/fork'](fake, { params: { id: SEED.session } });
+  for (const session of Object.values(fake.state.sessions)) assert.equal(typeof session.location.directory, 'string');
 });

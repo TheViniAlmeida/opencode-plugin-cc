@@ -1,7 +1,7 @@
 # Permissões
 
 O opc não altera a configuração global do OpenCode. Cada sessão criada recebe um perfil de regras
-`{permission, pattern, action}`. A última regra que casa vence; regras da sessão vencem as do
+`{action, resource, effect}`. A última regra que casa vence; regras da sessão vencem as do
 agente e da configuração global.
 
 ## Perfis
@@ -9,20 +9,20 @@ agente e da configuração global.
 ### `read-only` (padrão)
 
 Usado por `task` sem `--write`, `ask` e `plan`. Começa com `* * deny`, libera `read`, `glob`,
-`list`, `lsp`, `skill` e `todowrite`, e então acrescenta as invariantes. `grep` permanece
+`skill` e `question`, e então acrescenta as invariantes. `grep` permanece
 negado: padrões de grep podem ser termos de busca, e não caminhos, impedindo a proteção segura
-dos caminhos sensíveis. Não há `bash`, `edit`, `task`, `webfetch`, `websearch` nem `question`.
+dos caminhos sensíveis. Não há `shell`, `edit`, `subagent`, `webfetch` nem `websearch`.
 Pedidos residuais são rejeitados pela ponte.
 
 ### `write` (`--write`)
 
 Herda o agente `build` e as regras do usuário; o opc acrescenta invariantes, inclusive
-`bash <padrão> ask` para a lista destrutiva e `doom_loop * ask`.
+`shell <padrão> ask` para a lista destrutiva e `browser * deny`.
 
 ### `custom:<nome>` (`--profile <nome>`)
 
 É `read-only` mais as regras de `permissionProfiles.<nome>` da configuração global (chave
-travada) e as invariantes. Se liberar bash, a lista destrutiva também é anexada como `ask`.
+travada) e as invariantes. Se liberar shell, a lista destrutiva também é anexada como `ask`.
 Não existe perfil ou flag que libere tudo.
 
 ## Invariantes
@@ -30,11 +30,11 @@ Não existe perfil ou flag que libere tudo.
 Aplicadas por último, em todos os perfis:
 
 1. `external_directory * deny`;
-2. para cada `policy.sensitivePaths`, `read`, `grep`, `glob` e `list` recebem `deny`;
-3. agentes em `policy.agents.deny` recebem `task <glob> deny`;
+2. para cada `policy.sensitivePaths`, `read`, `grep` e `glob` recebem `deny`;
+3. agentes em `policy.agents.deny` recebem `subagent <glob> deny`;
 4. ferramentas em `policy.tools.deny` recebem `<padrão> * deny`;
-5. em `write` e em `custom` com bash, comandos destrutivos recebem `bash <padrão> ask`;
-6. `doom_loop *` recebe `ask` em `write` e `deny` nos demais.
+5. em `write` e em `custom` com shell, comandos destrutivos recebem `shell <padrão> ask`;
+6. `browser * deny` em todos os perfis.
 
 Os globs usam `*` inclusive para `/`; os caminhos sensíveis padrão incluem arquivos `.env`,
 chaves privadas e diretórios SSH.
@@ -53,10 +53,7 @@ gerar falso positivo benigno, como argumento de busca contendo `TRUNCATE`.
 
 ## Sessões filhas
 
-No OpenCode 1.18.32, uma filha criada por `task` herda apenas `deny` e `external_directory`.
-Ao receber `session.created`, o opc aplica o perfil por `PATCH /session/:filha`; há uma janela
-curta até o PATCH. Se esse PATCH ou callback crítico falhar, as sessões acompanhadas são
-abortadas e o job falha.
+No V2, a ferramenta `subagent` cria a filha com `parentID`; ela herda as `permissions` e o modelo da sessão pai. O opc acompanha a filha e confirma as regras aplicadas.
 
 ## Ponte de pedidos e aprovador
 
@@ -73,24 +70,19 @@ Os agentes `opc-worker` e `opc-rescue` nunca respondem permissões.
 
 ## Por que nunca `always`
 
-No OpenCode 1.18.32, `always` fica em memória para o diretório inteiro, alcança todas as sessões
-da instância e pode prevalecer sobre um `deny` de perfil. O opc só envia `once` ou `reject`,
-recusa `reply … always` (exit 2) e a API também se recusa a montar esse corpo.
+O opc só envia `once` ou `reject` e recusa `reply … always` (exit 2).
 
 ## Troca de perfil no `--resume`
 
-O `PATCH /session/:id {permission}` anexa regras, em vez de substituí-las (§15.3 confirmado ao
-vivo). Mesmo perfil não envia nada. `read-only` ou `custom` após `write` anexa um novo `* * deny`
-e neutraliza regras anteriores. `write` após `read-only` retorna exit 2
-`PROFILE_SWITCH_UNSUPPORTED`: o deny antigo continuaria valendo; use `--fresh`.
+O `PATCH /api/session/:id {permissions}` substitui a lista inteira. A troca de perfil no `--resume` é permitida após a confirmação das regras aplicadas.
 
 ## Stop review gate
 
 O gate é opcional (`stopGate.enabled`, padrão `false`; ligue com `/opc:setup --enable-review-gate`). Ligado, cada parada do Claude roda um turno OpenCode que revisa o turno anterior; há uma chamada de modelo por parada.
 
-- **Perfil:** `read-only`: nega tudo por padrão e libera somente `read`, `glob`, `grep`, `list`, `lsp`, `skill` e `todowrite`, além das invariantes. Não libera Bash, edição ou web. Pedido de permissão recebe `reject` imediato.
+- **Perfil:** `read-only`: nega tudo por padrão e libera somente `read`, `glob`, `grep`, `skill` e `question`, além das invariantes. Não libera Bash, edição ou web. Pedido de permissão recebe `reject` imediato.
 - **Entrada:** `last_assistant_message` ou, se ausente, a última mensagem de assistente em `transcript_path`, mais contexto do working tree de até 200 KB. Conteúdo de `policy.sensitivePaths` nunca é enviado.
-- **Modelo:** `stopGate.model` → `defaultModel` → padrão OpenCode, sempre sob política.
+- **Modelo:** `stopGate.model` → `defaultModel` → modelo explícito permitido pela política.
 - **Decisão:** apenas primeira linha `BLOCK: <motivo>` bloqueia; o Claude recebe `opc stop gate: <motivo>` e continua. `ALLOW:` permite.
 - **Infraestrutura:** OpenCode ausente, boot falho, modelo negado, limite de jobs, timeout de 840 s, resposta malformada ou falha de preparação permitem com `systemMessage` que informa a causa redigida.
 - **Laço:** com `stop_hook_active: true`, permite sem executar outro turno.

@@ -5,9 +5,10 @@ import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
-import { buildCatalog } from '../lib/models.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
-import { buildPermissionRules, parseProfile, planPermissionSwitch } from '../lib/policy.mjs';
+import { buildCatalog } from '../lib/models.mjs';
+import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
+import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
@@ -23,6 +24,12 @@ const KIND_SPECS = Object.freeze({
   ask: { template: 'ask.md', readOnly: true },
   plan: { template: 'plan.md', readOnly: true },
 });
+
+export async function resolveTaskCandidates({ api, kind, flags, config }) {
+  const [providers, models, defaultModel, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api)]);
+  const catalog = buildCatalog({ providers, models, defaultModel });
+  return { catalog, resolution: resolveCandidates({ kind, flags, config, catalog, opencodeConfig }) };
+}
 
 export const TURN_FLAGS = Object.freeze({
   json: { type: 'boolean' },
@@ -209,9 +216,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const policy = config.policy ?? {};
 
   const { api, server } = await connectApi(ctx);
-  const catalog = buildCatalog(await api.providers());
-  const opencodeConfig = await api.getConfig();
-  const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
+  const { catalog, resolution } = await resolveTaskCandidates({ api, kind, flags: { model: flags.model, tier: flags.tier }, config });
   const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
@@ -229,7 +234,7 @@ export async function runKindCommand(ctx, argv, kind) {
   let patchPermission = null;
   if (sessionID) {
     const session = await api.getSession(sessionID);
-    if (planPermissionSwitch(session?.permission, rules) === 'patch') patchPermission = rules;
+    if (JSON.stringify(session?.permissions) !== JSON.stringify(rules)) patchPermission = rules;
   }
   const template = spec.template ? loadPrompt(spec.template) : null;
   const text = buildPromptText({ userPrompt, template, project: config.project });
@@ -239,7 +244,7 @@ export async function runKindCommand(ctx, argv, kind) {
   const request = {
     kind,
     profileKind,
-    ...(sessionID ? { sessionID } : { newSession: { title: sessionTitle(kind, summary), permission: rules } }),
+    ...(sessionID ? { sessionID } : { newSession: { title: sessionTitle(kind, summary), permissions: rules } }),
     ...(patchPermission ? { patchPermission } : {}),
     childPermission: profileKind === 'read-only' ? null : rules,
     parts: [{ type: 'text', text }],

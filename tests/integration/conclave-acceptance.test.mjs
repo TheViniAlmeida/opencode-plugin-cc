@@ -11,6 +11,10 @@ import { kindOf } from '../fixtures/scenarios/_conclave-common.mjs';
 
 const Q = 'Should the storage layer add a write-ahead log?';
 const FAST_TIMEOUT = { conclave: { memberTimeoutSec: 2 } };
+function sessionForPrompt(env, request) {
+  const id = sessionOfRequest(request);
+  return readFakeState(env).sessions[id];
+}
 
 // --- Composition validations -------------------------------------------------
 
@@ -43,7 +47,7 @@ test('composition: pool from config; denied member skipped with a warning', asyn
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(res.json.composition.map((c) => c.model).sort(), [DS, QW].sort());
   assert.match(res.stderr, /ignorando "omniroute-personal\/opencode-go\/kimi-k3": modelo negado pela política/);
-  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !r.body.model.modelID.includes('kimi')));
+  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !sessionForPrompt(env, r).model.id.includes('kimi')));
 });
 
 test('composition: every member denied → exit 4; denied judge → exit 4', async (t) => {
@@ -96,16 +100,16 @@ test('quorum met: text mode reports MissingStructuredOutput for a member without
   assert.ok(pkg.synthesisInput);
 });
 
-test('quorum met: tool mode discards and lists a StructuredOutputError member; the rest synthesize', async (t) => {
+test('quorum met: legacy tool mode uses text and discards a malformed member', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-member-structured-error', config: { conclave: { structuredOutput: 'tool' } } });
   const res = await conclave(['--models', TRIO, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   const pkg = res.json;
   const qwen = labelOf(pkg, QW);
   assert.equal(pkg.status, 'completed');
-  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'StructuredOutputError']]);
-  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => r.body.format?.type === 'json_schema'));
-  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
+  assert.deepEqual(pkg.failures.map((f) => [f.label, f.round, f.errorType]), [[qwen, 1, 'MissingStructuredOutput']]);
+  assert.ok(requestsBySchema(env, 'ConclaveMember').every((r) => !r.body.format));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => !r.body.format));
   assert.ok(pkg.synthesisInput);
 });
 
@@ -119,8 +123,8 @@ test('member timeout: the silent member is aborted, discarded and left out of th
   const debate = requestsBySchema(env, 'ConclaveDebate');
   assert.equal(debate.length, 2);
   for (const r of debate) assert.ok(!textOf(r.body).includes(`<peer label="${kimi}">`));
-  const kimiSession = sessionOfRequest(requestsBySchema(env, 'ConclaveMember').find((r) => r.body.model.modelID.includes('kimi')));
-  assert.ok(readFakeState(env).requests.some((r) => r.method === 'POST' && r.path === `/session/${kimiSession}/abort`));
+  const kimiSession = sessionOfRequest(requestsBySchema(env, 'ConclaveMember').find((r) => sessionForPrompt(env, r).model.id.includes('kimi')));
+  assert.ok(readFakeState(env).requests.some((r) => r.method === 'POST' && r.path === `/api/session/${kimiSession}/interrupt`));
   assert.equal(pkg.rounds.completed, 2);
 });
 
@@ -149,7 +153,7 @@ test('debate: round 2 runs in each member own session and records changed per me
   const round2 = requestsBySchema(env, 'ConclaveDebate');
   assert.equal(round2.length, 3);
   for (const r of round2) {
-    const own = round1.find((m) => m.body.model.modelID === r.body.model.modelID);
+    const own = round1.find((m) => sessionForPrompt(env, m).model.id === sessionForPrompt(env, r).model.id);
     assert.equal(sessionOfRequest(r), sessionOfRequest(own));
   }
   const round2Answers = pkg.roundsData[1].responses;
@@ -226,8 +230,8 @@ test('judge model: read-only session sees only labels; synthesis validated again
   assert.deepEqual(validateSchema(pkg.judge.synthesis, schema), []);
   const [judgeReq] = requestsBySchema(env, 'ConclaveSynthesis');
   assert.match(textOf(judgeReq.body), /<labels>A, B<\/labels>/);
-  const judgeSession = readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/session').find((s) => s.body.title === 'OPC: conclave: judge');
-  assert.deepEqual(judgeSession.body.permission[0], { permission: '*', pattern: '*', action: 'deny' });
+  const judgeSession = readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session').find((s) => s.body.title === 'OPC: conclave: judge');
+  assert.deepEqual(judgeSession.body.permissions[0], { action: '*', resource: '*', effect: 'deny' });
 });
 
 test('judge failure in text mode keeps the conclave completed with MissingStructuredOutput warning', async (t) => {
@@ -239,14 +243,14 @@ test('judge failure in text mode keeps the conclave completed with MissingStruct
   assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
 });
 
-test('judge StructuredOutputError in tool mode keeps the conclave completed with a warning', async (t) => {
+test('judge malformed text in legacy tool mode keeps the conclave completed with a warning', async (t) => {
   const { env, cwd } = setupConclave(t, { scenario: 'conclave-opinion', config: { conclave: { structuredOutput: 'tool' } } });
   const res = await conclave(['--models', `${DS},${QW}`, '--judge', KM, '--json', Q], { env, cwd });
   assert.equal(res.code, 0, res.stderr);
   assert.equal(res.json.judge.status, 'failed');
-  assert.equal(res.json.judge.error.errorType, 'StructuredOutputError');
+  assert.equal(res.json.judge.error.errorType, 'MissingStructuredOutput');
   assert.ok(res.json.warnings.some((w) => /opc-conclave/.test(w)));
-  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => r.body.format?.type === 'json_schema'));
+  assert.ok(requestsBySchema(env, 'ConclaveSynthesis').every((r) => !r.body.format));
 });
 
 test('--allow-judge-member: required when the judge is also a member', async (t) => {

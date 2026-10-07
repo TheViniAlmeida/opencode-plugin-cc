@@ -8,11 +8,13 @@ import {
   validateAgainstServer, policyViolations, configPaths,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 import { buildCatalog } from '../../plugins/opc/scripts/lib/models.mjs';
+import { toAgent } from '../../plugins/opc/scripts/lib/opencode-v2.mjs';
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'data');
 const load = (f) => JSON.parse(fs.readFileSync(path.join(DATA, f), 'utf8'));
-const catalog = buildCatalog(load('provider.json'));
-const agents = load('agent.json');
+const catalog = buildCatalog({ providers: load('provider.json'), models: load('model.json') });
+// The product consumes agents through api.agents(), i.e. normalized by toAgent (model: { providerID, modelID }).
+const agents = load('agent.json').map(toAgent);
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 const fresh = () => JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -103,7 +105,7 @@ test('validateAgainstServer: stored full ids are read without defaultProvider pr
 });
 
 test('defaultVariant falls back to the OpenCode default model', () => {
-  const cfg = { ...fresh(), defaultVariant: 'max' };
+  const cfg = { ...fresh(), defaultVariant: 'high' };
   const { errors } = validateAgainstServer(cfg, { catalog, agents, opencodeConfig: { model: `${MV}/opencode-go/qwen3.8-max` } });
   assert.deepEqual(errors, []);
 });

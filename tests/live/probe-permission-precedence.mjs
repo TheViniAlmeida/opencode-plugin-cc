@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Standalone live probe for spec §15 items 1, 2, 4 and 5 (F0). Throwaway project, dedicated server, real model.
 // Run: OPC_LIVE=1 node tests/live/probe-permission-precedence.mjs [--json]
-// `always` is used HERE ONLY, to document its scope; the plugin never sends it (spec §8.3).
+// Uses only V2 API routes and `once`/`reject` permission decisions.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,6 +27,7 @@ if (!MODEL) {
 }
 const [providerID, ...modelRest] = MODEL.split('/');
 const modelID = modelRest.join('/');
+const MODEL_REF = { providerID, id: modelID };
 const TURN_TIMEOUT_MS = 240000;
 const ENV_MARKER = 'OPC_PROBE_DUMMY_VALUE_7731';
 const GREP_MARKER = 'OPC_PROBE_GREP_MARKER_42';
@@ -34,11 +35,10 @@ const SENSITIVE = ['*.env', '*.env.*'];
 const log = (line) => process.stderr.write(redactText(`[probe] ${line}\n`));
 
 const READ_ONLY_RULES = [
-  { permission: '*', pattern: '*', action: 'deny' },
-  ...['read', 'glob', 'grep', 'list', 'lsp', 'skill', 'todowrite'].map((p) => ({ permission: p, pattern: '*', action: 'allow' })),
-  { permission: 'external_directory', pattern: '*', action: 'deny' },
-  ...SENSITIVE.map((p) => ({ permission: 'read', pattern: p, action: 'deny' })),
-  { permission: 'doom_loop', pattern: '*', action: 'deny' },
+  { action: '*', resource: '*', effect: 'deny' },
+  ...['read', 'glob', 'grep'].map((action) => ({ action, resource: '*', effect: 'allow' })),
+  { action: 'external_directory', resource: '*', effect: 'deny' },
+  ...SENSITIVE.map((resource) => ({ action: 'read', resource, effect: 'deny' })),
 ];
 
 const MCP_SERVER_SOURCE = `
@@ -89,32 +89,29 @@ function prepareProject(base) {
 
 function makeTurnRunner(client, hub) {
   return async function turn({ title, rules, text, onAsk = 'reject', agent = 'build' }) {
-    const session = await client.post('/session', { title: `OPC: probe: ${title}`, permission: rules });
+    const session = await client.post('/api/session', { title: `OPC: probe: ${title}`, agent, model: MODEL_REF, permissions: rules });
     const asked = [];
-    let sawActivity = false;
     let untrack = () => {};
     const done = new Promise((resolve) => {
       untrack = hub.track(session.id, async (e) => {
-        if (e.type.startsWith('message.') || (e.type === 'session.status' && e.properties.status?.type !== 'idle')) sawActivity = true;
         if (e.type === 'permission.asked') {
           const reply = typeof onAsk === 'function' ? onAsk(e) : onAsk;
-          asked.push({ permission: e.properties.permission, patterns: e.properties.patterns, always: e.properties.always, reply });
-          await client.post(`/permission/${e.properties.id}/reply`, { reply, message: 'opc probe' }).catch((err) => log(`reply failed: ${err.code}`));
+          asked.push({ action: e.data.action, resources: e.data.resources, reply });
+          await client.post(`/api/session/${session.id}/permission/${e.data.id}/reply`, { decision: reply, message: 'opc probe' }).catch((err) => log(`reply failed: ${err.code}`));
         }
-        const idle = e.type === 'session.idle' || (e.type === 'session.status' && e.properties.status?.type === 'idle');
-        if (e.type === 'session.error' || (idle && sawActivity)) resolve(e.type);
+        if (['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted'].includes(e.type)) resolve(e.type);
       });
     });
-    await client.post(`/session/${session.id}/prompt_async`, { model: { providerID, modelID }, agent, parts: [{ type: 'text', text }] });
+    await client.post(`/api/session/${session.id}/prompt`, { text });
     let timer;
     const end = await Promise.race([done, new Promise((r) => { timer = setTimeout(() => r('timeout'), TURN_TIMEOUT_MS); })]);
     clearTimeout(timer);
     untrack();
-    if (end === 'timeout') await client.post(`/session/${session.id}/abort`).catch(() => {});
-    const messages = (await client.get(`/session/${session.id}/message`)) ?? [];
-    const parts = messages.flatMap((m) => (m.parts ?? []).map((p) => ({ ...p, role: m.info?.role })));
+    if (end === 'timeout') await client.post(`/api/session/${session.id}/interrupt`).catch(() => {});
+    const messages = (await client.get(`/api/session/${session.id}/message`, { query: { order: 'asc' } })) ?? [];
+    const parts = messages.flatMap((m) => (m.content ?? []).map((p) => ({ ...p, role: m.type })));
     const tools = parts.filter((p) => p.type === 'tool').map((p) => ({
-      tool: p.tool,
+      tool: p.name,
       status: p.state?.status,
       error: p.state?.error ? String(p.state.error).slice(0, 200) : undefined,
     }));
@@ -125,17 +122,18 @@ function makeTurnRunner(client, hub) {
 }
 
 async function probeConfigMerge(client, userConfig) {
-  let cfg;
+  let sources;
   let configError;
   try {
-    cfg = await client.get('/config');
+    sources = await client.get('/api/config');
   } catch (err) {
     configError = err;
   }
-  const toolIds = await client.get('/experimental/tool/ids').catch(() => null);
-  const probeTool = Array.isArray(toolIds) ? toolIds.find((id) => id.includes('echo_marker')) ?? null : null;
+  const documents = Array.isArray(sources) ? sources.filter((item) => item.type === 'document' && item.info) : [];
+  const cfg = Object.assign({}, ...documents.map((item) => item.info));
+  const probeTool = cfg.mcp?.opcprobe ? 'opcprobe_echo_marker' : null;
   const mergeReason = configError
-    ? 'GET /config falhou'
+    ? 'GET /api/config falhou'
     : !userConfig || !['model', 'agent', 'provider'].some((candidate) => Object.hasOwn(userConfig, candidate))
       ? 'nenhuma chave de config do usuário para comparar'
       : !cfg || cfg.share !== 'disabled' || !probeTool
@@ -145,13 +143,13 @@ async function probeConfigMerge(client, userConfig) {
   return {
     item: '§15.5 OPENCODE_CONFIG_CONTENT',
     shareDisabled: cfg?.share === 'disabled',
-    mcpInjected: Boolean(cfg?.mcp && 'opcprobe' in cfg.mcp),
+    mcpInjected: Boolean(cfg.mcp?.opcprobe),
     userMcpCount: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe').length,
     userConfigKey: merge.key,
     probeToolId: probeTool,
     verdict: merge.verdict,
     ...(merge.verdict.startsWith('INCONCLUSIVO') ? { reason: merge.verdict.slice('INCONCLUSIVO ('.length, -1) } : {}),
-    userMcpNames: Object.keys(cfg?.mcp ?? {}).filter((k) => k !== 'opcprobe'),
+    userMcpNames: Object.keys(cfg.mcp ?? {}).filter((k) => k !== 'opcprobe'),
   };
 }
 
@@ -164,7 +162,7 @@ async function probePrecedence(turn, ws) {
   const bash = await turn({
     title: 'precedence bash',
     rules: READ_ONLY_RULES,
-    text: 'Use the bash tool to run exactly: echo OPC_PROBE_BASH > probe-bash.txt . If the tool is denied, answer DENIED and stop.',
+    text: 'Use the shell tool to run exactly: echo OPC_PROBE_BASH > probe-bash.txt . If the tool is denied, answer DENIED and stop.',
   });
   const env = await turn({
     title: 'precedence env',
@@ -175,7 +173,7 @@ async function probePrecedence(turn, ws) {
   const bashBlocked = !fs.existsSync(path.join(ws, 'probe-bash.txt'));
   const envAttempted = toolAttempted(env.tools, env.asked, 'read');
   const editAttempted = ['write', 'edit'].some((name) => toolAttempted(edit.tools, edit.asked, name));
-  const bashAttempted = toolAttempted(bash.tools, bash.asked, 'bash');
+  const bashAttempted = toolAttempted(bash.tools, bash.asked, 'shell');
   const envBlocked = !env.finalText.includes(ENV_MARKER);
   return {
     item: '§15.1 precedência (sessão vs agente/config do usuário)',
@@ -195,18 +193,17 @@ async function probeSearchPatterns(turn) {
   const res = await turn({
     title: 'grep-glob-list patterns',
     rules: [
-      { permission: '*', pattern: '*', action: 'allow' },
-      { permission: 'grep', pattern: '*', action: 'ask' },
-      { permission: 'glob', pattern: '*', action: 'ask' },
-      { permission: 'list', pattern: '*', action: 'ask' },
+      { action: '*', resource: '*', effect: 'allow' },
+      { action: 'grep', resource: '*', effect: 'ask' },
+      { action: 'glob', resource: '*', effect: 'ask' },
     ],
     onAsk: 'once',
-    text: `Do these three steps, in order, using exactly these tools: 1) grep tool: search for ${GREP_MARKER} in the directory secretdir. 2) glob tool with the pattern secretdir/**/*.txt. 3) list tool on the directory secretdir. Then summarize.`,
+    text: `Do these two steps, in order, using exactly these tools: 1) grep tool: search for ${GREP_MARKER} in the directory secretdir. 2) glob tool with the pattern secretdir/**/*.txt. Then summarize.`,
   });
   const byPermission = {};
-  for (const a of res.asked) (byPermission[a.permission] ??= []).push(a.patterns);
+  for (const a of res.asked) (byPermission[a.action] ??= []).push(a.resources);
   return {
-    item: '§15.4a padrões de grep/glob/list',
+    item: '§15.4a recursos de grep/glob',
     askedPatterns: byPermission,
     note: 'Se os padrões forem o termo buscado / o glob (e não caminhos), a invariante sensitivePaths só vale para read (plano B §8.1).',
   };
@@ -217,18 +214,18 @@ async function probeMcpWildcard(turn, callLog, toolId) {
   const prefix = toolId.split('_')[0];
   const text = `Call the tool ${toolId} with text "hello". Do not use any other tool.`;
   const c0 = countLines(callLog);
-  await turn({ title: 'mcp control', rules: [{ permission: '*', pattern: '*', action: 'allow' }], text });
+  await turn({ title: 'mcp control', rules: [{ action: '*', resource: '*', effect: 'allow' }], text });
   const controlCalled = countLines(callLog) > c0;
   const ask = await turn({
     title: 'mcp ask',
-    rules: [{ permission: '*', pattern: '*', action: 'allow' }, { permission: `${prefix}_*`, pattern: '*', action: 'ask' }],
+    rules: [{ action: '*', resource: '*', effect: 'allow' }, { action: `${prefix}_*`, resource: '*', effect: 'ask' }],
     text,
     onAsk: 'reject',
   });
   const c1 = countLines(callLog);
   const deny = await turn({
     title: 'mcp deny',
-    rules: [{ permission: '*', pattern: '*', action: 'allow' }, { permission: `${prefix}_*`, pattern: '*', action: 'deny' }],
+    rules: [{ action: '*', resource: '*', effect: 'allow' }, { action: `${prefix}_*`, resource: '*', effect: 'deny' }],
     text,
   });
   const deniedCallHappened = countLines(callLog) > c1;
@@ -239,7 +236,7 @@ async function probeMcpWildcard(turn, callLog, toolId) {
     item: '§15.4b curinga de nome para MCP',
     toolId,
     controlCalled,
-    askPermissionNames: ask.asked.map((a) => a.permission),
+    askPermissionNames: ask.asked.map((a) => a.action),
     deniedCallHappened,
     denyAttempted,
     verdict,
@@ -247,21 +244,21 @@ async function probeMcpWildcard(turn, callLog, toolId) {
   };
 }
 
-async function probeAlways(turn) {
-  const cmd = 'echo OPC_ALWAYS_PROBE';
-  const text = `Use the bash tool to run exactly: ${cmd} . Then report the output.`;
-  const a = await turn({ title: 'always session A', rules: [{ permission: 'bash', pattern: '*', action: 'ask' }], text, onAsk: 'always' });
-  const b = await turn({ title: 'always session B', rules: [{ permission: 'bash', pattern: '*', action: 'deny' }], text, onAsk: 'reject' });
-  const approvedInA = a.asked.some((x) => x.permission === 'bash' && x.reply === 'always')
-    && a.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed');
-  const bAttempted = toolAttempted(b.tools, b.asked, 'bash');
-  const bRan = b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed');
+async function probeOnceScope(turn) {
+  const cmd = 'echo OPC_ONCE_PROBE';
+  const text = `Use the shell tool to run exactly: ${cmd} . Then report the output.`;
+  const a = await turn({ title: 'once session A', rules: [{ action: 'shell', resource: '*', effect: 'ask' }], text, onAsk: 'once' });
+  const b = await turn({ title: 'once session B', rules: [{ action: 'shell', resource: '*', effect: 'deny' }], text, onAsk: 'reject' });
+  const approvedInA = a.asked.some((x) => x.action === 'shell' && x.reply === 'once')
+    && a.tools.some((tl) => tl.tool === 'shell' && tl.status === 'completed');
+  const bAttempted = toolAttempted(b.tools, b.asked, 'shell');
+  const bRan = b.tools.some((tl) => tl.tool === 'shell' && tl.status === 'completed');
   return {
-    item: '§15.2 escopo do always',
-    sessionAAsked: a.asked.map((x) => ({ patterns: x.patterns, always: x.always })),
+    item: '§15.2 escopo do once',
+    sessionAAsked: a.asked.map((x) => ({ resources: x.resources, reply: x.reply })),
     sessionBRanBash: bRan,
     sessionBAsked: b.asked.length,
-    verdict: !approvedInA || !bAttempted ? 'INCONCLUSIVO (aprovação na sessão A ou tentativa na sessão B ausente)' : (b.tools.some((tl) => tl.tool === 'bash' && tl.status === 'completed') ? 'ALWAYS_VAZA_E_VENCE_DENY' : 'ALWAYS_NAO_VAZOU'),
+    verdict: !approvedInA || !bAttempted ? 'INCONCLUSIVO (aprovação na sessão A ou tentativa na sessão B ausente)' : (bRan ? 'ONCE_VAZA_E_VENCE_DENY' : 'ONCE_NAO_VAZOU'),
   };
 }
 
@@ -274,8 +271,9 @@ async function probeDisableUserMcp(dataDir, ws, env, userMcpNames) {
   try {
     const server = await ensureServer(ctx);
     const client = clientFor(ctx, server);
-    const status = await client.get('/mcp').catch(() => null);
-    return { item: '§15.5 desligar MCP do usuário via override', mcp: name, bootOk: true, status: status?.[name] ?? null, verdict: status?.[name]?.status === 'disabled' ? 'DESLIGA' : 'NAO_DESLIGA' };
+    const sources = await client.get('/api/config');
+    const disabledInSource = sources.some((source) => source.type === 'document' && source.info?.mcp?.[name]?.enabled === false);
+    return { item: '§15.5 desligar MCP do usuário via override', mcp: name, bootOk: true, disabledInSource, verdict: 'INCONCLUSIVO (fontes de configuração não informam o estado efetivo do MCP)' };
   } catch (err) {
     return { item: '§15.5 desligar MCP do usuário via override', mcp: name, bootOk: false, error: err.code, verdict: 'OVERRIDE_PARCIAL_INVALIDO' };
   } finally {
@@ -311,7 +309,8 @@ try {
   let userConfig;
   try {
     const baselineClient = clientFor(baselineCtx, baselineServer);
-    const effectiveUserConfig = await baselineClient.get('/config');
+    const sources = await baselineClient.get('/api/config');
+    const effectiveUserConfig = Object.assign({}, ...sources.filter((item) => item.type === 'document' && item.info).map((item) => item.info));
     const key = ['model', 'agent', 'provider'].find((candidate) => Object.hasOwn(effectiveUserConfig ?? {}, candidate));
     if (key) userConfig = { [key]: effectiveUserConfig[key] };
   } finally {
@@ -328,7 +327,7 @@ try {
   results.push(await probePrecedence(turn, ws));
   results.push(await probeSearchPatterns(turn));
   results.push(await probeMcpWildcard(turn, callLog, merge.probeToolId));
-  results.push(await probeAlways(turn));
+  results.push(await probeOnceScope(turn));
   hub.stop();
   hub = null;
   await cleanup.stop(ctx);

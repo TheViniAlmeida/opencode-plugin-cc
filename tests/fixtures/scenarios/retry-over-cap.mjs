@@ -3,12 +3,11 @@ import { isFailingModel, successTurn } from './_model-select.mjs';
 const TICK_MS = Number(process.env.FAKE_RETRY_TICK_MS ?? 40);
 const MAX_TICKS = Number(process.env.FAKE_RETRY_MAX_TICKS ?? 50);
 
-// O modelo escolhido entra em retry do OpenCode: session.status{type:'retry'} com attempt crescente e
-// next (epoch ms) cada vez mais distante, até o cliente abortar a sessão (ou MAX_TICKS).
+// O modelo escolhido emite retry.scheduled até o cliente interromper a sessão.
 export default {
-  onPromptAsync(fake, sessionID, body) {
-    if (!isFailingModel(body)) {
-      fake.emitTurn(sessionID, successTurn(body));
+  onPrompt(fake, sessionID, body) {
+    if (!isFailingModel(fake.state.sessions[sessionID])) {
+      fake.emitTurn(sessionID, successTurn(fake.state.sessions[sessionID]));
       return;
     }
     fake.setStatus(sessionID, { type: 'busy' });
@@ -21,11 +20,11 @@ export default {
       }
       if (attempt >= MAX_TICKS) {
         clearInterval(timer);
-        fake.emitTurn(sessionID, { text: '', error: { name: 'MessageAbortedError', data: { message: 'A operação foi cancelada.' } } });
+        fake.failExecution(sessionID, { type: 'provider.transport', message: 'Tentativas esgotadas.' });
         return;
       }
       attempt += 1;
-      fake.setStatus(sessionID, { type: 'retry', attempt, message: 'Limite de requisições (falso)', next: Date.now() + 1000 * attempt });
+      fake.event('session.retry.scheduled', { sessionID, assistantMessageID: 'msg_retry', attempt, at: Date.now() + 1000 * attempt, error: { type: 'provider.transport', message: 'Limite de requisições (falso)' } });
     }, TICK_MS);
   },
 };

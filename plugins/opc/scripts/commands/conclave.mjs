@@ -11,8 +11,6 @@ import { renderConclave } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { redactOutput, redactText, safeOutputText } from '../lib/redact.mjs';
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
 const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode: { type: 'string', default: 'opinion' }, rounds: { type: 'number' }, judge: { type: 'string' }, quorum: { type: 'number' }, 'allow-judge-member': { type: 'boolean', default: false }, background: { type: 'boolean', default: false }, 'wait-timeout': { type: 'number' }, base: { type: 'string' }, scope: { type: 'string' }, json: { type: 'boolean', default: false }, 'raw-args-stdin': { type: 'boolean' } }, allowPositionals: true };
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
 
@@ -26,6 +24,12 @@ export function presentConclaveResult(ctx, job, asJson) {
   if (asJson) ctx.json(isPackage ? job.result : { jobId: job.id, status: job.status, errorCode: job.errorCode ?? null, errorMessage: job.errorMessage ?? null });
   else ctx.out(renderConclaveForeground(job));
   return exitCodeForJob(job);
+}
+
+export async function composeFromDiscovery(api, selectedModels, options) {
+  const [providers, availableModels, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers, models: availableModels, defaultModel });
+  return composeMembers({ ...options, models: selectedModels, catalog });
 }
 
 export async function run(ctx, argv) {
@@ -42,8 +46,7 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   try {
-    const catalog = buildCatalog(await conn.api.providers());
-    const composition = composeMembers({ models, pool: flags.pool ?? null, config: ctx.config, catalog, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
+    const composition = await composeFromDiscovery(conn.api, models, { pool: flags.pool ?? null, config: ctx.config, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
     for (const warning of composition.warnings) ctx.err(`[opc] aviso: ${warning}\n`);
     const common = { summary: (question || `review ${target?.label ?? ''}`).trim().slice(0, 120), permissionProfile: 'read-only' };
     const memberFields = composition.members.map((m) => ({ ...common, kind: 'conclave-member', title: `OPC: conclave: membro ${m.label}`, role: `member:${m.label}`, model: m.full }));
@@ -85,7 +88,8 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     request = { ...request, members: request.members.map((m) => ({ ...m, jobId: idsByRole.get(`member:${m.label}`) })), judge: { ...request.judge, jobId: idsByRole.get('judge') ?? null } };
     await persisted(() => updateJobImpl(ctx.stateDir, job.id, { status: 'running', phase: 'starting', startedAt: now() }));
     conn = await openApiImpl(ctx, { withHub: true, respawn: false });
-    const catalog = buildCatalog(await conn.api.providers());
+    const [providers, models, defaultModel] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel()]);
+    const catalog = buildCatalog({ providers, models, defaultModel });
     const knownNames = buildKnownNames(catalog, { extraModels: [...request.members, ...(request.judge.type === 'model' ? [request.judge] : [])] });
     const rules = profileRules(ctx, 'read-only');
     const ids = new Map(request.members.map((m) => [m.label, m.jobId]));
@@ -104,11 +108,11 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
       let result;
       try {
         result = await turnRunner({ api: conn.api, hub: conn.hub,
-          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, ...(ctx.config.conclave?.structuredOutput === 'tool' ? { format: { type: 'json_schema', schema: spec.schema } } : {}), textJson: ctx.config.conclave?.structuredOutput === 'tool' ? null : (value) => isPlainObject(value) ? null : 'resposta deve ser um objeto JSON', messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
+          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, format: { type: 'json_schema', schema: spec.schema }, messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
           isCancelled: () => isCancelled(id),
-          onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.abort(sessionID); }),
-          onPermission: (p) => conn.api.replyPermission(p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
-          onQuestion: (q) => conn.api.rejectQuestion(q.id),
+          onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.interrupt(sessionID); }),
+          onPermission: (p) => conn.api.replyPermission(p.sessionID, p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
+          onQuestion: (q) => conn.api.rejectQuestion(q.sessionID, q.id),
         });
       } catch (err) {
         throw persistenceError ?? err;

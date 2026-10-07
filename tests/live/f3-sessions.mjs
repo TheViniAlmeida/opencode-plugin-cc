@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { SKIP, MODELS, liveWorkspace, opc, record, note, fileLines, userText } from './_f3-lib.mjs';
 
-test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, children', { skip: SKIP, timeout: 60 * 60_000 }, async (t) => {
+test('F3 live: session new, fork, revert/unrevert, diff, summarize, children', { skip: SKIP, timeout: 60 * 60_000 }, async (t) => {
   const { ws, env, dataDir } = liveWorkspace(t);
   const notes = join(ws, 'notes.txt');
   const run = async (title, args, opts = {}) => { const res = await opc(args, { env, cwd: ws, ...opts }); record(title, res, dataDir); return res; };
@@ -19,20 +19,24 @@ test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, childr
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
   res = await run('session diff (após as duas edições, antes do revert)', ['session', 'diff', sid, '--json']);
   assert.equal(res.code, 0, res.stderr);
-  assert.ok(JSON.parse(res.stdout).diffs.some((d) => String(d.file).endsWith('notes.txt')));
+  // OpenCode 2.0.22 answered an empty session diff after real edits; opc must then say so instead of showing nothing.
+  const sessionDiff = JSON.parse(res.stdout);
+  const listsNotes = sessionDiff.diffs.some((d) => String(d.file).endsWith('notes.txt'));
+  t.diagnostic(`session diff: ${listsNotes ? 'lista notes.txt' : `vazio; avisos: ${sessionDiff.notices.length}`}`);
+  assert.ok(listsNotes || (sessionDiff.diffs.length === 0 && sessionDiff.notices.length > 0), 'diff sem notes.txt e sem aviso de diff vazio');
   res = await run('session show', ['session', 'show', sid, '--limit', '100', '--json']);
-  const users = JSON.parse(res.stdout).messages.filter((m) => m.info.role === 'user');
-  const m2 = users.find((m) => userText(m).includes('BETA'))?.info.id;
+  const users = JSON.parse(res.stdout).messages.filter((m) => m.type === 'user');
+  const m2 = users.find((m) => userText(m).includes('BETA'))?.id;
   assert.ok(m2, 'mensagem de usuário do turno BETA');
-  res = await run('session fork (antes do turno BETA)', ['session', 'fork', sid, m2, '--json']);
+  res = await run('session fork (antes do turno BETA)', ['session', 'fork', sid, '--before', m2, '--json']);
   assert.equal(res.code, 0, res.stderr);
   const forkId = JSON.parse(res.stdout).session.id;
-  const forkUsers = JSON.parse((await opc(['session', 'show', forkId, '--limit', '100', '--json'], { env, cwd: ws })).stdout).messages.filter((m) => m.info.role === 'user');
+  const forkUsers = JSON.parse((await opc(['session', 'show', forkId, '--limit', '100', '--json'], { env, cwd: ws })).stdout).messages.filter((m) => m.type === 'user');
   assert.ok(forkUsers.some((m) => userText(m).includes('ALPHA')));
   assert.ok(!forkUsers.some((m) => userText(m).includes('BETA')));
   res = await run('session revert sem confirmação', ['session', 'revert', sid, m2]);
   assert.equal(res.code, 2);
-  assert.match(res.stdout, /notes\.txt/);
+  assert.match(res.stdout, /não fornece um diff restrito às mensagens a partir do alvo/);
   assert.match(res.stdout, /--confirmed-by-user/);
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
   res = await run('session revert confirmado', ['session', 'revert', sid, m2, '--confirmed-by-user', '--json']);
@@ -46,18 +50,12 @@ test('F3 live: session new, fork, revert/unrevert, diff, todo, summarize, childr
   assert.deepEqual(fileLines(notes), ['original', 'ALPHA', 'BETA']);
   assert.equal(JSON.parse((await opc(['session', 'show', sid, '--json'], { env, cwd: ws })).stdout).session.revert, undefined);
   res = await run('session diff (após unrevert; observação)', ['session', 'diff', sid, '--json']);
-  res = await run('task todowrite', ['task', '--resume', sid, '--write', '--model', MODELS.deepseek, 'Use the todowrite tool to create a todo list with exactly two items: "check alpha" and "check beta". Then reply DONE.']);
-  assert.equal(res.code, 0, res.stderr);
-  res = await run('session todo', ['session', 'todo', sid, '--json']);
-  const todos = JSON.parse(res.stdout).todos;
-  assert.ok(Array.isArray(todos));
-  note('contagem de tarefas (critério: >= 1)', { count: todos.length }, dataDir);
-  assert.ok(todos.length >= 1, 'o modelo deve criar ao menos uma tarefa');
   const before = JSON.parse((await opc(['session', 'show', sid, '--limit', '200', '--json'], { env, cwd: ws })).stdout).messages.length;
   res = await run('session summarize', ['session', 'summarize', sid, '--model', MODELS.qwen, '--json']);
   assert.equal(res.code, 0, res.stderr);
   const after = JSON.parse((await opc(['session', 'show', sid, '--limit', '200', '--json'], { env, cwd: ws })).stdout).messages;
-  assert.ok(after.some((m) => m.info.summary === true) || after.length > before, 'o resumo gerou uma mensagem');
+  assert.equal(JSON.parse(res.stdout).summarized, true);
+  assert.ok(after.some((m) => m.agent === 'compaction' || m.type === 'compaction') || after.length !== before, 'o resumo alterou a lista de mensagens');
   res = await run('session children', ['session', 'children', sid, '--json']);
   assert.equal(res.code, 0);
   assert.ok(Array.isArray(JSON.parse(res.stdout).children));

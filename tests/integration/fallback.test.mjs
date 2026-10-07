@@ -16,7 +16,7 @@ function setup(t, scenario, { extra = {}, cfg = config() } = {}) {
   const env = testEnv(t, { scenario, extra: { OPC_FALLBACK_BACKOFF_MS: '50', ...extra } });
   const ws = makeWorkspace(t); writeGlobalConfig(env, cfg); return { env, ws };
 }
-const sessionCreates = (env) => requestsTo(env, 'POST', /^\/session$/).length;
+const sessionCreates = (env) => requestsTo(env, 'POST', /^\/api\/session$/).length;
 const output = (r) => `${r.stdout}\n${r.stderr}`;
 
 test('model-429 faz fallback e registra tentativas', async (t) => {
@@ -25,7 +25,7 @@ test('model-429 faz fallback e registra tentativas', async (t) => {
   assert.equal(r.code, 0, output(r)); assert.deepEqual(promptModels(env), [M.fast, M.k3]); assert.equal(sessionCreates(env), 2);
   const [job] = jobsIn(env, ws); assert.equal(job.status, 'completed'); assert.equal(job.model, M.k3); assert.equal(job.attemptLimit, 2);
   assert.deepEqual(job.attempts.map(({ status, errorClass, errorType }) => ({ status, errorClass, errorType })), [
-    { status: 'failed', errorClass: 'recoverable', errorType: 'APIError' },
+    { status: 'failed', errorClass: 'recoverable', errorType: 'provider.rate-limit' },
     { status: 'completed', errorClass: null, errorType: null },
   ]);
   assert.equal(job.attempts.length, 2); assert.notEqual(job.attempts[0].sessionID, job.attempts[1].sessionID);
@@ -36,7 +36,7 @@ test('limite de retries do provedor aborta sessão e faz fallback', async (t) =>
   const { env, ws } = setup(t, 'retry-over-cap', { extra: { FAKE_FAIL_MODELS: M.fast }, cfg: config({ fallback: { maxProviderRetries: 2 } }) });
   const r = await runCli(['ask', 'Qual arquivo define o ponto de entrada?'], { env, cwd: ws });
   assert.equal(r.code, 0, output(r)); assert.deepEqual(promptModels(env), [M.fast, M.k3]);
-  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/abort$/).length, 1);
+  assert.equal(requestsTo(env, 'POST', /^\/api\/session\/[^/]+\/interrupt$/).length, 1);
   const [job] = jobsIn(env, ws); assert.equal(job.attempts[0].errorType, 'RetryCapExceeded'); assert.equal(job.attempts[1].status, 'completed');
 });
 
@@ -44,7 +44,7 @@ test('falha fatal não faz fallback', async (t) => {
   const { env, ws } = setup(t, 'model-fatal', { extra: { FAKE_FAIL_MODELS: M.fast } });
   const r = await runCli(['ask', 'Qual arquivo define o ponto de entrada?'], { env, cwd: ws });
   assert.equal(r.code, 7, output(r)); assert.deepEqual(promptModels(env), [M.fast]);
-  const [job] = jobsIn(env, ws); assert.equal(job.errorType, 'ProviderAuthError'); assert.equal(job.attempts.length, 1);
+  const [job] = jobsIn(env, ws); assert.equal(job.errorType, 'provider.auth'); assert.equal(job.attempts.length, 1);
 });
 
 test('falha após escrita não faz fallback e lista arquivos e ferramentas', async (t) => {
@@ -73,7 +73,7 @@ test('falha recuperável de todos candidatos termina com FALLBACK_EXHAUSTED', as
   const r = await runCli(['ask', 'Qual arquivo define o ponto de entrada?'], { env, cwd: ws });
   assert.equal(r.code, 7, output(r)); assert.deepEqual(promptModels(env), [M.fast, M.k3]);
   const [job] = jobsIn(env, ws); assert.equal(job.errorCode, 'FALLBACK_EXHAUSTED');
-  assert.match(job.errorMessage, /1\) .*deepseek-v4\.1-flash: APIError; 2\) .*kimi-k3: APIError/);
+  assert.match(job.errorMessage, /1\) .*deepseek-v4\.1-flash: provider\.rate-limit; 2\) .*kimi-k3: provider\.rate-limit/);
 });
 
 test('retomada não faz fallback', async (t) => {
@@ -137,5 +137,5 @@ test('worker encerra como cancelled com cancelamento anterior à primeira tentat
   const terminal = jobsIn(env, ws).find((entry) => entry.id === job.id);
   assert.equal(terminal.status, 'cancelled');
   assert.deepEqual(terminal.attempts, []);
-  assert.equal(requestsTo(env, 'POST', /^\/session\/[^/]+\/prompt_async$/).length, 0);
+  assert.equal(requestsTo(env, 'POST', /^\/api\/session\/[^/]+\/prompt$/).length, 0);
 });

@@ -76,7 +76,7 @@ test('auth-401 → AUTH_FAILED immediately (one boot), server terminated', async
 
 test('missing opencode binary → BOOT_FAILED with install guidance', async (t) => {
   const { ctx } = makeServerCtx(t);
-  await assert.rejects(ensureServer({ ...ctx, opencodeBin: 'opencode-missing-binary-xyz' }), (e) => e.code === 'BOOT_FAILED' && /npm install -g opencode-ai/.test(e.message));
+  await assert.rejects(ensureServer({ ...ctx, opencodeBin: 'opencode-missing-binary-xyz' }), (e) => e.code === 'BOOT_FAILED' && /server\.opencodeBin/.test(e.message));
 });
 
 test('share-auto: world check marks sessions as blocked and assertCanCreateSessions refuses', async (t) => {
@@ -96,6 +96,7 @@ test('world check: default override share:"disabled" keeps sessions allowed; den
   assert.equal(server.world.shareBlocked, false);
   assert.deepEqual(server.world.deniedDefaults, ['model', 'small_model']);
   assert.ok(server.warnings.some((w) => /"model"/.test(w) && /configOverride\.model/.test(w)));
+  assert.ok(server.warnings.some((w) => /"small_model"/.test(w) && /configOverride\.small_model/.test(w)));
 });
 
 test('config unavailable blocks session creation and a later successful reuse check clears the block', async (t) => {
@@ -103,7 +104,7 @@ test('config unavailable blocks session creation and a later successful reuse ch
   const first = await ensureServer(ctx);
   assert.equal(first.world.shareBlocked, true);
   assert.equal(first.world.shareReason, 'config-unavailable');
-  assert.ok(first.warnings.some((warning) => /GET \/config/.test(warning)));
+  assert.ok(first.warnings.some((warning) => /GET \/api\/config/.test(warning)));
   assert.throws(() => assertCanCreateSessions(first), (err) => err.code === 'SHARE_AUTO'
     && /tente novamente/i.test(err.message) && /servidor/i.test(err.message));
 

@@ -1,20 +1,19 @@
 // Shape recording and diffing used by tests/live/contract.mjs (kept import-safe for unit tests).
+import fs from 'node:fs';
 
-// Probe registry read by tests/live/contract.mjs (the single contract runner). Later phases APPEND entries here
-// (explicit "Modify" steps) for the GET endpoints / passive SSE events they start consuming:
+// V2 GET endpoints and passive SSE events consumed by the scheduled live contract runner.
 // { name, method: 'GET', path, used: [dotted fields opc reads], optionalUsed?: [fields read only if present] }.
 export const PROBES = [
-  { name: 'health', method: 'GET', path: '/global/health', used: ['healthy', 'version'] },
-  { name: 'agent', method: 'GET', path: '/agent', used: ['[].name', '[].mode', '[].permission', '[].options'] },
-  { name: 'config', method: 'GET', path: '/config', used: [], optionalUsed: ['model', 'small_model', 'share', 'autoshare', 'mcp'] },
-  { name: 'session.status', method: 'GET', path: '/session/status', used: [] },
-  { name: 'permission', method: 'GET', path: '/permission', used: [] },
-  { name: 'question', method: 'GET', path: '/question', used: [] },
-  { name: 'provider', method: 'GET', path: '/provider', used: ['all.[].id', 'all.[].name'], optionalUsed: ['connected', 'default', 'all.[].models', 'all.[].models.*.id', 'all.[].models.*.name', 'all.[].models.*.limit', 'all.[].models.*.variants', 'all.[].models.*.status', 'all.[].models.*.release_date'] },
-  { name: 'command', method: 'GET', path: '/command', used: ['[].name'], optionalUsed: ['[].description', '[].source', '[].agent', '[].model', '[].subtask', '[].template', '[].hints'] },
-  { name: 'skill', method: 'GET', path: '/skill', used: [], optionalUsed: ['[].name', '[].description', '[].location'] },
+  { name: 'info', method: 'GET', path: '/api/info', used: ['version', 'pid', 'urls'], optionalUsed: ['paths'] },
+  { name: 'agent', method: 'GET', path: '/api/agent', used: ['[].id', '[].name', '[].mode'], optionalUsed: ['[].permissions'] },
+  { name: 'config', method: 'GET', path: '/api/config', used: [] },
+  { name: 'session.active', method: 'GET', path: '/api/session/active', used: [] },
+  { name: 'provider', method: 'GET', path: '/api/provider', used: ['[].id', '[].name', '[].activation'] },
+  { name: 'model', method: 'GET', path: '/api/model', used: [] },
+  { name: 'command', method: 'GET', path: '/api/command', used: ['[].name'] },
+  { name: 'skill', method: 'GET', path: '/api/skill', used: [] },
 ];
-export const EVENT_TYPES = ['server.connected', 'server.heartbeat'];
+export const EVENT_TYPES = ['server.connected'];
 
 // Only config fields consumed by the plugin belong in snapshots.
 export const CONFIG_USED_FIELDS = ['share', 'autoshare', 'model', 'small_model', 'mcp', 'agent', 'provider', 'permission'];
@@ -24,13 +23,13 @@ export const KNOWN_CONFIG_PROPS = new Set([
   'enabled', 'type', 'command', 'url', 'environment', 'headers', 'timeout', 'model',
   'mode', 'prompt', 'description', 'temperature', 'top_p', 'tools', 'disable',
   'hidden', 'permission', 'options', 'models', 'name', 'npm', 'api', 'variant',
-  'variants', 'steps', 'color',
+  'variants', 'steps', 'color', 'id', 'permissions', 'action', 'resource', 'effect',
 ]);
 
 // Maps whose keys are user data (provider names, MCP names…): only the value shape is recorded.
 export const MAP_PATHS = new Set([
   'config.agent', 'config.mcp', 'config.provider', 'config.command', 'config.mode', 'config.lsp', 'config.formatter',
-  'config.permission', 'session.status',
+  'config.permission', 'session.status', 'session.active',
   'agent', 'command', 'skill',
   'provider.all[].models', 'provider.default', 'provider.all[].options', 'provider.all[].models.*.options',
   'provider.all[].models.*.headers', 'provider.all[].models.*.variants',
@@ -66,7 +65,7 @@ function collapseKeys(value, at, keys) {
 
 export function toolAttempted(tools, asked, tool) {
   return tools.some((part) => part.tool === tool && ['error', 'completed'].includes(part.status))
-    || asked.some((event) => event.permission === tool);
+    || asked.some((event) => (event.action ?? event.permission) === tool);
 }
 
 function inconclusiveReason(reason) {
@@ -88,6 +87,7 @@ export function mergeVerdict({ overrideApplied, userConfig, effectiveConfig, ove
 
 export function shapeOf(value, at = '') {
   if (value === null) return 'null';
+  if (at === 'config' && Array.isArray(value)) return ['object'];
   if (Array.isArray(value)) return value.length === 0 ? ['empty'] : [shapeOf(value[0], `${at}[]`)];
   if (typeof value === 'object') {
     const keys = Object.keys(value);
@@ -140,4 +140,64 @@ export function diffShapes(real, fake, used = [], optionalUsed = []) {
     }
   }
   return problems;
+}
+
+// OpenCode 2.0.22 contract (F6). Samples are real responses captured on 06/10/2026 and sanitized; each shape
+// lists the keys opc reads. `V2_SHAPES.files` maps every committed sample to the shape it must satisfy
+// (`null` = recorded for reference only).
+export const V2_CONTRACT_DIR = new URL('./contract/opencode-2.0.22/', import.meta.url);
+
+export const V2_SHAPES = Object.freeze({
+  info: ['version', 'pid', 'urls', 'paths'],
+  session: ['id', 'projectID', 'agent', 'model', 'permissions', 'time', 'title', 'location', 'cost', 'tokens'],
+  'message.user': ['id', 'type', 'time', 'text'],
+  'message.assistant': ['id', 'type', 'time', 'agent', 'model', 'content', 'cost', 'tokens'],
+  'message.idle': ['id', 'type', 'time', 'outcome'],
+  event: ['id', 'type', 'data'],
+  permissionRequest: ['id', 'sessionID', 'action', 'resources', 'save', 'source'],
+  form: ['id', 'sessionID', 'title', 'metadata', 'fields'],
+  model: ['id', 'modelID', 'providerID', 'name', 'capabilities', 'variants', 'status'],
+  agent: ['id', 'name', 'mode', 'hidden', 'permissions'],
+  provider: ['id', 'name', 'activation'],
+  export: ['info', 'messages'],
+  compaction: ['id', 'sessionID', 'time', 'type', 'payload', 'delivery'],
+  files: {
+    'info.json': 'info',
+    'session.json': 'session',
+    'messages-turn.json': null,
+    'messages-failed.json': null,
+    'messages-interrupted.json': null,
+    'permission-request.json': 'permissionRequest',
+    'form.json': 'form',
+    'model.json': null,
+    'model-default.json': null,
+    'agent.json': null,
+    'provider.json': null,
+    'command.json': null,
+    'config.json': null,
+    'export.json': 'export',
+    'session-list.json': null,
+    'prompt.json': null,
+    'active.json': null,
+    'interrupt.json': null,
+    'compact.json': 'compaction',
+  },
+});
+
+// Throws an AssertionError-like Error naming the first missing key.
+export function assertShape(name, value) {
+  const keys = V2_SHAPES[name];
+  if (!Array.isArray(keys)) throw new Error(`unknown V2 shape: ${name}`);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${name}: expected an object`);
+  for (const key of keys) {
+    if (!(key in value)) throw Object.assign(new Error(`${name}: missing key ${key}`), { code: 'ERR_ASSERTION' });
+  }
+  return value;
+}
+
+export function loadContractSample(name) {
+  const text = fs.readFileSync(new URL(name, V2_CONTRACT_DIR), 'utf8');
+  if (name.endsWith('.jsonl')) return text.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  if (name.endsWith('.txt')) return text;
+  return JSON.parse(text);
 }

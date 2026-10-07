@@ -1,5 +1,7 @@
 # opc — Checklist de execução
 
+> As fases F0–F5 abaixo são histórico. Na F6, OpenCode V2 (≥ 2.0.22) substitui a API V1. Consulte [o relatório da F6](../../phases/F6-report.md) para o portão atual.
+
 Checklist mestre para retomar o trabalho em qualquer sessão. Marque os itens conforme concluídos
 (`- [x]`) e registre a data ao lado dos marcos.
 

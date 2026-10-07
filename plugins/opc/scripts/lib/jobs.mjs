@@ -9,7 +9,7 @@ import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } fr
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
-import { readServerRecord } from './server.mjs';
+import { readServerRecord, resolveOpencodeBin } from './server.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
 
@@ -452,6 +452,7 @@ export function serverContext(ctx) {
     workspaceRoot: ctx.workspaceRoot,
     config: ctx.config,
     env: ctx.env,
+    opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
     hasActiveJobs: () => listJobs(ctx.stateDir, { all: true }).some(isActive),
   };
 }
@@ -666,7 +667,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
   if (client && job.sessionID && job.phase !== 'fallback' && !previousFinished) {
     try {
       for (const sessionID of [job.sessionID, ...(job.childSessionIDs ?? [])]) {
-        if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
+        await client.interrupt(sessionID); // V2: {interrupted:false} just means it was already idle
       }
       report.aborted = true;
       report.idle = await waitSessionIdle(client, job.sessionID, idleWaitMs);
@@ -690,7 +691,7 @@ export async function cancelJob(ctx, id, { api = undefined, idleWaitMs = 10000, 
     if (client && latest.sessionID && !report.aborted) {
       try {
         for (const sessionID of [latest.sessionID, ...(latest.childSessionIDs ?? [])]) {
-          if (await client.abort(sessionID) === false) throw new Error(`o servidor recusou o cancelamento da sessão ${sessionID}`);
+          await client.interrupt(sessionID); // V2: {interrupted:false} just means it was already idle
         }
         report.aborted = true;
       } catch (err) {

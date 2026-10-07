@@ -4,9 +4,10 @@ import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, resolveModel, requireAgent, profileRules } from '../lib/context.mjs';
 import { assertId } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
-import { renderSession, renderSessions, renderSessionDiff, renderTodos, renderRevertPreview } from '../lib/render.mjs';
-import { readSessionMessages } from '../lib/session-messages.mjs';
+import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../lib/render.mjs';
+import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
 import { maskDeep, safeOutputText } from '../lib/redact.mjs';
+import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 
 const SPEC = {
   flags: {
@@ -17,6 +18,7 @@ const SPEC = {
     limit: { type: 'number', default: 20 },
     part: { type: 'string' },
     message: { type: 'string' },
+    before: { type: 'string' },
     'confirmed-by-user': { type: 'boolean' },
     timeout: { type: 'number' },
     json: { type: 'boolean' },
@@ -26,13 +28,15 @@ const SPEC = {
 };
 
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
-export const PREVIEW_TRUNCATION_NOTICE = 'Prévia limitada às 50 primeiras mensagens do usuário a partir do alvo; o revert pode afetar mais arquivos.';
+export const EMPTY_DIFF_NOTICE = 'O OpenCode não informou alterações para esta sessão (o diff pode vir vazio mesmo com arquivos alterados); a fonte confiável é o git do workspace (ex.: git diff).';
+export const SNAPSHOT_DISABLED_NOTICE = 'O OpenCode está com "snapshot": false: sem snapshots, a sessão não registra diff e a reversão não restaura arquivos.';
+export const REVERT_SCOPE_NOTICE = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo. A reversão pode alterar arquivos; confira o estado da sessão e do workspace antes de confirmar.';
 
 async function actionNew(ctx, api, { flags }) {
   const policy = ctx.config.policy ?? {};
   const body = {
     title: `OPC: session: ${oneLine(flags.title || 'manual').slice(0, 72)}`,
-    permission: profileRules(ctx, flags.write ? 'write' : 'read-only'),
+    permissions: profileRules(ctx, flags.write ? 'write' : 'read-only'),
   };
   {
     const discovery = await loadDiscovery(api);
@@ -54,20 +58,16 @@ async function actionShow(ctx, api, { flags, sessionID }) {
     readSessionMessages(api, sessionID, { limit: flags.limit }),
   ]);
   const status = statusMap?.[sessionID]?.type ?? 'idle';
-  const unavailable = messages?.messagesUnavailable === true;
   const safeSession = maskDeep(session);
   const safeMessages = maskDeep(messages ?? []);
-  if (flags.json) ctx.json(maskDeep({ session: safeSession, status, messages: safeMessages, ...(unavailable ? { messagesUnavailable: true, reason: 'OPENCODE_LIST_BUG' } : {}) }));
-  else {
-    if (unavailable) ctx.out('As mensagens desta sessão não podem ser listadas por um defeito do OpenCode 1.18.32 com saída estruturada; o diff e os filhos continuam disponíveis.\n');
-    ctx.out(renderSession(safeSession, { status, messages: safeMessages }));
-  }
+  if (flags.json) ctx.json({ session: safeSession, status, messages: safeMessages });
+  else ctx.out(renderSession(safeSession, { status, messages: safeMessages }));
   return ExitCode.OK;
 }
 
 async function actionFork(ctx, api, { flags, sessionID, rest }) {
-  const messageID = rest[1] ? assertId('msg', rest[1], 'mensagem') : undefined;
-  const forked = await api.fork(sessionID, { messageID });
+  const messageID = flags.before ? assertId('msg', flags.before, 'mensagem') : undefined;
+  const forked = await api.fork(sessionID, { before: messageID });
   if (flags.json) ctx.json(maskDeep({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } }));
   else ctx.out(renderSession(forked, { note: `Fork de ${sessionID}${messageID ? `, com o histórico anterior a ${messageID}` : ''}.` }));
   return ExitCode.OK;
@@ -80,52 +80,17 @@ async function actionChildren(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
-// OpenCode 1.18.32 returns an empty session-level diff (summary not computed); per-message diffs work.
-// Without --message and with an empty aggregate, collect the diff of each user message (oldest first).
-async function perMessageDiffs(api, sessionID) {
-  const messages = (await readSessionMessages(api, sessionID)) ?? [];
-  const userIds = messages.filter((m) => (m.info?.role ?? m.role) === 'user').map((m) => m.info?.id ?? m.id).filter(Boolean);
-  const ids = userIds.slice(-MAX_DIFF_MESSAGES);
-  const diffs = [];
-  for (const id of ids) {
-    for (const entry of (await api.diff(sessionID, { messageID: id })) ?? []) diffs.push({ ...entry, messageID: id });
-  }
-  return { diffs, truncated: userIds.length > ids.length, unavailable: Boolean(messages.messagesUnavailable) };
-}
-
 async function actionDiff(ctx, api, { flags, sessionID }) {
-  const messageID = flags.message !== undefined ? assertId('msg', flags.message, 'mensagem') : undefined;
-  let diffs = (await api.diff(sessionID, { messageID })) ?? [];
-  let source = messageID ? 'message' : 'session';
-  const notices = [];
-  if (!messageID && diffs.length === 0) {
-    const collected = await perMessageDiffs(api, sessionID);
-    if (collected.diffs.length) {
-      diffs = collected.diffs;
-      source = 'per-message';
-      notices.push('O OpenCode não calculou o diff agregado da sessão; mostrando o diff de cada mensagem do usuário (da mais antiga para a mais recente).');
-      if (collected.truncated) notices.push(`Limitado às ${MAX_DIFF_MESSAGES} mensagens do usuário mais recentes.`);
-    } else if (collected.unavailable) {
-      notices.push('As mensagens desta sessão não puderam ser listadas; use --message <id> para ver o diff de uma mensagem.');
-    }
-  }
+  if (flags.message !== undefined) throw new UsageError('UNKNOWN_OPTION', '--message não está disponível para diff no OpenCode 2');
+  const diffs = (await api.diff(sessionID)) ?? [];
   const safeDiffs = maskDeep(diffs);
-  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: messageID ?? null, source, notices, diffs: safeDiffs }));
-  else {
-    const rendered = renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}${messageID ? ` (mensagem ${messageID})` : ''}` });
-    ctx.out(notices.length ? rendered.replace(/\n\n/, `\n\n${notices.join('\n')}\n\n`) : rendered);
-  }
+  // An empty V2 diff is not proof of an untouched workspace; never derive a diff locally.
+  const notices = safeDiffs.length ? [] : [EMPTY_DIFF_NOTICE, ...(await snapshotsDisabled(api) ? [SNAPSHOT_DISABLED_NOTICE] : [])];
+  if (flags.json) ctx.json(maskDeep({ sessionID, messageID: null, source: 'session', notices, diffs: safeDiffs }));
+  else ctx.out(`${renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}` })}${notices.map((notice) => `\nAviso: ${notice}\n`).join('')}`);
   return ExitCode.OK;
 }
 
-async function actionTodo(ctx, api, { flags, sessionID }) {
-  const todos = (await api.todo(sessionID)) ?? [];
-  if (flags.json) ctx.json(maskDeep({ sessionID, todos }));
-  else ctx.out(renderTodos(todos, { sessionID }));
-  return ExitCode.OK;
-}
-
-const MAX_DIFF_MESSAGES = 50;
 const DEFAULT_SUMMARIZE_TIMEOUT_SEC = 600;
 
 export async function withSessionGuard(ctx, api, sessionID, fn) {
@@ -141,68 +106,40 @@ export async function withSessionGuard(ctx, api, sessionID, fn) {
 }
 
 export async function collectAffectedDiff(api, sessionID, messageID) {
-  const messages = (await readSessionMessages(api, sessionID)) ?? [];
-  const index = messages.findIndex((m) => m.info?.id === messageID);
-  if (messages.messagesUnavailable || index < 0) {
-    let target;
-    try { target = await api.message(sessionID, messageID); }
-    catch (err) {
-      if (err?.code === 'NOT_FOUND') throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
-      throw err;
-    }
-    if (!target) throw new UsageError('UNKNOWN_MESSAGE', `a mensagem ${messageID} não pertence à sessão ${sessionID}`);
-    const diffMessageID = target.info?.role === 'assistant' ? target.info.parentID ?? messageID : messageID;
-    const diffs = (await api.diff(sessionID, { messageID: diffMessageID })) ?? [];
-    if (messages.messagesUnavailable) diffs.listBugNotice = 'Não foi possível enumerar os turnos posteriores por defeito do OpenCode 1.18.32; a prévia mostra apenas esta mensagem.';
-    else diffs.previewTruncated = true;
-    return diffs;
+  const messages = await readTurnMessages(api, sessionID);
+  if (!messages.some((message) => message.id === messageID)) {
+    throw new UsageError('UNKNOWN_MESSAGE', 'a mensagem <valor> não pertence à sessão <valor>');
   }
-  const target = messages[index].info;
-  const ids = [];
-  if (target.role === 'assistant' && target.parentID) ids.push(target.parentID);
-  for (const message of messages.slice(index)) {
-    if (message.info?.role === 'user' && !ids.includes(message.info.id)) ids.push(message.info.id);
-  }
-  const previewTruncated = ids.length > MAX_DIFF_MESSAGES;
-  const byFile = new Map();
-  for (const id of ids.slice(0, MAX_DIFF_MESSAGES)) {
-    for (const diff of (await api.diff(sessionID, { messageID: id })) ?? []) {
-      const key = diff.file ?? '(desconhecido)';
-      const previous = byFile.get(key);
-      if (!previous) {
-        byFile.set(key, { ...diff });
-        continue;
-      }
-      byFile.set(key, {
-        ...previous,
-        additions: (previous.additions ?? 0) + (diff.additions ?? 0),
-        deletions: (previous.deletions ?? 0) + (diff.deletions ?? 0),
-        patch: [previous.patch, diff.patch].filter(Boolean).join('\n'),
-        status: previous.status === 'added' ? 'added' : (diff.status ?? previous.status),
-      });
-    }
-  }
-  const result = [...byFile.values()];
-  if (previewTruncated) result.previewTruncated = true;
-  return result;
+  return null;
+}
+
+// V2 diffs and file restores come from snapshots; the merged OpenCode config can turn them off.
+async function snapshotsDisabled(api) {
+  return (await loadOpencodeConfig(api))?.snapshot === false;
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
   const requestedMessageID = flags.message ?? rest[1];
   if (!requestedMessageID) throw new UsageError('MISSING_MESSAGE_ID', 'session revert exige <sessionID> <messageID>');
   const messageID = assertId('msg', requestedMessageID, 'mensagem');
-  const partID = flags.part ? assertId('prt', flags.part, 'parte') : undefined;
+  if (flags.part) throw new UsageError('UNKNOWN_OPTION', '--part não está disponível no OpenCode 2');
   return withSessionGuard(ctx, api, sessionID, async () => {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
+    if (await snapshotsDisabled(api)) {
+      throw new UsageError('SNAPSHOT_DISABLED', `${SNAPSHOT_DISABLED_NOTICE} Defina "snapshot": true em server.configOverride na configuração global do opc (ou na do OpenCode) e reinicie o servidor (opc setup --stop-server).`);
+    }
     if (!flags['confirmed-by-user']) {
-      const command = `opc session revert ${sessionID} ${messageID}${partID ? ` --part ${partID}` : ''} --confirmed-by-user`;
-      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, command, ...(affected.previewTruncated ? { previewTruncated: true, notice: PREVIEW_TRUNCATION_NOTICE } : {}), ...(affected.listBugNotice ? { notice: affected.listBugNotice } : {}) }));
-      else ctx.out(`${renderRevertPreview({ action: 'revert', sessionID, messageID, affected, command })}${affected.previewTruncated ? `\n${PREVIEW_TRUNCATION_NOTICE}\n` : ''}${affected.listBugNotice ? `\n${affected.listBugNotice}\n` : ''}`);
+      const command = `opc session revert ${sessionID} ${messageID} --confirmed-by-user`;
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
+      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
       return ExitCode.USAGE;
     }
-    const session = await api.revert(sessionID, { messageID, partID });
+    // Stage only: it restores the files and keeps the revert pending, so DELETE (unrevert) can undo it.
+    // revert/commit would drop the messages for good and leave nothing to unrevert.
+    await api.revertStage(sessionID, { messageID });
+    const session = await api.getSession(sessionID);
     if (flags.json) ctx.json(maskDeep({ confirmed: true, action: 'revert', session }));
-    else ctx.out(renderSession(session, { note: `Revert aplicado a partir de ${messageID}. Para desfazer: opc session unrevert ${sessionID} --confirmed-by-user` }));
+    else ctx.out(renderSession(session, { note: `Reversão aplicada (pendente). Para desfazer: opc session unrevert ${sessionID} --confirmed-by-user` }));
     return ExitCode.OK;
   });
 }
@@ -210,15 +147,18 @@ async function actionRevert(ctx, api, { flags, sessionID, rest }) {
 async function actionUnrevert(ctx, api, { flags, sessionID }) {
   return withSessionGuard(ctx, api, sessionID, async () => {
     const current = await api.getSession(sessionID);
-    if (!current.revert) throw new UsageError('NOT_REVERTED', `a sessão ${sessionID} não tem revert ativo; nada a desfazer`);
+    if (!current.revert) throw new UsageError('NOT_REVERTED', 'a sessão <valor> não tem reversão ativa; nada a desfazer');
     if (!flags['confirmed-by-user']) {
       const command = `opc session unrevert ${sessionID} --confirmed-by-user`;
-      const rawDiff = current.revert.diff ?? null;
+      // V2 stages carry the restored files with their patches.
+      const files = Array.isArray(current.revert.files) ? current.revert.files : [];
+      const rawDiff = files.map((file) => file?.patch).filter((patch) => typeof patch === 'string' && patch).join('\n') || null;
       if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
       else ctx.out(renderRevertPreview({ action: 'unrevert', sessionID, messageID: current.revert.messageID, rawDiff, command }));
       return ExitCode.USAGE;
     }
-    const session = await api.unrevert(sessionID);
+    await api.revertClear(sessionID);
+    const session = await api.getSession(sessionID);
     if (flags.json) ctx.json(maskDeep({ confirmed: true, action: 'unrevert', session }));
     else ctx.out(renderSession(session, { note: 'Unrevert aplicado: mensagens e arquivos restaurados.' }));
     return ExitCode.OK;
@@ -229,13 +169,12 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
   const discovery = await loadDiscovery(api);
   const model = resolveModel(ctx, discovery, 'summarize', flags.model);
   return withSessionGuard(ctx, api, sessionID, async () => {
-    await api.summarize(sessionID, {
-      providerID: model.providerID,
-      modelID: model.modelID,
-      timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000,
-    });
-    if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true }));
-    else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\nVeja o resultado: opc session show ${safeOutputText(sessionID)}\n`);
+    await api.setModel(sessionID, { providerID: model.providerID, id: model.modelID });
+    // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }).
+    const compaction = await api.compact(sessionID, { timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000 });
+    const compactionMessageID = typeof compaction?.id === 'string' ? compaction.id : null;
+    if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true, compactionMessageID }));
+    else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\n${compactionMessageID ? `Mensagem de compactação: ${safeOutputText(compactionMessageID)}\n` : ''}Veja o resultado: opc session show ${safeOutputText(sessionID)}\n`);
     return ExitCode.OK;
   });
 }
@@ -249,7 +188,6 @@ const ACTIONS = {
   summarize: actionSummarize,
   children: actionChildren,
   diff: actionDiff,
-  todo: actionTodo,
 };
 
 // Validates every id before connecting, so malformed input never reaches the server.
@@ -257,7 +195,9 @@ function validateIds(action, rest, flags) {
   if (action === 'new') return null;
   if (!rest[0]) throw new UsageError('MISSING_ID', `session ${action} exige <sessionID>`);
   const sessionID = assertId('ses', rest[0], 'sessão');
-  if (rest[1] && ['fork', 'revert'].includes(action)) assertId('msg', rest[1], 'mensagem');
+  if (rest[1] && action === 'revert') assertId('msg', rest[1], 'mensagem');
+  if (rest[1] && action === 'fork') throw new UsageError('UNKNOWN_OPTION', 'Use --before <messageID> para bifurcar antes de uma mensagem');
+  if (flags.before) assertId('msg', flags.before, 'mensagem');
   if (flags.message !== undefined) assertId('msg', flags.message, 'mensagem');
   if (flags.part) assertId('prt', flags.part, 'parte');
   return sessionID;
@@ -269,7 +209,7 @@ export async function run(ctx, argv) {
   const handler = ACTIONS[action];
   if (!handler) {
     const shown = String(action ?? '').slice(0, 12);
-    throw new UsageError('UNKNOWN_ACTION', `Ação desconhecida: ${shown}${String(action ?? '').length > 12 ? '…' : ''}. Use: ${Object.keys(ACTIONS).join(', ')}`);
+    throw new UsageError('UNKNOWN_SUBCOMMAND', `Subcomando desconhecido: ${shown}${String(action ?? '').length > 12 ? '…' : ''}. Use: ${Object.keys(ACTIONS).join(', ')}`);
   }
   const sessionID = validateIds(action, rest, flags);
   const conn = await openApi(ctx);

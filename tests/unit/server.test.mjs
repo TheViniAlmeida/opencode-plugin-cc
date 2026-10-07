@@ -5,18 +5,32 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-  MIN_OPENCODE_VERSION, assertCanCreateSessions, compareVersions, pickFreePort, readServerRecord, serverMatcher,
+  MIN_OPENCODE_VERSION, LISTENING_RE, assertCanCreateSessions, compareVersions, pickFreePort, readServerRecord, resolveOpencodeBin, serverMatcher,
 } from '../../plugins/opc/scripts/lib/server.mjs';
 import { makeTempDir, removeTempDir } from '../helpers.mjs';
 
-test('MIN_OPENCODE_VERSION is 1.18.0 and compareVersions orders numerically', () => {
-  assert.equal(MIN_OPENCODE_VERSION, '1.18.0');
+test('MIN_OPENCODE_VERSION is 2.0.22 and compareVersions orders numerically', () => {
+  assert.equal(MIN_OPENCODE_VERSION, '2.0.22');
   assert.equal(compareVersions('1.18.32', '1.18.0'), 1);
   assert.equal(compareVersions('1.9.0', '1.18.0'), -1);
   assert.equal(compareVersions('1.18.0', '1.18.0'), 0);
   assert.equal(compareVersions('v2.0.0', '1.99.99'), 1);
   assert.equal(compareVersions('1.18.32-beta.1', '1.18.32'), 0);
   assert.equal(compareVersions('1.17.9', MIN_OPENCODE_VERSION), -1);
+});
+
+test('V2 readiness line, matcher and minimum version', () => {
+  assert.equal(MIN_OPENCODE_VERSION, '2.0.22');
+  assert.equal('server listening on http://127.0.0.1:4096'.match(LISTENING_RE)[1], 'http://127.0.0.1:4096');
+  assert.ok(serverMatcher(4096)(['/home/u/.opencode/bin/opencode', 'serve', '--hostname', '127.0.0.1', '--port', '4096']));
+  assert.ok(serverMatcher(4096, '/opt/v2/current')(['/opt/v2/current', 'serve', '--port', '4096']));
+  assert.ok(!serverMatcher(4096)(['/usr/bin/node', 'x.mjs', 'serve', '--port', '4096']));
+});
+
+test('resolveOpencodeBin prefers the env override, then config, then PATH', () => {
+  assert.equal(resolveOpencodeBin({ env: { OPC_OPENCODE_BIN: '/a/opencode' }, config: { server: { opencodeBin: '/b/opencode' } } }), '/a/opencode');
+  assert.equal(resolveOpencodeBin({ env: {}, config: { server: { opencodeBin: '/b/opencode' } } }), '/b/opencode');
+  assert.equal(resolveOpencodeBin({ env: {}, config: {} }), 'opencode');
 });
 
 test('pickFreePort returns a port that can be bound on 127.0.0.1', async () => {

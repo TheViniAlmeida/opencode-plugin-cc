@@ -12,66 +12,64 @@ const policy = {
   destructiveBash: ['make nuke*'],
   agents: { deny: ['work-*'] },
 };
-const r = (permission, pattern, action) => ({ permission, pattern, action });
+const r = (action, resource, effect) => ({ action, resource, effect });
 const INVARIANTS = [
   r('external_directory', '*', 'deny'),
-  r('read', '*.env', 'deny'), r('grep', '*.env', 'deny'), r('glob', '*.env', 'deny'), r('list', '*.env', 'deny'),
-  r('read', '**/.ssh/**', 'deny'), r('grep', '**/.ssh/**', 'deny'), r('glob', '**/.ssh/**', 'deny'), r('list', '**/.ssh/**', 'deny'),
-  r('task', 'work-*', 'deny'),
+  r('read', '*.env', 'deny'), r('grep', '*.env', 'deny'), r('glob', '*.env', 'deny'),
+  r('read', '**/.ssh/**', 'deny'), r('grep', '**/.ssh/**', 'deny'), r('glob', '**/.ssh/**', 'deny'),
+  r('subagent', 'work-*', 'deny'),
   r('gitlab_*', '*', 'deny'),
 ];
 const INVARIANTS_RO = [INVARIANTS[0], r('grep', '*', 'deny'), ...INVARIANTS.slice(1)];
 
-test('read-only: deny-all, allows, invariants, doom_loop deny — exact order', () => {
+test('read-only V2: deny-all, allows and invariants in order', () => {
   const rules = buildPermissionRules('read-only', { policy, deniedAgentGlobs: ['work-*'] });
   assert.deepEqual(rules, [
     r('*', '*', 'deny'),
-    r('read', '*', 'allow'), r('glob', '*', 'allow'), r('list', '*', 'allow'),
-    r('lsp', '*', 'allow'), r('skill', '*', 'allow'), r('todowrite', '*', 'allow'),
+    r('read', '*', 'allow'), r('glob', '*', 'allow'), r('skill', '*', 'allow'), r('question', '*', 'allow'),
     ...INVARIANTS_RO,
-    r('doom_loop', '*', 'deny'),
+    r('browser', '*', 'deny'),
   ]);
-  assert.ok(!rules.some((x) => x.permission === 'bash' && x.action !== 'deny'));
+  assert.ok(!rules.some((x) => x.action === 'bash' && x.effect !== 'deny'));
 });
 
 test('F2a expected read-only fixtures exactly match the profile builder', () => {
   const opts = { policy: { sensitivePaths: ['*.env', '**/.ssh/**'], tools: { deny: ['gitlab_*'] }, destructiveBash: ['make nuke*'] }, deniedAgentGlobs: ['work-*'] };
   assert.deepEqual(READ_ONLY_RULES, buildPermissionRules('read-only', opts));
   assert.deepEqual(NPM_TEST_ONLY_RULES, buildPermissionRules('custom:npm-test-only', {
-    ...opts, permissionProfiles: { 'npm-test-only': [{ permission: 'bash', pattern: 'npm test', action: 'allow' }] },
+    ...opts, permissionProfiles: { 'npm-test-only': [{ action: 'shell', resource: 'npm test', effect: 'allow' }] },
   }));
 });
 
-test('write: only invariants + destructive asks (builtin then policy) + doom_loop ask', () => {
+test('write: invariants and destructive shell asks', () => {
   const rules = buildPermissionRules('write', { policy, deniedAgentGlobs: ['work-*'] });
-  const asks = [...BUILTIN_DESTRUCTIVE_BASH, 'make nuke*'].map((p) => r('bash', p, 'ask'));
-  assert.deepEqual(rules, [...INVARIANTS, ...asks, r('doom_loop', '*', 'ask')]);
+  const asks = [...BUILTIN_DESTRUCTIVE_BASH, 'make nuke*'].map((p) => r('shell', p, 'ask'));
+  assert.deepEqual(rules, [...INVARIANTS, ...asks, r('browser', '*', 'deny')]);
   assert.equal(BUILTIN_DESTRUCTIVE_BASH.length, 28);
-  assert.ok(!rules.some((x) => x.permission === 'grep' && x.pattern === '*' && x.action === 'deny'));
+  assert.ok(!rules.some((x) => x.action === 'grep' && x.resource === '*' && x.effect === 'deny'));
 });
 
-test('custom: read-only base + custom rules + invariants; bash allow brings destructive asks', () => {
-  const permissionProfiles = { 'npm-test-only': [{ permission: 'bash', pattern: 'npm test', action: 'allow' }], docs: [{ permission: 'edit', pattern: 'docs/*', action: 'allow' }] };
+test('custom: read-only base + custom rules + invariants; shell allow brings destructive asks', () => {
+  const permissionProfiles = { 'npm-test-only': [{ action: 'shell', resource: 'npm test', effect: 'allow' }], docs: [{ action: 'edit', resource: 'docs/*', effect: 'allow' }] };
   const rules = buildPermissionRules('custom:npm-test-only', { policy, permissionProfiles, deniedAgentGlobs: [] });
-  assert.deepEqual(rules.slice(0, 8), [
-    r('*', '*', 'deny'), r('read', '*', 'allow'), r('glob', '*', 'allow'), r('list', '*', 'allow'),
-    r('lsp', '*', 'allow'), r('skill', '*', 'allow'), r('todowrite', '*', 'allow'), r('bash', 'npm test', 'allow'),
+  assert.deepEqual(rules.slice(0, 6), [
+    r('*', '*', 'deny'), r('read', '*', 'allow'), r('glob', '*', 'allow'), r('skill', '*', 'allow'), r('question', '*', 'allow'), r('shell', 'npm test', 'allow'),
   ]);
-  assert.ok(rules.some((x) => x.permission === 'bash' && x.pattern === 'rm -rf*' && x.action === 'ask'));
-  assert.deepEqual(rules.at(-1), r('doom_loop', '*', 'deny'));
+  assert.ok(rules.some((x) => x.action === 'shell' && x.resource === 'rm *' && x.effect === 'ask'));
+  assert.deepEqual(rules.at(-1), r('browser', '*', 'deny'));
   const docs = buildPermissionRules('custom:docs', { policy, permissionProfiles });
-  assert.ok(!docs.some((x) => x.permission === 'bash'));
+  assert.ok(!docs.some((x) => x.action === 'shell'));
 });
 
 test('unknown or malformed profiles are usage errors', () => {
   assert.throws(() => buildPermissionRules('everything', { policy }), UsageError);
   assert.throws(() => buildPermissionRules('custom:nope', { policy, permissionProfiles: {} }), UsageError);
-  assert.throws(() => buildPermissionRules('custom:bad', { policy, permissionProfiles: { bad: [{ permission: 'bash', pattern: '*', action: 'always' }] } }), UsageError);
+  assert.throws(() => buildPermissionRules('custom:bad', { policy, permissionProfiles: { bad: [{ action: 'shell', resource: '*', effect: 'always' }] } }), UsageError);
 });
 
 test('default sensitive paths apply when policy has none', () => {
   const rules = invariantRules('read-only', { policy: {} });
-  assert.ok(rules.some((x) => x.permission === 'read' && x.pattern === '*.pem' && x.action === 'deny'));
+  assert.ok(rules.some((x) => x.action === 'read' && x.resource === '*.pem' && x.effect === 'deny'));
 });
 
 test('bridgeModeOf: read-only auto-rejects, others bridge', () => {
@@ -81,11 +79,13 @@ test('bridgeModeOf: read-only auto-rejects, others bridge', () => {
 });
 
 test('requiresUser: destructive bash, external_directory, sensitive paths', () => {
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['rm -rf build'] }, policy), true);
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['make nuke all'] }, policy), true);
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['psql -c "DROP TABLE x"'] }, policy), true);
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['ls -la'] }, policy), false);
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['ls'], metadata: { command: 'git push --force origin main' } }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['rm -rf build'] }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['ls -la'] }, policy), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['rm -rf build'] }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['make nuke all'] }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['psql -c "DROP TABLE x"'] }, policy), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['ls -la'] }, policy), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['ls'], metadata: { command: 'git push --force origin main' } }, policy), true);
   assert.equal(requiresUser({ permission: 'external_directory', patterns: ['/etc/*'] }, policy), true);
   assert.equal(requiresUser({ permission: 'read', patterns: ['/ws/app/.env'] }, policy), true);
   assert.equal(requiresUser({ permission: 'edit', patterns: ['/home/u/.ssh/config'] }, policy), true);
@@ -101,9 +101,9 @@ test('requiresUser: detects destructive commands in compound and wrapped segment
     'sudo rm -rf /x',
     '$(rm -rf /x)',
   ]) {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }, policy), true, command);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }, policy), true, command);
   }
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['npm test && git status'] }, policy), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['npm test && git status'] }, policy), false);
 });
 
 test('requiresUser: recursively inspects nested substitutions and shell groups', () => {
@@ -114,14 +114,14 @@ test('requiresUser: recursively inspects nested substitutions and shell groups',
     '(echo (rm -rf /x))',
     '{ echo { rm -rf /x; }; }',
   ]) {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }, policy), true, command);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }, policy), true, command);
   }
-  assert.equal(requiresUser({ permission: 'bash', patterns: ['echo $(echo $(printf safe))'] }, policy), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['echo $(echo $(printf safe))'] }, policy), false);
 });
 
 test('checkReply: never always; approver user needs confirmation; claude only for destructive', () => {
-  const destructive = { permission: 'bash', patterns: ['rm -rf build'] };
-  const benign = { permission: 'bash', patterns: ['ls'] };
+  const destructive = { permission: 'shell', patterns: ['rm -rf build'] };
+  const benign = { permission: 'shell', patterns: ['ls'] };
   assert.deepEqual(checkReply({ approver: 'claude', request: benign, reply: 'always', policy }).code, 'INVALID_REPLY');
   assert.equal(checkReply({ approver: 'user', request: benign, reply: 'maybe', policy }).code, 'INVALID_REPLY');
   assert.equal(checkReply({ approver: 'user', request: destructive, reply: 'reject', policy }).ok, true);
@@ -141,20 +141,18 @@ test('policy errors and approval reasons are PT-BR and truncate echoed values', 
   const invalid = checkReply({ approver: 'user', request: {}, reply: 'abcdefghijklmnop', policy });
   assert.match(invalid.reason, /resposta inválida/);
   assert.match(invalid.reason, /abcdefghijkl…/);
-  const needsUser = checkReply({ approver: 'claude', request: { permission: 'bash', patterns: ['sudo rm -rf /x'] }, reply: 'once', policy });
+  const needsUser = checkReply({ approver: 'claude', request: { permission: 'shell', patterns: ['sudo rm -rf /x'] }, reply: 'once', policy });
   assert.match(needsUser.reason, /destrutiva/);
   assert.match(needsUser.reason, /--confirmed-by-user/);
 });
 
-test('planPermissionSwitch: none when tail matches; patch only with leading catch-all under append', () => {
+test('planPermissionSwitch replaces exact V2 lists', () => {
   const ro = buildPermissionRules('read-only', { policy });
   const wr = buildPermissionRules('write', { policy });
-  assert.equal(planPermissionSwitch(ro, ro), 'none');
-  assert.equal(planPermissionSwitch([...wr, ...ro], ro), 'none');
-  assert.equal(planPermissionSwitch(wr, ro), 'patch');
-  assert.throws(() => planPermissionSwitch(ro, wr), (err) => err.code === 'PROFILE_SWITCH_UNSUPPORTED' && err.exitCode === 2);
-  assert.equal(planPermissionSwitch(ro, wr, 'replace'), 'patch');
-  assert.equal(planPermissionSwitch(undefined, ro), 'patch');
+  assert.deepEqual(planPermissionSwitch(ro, ro), { kind: 'none' });
+  assert.deepEqual(planPermissionSwitch([...wr, ...ro], ro), { kind: 'replace', rules: ro });
+  assert.deepEqual(planPermissionSwitch(wr, ro), { kind: 'replace', rules: ro });
+  assert.deepEqual(planPermissionSwitch(ro, wr), { kind: 'replace', rules: wr });
 });
 
 const wrappedDestructive = [
@@ -172,16 +170,16 @@ const wrappedDestructive = [
 ];
 for (const command of wrappedDestructive) {
   test(`gate 2: wrapper requires user: ${command}`, () => {
-    const request = { permission: 'bash', patterns: [command] };
+    const request = { permission: 'shell', patterns: [command] };
     assert.equal(requiresUser(request), true);
     assert.equal(checkReply({ approver: 'claude', request, reply: 'once' }).code, 'NEEDS_USER');
     assert.equal(checkReply({ approver: 'claude', request, reply: 'once', confirmedByUser: true }).ok, true);
-    assert.equal(requiresUser({ permission: 'bash', patterns: [], metadata: { command } }), true);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [], metadata: { command } }), true);
   });
 }
 for (const command of ['bash -c "unterminated', 'cat <<EOF\ntext\nEOF', '$COMMAND harmless', 'env X=1 "$COMMAND"', 'sudo --unknown-option value ls']) {
   test(`gate 2: ambiguous shell fails closed: ${command}`, () => {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }), true);
   });
 }
 
@@ -191,7 +189,7 @@ for (const command of [
   'echo safe&rm -rf /tmp/x', '/bin/sh -c "/bin/rm -rf /tmp/x"',
 ]) {
   test(`gate 2: indirect or unsupported shell syntax requires user: ${command}`, () => {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }), true);
   });
 }
 for (const command of [
@@ -203,7 +201,7 @@ for (const command of [
   'echo $(sh -c "git status")', 'echo `sh -c "git status"`',
 ]) {
   test(`gate 2: inspectable benign wrapper stays eligible: ${command}`, () => {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), false);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }), false);
   });
 }
 
@@ -212,6 +210,6 @@ for (const command of [
   'find . -exec sh -c "echo {}" \\;', 'find . -exec pre{}post \\;',
 ]) {
   test(`gate 2: runtime arguments cannot bypass inspection: ${command}`, () => {
-    assert.equal(requiresUser({ permission: 'bash', patterns: [command] }), true);
+    assert.equal(requiresUser({ permission: 'shell', patterns: [command] }), true);
   });
 }

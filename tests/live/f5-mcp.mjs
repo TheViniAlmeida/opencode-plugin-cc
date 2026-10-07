@@ -13,7 +13,7 @@ const FIRST = process.env.OPC_LIVE_MODEL?.trim();
 const SECOND = process.env.OPC_LIVE_MODEL_2?.trim();
 const SKIP = process.env.OPC_LIVE !== '1' ? 'OPC_LIVE!=1'
   : !FIRST || !SECOND || FIRST === SECOND ? 'Informe dois modelos pessoais distintos em OPC_LIVE_MODEL e OPC_LIVE_MODEL_2.' : false;
-const REPORT = process.env.OPC_F5_LIVE_REPORT || path.join(REPO_ROOT, 'docs/phases/F5-live-output.md');
+const REPORT = process.env.OPC_F6_LIVE_REPORT || path.join(REPO_ROOT, 'docs/phases/F6-live-output.md');
 
 test('F5 live: MCP discovery and a two-model conclave match the CLI (three runs, at least two pass)', { skip: SKIP, timeout: 3_600_000 }, async (t) => {
   const cwd = makeWorkspace(t, { git: false, name: 'f5-mcp' });

@@ -206,7 +206,7 @@ test('evidence file names are anonymized in packages, peers, judge and Markdown'
 });
 
 for (const mode of ['text', 'tool']) {
-  test(`${mode} member, debate and judge prompts have exactly one mode-specific contract`, async () => {
+  test(`${mode} member, debate and judge prompts request unfenced V2 text JSON`, async () => {
     const h = harness((spec) => spec.role === 'judge'
       ? ok(synthesis(['A', 'B', 'C']), 'ses_judge')
       : ok(spec.round === 1 ? answer() : debateAnswer(peerOf(spec)), `ses_${spec.label}`),
@@ -215,9 +215,9 @@ for (const mode of ['text', 'tool']) {
     assert.equal(h.calls.length, 7);
     for (const { prompt } of h.calls) {
       assert.doesNotMatch(prompt, /Reply only through the structured output/);
-      assert.equal(prompt.split('Return your answer only through the structured output.').length - 1, mode === 'tool' ? 1 : 0);
-      assert.equal(prompt.split('Return only one JSON object inside a single ```json fence').length - 1, mode === 'text' ? 1 : 0);
-      assert.equal(prompt.includes('Return a JSON instance with field values, not the schema.'), mode === 'text');
+      assert.doesNotMatch(prompt, /Return your answer only through the structured output|single ```json fence/);
+      assert.equal(prompt.split('Reply with only one JSON object, no prose and no code fence').length - 1, 1);
+      assert.equal(prompt.includes('Return a JSON instance with field values, not the schema.'), true);
     }
   });
 }
@@ -283,14 +283,18 @@ for (const mode of ['text', 'tool']) {
 
   test(`${mode} drops schema keywords echoed beside valid values`, async () => {
     const echoed = { title: 'ConclaveMember', $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', ...answer() };
-    const h = harness((s) => s.label === 'A' ? { ...ok(echoed, 'ses_A'), finalText: JSON.stringify(echoed) } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
-    const pkg = await h.run();
-    assert.deepEqual(pkg.failures, []);
-    assert.deepEqual(pkg.final.responses.find((r) => r.label === 'A').response, answer());
     const bad = { title: 'ConclaveMember', ...answer({ confidence: 2 }) };
-    const h2 = harness((s) => s.label === 'A' ? ok(bad, 'ses_A') : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
-    const pkg2 = await h2.run();
-    assert.equal(pkg2.failures[0].errorType, 'InvalidStructuredOutput');
+    // The V2 runner returns structured=null for text that fails the strict schema; keep the injected shape too.
+    for (const structured of [(value) => value, () => null]) {
+      const h = harness((s) => s.label === 'A' ? { ...ok(structured(echoed), 'ses_A'), finalText: JSON.stringify(echoed) } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+      const pkg = await h.run();
+      assert.deepEqual(pkg.failures, []);
+      assert.deepEqual(pkg.final.responses.find((r) => r.label === 'A').response, answer());
+      const h2 = harness((s) => s.label === 'A' ? { ...ok(structured(bad), 'ses_A'), finalText: JSON.stringify(bad) } : ok(answer(), `ses_${s.label}`), { structuredOutput: mode });
+      const pkg2 = await h2.run();
+      assert.equal(pkg2.failures[0].errorType, 'InvalidStructuredOutput');
+      assert.match(pkg2.failures[0].message, /\$\.confidence/);
+    }
   });
 
   test(`${mode} preserves an already valid object even when it has valid properties`, async () => {

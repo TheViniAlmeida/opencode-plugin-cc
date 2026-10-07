@@ -6,13 +6,14 @@ import { assertCommandUsable } from '../lib/policy.mjs';
 import {
   createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock,
 } from '../lib/jobs.mjs';
-import { newMessageId } from '../lib/runner.mjs';
 import { classifyError } from '../lib/errors.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderCommandResult, renderPermissionRequest } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
+import { parseFullId } from '../lib/models.mjs';
 import { safeOutputText } from '../lib/redact.mjs';
+import { runTurn } from '../lib/runner.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
 const SPEC = {
@@ -23,11 +24,6 @@ const SPEC = {
     'raw-args-stdin': { type: 'boolean' },
   }, allowPositionals: true,
 };
-
-export function textFromParts(parts) {
-  return (parts ?? []).filter((part) => part.type === 'text' && !part.synthetic && !part.ignored)
-    .map((part) => part.text ?? '').join('\n').trim();
-}
 
 export function safeFailureMessage(value, rawArguments = '') {
   // remove the raw arguments before masking: masking first can split them so they no longer match
@@ -123,33 +119,31 @@ export async function runWorker(ctx, job, request = job.request) {
   try {
     conn = await openApi(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
-    const session = await api.createSession({ title: job.title, permission: request.rules });
+    const selected = parseFullId(request.model);
+    const session = await api.createSession({ title: job.title, permissions: request.rules,
+      model: { providerID: selected.providerID, id: selected.modelID }, ...(request.agent ? { agent: request.agent } : {}) });
     release = tryAcquireLock(join(stateDir, `session-${session.id}.lock`), { purpose: `job ${job.id}` });
     await updateJob(stateDir, job.id, { status: 'running', phase: 'running', startedAt: now(), sessionID: session.id });
     const updater = createSerialUpdater(stateDir, job.id);
     const bridge = createRequestBridge({ update: (patch) => updater.update(patch), jobId: job.id, stateDir, api,
       profileKind: request.profile, policy, timeoutMs: (policy.permissionTimeoutSec ?? 600) * 1000,
       log: (line) => appendJobLog(stateDir, job.id, line) });
-    const bridgeError = (kind) => (err) => appendJobLog(stateDir, job.id, `[opc] falha na ponte de ${kind}: ${safeMessage(err.message)}`);
-    const untrack = hub.track(session.id, (event) => {
-      const props = event?.properties ?? {};
-      if (event?.type === 'permission.asked') bridge.onPermission(props).catch(bridgeError('permissões'));
-      else if (event?.type === 'question.asked') bridge.onQuestion(props).catch(bridgeError('perguntas'));
-      else if (event?.type === 'permission.replied') bridge.onResolved({ type: 'permission', requestID: props.requestID, sessionID: props.sessionID, outcome: props.reply }).catch(bridgeError('permissões'));
-      else if (event?.type === 'question.replied' || event?.type === 'question.rejected') bridge.onResolved({ type: 'question', requestID: props.requestID, sessionID: props.sessionID, outcome: event.type === 'question.replied' ? 'replied' : 'rejected' }).catch(bridgeError('perguntas'));
-    });
-    let response = null;
+    let outcome = null;
     let failure = null;
     try {
-      response = await api.runCommand(session.id, { command: request.command, arguments: request.arguments ?? '',
-        agent: request.agent ?? undefined, model: request.model, variant: request.variant ?? undefined,
-        messageID: newMessageId(), timeoutMs: request.timeoutMs });
+      outcome = await runTurn({ api, hub,
+        request: { sessionID: session.id, model: selected, agent: request.agent ?? 'build',
+          command: { name: request.command, text: request.arguments ?? '' },
+          timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000 },
+        onPermission: (permission) => bridge.onPermission(permission),
+        onQuestion: (question) => bridge.onQuestion(question),
+        onRequestResolved: (resolved) => bridge.onResolved(resolved),
+      });
     } catch (err) {
       failure = err;
-      if (err.code === 'TIMEOUT') await api.abort(session.id).catch(() => {});
-    } finally { untrack(); bridge.dispose(); await updater.flush(); }
+    } finally { bridge.dispose(); await updater.flush(); }
     const latest = readJob(stateDir, job.id);
-    const error = response?.info?.error ?? null;
+    const error = outcome?.error ?? (outcome?.status === 'failed' ? { type: outcome.errorType, message: outcome.errorMessage } : null);
     let patch;
     if (latest?.status === 'cancelled') patch = { status: 'cancelled' };
     else if (failure) patch = { status: 'failed', errorCode: failure.code === 'TIMEOUT' ? 'timeout' : (failure.code ?? 'error'), errorType: failure.code ?? failure.name, errorMessage: safeMessage(failure.message) };
@@ -158,11 +152,11 @@ export async function runWorker(ctx, job, request = job.request) {
       patch = { status: 'failed', errorClass: classified.errorClass, errorType: classified.errorType, errorMessage: safeMessage(classified.message) };
     } else patch = { status: 'completed' };
     const resultError = error
-      ? { name: safeMessage(error.name ?? 'Error'), message: safeMessage(error.data?.message ?? error.message ?? '') }
+      ? { name: safeMessage(error.type ?? error.name ?? 'Error'), message: safeMessage(error.data?.message ?? error.message ?? '') }
       : (failure ? { name: safeMessage(failure.code ?? 'Error'), message: safeMessage(failure.message) } : null);
     const result = { status: patch.status, command: request.command, argumentsPreview: request.argumentsPreview ?? previewArguments(rawArguments),
       argumentsBytes: request.argumentsBytes ?? Buffer.byteLength(rawArguments), sessionID: session.id, model: request.model,
-      agent: request.agent ?? null, finalText: safeOutputText(textFromParts(response?.parts)), error: resultError };
+      agent: request.agent ?? null, finalText: safeOutputText(outcome?.finalText ?? ''), error: resultError };
     await updateJob(stateDir, job.id, { ...patch, phase: patch.status, completedAt: now(), pendingRequest: null,
       result, rendered: renderCommandResult(result) });
     return exitCodeForJob(patch);

@@ -13,7 +13,8 @@ async function runCommand(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   if (positionals.length) throw new UsageError('USAGE', 'uso: opc providers [--all] [--json]');
   const { api } = await connectApi(ctx);
-  const catalog = buildCatalog(await api.providers());
+  const [availableProviders, models, defaultModel] = await Promise.all([api.providers(), api.models(), api.defaultModel()]);
+  const catalog = buildCatalog({ providers: availableProviders, models, defaultModel });
   const providers = catalog.providers
     .filter((p) => flags.all || p.connected)
     .map((p) => ({ ...p, ...evaluate('provider', p.id, ctx.config.policy) }));

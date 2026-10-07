@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { shellQuote } from '../../plugins/opc/scripts/lib/args.mjs';
 import {
-  renderSessions, renderSession, renderSessionDiff, renderTodos, renderRevertPreview,
+  renderSessions, renderSession, renderSessionDiff, renderRevertPreview,
   renderPendingLines, renderGroupStatus, renderGroupResult, renderCommandResult, renderAttach,
 } from '../../plugins/opc/scripts/lib/render.mjs';
 
@@ -28,16 +28,23 @@ test('renderSessions: table with status, escaped title, empty state', () => {
 
 test('renderSession: fields, revert marker and message table', () => {
   const out = renderSession(
-    { id: 'ses_a', title: 'OPC: x', directory: '/ws', agent: 'build', model: { id: 'm', providerID: 'p' }, parentID: 'ses_p', time: { created: 0, updated: 0 }, revert: { messageID: 'msg_3' } },
-    { status: 'idle', messages: [{ info: { id: 'msg_1', role: 'user', agent: 'build' }, parts: [{ type: 'text', text: 'hello\nworld' }] }], note: 'Nota X.' },
+    { id: 'ses_a', title: 'OPC: x', location: { directory: '/ws' }, agent: 'build', model: { id: 'm', providerID: 'p' }, parentID: 'ses_p', time: { created: 0, updated: 0 }, revert: { messageID: 'msg_3' } },
+    { status: 'idle', messages: [
+      { id: 'msg_1', type: 'user', time: { created: 0 }, text: 'hello\nworld' },
+      { id: 'msg_2', type: 'assistant', time: { created: 1 }, agent: 'build', model: { id: 'm', providerID: 'p' }, content: [{ type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'answer\nline' }] },
+    ], note: 'Nota X.' },
   );
   assert.match(out, /# Sessão ses_a/);
+  assert.match(out, /Diretório: \/ws/);
   assert.match(out, /Modelo: p\/m/);
   assert.match(out, /Pai: ses_p/);
   assert.match(out, /Revert ativo: a partir de msg_3/);
   assert.match(out, /opc session unrevert ses_a --confirmed-by-user/);
-  assert.match(out, /msg_1/);
+  assert.match(out, /Mensagens \(2\)/);
+  assert.match(out, /\| 1 \| msg_1 \| user \|/);
   assert.match(out, /hello world/);
+  assert.match(out, /\| 2 \| msg_2 \| assistant \| build · p\/m \| answer line \|/);
+  assert.doesNotMatch(out, /hidden/);
   assert.match(out, /Nota X\./);
 });
 
@@ -53,29 +60,21 @@ test('renderSessionDiff: small patches inline, huge ones listed but omitted, saf
   assert.match(renderSessionDiff([]), /Nenhuma alteração registrada/);
 });
 
-test('renderTodos lists status, priority and content', () => {
-  const out = renderTodos([{ content: 'check alpha', status: 'completed', priority: 'high' }], { sessionID: 'ses_a' });
-  assert.match(out, /ses_a/);
-  assert.match(out, /completed/);
-  assert.match(out, /check alpha/);
-  assert.match(renderTodos([]), /Nenhum todo/);
-});
-
-test('renderRevertPreview shows files, patch and the exact confirmation command', () => {
+test('renderRevertPreview shows the scope notice and the exact confirmation command', () => {
+  const notice = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo.';
   const out = renderRevertPreview({
-    action: 'revert', sessionID: 'ses_a', messageID: 'msg_3',
-    affected: [{ file: 'notes.txt', status: 'modified', additions: 1, deletions: 0, patch: '+BETA\n' }],
+    action: 'revert', sessionID: 'ses_a', messageID: 'msg_3', affected: null, notice,
     command: 'opc session revert ses_a msg_3 --confirmed-by-user',
   });
   assert.match(out, /confirmação necessária \(revert\)/);
-  assert.match(out, /notes\.txt/);
-  assert.match(out, /\+BETA/);
+  assert.match(out, /a partir da mensagem msg_3/);
+  assert.match(out, /não fornece um diff restrito/);
   assert.match(out, /Nada foi alterado/);
   assert.match(out, /opc session revert ses_a msg_3 --confirmed-by-user/);
   const un = renderRevertPreview({ action: 'unrevert', sessionID: 'ses_a', messageID: 'msg_3', rawDiff: '+BETA\n', command: 'opc session unrevert ses_a --confirmed-by-user' });
   assert.match(un, /unrevert/);
   assert.match(un, /\+BETA/);
-  assert.match(renderRevertPreview({ action: 'revert', sessionID: 's', messageID: 'm', affected: [], command: 'c' }), /nenhuma alteração de arquivo/i);
+  assert.doesNotMatch(renderRevertPreview({ action: 'revert', sessionID: 's', messageID: 'm', affected: null, command: 'c' }), /diff restrito/);
 });
 
 test('renderPendingLines: iterates the pendingRequest list (permission and question reply lines, memberId)', () => {
@@ -164,12 +163,12 @@ test('renderCommandResult masks and bounds a legacy arguments field', () => {
 });
 
 test('renderAttach: command reads the password from file or env, uses supplied argv, never inline', () => {
-  const file = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: 'ses_a', directory: '/tmp/a b', attached: false, authSource: { type: 'file', path: '/data/state/x/attach.secret' }, argv: ['opencode', 'attach', 'http://127.0.0.1:4100', '-s', 'ses_a', '--dir', '/tmp/a b'] });
-  assert.match(file, /OPENCODE_SERVER_PASSWORD="\$\(cat \/data\/state\/x\/attach\.secret\)" opencode attach http:\/\/127\.0\.0\.1:4100 -s ses_a --dir '\/tmp\/a b'/);
+  const file = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: 'ses_a', directory: '/tmp/a b', attached: false, authSource: { type: 'file', path: '/data/state/x/attach.secret' }, argv: ['opencode', '--server', 'http://127.0.0.1:4100', '-s', 'ses_a'] });
+  assert.match(file, /cd '\/tmp\/a b' && OPENCODE_SERVER_PASSWORD="\$\(cat \/data\/state\/x\/attach\.secret\)" opencode --server http:\/\/127\.0\.0\.1:4100 -s ses_a/);
   assert.match(file, /\/opc:attach --pane ses_a/);
-  const env = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: null, directory: '/ws', attached: true, authSource: { type: 'env', name: 'OPC_SERVER_PASSWORD' }, argv: ['opencode', 'attach', 'http://127.0.0.1:4100', '--dir', '/ws'] });
-  assert.match(env, /OPENCODE_SERVER_PASSWORD="\$OPC_SERVER_PASSWORD" opencode attach http:\/\/127\.0\.0\.1:4100 --dir \/ws/);
+  const env = renderAttach({ url: 'http://127.0.0.1:4100', sessionID: null, directory: '/ws', attached: true, authSource: { type: 'env', name: 'OPC_SERVER_PASSWORD' }, argv: ['opencode', '--server', 'http://127.0.0.1:4100'] });
+  assert.match(env, /cd \/ws && OPENCODE_SERVER_PASSWORD="\$OPC_SERVER_PASSWORD" opencode --server http:\/\/127\.0\.0\.1:4100/);
   assert.match(env, /externo/);
-  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', 'attach', 'u'], pane: { id: '%42' } }), /Pane aberto: %42/);
-  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', 'attach', 'custom', '--dir', '/other'] }), /opencode attach custom --dir \/other/);
+  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', '--server', 'u'], pane: { id: '%42' } }), /Pane aberto: %42/);
+  assert.match(renderAttach({ url: 'u', sessionID: 'ses_a', directory: '/ws', attached: false, authSource: { type: 'file', path: '/p' }, argv: ['opencode', '--server', 'custom'] }), /opencode --server custom/);
 });

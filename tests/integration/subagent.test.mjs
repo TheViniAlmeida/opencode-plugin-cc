@@ -9,9 +9,9 @@ import { readJob, listGroupMembers } from '../../plugins/opc/scripts/lib/jobs.mj
 async function setup(t, { scenario = 'group-slow', config = F3_TEST_CONFIG, extra = {} } = {}) {
   const cwd = makeWorkspace(t); const env = testEnv(t, { scenario, extra }); writeGlobalConfig(env, config); return { cwd, env };
 }
-const created = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/session').map((r) => r.body);
-const prompts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/prompt_async$/.test(r.path)).map((r) => r.body);
-const DENY_ALL = { permission: '*', pattern: '*', action: 'deny' };
+const created = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/api/session').map((r) => r.body);
+const prompts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/prompt$/.test(r.path)).map((r) => r.body);
+const DENY_ALL = { action: '*', resource: '*', effect: 'deny' };
 
 test('três membros: sessão própria, resultado e corpos corretos', async (t) => {
   const { cwd, env } = await setup(t);
@@ -26,11 +26,11 @@ test('três membros: sessão própria, resultado e corpos corretos', async (t) =
   const bodies = created(env); const parent = bodies.find((b) => !b.parentID);
   assert.match(parent.title, /^OPC: subagents:/); const children = bodies.filter((b) => b.parentID);
   assert.equal(children.length, 3); assert.ok(children.every((b) => b.parentID === group.sessionID && b.agent === 'general'));
-  assert.ok(children.every((b) => b.permission[0].permission === DENY_ALL.permission));
+  assert.ok(children.every((b) => b.permissions[0].action === DENY_ALL.action && b.model?.id));
   const sent = prompts(env);
   assert.equal(sent.length, 3);
-  assert.ok(sent.every((b) => b.agent === 'general' && b.parts[0].type === 'text' && b.parts[0].text === 'Explique o repositório'));
-  assert.deepEqual(sent.map((b) => [b.model.providerID, b.model.modelID]).sort((a, b) => a[1].localeCompare(b[1])), [
+  assert.ok(sent.every((b) => b.text === '[REDACTED]' && !('model' in b) && !('agent' in b) && !('parts' in b)));
+  assert.deepEqual(children.map((b) => [b.model.providerID, b.model.id]).sort((a, b) => a[1].localeCompare(b[1])), [
     ['omniroute-personal', 'opencode-go/deepseek-v4.1-flash'],
     ['omniroute-personal', 'opencode-go/kimi-k3'],
     ['omniroute-personal', 'opencode-go/qwen3.8-max'],
@@ -42,7 +42,7 @@ test('três membros: sessão própria, resultado e corpos corretos', async (t) =
 test('prompt chega intacto a todos os membros', async (t) => {
   const { cwd, env } = await setup(t); const prompt = 'linha1\nlinha2 `tick` $(touch pwned) "q" ção 🚀';
   const res = await runCli(['subagent', '--raw-args-stdin'], { env, cwd, stdin: `--agent general --model fast,strong -- ${prompt}\n` });
-  assert.equal(res.code, 0, res.stderr); assert.deepEqual(prompts(env).map((b) => b.parts[0].text), [prompt, prompt]);
+  assert.equal(res.code, 0, res.stderr); assert.deepEqual(readFakeState(env).f3.prompts.map((p) => p.text), [prompt, prompt]);
   assert.equal(existsSync(join(cwd, 'pwned')), false);
 });
 
@@ -63,13 +63,13 @@ test('--write executa membros em série com as regras de escrita', async (t) => 
   const res = await runCli(['subagent', '--write', '--agent', 'general', '--model', 'fast,strong', 'p'], { env, cwd });
   assert.equal(res.code, 0, res.stderr); const at = readFakeState(env).f3.prompts.map((p) => p.at);
   assert.ok(Math.max(...at) - Math.min(...at) >= 700);
-  assert.ok(created(env).filter((b) => b.parentID).every((b) => b.permission[0].permission !== '*'));
+  assert.ok(created(env).filter((b) => b.parentID).every((b) => b.permissions.length > 0 && !b.permissions.some((rule) => rule.action === '*' && rule.effect === 'deny')));
 });
 
 test('recusas de política e uso ocorrem antes de criar sessão', async (t) => {
   const { cwd, env } = await setup(t);
   const cases = [
-    [['subagent', '--agent', 'work-secret', 'hi'], 4], [['subagent', '--agent', 'pinned-sub', 'hi'], 4],
+    [['subagent', '--agent', 'work-secret', 'hi'], 4],
     [['subagent', '--agent', 'build', 'hi'], 2], [['subagent', '--agent', 'general', '--model', 'omniroute-work/cx/gpt-5.5', 'hi'], 4],
     [['subagent', '--agent', 'general,explore', '--model', 'fast,strong,k3', 'hi'], 2], [['subagent', 'hi'], 2],
     [['subagent', '--agent', 'general'], 2], [['subagent', '--agent', 'general', '--mechanism', 'magic', 'hi'], 2],
@@ -85,7 +85,7 @@ test('falha de um membro conclui grupo com avisos', async (t) => {
   assert.equal(res.code, 0, res.stderr); const { group, members } = JSON.parse(res.stdout);
   assert.equal(group.status, 'completed'); assert.deepEqual(members.map((m) => m.status), ['completed', 'completed', 'failed']);
   assert.deepEqual(group.result.warnings, ['1 falharam, 0 canceladas']);
-  const sd = await stateDirFor(env, cwd); assert.match(readJob(sd, group.id).rendered, /ProviderAuthError|invalid api key/);
+  const sd = await stateDirFor(env, cwd); assert.match(readJob(sd, group.id).rendered, /Chave de API inválida/);
 });
 
 test('--background retorna rápido e coordenador conclui grupo', async (t) => {
@@ -95,20 +95,46 @@ test('--background retorna rápido e coordenador conclui grupo', async (t) => {
   assert.ok(listGroupMembers(sd, group.id).every((m) => m.status === 'completed' && m.pid === readJob(sd, group.id).pid));
 });
 
-test('usa subtask quando modo do agente é recusado', async (t) => {
+test('usa subagent-tool e a filha herda modelo e permissões', async (t) => {
   const { cwd, env } = await setup(t, { scenario: 'subagent-mode-refused' });
-  const res = await runCli(['subagent', '--agent', 'explore', '--model', 'fast', '--json', 'p'], { env, cwd });
+  const res = await runCli(['subagent', '--agent', 'explore', '--model', 'fast', '--mechanism', 'subagent-tool', '--json', 'p'], { env, cwd });
   assert.equal(res.code, 0, res.stderr); const [member] = JSON.parse(res.stdout).members;
-  assert.equal(member.result.mechanism, 'subtask'); assert.equal(member.result.fellBack, true);
-  assert.match(member.result.finalText, /^SUBTASK explore opencode-go\/deepseek-v4\.1-flash via ses_/);
-  const sent = prompts(env); assert.equal(sent[0].agent, 'explore'); assert.equal(sent[1].parts[0].type, 'subtask');
+  assert.equal(member.result.mechanism, 'subagent-tool'); assert.equal(member.result.fellBack, false);
+  assert.match(member.result.finalText, /^SUBAGENT explore via ses_/);
+  const sent = prompts(env); assert.deepEqual(sent[0].agents, ['explore']);
+  const carrier = created(env).find((body) => body.parentID && !body.agent);
+  assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  const sessions = readFakeState(env).sessions;
+  const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);
+  assert.deepEqual(child.permissions, sessions[member.sessionID].permissions);
+  assert.deepEqual(child.model, sessions[member.sessionID].model);
 });
 
-test('--mechanism subtask ignora tentativa de sessão filha', async (t) => {
+test('recusa de agente na criação aciona fallback automático e preserva a herança', async (t) => {
+  const { cwd, env } = await setup(t, { scenario: 'subagent-mode-refused' });
+  const res = await runCli(['subagent', '--agent', 'explore', '--model', 'fast', '--json', 'p'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const [member] = JSON.parse(res.stdout).members;
+  assert.equal(member.result.mechanism, 'subagent-tool');
+  assert.equal(member.result.fellBack, true);
+  const bodies = created(env);
+  assert.equal(bodies.filter((body) => body.agent === 'explore').length, 1);
+  const carrier = bodies.find((body) => body.parentID && !body.agent);
+  assert.ok(carrier);
+  assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  assert.deepEqual(prompts(env)[0].agents, ['explore']);
+  const sessions = readFakeState(env).sessions;
+  const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);
+  assert.deepEqual(child.permissions, sessions[member.sessionID].permissions);
+  assert.deepEqual(child.model, sessions[member.sessionID].model);
+});
+
+test('--mechanism subtask é convertido em subagent-tool com aviso', async (t) => {
   const { cwd, env } = await setup(t); const res = await runCli(['subagent', '--agent', 'general', '--model', 'fast', '--mechanism', 'subtask', '--json', 'p'], { env, cwd });
   assert.equal(res.code, 0, res.stderr); const [member] = JSON.parse(res.stdout).members;
-  assert.equal(member.result.mechanism, 'subtask'); assert.equal(member.result.fellBack, false);
-  assert.equal(member.result.finalText, 'SUBTASK general opencode-go/deepseek-v4.1-flash'); assert.ok(created(env).every((b) => !b.agent));
+  assert.equal(member.result.mechanism, 'subagent-tool'); assert.equal(member.result.fellBack, false);
+  assert.match(res.stderr, /subtask foi renomeado para subagent-tool/);
+  assert.equal(member.result.finalText, 'RESULT build opencode-go/deepseek-v4.1-flash'); assert.ok(created(env).filter((b) => b.parentID).every((b) => !b.agent));
 });
 
 test('pedido de permissão de membro pode ser respondido e grupo conclui', async (t) => {
@@ -128,13 +154,13 @@ test('pergunta de membro pode ser respondida', async (t) => {
   const { cwd, env } = await setup(t, { extra: { FAKE_GROUP_ASK: 'question' } });
   const res = await runCli(['subagent', '--write', '--agent', 'general', '--model', 'k3', '--json', 'p'], { env, cwd });
   assert.equal(res.code, 3, res.stderr); assert.equal(JSON.parse(res.stdout).group.pendingRequest[0].type, 'question');
-  const answer = await runCli(['permissions', 'answer', 'que_f3_1', 'A'], { env, cwd }); assert.equal(answer.code, 0, answer.stdout + answer.stderr);
+  const answer = await runCli(['permissions', 'answer', 'frm_f3_1', 'A'], { env, cwd }); assert.equal(answer.code, 0, answer.stdout + answer.stderr);
   const sd = await stateDirFor(env, cwd); await eventually(() => readJob(sd, JSON.parse(res.stdout).group.id)?.status === 'completed');
 });
 
 test('membros somente leitura recusam pedidos de permissão automaticamente', async (t) => {
   const { cwd, env } = await setup(t, { extra: { FAKE_GROUP_ASK: 'permission' } });
   const res = await runCli(['subagent', '--agent', 'general', '--model', 'k3', '--json', 'p'], { env, cwd }); assert.equal(res.code, 0, res.stderr);
-  const replies = fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/permission/per_f3_1/reply');
-  assert.ok(replies.some((r) => r.body.reply === 'reject')); assert.ok(replies.every((r) => r.body.reply !== 'always'));
+  const replies = fakeRequests(env).filter((r) => r.method === 'POST' && r.path.endsWith('/permission/per_f3_1/reply'));
+  assert.ok(replies.some((r) => r.body.decision === 'reject')); assert.ok(replies.every((r) => r.body.decision !== 'always'));
 });

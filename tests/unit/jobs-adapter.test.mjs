@@ -36,8 +36,8 @@ test('turnJobRequest builds the F2a request shape (D4.2) for a read-only review'
   assert.equal(request.title, 'OPC: review: x');
   assert.equal(request.sessionID, undefined);
   assert.equal(request.newSession.title, 'OPC: review: x');
-  assert.deepEqual(request.newSession.permission[0], { permission: '*', pattern: '*', action: 'deny' });
-  assert.equal(request.newSession.permission.some((rule) => rule.permission === 'bash' && rule.action === 'allow'), false);
+  assert.deepEqual(request.newSession.permission[0], { action: '*', resource: '*', effect: 'deny' });
+  assert.equal(request.newSession.permission.some((rule) => rule.action === 'shell' && rule.effect === 'allow'), false);
   assert.equal(request.childPermission, null);
   assert.deepEqual(request.parts, [{ type: 'text', text: 'PROMPT' }]);
   assert.deepEqual(request.model, { providerID: 'prov', modelID: 'family/model' });
@@ -68,14 +68,14 @@ test('turnJobRequest resumes a session and keeps rules for children of a write p
   assert.equal(request.newSession, undefined);
   assert.equal(request.profileKind, 'write');
   assert.ok(Array.isArray(request.childPermission) && request.childPermission.length > 0);
-  assert.equal(request.childPermission.some((rule) => rule.permission === '*' && rule.action === 'deny'), false);
+  assert.equal(request.childPermission.some((rule) => rule.action === '*' && rule.effect === 'deny'), false);
 });
 
 test('turnJobRequest rejects every adapter-controlled extension key', () => {
   for (const key of ['profileKind', 'newSession', 'childPermission', 'permission', 'kind', 'profile', 'title', 'sessionID', 'parts', 'model', 'modelFull', 'variant', 'agent', 'format', 'messageID', 'timeoutMs', 'fallbackCfg', 'permissionTimeoutMs']) {
     assert.throws(() => minimal({ extra: { [key]: null } }), (err) => err instanceof UsageError && err.code === 'INTERNAL_FIELD_COLLISION' && err.exitCode === 2 && err.message.includes(key), key);
   }
-  const loose = [{ permission: '*', pattern: '*', action: 'allow' }];
+  const loose = [{ action: '*', resource: '*', effect: 'allow' }];
   assert.throws(() => minimal({ extra: { newSession: { permission: loose } } }), (err) => err.code === 'INTERNAL_FIELD_COLLISION' && err.message.includes('newSession'));
 });
 

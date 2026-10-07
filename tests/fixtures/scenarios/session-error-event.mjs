@@ -1,10 +1,8 @@
-// The turn fails through a session.error event (ProviderAuthError: fatal).
+// The turn fails before any assistant message.
 export default {
-  async onPromptAsync(fake, sessionID) {
+  async onPrompt(fake, sessionID) {
     fake.setStatus(sessionID, { type: 'busy' });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    fake.event('session.error', { sessionID, error: { name: 'ProviderAuthError', data: { providerID: 'omniroute-personal', message: 'invalid credentials for provider' } } });
-    fake.setStatus(sessionID, { type: 'idle' });
-    fake.event('session.idle', { sessionID });
+    fake.failExecution(sessionID, { type: 'provider.auth', message: 'Credenciais inválidas.' });
   },
 };

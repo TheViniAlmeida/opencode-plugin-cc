@@ -1,0 +1,142 @@
+{
+  "data": [
+    {
+      "id": "msg_11191c80a001X6wdbO5fBOpU4k",
+      "time": {
+        "created": 1791296129078
+      },
+      "text": "Read the file note.txt in the current directory and reply with exactly its content, nothing else.",
+      "type": "user"
+    },
+    {
+      "id": "msg_11191c863001rC6r2vQ2V7HBwe",
+      "time": {
+        "created": 1791296129733,
+        "streamed": 1791296132708,
+        "completed": 1791296162738
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "opencode-go/deepseek-v4.1-flash",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "Reasoning omitted from the fixture.",
+          "state": {
+            "itemId": "rs_resp_00000000000000000000000000000000_0",
+            "reasoningEncryptedContent": null
+          },
+          "time": {
+            "created": 1791296132524,
+            "completed": 1791296132617
+          }
+        },
+        {
+          "type": "tool",
+          "id": "call_00_uxeamtbuu9fnsmpm5r130xox",
+          "name": "read",
+          "executed": false,
+          "providerState": {
+            "itemId": "fc_call_00_uxeamtbuu9fnsmpm5r130xox"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "note.txt"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file note.txt, lines 1-1\n1: hello"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1791296132620,
+            "ran": 1791296132704,
+            "completed": 1791296162733
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "providerState": {
+        "responseId": "resp_00000000000000000000000000000000"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 5431,
+        "output": 38,
+        "reasoning": 23,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_111924bd5001mR4PSXI6hD7zBd",
+      "time": {
+        "created": 1791296162866,
+        "streamed": 1791296165443,
+        "completed": 1791296165445
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "opencode-go/deepseek-v4.1-flash",
+        "providerID": "omniroute-personal",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "Reasoning omitted from the fixture.",
+          "state": {
+            "itemId": "rs_resp_00000000000000000000000000000000_0",
+            "reasoningEncryptedContent": null
+          },
+          "time": {
+            "created": 1791296164968,
+            "completed": 1791296165433
+          }
+        },
+        {
+          "type": "text",
+          "text": "hello",
+          "state": {
+            "itemId": "msg_resp_00000000000000000000000000000000_1"
+          }
+        }
+      ],
+      "finish": "stop",
+      "providerState": {
+        "responseId": "resp_00000000000000000000000000000000"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 142,
+        "output": 2,
+        "reasoning": 91,
+        "cache": {
+          "read": 5376,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_111925649001iL128tXd14zAVC",
+      "time": {
+        "created": 1791296165449
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

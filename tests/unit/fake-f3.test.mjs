@@ -7,7 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { loadScenario, startFake } from '../fixtures/fake-opencode.mjs';
 import { pickFreePort } from '../../plugins/opc/scripts/lib/server.mjs';
-import { F3_MODELS, SEED, userMessage, assistantMessage } from '../fixtures/f3-fake.mjs';
+import { SEED, userMessage, assistantMessage, F3_MODEL_CATALOG } from '../fixtures/f3-fake.mjs';
+import { assertShape, loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 async function boot(t, scenario = 'f3-sessions') {
   const dir = trackTempDir(t, makeTempDir('opc-f3fake-'));
@@ -18,18 +19,19 @@ async function boot(t, scenario = 'f3-sessions') {
   async function call(method, path, body) {
     const res = await fetch(`${fake.url}${path}`, {
       method,
-      headers: { authorization: auth, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      headers: { authorization: auth, 'x-opencode-directory': '/workspace', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
+    const parsed = text ? JSON.parse(text) : null;
+    return { status: res.status, body: parsed?.data ?? parsed };
   }
   return { fake, call };
 }
 
 test('f3 fake: seeded sessions are listed newest first', async (t) => {
   const { call } = await boot(t);
-  const res = await call('GET', '/session');
+  const res = await call('GET', '/api/session');
   assert.equal(res.status, 200);
   const ids = res.body.map((s) => s.id);
   assert.ok(ids.includes(SEED.session));
@@ -37,15 +39,15 @@ test('f3 fake: seeded sessions are listed newest first', async (t) => {
   assert.deepEqual(ids.slice(0, 2), [SEED.session, SEED.userSession]);
 });
 
-test('f3 fake: POST /session stores parentID, agent and model; children lists it', async (t) => {
+test('f3 fake: POST /api/session stores parentID, agent and model; parent query lists it', async (t) => {
   const { call } = await boot(t);
-  const created = await call('POST', '/session', { parentID: SEED.session, title: 'OPC: sub: x', agent: 'general', model: { id: 'opencode-go/kimi-k3', providerID: 'omniroute-personal' } });
+  const created = await call('POST', '/api/session', { parentID: SEED.session, title: 'OPC: sub: x', agent: 'general', model: { id: 'opencode-go/kimi-k3', providerID: 'omniroute-personal' }, permissions: [{ action: '*', resource: '*', effect: 'deny' }] });
   assert.equal(created.status, 200);
   assert.match(created.body.id, /^ses/);
   assert.equal(created.body.parentID, SEED.session);
   assert.equal(created.body.agent, 'general');
   assert.deepEqual(created.body.model, { id: 'opencode-go/kimi-k3', providerID: 'omniroute-personal' });
-  const children = await call('GET', `/session/${SEED.session}/children`);
+  const children = await call('GET', `/api/session?parentID=${SEED.session}`);
   assert.deepEqual(children.body.map((s) => s.id), [created.body.id]);
 });
 
@@ -57,9 +59,10 @@ test('f3 fake: fork uses insertion order even when message ids sort differently'
     userMessage(SEED.session, 'msg_m_after', 'three'),
   ];
   fake.state.messages[SEED.session] = messages;
-  const forked = await call('POST', `/session/${SEED.session}/fork`, { messageID: 'msg_a_target' });
-  const result = await call('GET', `/session/${forked.body.id}/message`);
-  assert.deepEqual(result.body.map((message) => message.info.id), ['msg_z_last']);
+  const forked = await call('POST', `/api/session/${SEED.session}/fork`, { before: 'msg_a_target' });
+  assert.deepEqual(forked.body.fork, { sessionID: SEED.session, boundary: 'msg_a_target' });
+  const result = await call('GET', `/api/session/${forked.body.id}/message?order=asc`);
+  assert.deepEqual(result.body.map((message) => message.id), ['msg_z_last']);
 });
 
 test('f3 fake: attach probe redacts password from argv log and creates private log', (t) => {
@@ -82,74 +85,122 @@ test('f3 fake: attach probe redacts password from argv log and creates private l
 
 test('group-slow permission reply rejects missing, non-pending, and always replies', async () => {
   const scenario = await loadScenario('group-slow');
-  const handler = scenario.routes['POST /permission/:id/reply'];
+  const handler = scenario.routes['POST /api/session/:id/permission/:requestID/reply'];
   const fake = { state: { permissions: { pending: { id: 'pending' } }, f3: { askSession: 'ses_ask', prompts: [] } }, emit() { throw new Error('must not emit'); } };
-  assert.equal(handler(fake, { params: { id: 'missing' }, body: { reply: 'once' } }).status, 400);
+  assert.equal(handler(fake, { params: { id: 'ses_ask', requestID: 'missing' }, body: { decision: 'once' } }).status, 404);
   fake.state.permissions.pending = undefined;
-  assert.equal(handler(fake, { params: { id: 'pending' }, body: { reply: 'once' } }).status, 400);
-  fake.state.permissions.pending = { id: 'pending' };
-  assert.equal(handler(fake, { params: { id: 'pending' }, body: { reply: 'always' } }).status, 400);
+  assert.equal(handler(fake, { params: { id: 'ses_ask', requestID: 'pending' }, body: { decision: 'once' } }).status, 404);
+  fake.state.permissions.pending = { id: 'pending', sessionID: 'ses_ask' };
+  assert.equal(handler(fake, { params: { id: 'ses_ask', requestID: 'pending' }, body: { decision: 'always' } }).status, 400);
 });
 
-test('f3 fake: fork copies only messages before messageID', async (t) => {
+test('f3 fake: fork copies only messages before the boundary', async (t) => {
   const { call } = await boot(t);
-  const forked = await call('POST', `/session/${SEED.session}/fork`, { messageID: SEED.m3 });
+  const forked = await call('POST', `/api/session/${SEED.session}/fork`, { before: SEED.m3 });
   assert.equal(forked.status, 200);
-  const msgs = await call('GET', `/session/${forked.body.id}/message`);
-  assert.deepEqual(msgs.body.map((m) => m.info.role), ['user', 'assistant']);
-  const unknown = await call('POST', `/session/${SEED.session}/fork`, { messageID: 'msg_nope' });
+  const msgs = await call('GET', `/api/session/${forked.body.id}/message?order=asc`);
+  assert.deepEqual(msgs.body.map((m) => m.type), ['user', 'assistant']);
+  const unknown = await call('POST', `/api/session/${SEED.session}/fork`, { before: 'msg_nope' });
   assert.equal(unknown.status, 400);
 });
 
-test('f3 fake: revert sets session.revert with a diff; unrevert clears it', async (t) => {
+test('f3 fake: revert stage keeps a pending revert with files, delete clears it, commit drops the messages', async (t) => {
   const { call } = await boot(t);
-  const reverted = await call('POST', `/session/${SEED.session}/revert`, { messageID: SEED.m3 });
-  assert.equal(reverted.status, 200);
-  assert.equal(reverted.body.revert.messageID, SEED.m3);
-  assert.match(reverted.body.revert.diff, /\+BETA/);
-  const missing = await call('POST', `/session/${SEED.session}/revert`, {});
+  const staged = await call('POST', `/api/session/${SEED.session}/revert/stage`, { messageID: SEED.m3 });
+  assert.equal(staged.status, 200);
+  assert.equal(staged.body.messageID, SEED.m3);
+  assert.deepEqual(staged.body.files.map((f) => f.file), ['notes.txt', 'extra.txt']);
+  assert.match(staged.body.files[0].patch, /\+BETA/);
+  const pending = await call('GET', `/api/session/${SEED.session}`);
+  assert.equal(pending.body.revert.messageID, SEED.m3);
+  const missing = await call('POST', `/api/session/${SEED.session}/revert/stage`, {});
   assert.equal(missing.status, 400);
-  const restored = await call('POST', `/session/${SEED.session}/unrevert`);
-  assert.equal(restored.status, 200);
-  assert.equal(restored.body.revert, undefined);
+  const cleared = await call('DELETE', `/api/session/${SEED.session}/revert`);
+  assert.equal(cleared.status, 204);
+  assert.equal((await call('GET', `/api/session/${SEED.session}`)).body.revert, undefined);
+  await call('POST', `/api/session/${SEED.session}/revert/stage`, { messageID: SEED.m3 });
+  const committed = await call('POST', `/api/session/${SEED.session}/revert/commit`);
+  assert.equal(committed.status, 204);
+  assert.equal((await call('GET', `/api/session/${SEED.session}`)).body.revert, undefined);
+  const left = await call('GET', `/api/session/${SEED.session}/message?order=asc&limit=200`);
+  assert.ok(Array.isArray(left.body) && !left.body.some((m) => m.id === SEED.m3), 'commit drops the messages from the target on');
 });
 
-test('f3 fake: summarize requires providerID and modelID', async (t) => {
+test('f3 fake: compact uses the session model and appends a compaction message', async (t) => {
   const { call } = await boot(t);
-  assert.equal((await call('POST', `/session/${SEED.session}/summarize`, {})).status, 400);
-  const res = await call('POST', `/session/${SEED.session}/summarize`, { providerID: 'omniroute-personal', modelID: 'opencode-go/qwen3.8-max' });
+  assert.equal((await call('POST', '/api/session/ses_missing/compact', {})).status, 404);
+  const switched = await call('POST', `/api/session/${SEED.session}/model`, { model: { providerID: 'omniroute-personal', id: 'opencode-go/qwen3.8-max' } });
+  assert.equal(switched.status, 204);
+  // V2 2.0.22 refuses a compact without an object body (400 "Expected object") and extra keys.
+  const noBody = await call('POST', `/api/session/${SEED.session}/compact`);
+  assert.deepEqual([noBody.status, noBody.body.message], [400, 'Expected object']);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/compact`, { providerID: 'p' })).status, 400);
+  const res = await call('POST', `/api/session/${SEED.session}/compact`, {});
   assert.equal(res.status, 200);
-  assert.equal(res.body, true);
-  const msgs = await call('GET', `/session/${SEED.session}/message`);
-  assert.equal(msgs.body.at(-1).info.summary, true);
+  assertShape('compaction', res.body);
+  assert.equal(res.body.type, 'compaction');
+  assert.equal(res.body.sessionID, SEED.session);
+  assert.match(res.body.id, /^msg_/);
+  const msgs = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
+  const compaction = msgs.body.findLast((m) => m.type === 'assistant');
+  assert.equal(compaction.agent, 'compaction');
+  assert.equal(compaction.model.id, 'opencode-go/qwen3.8-max');
 });
 
-test('f3 fake: command requires command and string arguments, answers synchronously', async (t) => {
+test('f3 fake: command requires name and string text, answers through the turn', async (t) => {
   const { call } = await boot(t);
-  assert.equal((await call('POST', `/session/${SEED.session}/command`, { command: 'echo' })).status, 400);
-  assert.equal((await call('POST', `/session/${SEED.session}/command`, { command: 'nope', arguments: '' })).status, 400);
-  const res = await call('POST', `/session/${SEED.session}/command`, { command: 'echo', arguments: 'a b', model: F3_MODELS.qwen });
-  assert.equal(res.status, 200);
-  assert.equal(res.body.info.modelID, 'opencode-go/qwen3.8-max');
-  assert.equal(res.body.parts[0].text, 'COMMAND echo ARGS[a b]');
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { name: 'echo' })).status, 400);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { name: 'nope', text: '' })).status, 400);
+  assert.equal((await call('POST', `/api/session/${SEED.session}/command`, { command: 'echo', arguments: 'a b' })).status, 400);
+  const res = await call('POST', `/api/session/${SEED.session}/command`, { name: 'echo', text: 'a b' });
+  assert.equal(res.status, 204);
+  let answer;
+  for (let attempt = 0; attempt < 100 && !answer; attempt += 1) {
+    const messages = await call('GET', `/api/session/${SEED.session}/message?order=asc`);
+    answer = messages.body.findLast((m) => m.type === 'assistant' && m.content?.[0]?.text?.startsWith('COMANDO'));
+    if (!answer) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(answer, 'the command turn must answer');
+  assert.equal(answer.model.id, 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(answer.content[0].text, 'COMANDO echo ARGUMENTOS[a b]');
 });
 
-test('f3 fake: diff (with and without messageID), todo, dispose and catalogs', async (t) => {
-  const { fake, call } = await boot(t);
-  assert.equal((await call('GET', `/session/${SEED.session}/diff`)).body.length, 1);
-  const perMessage = await call('GET', `/session/${SEED.session}/diff?messageID=${SEED.m3}`);
+test('f3 fake: diff (with and without messageID) and catalogs', async (t) => {
+  const { call } = await boot(t);
+  assert.equal((await call('GET', `/api/session/${SEED.session}/diff`)).body.length, 1);
+  const perMessage = await call('GET', `/api/session/${SEED.session}/diff?messageID=${SEED.m3}`);
   assert.deepEqual(perMessage.body.map((d) => d.file), ['notes.txt', 'extra.txt']);
-  assert.equal((await call('GET', `/session/${SEED.session}/todo`)).body.length, 2);
-  assert.equal((await call('POST', '/instance/dispose')).body, true);
-  assert.equal(fake.state.f3.disposed, 1);
-  const providers = await call('GET', '/provider');
-  assert.deepEqual(providers.body.connected, ['omniroute-personal', 'omniroute-work']);
-  assert.ok((await call('GET', '/agent')).body.some((a) => a.name === 'explore' && a.mode === 'subagent'));
-  assert.ok((await call('GET', '/command')).body.some((c) => c.name === 'pinned-model'));
+  const providers = await call('GET', '/api/provider');
+  assert.deepEqual(providers.body.map((p) => p.id), ['omniroute-personal', 'omniroute-work']);
+  assert.ok((await call('GET', '/api/agent')).body.some((a) => a.name === 'explore' && a.mode === 'subagent'));
+  assert.ok((await call('GET', '/api/command')).body.some((c) => c.name === 'pinned-model'));
 });
 
 test('f3 fake: children scenario seeds two children of the seed session', async (t) => {
   const { call } = await boot(t, 'children');
-  const res = await call('GET', `/session/${SEED.session}/children`);
+  const res = await call('GET', `/api/session?parentID=${SEED.session}`);
   assert.equal(res.body.length, 2);
+});
+
+test('f3 fake: model catalog follows the recorded V2 sample (id relative to the provider, capabilities.tools)', () => {
+  const sample = loadContractSample('model.json').data[0];
+  for (const model of F3_MODEL_CATALOG) {
+    assertShape('model', model);
+    assert.equal(model.id, model.modelID, 'id is relative to the provider, like the sample');
+    assert.ok(!model.id.startsWith(`${model.providerID}/`), 'the provider is not embedded in the id');
+    assert.equal(sample.id, sample.modelID);
+    assert.equal(model.capabilities.tools, true);
+    assert.equal('toolcall' in model.capabilities, false);
+  }
+});
+
+test('f3 fake: GET /api/model/default is a model object like the sample', async (t) => {
+  const { call } = await boot(t);
+  const res = await call('GET', '/api/model/default');
+  assert.equal(res.status, 200);
+  const sample = loadContractSample('model-default.json').data;
+  for (const key of ['id', 'modelID', 'providerID']) assert.equal(typeof res.body[key], typeof sample[key], key);
+  assert.ok(typeof res.body.id === 'string' && typeof res.body.providerID === 'string');
+  assert.equal(Array.isArray(res.body), false);
+  assert.equal(res.body.id, res.body.modelID);
 });

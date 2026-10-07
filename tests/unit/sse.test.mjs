@@ -3,8 +3,9 @@ import test from 'node:test';
 
 import { EventHub, createSSEParser, eventSessionID } from '../../plugins/opc/scripts/lib/sse.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
-const client = { buildUrl: () => 'http://opc.test/event', authHeaders: () => ({}) };
+const client = { buildUrl: () => 'http://opc.test/api/event', authHeaders: () => ({}) };
 
 function responseWithFrames(...frames) {
   let index = 0;
@@ -23,58 +24,167 @@ function responseWithFrames(...frames) {
 
 test('parser returns JSON of each data frame, across chunk boundaries', () => {
   const p = createSSEParser();
-  assert.deepEqual(p.push('data: {"type":"server.connected","properties":{}}\n\nda'), [{ type: 'server.connected', properties: {} }]);
-  assert.deepEqual(p.push('ta: {"type":"server.heartbeat"}\n'), []);
-  assert.deepEqual(p.push('\n'), [{ type: 'server.heartbeat' }]);
+  assert.deepEqual(p.push('data: {"type":"server.connected","data":{}}\n\nda'), { events: [{ type: 'server.connected', data: {} }], comments: 0 });
+  assert.deepEqual(p.push('ta: {"type":"session.execution.succeeded","data":{"sessionID":"ses_a"}}\n'), { events: [], comments: 0 });
+  assert.deepEqual(p.push('\n'), { events: [{ type: 'session.execution.succeeded', data: { sessionID: 'ses_a' } }], comments: 0 });
 });
 
-test('parser ignores comments, non-data fields and invalid JSON; handles CRLF and multi-line data', () => {
+test('parser counts heartbeat comments and parses data frames', () => {
+  const parser = createSSEParser();
+  const out = parser.push(': heartbeat\n\ndata: {"type":"server.connected","data":{}}\n\n: heartbeat\n\n');
+  assert.equal(out.comments, 2);
+  assert.deepEqual(out.events.map((e) => e.type), ['server.connected']);
+});
+
+test('parser counts each line-terminated heartbeat before a frame delimiter', () => {
+  const parser = createSSEParser();
+  assert.deepEqual(parser.push(': heartbeat\n'), { events: [], comments: 1 });
+  assert.deepEqual(parser.push(': heartbeat\n'), { events: [], comments: 1 });
+  assert.deepEqual(parser.push('\n'), { events: [], comments: 0 });
+});
+
+test('parser accepts the recorded OpenCode 2.0.22 stream', () => {
+  const result = createSSEParser().push(loadContractSample('sse-stream.txt'));
+  assert.ok(result.comments >= 2);
+  assert.equal(result.events[0].type, 'server.connected');
+  assert.equal(result.events[1].type, 'session.created');
+  assert.ok(result.events[1].data.sessionID);
+});
+
+test('parser counts comments, ignores non-data fields and invalid JSON; handles CRLF and multi-line data', () => {
   const p = createSSEParser();
-  const events = p.push(': keep-alive\n\nevent: x\nid: 1\ndata: {"a":\r\ndata: 1}\r\n\r\ndata: not json\n\ndata:{"b":2}\n\n');
-  assert.deepEqual(events, [{ a: 1 }, { b: 2 }]);
+  const out = p.push(': keep-alive\n\nevent: x\nid: 1\ndata: {"a":\r\ndata: 1}\r\n\r\ndata: not json\n\ndata:{"b":2}\n\n');
+  assert.deepEqual(out, { events: [{ a: 1 }, { b: 2 }], comments: 1 });
 });
 
 test('parser normalizes CRLF split across chunk boundaries', () => {
   const p = createSSEParser();
-  assert.deepEqual(p.push('data: {"type":"a"}\r'), []);
-  assert.deepEqual(p.push('\n\r'), []);
-  assert.deepEqual(p.push('\n'), [{ type: 'a' }]);
+  assert.deepEqual(p.push('data: {"type":"a"}\r'), { events: [], comments: 0 });
+  assert.deepEqual(p.push('\n\r'), { events: [], comments: 0 });
+  assert.deepEqual(p.push('\n'), { events: [{ type: 'a' }], comments: 0 });
 });
 
-test('eventSessionID finds the session in properties, info or part', () => {
-  assert.equal(eventSessionID({ properties: { sessionID: 'ses_a' } }), 'ses_a');
-  assert.equal(eventSessionID({ properties: { info: { sessionID: 'ses_b' } } }), 'ses_b');
-  assert.equal(eventSessionID({ properties: { part: { sessionID: 'ses_c' } } }), 'ses_c');
-  assert.equal(eventSessionID({ type: 'server.heartbeat', properties: {} }), null);
+test('eventSessionID reads data.sessionID from the V2 envelope', () => {
+  assert.equal(eventSessionID({ type: 'session.execution.succeeded', data: { sessionID: 'ses_a' } }), 'ses_a');
+  assert.equal(eventSessionID({ type: 'server.connected', data: {} }), null);
   assert.equal(eventSessionID(null), null);
 });
 
-test('server.instance.disposed as the first frame makes start reconnect before opening', async () => {
+test('hub requests /api/event with client auth and directory headers', async () => {
+  let request;
+  const hub = new EventHub({
+    client: { buildUrl: (path) => `http://opc.test${path}`, authHeaders: () => ({ authorization: 'Basic fake' }), directory: '/workspace' },
+    fetchImpl: async (url, options) => {
+      request = { url, headers: options.headers };
+      return responseWithFrames('data: {"type":"server.connected","data":{}}\n\n');
+    },
+  });
+  await hub.start();
+  assert.equal(request.url, 'http://opc.test/api/event');
+  assert.equal(request.headers.authorization, 'Basic fake');
+  assert.equal(request.headers['x-opencode-directory'], '/workspace');
+  hub.stop();
+});
+
+test('heartbeat comments rearm liveness without dispatching events', async () => {
   let fetchCount = 0;
-  let releaseSecond;
-  const secondHeaders = new Promise((resolve) => { releaseSecond = resolve; });
+  const received = [];
+  const hub = new EventHub({
+    client,
+    livenessMs: 80,
+    backoffMs: [1],
+    fetchImpl: async (_url, { signal }) => {
+      fetchCount += 1;
+      let readCount = 0;
+      return { ok: true, status: 200, body: { getReader: () => ({
+        read: () => new Promise((resolve, reject) => {
+          const onAbort = () => { clearTimeout(timer); reject(new Error('aborted')); };
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            readCount += 1;
+            resolve({ done: false, value: new TextEncoder().encode(readCount === 1 ? ': heartbeat\n\n' : ': heartbeat\n') });
+          }, 20);
+          signal.addEventListener('abort', onAbort, { once: true });
+        }),
+      }) } };
+    },
+  });
+  hub.onAny((event) => received.push(event));
+  await hub.start();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(fetchCount, 1);
+  assert.equal(hub.state, 'open');
+  assert.deepEqual(received, []);
+  hub.stop();
+});
+
+test('hub routes complete V2 envelopes to tracked children and grandchildren', () => {
+  const hub = new EventHub({ client });
+  const received = [];
+  hub.track('ses_root', (event) => received.push(event));
+  const child = { id: 'evt_1', type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_root' } };
+  const grandchild = { id: 'evt_2', type: 'session.created', data: { sessionID: 'ses_grand', parentID: 'ses_child' } };
+  const completed = { id: 'evt_3', type: 'session.execution.succeeded', data: { sessionID: 'ses_grand' } };
+  hub._dispatch(child);
+  hub._dispatch(grandchild);
+  hub._dispatch(completed);
+  assert.deepEqual(received, [child, grandchild, completed]);
+});
+
+test('a heartbeat comment opens the stream without server.connected', async () => {
+  let fetchCount = 0;
   const hub = new EventHub({
     client,
     livenessMs: 1000,
     backoffMs: [1],
     fetchImpl: async () => {
       fetchCount += 1;
-      if (fetchCount === 1) return responseWithFrames('data: {"type":"server.instance.disposed"}\n\n');
-      await secondHeaders;
-      return responseWithFrames('data: {"type":"server.connected"}\n\n');
+      return responseWithFrames(': heartbeat\n\n');
     },
   });
-  let settled = false;
-  const started = hub.start().then(() => { settled = true; });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(fetchCount, 2);
-  assert.equal(settled, false);
-  releaseSecond();
-  await started;
+  await hub.start();
+  assert.equal(hub.state, 'open');
+  assert.equal(fetchCount, 1);
   hub.stop();
 });
 
-test('stop during reconnect after an initial disposed frame keeps start stopped', async () => {
+test('reconnection opens on a line-terminated comment without server.connected', async () => {
+  let fetchCount = 0;
+  let reconnects = 0;
+  const received = [];
+  let notifyReconnect;
+  const reconnected = new Promise((resolve) => { notifyReconnect = resolve; });
+  const hub = new EventHub({
+    client,
+    livenessMs: 50,
+    backoffMs: [1],
+    fetchImpl: async () => {
+      fetchCount += 1;
+      const frames = fetchCount === 1
+        ? ['data: {"type":"server.connected","data":{}}\n\n']
+        : [': heartbeat\n'];
+      let index = 0;
+      return { ok: true, status: 200, body: { getReader: () => ({
+        read: async () => index < frames.length
+          ? { done: false, value: new TextEncoder().encode(frames[index++]) }
+          : fetchCount === 1 ? { done: true } : new Promise(() => {}),
+      }) } };
+    },
+  });
+  hub.onAny((event) => received.push(event.type));
+  hub.onReconnect(() => { reconnects += 1; notifyReconnect(); });
+  try {
+    await hub.start();
+    await Promise.race([reconnected, new Promise((resolve) => setTimeout(resolve, 100))]);
+    assert.equal(fetchCount, 2);
+    assert.equal(reconnects, 1);
+    assert.deepEqual(received, ['server.connected']);
+  } finally {
+    hub.stop();
+  }
+});
+
+test('stop during reconnect keeps the hub stopped', async () => {
   let fetchCount = 0;
   let secondSignal;
   const hub = new EventHub({
@@ -83,22 +193,57 @@ test('stop during reconnect after an initial disposed frame keeps start stopped'
     backoffMs: [1],
     fetchImpl: async (_url, { signal }) => {
       fetchCount += 1;
-      if (fetchCount === 1) return responseWithFrames('data: {"type":"server.instance.disposed"}\n\n');
+      if (fetchCount === 1) return { ok: true, status: 200, body: { getReader: () => {
+        let first = true;
+        return { read: async () => {
+          if (!first) return { done: true };
+          first = false;
+          return { done: false, value: new TextEncoder().encode(': heartbeat\n\n') };
+        } };
+      } } };
       secondSignal = signal;
       return new Promise(() => {});
     },
   });
-  const started = hub.start();
+  await hub.start();
   while (fetchCount < 2) await new Promise((resolve) => setImmediate(resolve));
   hub.stop();
-  await assert.rejects(started, /stopped/i);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(hub.state, 'stopped');
   assert.equal(fetchCount, 2);
   assert.equal(secondSignal.aborted, true);
 });
 
-test('disposed connections abort and close their streams before reconnecting', async () => {
+test('stop during the reconnect backoff ends the wait instead of holding the process', async () => {
+  let fetchCount = 0;
+  const hub = new EventHub({
+    client,
+    livenessMs: 1000,
+    backoffMs: [60_000],
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return { ok: true, status: 200, body: { getReader: () => {
+        let first = true;
+        return { read: async () => {
+          if (!first) return { done: true };
+          first = false;
+          return { done: false, value: new TextEncoder().encode(': heartbeat\n\n') };
+        } };
+      } } };
+    },
+  });
+  await hub.start();
+  while (hub.state !== 'reconnecting') await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof hub._wakeBackoff, 'function', 'hub is not waiting in the backoff');
+  hub.stop();
+  assert.equal(hub._wakeBackoff, null);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(hub.state, 'stopped');
+  assert.equal(fetchCount, 1);
+});
+
+test('dropped connections abort and close their streams before reconnecting', async () => {
   const signals = [];
   let openStreams = 0;
   let maxOpenStreams = 0;
@@ -125,9 +270,9 @@ test('disposed connections abort and close their streams before reconnecting', a
             };
             return {
               read: async () => {
-                if (yielded) return new Promise(() => {});
+                if (yielded) return { done: true };
                 yielded = true;
-                return { done: false, value: new TextEncoder().encode('data: {"type":"server.instance.disposed"}\n\n') };
+                return { done: false, value: new TextEncoder().encode('data: {"type":"server.connected","data":{}}\n\n') };
               },
               cancel: async () => close(),
               releaseLock: close,
@@ -137,7 +282,9 @@ test('disposed connections abort and close their streams before reconnecting', a
       };
     },
   });
-  await assert.rejects(hub.start());
+  await hub.start();
+  while (signals.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  hub.stop();
   assert.ok(signals.length >= 2);
   assert.ok(signals.slice(0, -1).every((signal) => signal.aborted));
   assert.equal(maxOpenStreams, 1);
@@ -200,7 +347,7 @@ test('stop while connecting rejects start and does not reconnect', async () => {
   const started = hub.start();
   await new Promise((resolve) => setImmediate(resolve));
   hub.stop();
-  await assert.rejects(started, /stopped/i);
+  await assert.rejects(started, /parou antes de abrir/);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(hub.state, 'stopped');
   assert.equal(fetchCount, 1);
@@ -217,7 +364,7 @@ test('stop immediately after start rejects as stopped without invoking fetch', a
   });
   const started = hub.start();
   hub.stop();
-  await assert.rejects(started, /stopped/i);
+  await assert.rejects(started, /parou antes de abrir/);
   assert.equal(fetchCount, 0);
   assert.equal(hub.state, 'stopped');
 });
@@ -236,7 +383,7 @@ test('stop while waiting for the first frame rejects start and does not reconnec
   const started = hub.start();
   await new Promise((resolve) => setImmediate(resolve));
   hub.stop();
-  await assert.rejects(started, /stopped/i);
+  await assert.rejects(started, /parou antes de abrir/);
   assert.equal(hub.state, 'stopped');
   assert.equal(fetchCount, 1);
 });

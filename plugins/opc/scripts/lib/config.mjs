@@ -10,7 +10,7 @@ import { evaluate, evaluateAgent } from './policy.mjs';
 import { withLock } from './locks.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
-export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride']);
+export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin']);
 const MISSING = Symbol('missing');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -76,7 +76,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   defaultAgent: schemaField('string', { nullable: true }),
   aliases: schemaField('model-map'),
   reviewModel: schemaField('modelref', { nullable: true }),
-  'review.structuredOutput': schemaField('enum', { values: ['text', 'tool'] }),
+  'review.structuredOutput': schemaField('enum', { values: ['text'] }),
   'stopGate.enabled': schemaField('boolean'),
   'stopGate.model': schemaField('modelref', { nullable: true }),
   'project.goal': schemaField('string', { nullable: true }),
@@ -109,8 +109,8 @@ export const CONFIG_SCHEMA = Object.freeze({
   'conclave.rounds': schemaField('integer', { min: 1, max: 3 }),
   'conclave.quorum': schemaField('integer', { min: 2, max: 16 }),
   'conclave.memberTimeoutSec': schemaField('integer', { min: 1, max: 86400 }),
-  'conclave.structuredOutput': schemaField('enum', { values: ['text', 'tool'] }),
-  'orchestrate.structuredOutput': schemaField('enum', { values: ['text', 'tool'] }),
+  'conclave.structuredOutput': schemaField('enum', { values: ['text'] }),
+  'orchestrate.structuredOutput': schemaField('enum', { values: ['text'] }),
   'orchestrate.planner': schemaField('modelref', { nullable: true }),
   'orchestrate.maxSubtasks': schemaField('integer', { min: 2, max: 20 }),
   'orchestrate.synthesizer': schemaField('modelref-or-claude'),
@@ -119,6 +119,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   'jobs.maxParallel': schemaField('integer', { min: 1, max: 32 }),
   'server.bootTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
   'server.requestTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
+  'server.opencodeBin': schemaField('string'),
   'server.configOverride': schemaField('object'),
 });
 
@@ -130,6 +131,8 @@ const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-m
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const cloneJson = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+const STRUCTURED_OUTPUT_KEYS = ['review.structuredOutput', 'conclave.structuredOutput', 'orchestrate.structuredOutput'];
+const STRUCTURED_OUTPUT_WARNING = 'structuredOutput "tool" não existe no OpenCode V2; usando "text".';
 
 export function schemaFor(dotted) {
   if (Object.hasOwn(CONFIG_SCHEMA, dotted)) return CONFIG_SCHEMA[dotted];
@@ -191,8 +194,8 @@ function checkValue(desc, value) {
 
 function checkRules(rules) {
   if (!Array.isArray(rules)) return 'as regras devem ser uma lista';
-  const ok = rules.every((r) => isObj(r) && typeof r.permission === 'string' && typeof r.pattern === 'string' && ['allow', 'deny', 'ask'].includes(r.action));
-  return ok ? null : 'cada regra precisa de {permission, pattern, action: allow|deny|ask}';
+  const ok = rules.every((r) => isObj(r) && typeof r.action === 'string' && typeof r.resource === 'string' && ['allow', 'deny', 'ask'].includes(r.effect));
+  return ok ? null : 'cada regra precisa de {action, resource, effect: allow|deny|ask}';
 }
 
 export function findSecretLikeKeys(obj, prefix = '') {
@@ -217,6 +220,7 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
       const p = prefix ? `${prefix}.${key}` : key;
       const desc = CONFIG_SCHEMA[p];
       if (desc) {
+        if (STRUCTURED_OUTPUT_KEYS.includes(p) && value === 'tool') continue;
         const problem = checkValue(desc, value);
         if (problem) errors.push({ path: p, code: 'INVALID_VALUE', message: problem });
       } else if (GROUPS.has(p)) {
@@ -288,6 +292,16 @@ export function mergeConfig(globalCfg, workspaceCfg) {
       ignore(key, 'não pode ser substituída no workspace');
     } else {
       ignore(key, 'chave desconhecida');
+    }
+  }
+  for (const key of STRUCTURED_OUTPUT_KEYS) {
+    if (getPath(globalCfg, key) === 'tool' || getPath(workspaceCfg, key) === 'tool') {
+      warnings.push({ path: key, code: 'STRUCTURED_OUTPUT_MIGRATED', message: STRUCTURED_OUTPUT_WARNING,
+        source: getPath(workspaceCfg, key) === 'tool' ? 'workspace' : 'global' });
+    }
+    if (getPath(config, key) === 'tool') {
+      const [group] = key.split('.');
+      config[group].structuredOutput = 'text';
     }
   }
   return { config, warnings };
@@ -390,7 +404,7 @@ export function loadConfig({ dataDir, workspaceRoot }) {
     }
   } else workspace = null;
   const merged = mergeConfig(global, workspace);
-  warnings.push(...merged.warnings.map((x) => ({ ...x, source: 'workspace' })));
+  warnings.push(...merged.warnings.map((x) => ({ ...x, source: x.source ?? 'workspace' })));
   return { config: merged.config, global, workspace, hasGlobal: global !== null, warnings };
 }
 
@@ -583,7 +597,7 @@ export function validateAgainstServer(cfg, { catalog, agents = [], opencodeConfi
   if (cfg.defaultVariant) {
     const modelId = cfg.defaultModel ?? opencodeConfig?.model ?? null;
     const entry = modelId ? catalog.byFull.get(modelId) : null;
-    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant precisa de um defaultModel válido (ou do modelo padrão do OpenCode)' });
+    if (!entry) errors.push({ path: 'defaultVariant', code: 'UNKNOWN_VARIANT', message: 'defaultVariant precisa de um defaultModel válido (ou do "model" declarado na configuração do OpenCode)' });
     else {
       try { validateVariant(entry, cfg.defaultVariant); } catch (err) { errors.push({ path: 'defaultVariant', code: err.code, message: err.message }); }
     }

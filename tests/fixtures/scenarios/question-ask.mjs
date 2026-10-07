@@ -1,13 +1,13 @@
 // Three questions (single choice, multiple choice, free text) in one question request.
 export default {
-  async onPromptAsync(fake, sessionID) {
+  async onPrompt(fake, sessionID) {
     fake.setStatus(sessionID, { type: 'busy' });
     const outcome = await fake.askQuestion(sessionID, [
-      { question: 'Which database should the service use?', header: 'Database', options: [{ label: 'Postgres', description: 'Relational, server' }, { label: 'SQLite', description: 'Embedded' }], custom: false },
-      { question: 'Which features are in scope?', header: 'Features', options: [{ label: 'A', description: 'Auth' }, { label: 'B', description: 'Billing' }, { label: 'C', description: 'Search' }], multiple: true, custom: false },
-      { question: 'Name of the service?', header: 'Name', options: [{ label: 'default', description: 'Use the repository name' }], custom: true },
+      { key: 'q0', title: 'Banco de dados', description: 'Escolha o banco de dados.', type: 'string', options: [{ value: 'Postgres', label: 'Postgres', description: 'Relacional' }, { value: 'SQLite', label: 'SQLite', description: 'Embutido' }], custom: false },
+      { key: 'q1', title: 'Recursos', description: 'Escolha os recursos.', type: 'multiselect', options: [{ value: 'A', label: 'A', description: 'Autenticação' }, { value: 'C', label: 'C', description: 'Cache' }], custom: false },
+      { key: 'q2', title: 'Nome', description: 'Informe o nome.', type: 'string', options: [], custom: true },
     ]);
-    if (outcome.aborted) return;
-    await fake.emitTurn(sessionID, { text: outcome.rejected ? 'question rejected' : `answers: ${JSON.stringify(outcome.answers)}` });
+    if (fake.isAborted(sessionID)) return;
+    await fake.emitTurn(sessionID, { text: outcome.cancelled ? 'Pergunta cancelada.' : 'Pergunta respondida.' });
   },
 };

@@ -7,6 +7,7 @@ import { redactOutput, safeOutputText } from './redact.mjs';
 import { TIERS } from './routing.mjs';
 import { fillTemplate, loadPrompt as loadPromptFile, loadSchema as loadSchemaFile, projectContextBlock, sessionTitle, summarize } from './prompts.mjs';
 import { truncateUtf8 } from './git.mjs';
+import { jsonInstruction } from './structured-text.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants and plan validation
@@ -220,9 +221,7 @@ export function allowedAgentNames(agentsIndex, policy = {}) {
 export function buildDecomposePrompt({ template, task, maxSubtasks, write, projectContext = '', agents = [], structuredOutput = 'text', schema = null }) {
   const safeAgents = (Array.isArray(agents) ? agents : []).filter(isSafeAgentName);
   return fillTemplate(template, {
-    OUTPUT_CONTRACT: structuredOutput === 'tool'
-      ? 'Return the plan only through the structured output.'
-      : `Retorne apenas um objeto JSON em uma única cerca \`\`\`json, sem texto fora dela. Siga este esquema; não execute as subtarefas:\n${JSON.stringify(schema ?? planSchema(loadSchemaFile('orchestrate-plan'), maxSubtasks), null, 2)}`,
+    OUTPUT_CONTRACT: jsonInstruction(schema ?? planSchema(loadSchemaFile('orchestrate-plan'), maxSubtasks)),
     PROJECT_CONTEXT: projectContext,
     TASK: neutralizeTags(task),
     TARGET_RANGE: maxSubtasks >= 3 ? `between 3 and ${maxSubtasks}` : 'exactly 2',
@@ -487,14 +486,12 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
     let plannerRoute;
     try { plannerRoute = deps.resolvePlanner(); } catch (err) { return finish('failed', 'failed', 'planner_failed', `o modelo do planejador não pôde ser resolvido: ${safeOutputText(err?.message ?? err)}`); }
     warnings.push(...(plannerRoute.warnings ?? []));
-    const structuredOutput = config.orchestrate?.structuredOutput ?? 'text';
     const schema = planSchema(loadSchema('orchestrate-plan'), maxSubtasks);
     const plannerTitle = sessionTitle('orch-plan', summarize(task));
     const plannerMember = await members.start('planner', { title: plannerTitle, model: plannerRoute.candidates[0]?.full ?? null });
     const plannerResult = await safeTurn(deps, { role: 'planner', memberId: plannerMember, subtaskId: null, kind: 'plan', profile: 'read-only', title: plannerTitle,
-      prompt: buildDecomposePrompt({ template: loadPrompt('orchestrate-decompose'), task, maxSubtasks, write, projectContext, agents: allowedAgentNames(deps.agentsIndex, policy), structuredOutput, schema }),
-      format: structuredOutput === 'tool' ? { type: 'json_schema', schema } : null,
-      textJson: structuredOutput === 'text' ? (value) => isPlainObject(value) ? null : 'plano deve ser um objeto JSON' : null, agent: null, candidates: plannerRoute.candidates,
+      prompt: buildDecomposePrompt({ template: loadPrompt('orchestrate-decompose'), task, maxSubtasks, write, projectContext, agents: allowedAgentNames(deps.agentsIndex, policy), schema }),
+      format: { type: 'json_schema', schema }, agent: null, candidates: plannerRoute.candidates,
       fallbackEligible: plannerRoute.fallbackEligible === true, write: false, signal });
     await members.finish(plannerMember, memberPatch(plannerResult));
     pkg.planner = { status: plannerResult.status, model: plannerResult.model ?? plannerRoute.candidates[0]?.full ?? null, sessionID: plannerResult.sessionID ?? null,
