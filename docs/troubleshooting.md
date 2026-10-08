@@ -41,6 +41,20 @@ OPC_ARGS_5f1d0c7a_EOF
 - Causa: o servidor externo está com o catálogo de modelos vazio, porque nenhum provider carregou (chave inválida, gateway fora do ar, diretório recém-aberto ainda subindo).
 - Solução: corrija o provider no servidor externo (credencial, gateway) e confirme direto no servidor externo (TUI do OpenCode ou `GET /api/model`) que o catálogo tem modelos, porque `/opc:models` também passa pela mesma espera; depois rode o comando de novo.
 
+### `INSECURE_SERVER_URL` com IP privado
+
+- Sintoma: em attach, `OPC_SERVER_URL=http://<IP privado>:<porta>` termina com `INSECURE_SERVER_URL` (exit 2) e a mensagem "OPC_SERVER_URL usa http:// sem TLS no IP privado …".
+- Causa: `server.allowPrivateHttp` está desligada (padrão). Sem TLS, a senha e o conteúdo trafegariam em claro na rede.
+- Solução: prefira `https://` ou um túnel SSH (`ssh -N -L 4096:127.0.0.1:4096 usuario@host` e `OPC_SERVER_URL=http://127.0.0.1:4096`). Para aceitar o risco numa rede privada confiável, rode no seu terminal `opc config set server.allowPrivateHttp true --tty-confirm`.
+- Nome DNS (`http://servidor.lan:4096`) ou IP público com `http://` são sempre recusados com a mensagem genérica, mesmo com a chave ligada: use o IP literal, `https://` ou o túnel.
+
+### Ferramentas rodam em caminho errado no servidor remoto
+
+- Sintoma: em attach com o servidor em outra máquina, as ferramentas do OpenCode não acham os arquivos, criam arquivos num caminho que espelha o da sua máquina ou o `/opc:sessions` não lista as sessões do opc.
+- Causa: o opc envia ao servidor o diretório do workspace; sem raiz remota, vai o caminho local, que não existe (ou é outro) na máquina do servidor.
+- Solução: defina `OPC_REMOTE_ROOT=/caminho/do/clone/no/servidor` ou o mapa global `server.remoteRoots` (`docs/installation.md` §6) e confira a linha `- raiz remota:` no `/opc:setup`. `OPC_REMOTE_ROOT` precisa ser absoluto POSIX; outro valor dá `INVALID_REMOTE_ROOT` (exit 2). No modo gerenciado a variável é ignorada, com aviso.
+- Depois, sincronize via git: push aqui e pull lá antes da tarefa; commit/push lá e pull aqui depois de tarefas com escrita. O opc não compara branch/commit entre as máquinas (o contrato V2 não expõe isso).
+
 ### Boot lento ou falho (`BOOT_FAILED`)
 
 - O primeiro boot pode levar cerca de 20 s; cada tentativa espera `server.bootTimeoutSec` (padrão 60 s) e há até três portas candidatas.

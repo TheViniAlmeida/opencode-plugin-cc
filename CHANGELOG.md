@@ -6,6 +6,13 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Adicionado — F10
+
+- Modo remoto: o attach (`OPC_SERVER_URL`) passa a servir um OpenCode V2 em outra máquina, com o repositório sincronizado via git.
+- `server.allowPrivateHttp` (global, travada, padrão `false`): aceita `http://` quando o host do `OPC_SERVER_URL` é um IP literal privado (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, IPv6 `fc00::/7`); nomes DNS seguem recusados. Cada conexão avisa "Conexão sem TLS com <host>: a senha e o conteúdo trafegam em claro na rede privada." Com a chave desligada, o `INSECURE_SERVER_URL` explica como ligá-la. O onboarding inicial do `/opc:setup` e o `opc config init` ganham a etapa `privateHttp` (padrão: não).
+- Raiz remota: `OPC_REMOTE_ROOT` e o mapa global travado `server.remoteRoots` (caminho local → caminho remoto POSIX) trocam o diretório enviado ao servidor (`x-opencode-directory`, SSE, export/import do `transfer`) e o usado no filtro do `/opc:sessions`. Só vale em attach; no modo gerenciado é ignorado, com aviso para a variável. O `/opc:setup` mostra a raiz remota, e cada conexão lembra o fluxo git (push aqui e pull lá antes; commit/push lá e pull aqui depois de tarefas com escrita). O contrato V2 não expõe branch/commit do diretório, então não há comparação automática entre as máquinas.
+- Documentação: servidor em outra máquina, túnel SSH e raiz remota em `docs/installation.md` §6; chaves em `docs/configuration.md`; dois casos novos em `docs/troubleshooting.md`.
+
 ### Corrigido — F9
 
 - O `.opc.json` com `{"delegation":{"auto":false}}` agora desliga o lembrete de delegação sem aviso; `true` é ignorado com o aviso `.opc.json: o workspace só pode desligar (false); ignorado` (caminho `delegation.auto`). Antes, o aviso enganoso "não pode ser substituída no workspace; ignorado" saía mesmo quando o valor valia.
