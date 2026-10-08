@@ -69,21 +69,32 @@ async function actionShow(ctx, api, { flags, sessionID }) {
   return ExitCode.OK;
 }
 
+// The source's explicit rules and model that the fork does not carry (the variant counts only when the source has one).
+const rulesGap = (source, fork) => Array.isArray(source?.permissions) && source.permissions.length > 0
+  && JSON.stringify(fork?.permissions ?? null) !== JSON.stringify(source.permissions);
+const modelGap = (source, fork) => Boolean(source?.model?.id && source?.model?.providerID)
+  && (fork?.model?.id !== source.model.id || fork.model.providerID !== source.model.providerID
+    || (Boolean(source.model.variant) && fork.model.variant !== source.model.variant));
+const hasInheritanceGap = (source, fork) => rulesGap(source, fork) || modelGap(source, fork);
+const forkInheritanceError = (forkID, reason, cause) => new RequestError('FORK_INHERITANCE_FAILED',
+  `O fork ${forkID} foi criado, mas as regras ou o modelo da sessão de origem não foram reaplicados (${reason}); não use esse fork. Apague o fork ${forkID} no OpenCode e rode o fork de novo.`,
+  cause === undefined ? {} : { cause });
+
 async function actionFork(ctx, api, { flags, sessionID, rest }) {
   const messageID = flags.before ? assertId('msg', flags.before, 'mensagem') : undefined;
   const source = await api.getSession(sessionID);
   let forked = await api.fork(sessionID, { before: messageID });
   // V2 2.0.22 returns forks without the parent's rules and model; a fork must never end up with fewer rules than its source.
-  const sameRules = JSON.stringify(forked?.permissions ?? null) === JSON.stringify(source?.permissions ?? null);
-  const sameModel = forked?.model?.id === source?.model?.id && forked?.model?.providerID === source?.model?.providerID;
-  if (!sameRules || !sameModel) {
+  if (hasInheritanceGap(source, forked)) {
     try {
-      if (Array.isArray(source?.permissions) && source.permissions.length && !sameRules) await api.setPermissions(forked.id, source.permissions);
-      if (source?.model?.id && source?.model?.providerID && !sameModel) await api.setModel(forked.id, { providerID: source.model.providerID, id: source.model.id, ...(source.model.variant ? { variant: source.model.variant } : {}) });
+      if (rulesGap(source, forked)) await api.setPermissions(forked.id, source.permissions);
+      if (modelGap(source, forked)) await api.setModel(forked.id, { providerID: source.model.providerID, id: source.model.id, ...(source.model.variant ? { variant: source.model.variant } : {}) });
       forked = await api.getSession(forked.id);
     } catch (err) {
-      throw new RequestError('FORK_INHERITANCE_FAILED', `O fork ${forked.id} foi criado, mas as regras ou o modelo da sessão de origem não puderam ser reaplicados (${err.message}); não use esse fork.`, { cause: err });
+      throw forkInheritanceError(forked.id, safeOutputText(err?.message ?? String(err)), err);
     }
+    // A 2xx write that the server did not persist is as bad as a failed one.
+    if (hasInheritanceGap(source, forked)) throw forkInheritanceError(forked.id, 'o servidor não persistiu a alteração', undefined);
   }
   if (flags.json) ctx.json(maskDeep({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } }));
   else ctx.out(renderSession(forked, { note: `Fork de ${sessionID}${messageID ? `, com o histórico anterior a ${messageID}` : ''}.` }));

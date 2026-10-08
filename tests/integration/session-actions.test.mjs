@@ -14,6 +14,7 @@ async function setup(t, { scenario = 'f3-sessions', extra = {} } = {}) {
 
 const posts = (env, path) => fakeRequests(env).filter((r) => r.method === 'POST' && r.path === path);
 const IDLE_ID = 'msg_00000000000500000000000005';
+const forkIds = (env) => Object.keys(readFakeState(env).sessions).filter((id) => readFakeState(env).sessions[id].fork);
 const sessionCreates = (env) => posts(env, '/api/session');
 
 test('session new: title prefix, agent, model {id, providerID} and read-only rules', async (t) => {
@@ -271,6 +272,58 @@ test('session fork fails loudly when the rules cannot be re-applied to the fork'
   const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
   assert.notEqual(res.code, 0, 'a fork without its source rules must not be reported as success');
   assert.doesNotMatch(res.stdout, /"session"/);
+  const forkId = forkIds(env).at(-1);
+  assert.ok(forkId, 'the fork was created');
+  assert.ok((res.stdout + res.stderr).includes(forkId), 'the error names the fork');
+  assert.match(res.stdout + res.stderr, new RegExp(`Apague o fork ${forkId} no OpenCode e rode o fork de novo`));
+});
+
+test('session fork fails loudly when the rule write is acknowledged but not persisted', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_PATCH_NOOP: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0, 'a silently dropped write must not be reported as success');
+  assert.doesNotMatch(res.stdout, /"session"/);
+  const forkId = forkIds(env).at(-1);
+  assert.equal(readFakeState(env).sessions[forkId].permissions, undefined, 'the fake really dropped the write');
+  assert.match(res.stdout + res.stderr, new RegExp(`${forkId}.*não persistiu.*Apague o fork ${forkId}`, 's'));
+});
+
+test('session fork fails loudly when the model switch is acknowledged but not persisted', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_MODEL_NOOP: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0);
+  assert.doesNotMatch(res.stdout, /"session"/);
+  assert.match(res.stdout + res.stderr, /não persistiu/);
+});
+
+test('session fork repairs a fork that came back with only part of the source rules', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_PARTIAL_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.equal(state.sessions[SEED.session].permissions.length, 2);
+  assert.deepEqual(state.sessions[forkId].permissions, state.sessions[SEED.session].permissions);
+  assert.equal(posts(env, `/api/session/${forkId}/model`).length, 0, 'the inherited model needs no write');
+});
+
+test('session fork repairs a model that came back without its variant', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_VARIANT: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.equal(state.sessions[SEED.session].model.variant, 'default');
+  assert.deepEqual(state.sessions[forkId].model, state.sessions[SEED.session].model);
+});
+
+test('session fork of a source without rules makes no rule write and no error', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_SEED_NO_RULES: '1', FAKE_FORK_DROPS_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  assert.deepEqual(readFakeState(env).sessions[SEED.session].permissions, []);
+  assert.equal(fakeRequests(env).filter((r) => r.path === `/api/session/${forkId}` && r.method === 'PATCH').length, 0);
 });
 
 test('session fork leaves an inheriting fork alone (no extra rule or model writes)', async (t) => {
