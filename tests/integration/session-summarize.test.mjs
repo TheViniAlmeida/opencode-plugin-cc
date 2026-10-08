@@ -23,9 +23,27 @@ test('summarize waits for an asynchronous compaction before reporting it done', 
 test('summarize times out without claiming the session was summarized', async (t) => {
   const { cwd, env } = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000' });
   const res = await runCli(['session', 'summarize', SEED.session, '--timeout', '1', '--json'], { env, cwd });
-  assert.equal(res.code, 5); // ConnectionError('TIMEOUT'), the exit code opc already gives timeouts
+  // 5 = ConnectionError('TIMEOUT'), the shared timeout code. Not 6 (WAIT_TIMEOUT): MCP treats it as a non-error, and the summary was not confirmed.
+  assert.equal(res.code, 5);
   assert.match(res.stdout + res.stderr, /compactação continua no servidor/);
   assert.doesNotMatch(res.stdout, /"summarized":true/);
+});
+
+test('summarize spends a single --timeout budget on the compact request plus the wait', async (t) => {
+  const args = ['session', 'summarize', SEED.session, '--timeout', '1', '--json'];
+  const base = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000' });
+  const t0 = Date.now();
+  const fast = await runCli(args, { env: base.env, cwd: base.cwd });
+  const baseline = Date.now() - t0;
+  assert.equal(fast.code, 5);
+  // The compact answers after 800 ms; only the remaining ~200 ms may go to the wait, not a second full second.
+  const slow = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000', FAKE_COMPACT_DELAY_MS: '800' });
+  const t1 = Date.now();
+  const res = await runCli(args, { env: slow.env, cwd: slow.cwd });
+  const elapsed = Date.now() - t1;
+  assert.equal(res.code, 5);
+  assert.match(res.stdout + res.stderr, /não terminou em 1 s/);
+  assert.ok(elapsed - baseline < 500, `elapsed ${elapsed} ms vs baseline ${baseline} ms: the wait got a fresh budget`);
 });
 
 test('summarize warns on stderr when the session has a pending revert', async (t) => {
@@ -51,4 +69,9 @@ test('waitCompaction: true once idle and not compacting, false at the deadline',
   setTimeout(() => { compacting = false; }, 60);
   assert.equal(await waitCompaction(api, 'ses_x', { timeoutMs: 2000, pollMs: 10 }), true);
   assert.equal(await waitCompaction({ ...api, sessionStatus: async () => ({ ses_x: { type: 'busy' } }) }, 'ses_x', { timeoutMs: 50, pollMs: 10 }), false);
+  // No budget (omitted or exhausted): one check still answers true for an idle session and false for a busy one.
+  const idle = { sessionStatus: async () => ({}), getSession: async () => ({ time: {} }) };
+  assert.equal(await waitCompaction(idle, 'ses_x'), true);
+  assert.equal(await waitCompaction(idle, 'ses_x', { timeoutMs: 0 }), true);
+  assert.equal(await waitCompaction({ ...idle, sessionStatus: async () => ({ ses_x: { type: 'busy' } }) }, 'ses_x'), false);
 });

@@ -154,15 +154,17 @@ async function snapshotState(api) {
 
 // Compaction may be a marker (session already idle) or asynchronous (session active, `time.compacting` set).
 // True once the session is neither active nor compacting; false when the deadline passes first.
-export async function waitCompaction(api, sessionID, { timeoutMs, pollMs = 250 } = {}) {
-  const deadline = performance.now() + timeoutMs;
-  while (performance.now() < deadline) {
+// It always checks at least once, so an idle session answers true even with no budget left.
+export async function waitCompaction(api, sessionID, { timeoutMs = 0, pollMs = 250 } = {}) {
+  const deadline = performance.now() + Math.max(0, timeoutMs);
+  for (;;) {
     const busy = Boolean((await api.sessionStatus())?.[sessionID]);
     const compacting = Boolean((await api.getSession(sessionID))?.time?.compacting);
     if (!busy && !compacting) return true;
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
   }
-  return false;
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
@@ -218,12 +220,16 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
   const discovery = await loadDiscovery(api);
   const model = resolveModel(ctx, discovery, 'summarize', flags.model);
   return withSessionGuard(ctx, api, sessionID, async () => {
+    // One --timeout budget covers the compact request and the wait for the compaction to finish.
     const timeoutMs = (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000;
+    const deadline = performance.now() + timeoutMs;
     if ((await api.getSession(sessionID))?.revert) ctx.err(`[opc] aviso: ${PENDING_REVERT_NOTICE}\n`);
     await api.setModel(sessionID, { providerID: model.providerID, id: model.modelID });
     // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }); the compaction itself can outlive the answer.
     const compaction = await api.compact(sessionID, { timeoutMs });
-    if (!(await waitCompaction(api, sessionID, { timeoutMs }))) {
+    if (!(await waitCompaction(api, sessionID, { timeoutMs: Math.max(0, deadline - performance.now()) }))) {
+      // TIMEOUT is the code opc shares for every timeout (exit 5). WAIT_TIMEOUT (6) is deliberately not used:
+      // MCP treats it as a non-error, and here the summary was not confirmed.
       throw new ConnectionError('TIMEOUT', `A compactação da sessão ${safeOutputText(sessionID)} não terminou em ${timeoutMs / 1000} s; a compactação continua no servidor. Confira depois com opc session show.`);
     }
     const compactionMessageID = typeof compaction?.id === 'string' ? compaction.id : null;
