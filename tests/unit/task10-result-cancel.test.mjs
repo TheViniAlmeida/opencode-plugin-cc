@@ -45,7 +45,7 @@ test('cancel group reports failed member ids and returns connection exit code', 
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'group', status: 'running' }, [{ title: 'member', status: 'running', sessionID: 'ses_cancel_failure' }]);
   await updateJob(stateDir, group.id, { status: 'running' });
   const output = [];
-  const ctx = { stateDir, env: { OPC_SERVER_URL: 'file:///tmp/opc-cancel-test' }, json: (value) => output.push(value), out: (value) => output.push(value) };
+  const ctx = { stateDir, env: { OPC_SERVER_URL: 'http://127.0.0.1:9' }, json: (value) => output.push(value), out: (value) => output.push(value) };
 
   const code = await cancelForGroup(ctx, group, { json: true });
 
@@ -64,7 +64,7 @@ test('cancel group reports a failed group abort with CANCEL_FAILED', async (t) =
   const { group } = await createGroup(stateDir, { kind: 'sub', title: 'group', status: 'running', sessionID: 'ses_group_failure' }, []);
   await updateJob(stateDir, group.id, { status: 'running' });
   const output = [];
-  const ctx = { stateDir, env: { OPC_SERVER_URL: 'file:///tmp/opc-cancel-test' }, json: (value) => output.push(value), out: (value) => output.push(value) };
+  const ctx = { stateDir, env: { OPC_SERVER_URL: 'http://127.0.0.1:9' }, json: (value) => output.push(value), out: (value) => output.push(value) };
 
   const code = await cancelForGroup(ctx, group, { json: true });
 

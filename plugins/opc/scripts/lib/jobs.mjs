@@ -9,7 +9,7 @@ import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } fr
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
-import { readServerRecord, resolveOpencodeBin } from './server.mjs';
+import { attachTransport, readServerRecord, resolveOpencodeBin, serverSettings } from './server.mjs';
 import { createClient } from './http.mjs';
 import { serverDirectory } from './remote.mjs';
 import { createApi } from './api.mjs';
@@ -470,6 +470,14 @@ export function existingServerApi(ctx) {
   let baseUrl = env.OPC_SERVER_URL || null;
   let password = env.OPC_SERVER_PASSWORD || null;
   const attached = Boolean(baseUrl);
+  if (attached) {
+    // Same transport rules as attachServer: the password must never go to an http URL it would refuse.
+    let parsed;
+    try { parsed = new URL(baseUrl); } catch { throw new UsageError('INSECURE_SERVER_URL', 'OPC_SERVER_URL inválida.'); }
+    if (parsed.username || parsed.password) throw new UsageError('INSECURE_SERVER_URL', 'OPC_SERVER_URL não pode conter credenciais; use OPC_SERVER_PASSWORD.');
+    attachTransport(parsed, serverSettings(ctx.config));
+    baseUrl = parsed.origin;
+  }
   if (!baseUrl) {
     const record = readServerRecord(ctx.stateDir);
     if (!record?.url) return null;

@@ -55,6 +55,8 @@ OPC_ARGS_5f1d0c7a_EOF
 - Solução: defina `OPC_REMOTE_ROOT=/caminho/do/clone/no/servidor` ou o mapa global `server.remoteRoots` (`docs/installation.md` §6) e confira a linha `- raiz remota:` no `/opc:setup`. `OPC_REMOTE_ROOT` precisa ser absoluto POSIX; outro valor dá `INVALID_REMOTE_ROOT` (exit 2). No modo gerenciado a variável é ignorada, com aviso.
 - Depois, sincronize via git: push aqui e pull lá antes da tarefa; commit/push lá e pull aqui depois de tarefas com escrita. O opc não compara branch/commit entre as máquinas (o contrato V2 não expõe isso).
 
+- A TUI anexada pela linha do `/opc:attach` ou do `transfer` com raiz remota ainda não foi validada: ela parte do checkout local e pode informar ao servidor o diretório local.
+
 ### Boot lento ou falho (`BOOT_FAILED`)
 
 - O primeiro boot pode levar cerca de 20 s; cada tentativa espera `server.bootTimeoutSec` (padrão 60 s) e há até três portas candidatas.

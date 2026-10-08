@@ -125,7 +125,7 @@ test('cancelGroup reports failed member cancels and leaves the group active', as
 
   // file: URLs are rejected by fetch before any network connection, exercising cancelJob's
   // non-throwing CANCEL_FAILED result deterministically.
-  const ctx = { stateDir, env: { OPC_SERVER_URL: 'file:///tmp/opc-cancel-test' } };
+  const ctx = { stateDir, env: { OPC_SERVER_URL: 'http://127.0.0.1:9' } };
   const firstCancel = await cancelJob(ctx, members[0].id);
   assert.equal(firstCancel.ok, false);
   assert.equal(firstCancel.code, 'CANCEL_FAILED');

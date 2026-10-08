@@ -81,3 +81,13 @@ test('managed mode ignores OPC_REMOTE_ROOT and warns', async (t) => {
   assert.equal(server.remoteRoot, undefined);
   assert.ok(server.warnings.includes(REMOTE_ROOT_IGNORED_WARNING), server.warnings.join(' | '));
 });
+
+test('permissions list (existingServerApi) applies the same transport rules before sending the password', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t, { git: false });
+  for (const url of ['http://10.0.0.1:4096', 'http://203.0.113.7:4096', 'http://user:pw@127.0.0.1:4096']) {
+    const r = await runCli(['permissions', 'list', '--json'], { env: { ...env, OPC_SERVER_URL: url, OPC_SERVER_PASSWORD: 'unused-test-password' }, cwd: ws });
+    assert.equal(r.code, 2, `${url}: ${r.stderr}`);
+    assert.match(r.stderr, /INSECURE_SERVER_URL/);
+  }
+});

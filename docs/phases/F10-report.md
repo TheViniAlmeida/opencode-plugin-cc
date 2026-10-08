@@ -10,7 +10,7 @@
 
 | Item | Evidência | Resultado |
 |---|---|---|
-| Suíte completa | `node scripts/run-tests.mjs`: 2117 testes, 2116 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
+| Suíte completa | `node scripts/run-tests.mjs`: 2120 testes, 2119 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
 | `npm run scan-secrets` | `scan-secrets: nenhum achado.` | PASSOU |
 | `git diff --check` | Saída vazia, exit 0 | PASSOU |
 | Guarda de docs da F10 | `tests/unit/docs-f10.test.mjs` | PASSOU |
@@ -34,6 +34,9 @@
   gerenciado, a variável é ignorada com aviso.
 - **Aviso de sincronização:** com raiz remota, o attach lembra que as ferramentas rodam na máquina do servidor e que
   a sincronização é via git (push aqui e pull lá antes; commit/push lá e pull aqui depois de tarefas com escrita).
+- **Transporte em `existingServerApi`:** `opc permissions` e o cancelamento montavam o cliente direto de
+  `OPC_SERVER_URL`, sem as regras do attach. Agora validam a URL do mesmo jeito (achado da revisão; já existia antes
+  da F10).
 - **Docs:** instalação (§6: IP privado, túnel SSH, raiz remota e fluxo git), configuração, troubleshooting, CHANGELOG
   e a sonda `tests/live/f10-remote.mjs`.
 

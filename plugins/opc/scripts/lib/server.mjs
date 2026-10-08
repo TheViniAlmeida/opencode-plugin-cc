@@ -93,7 +93,7 @@ function removeServerRecord(stateDir) {
   removeAttachSecret(stateDir);
 }
 
-function serverSettings(config) {
+export function serverSettings(config) {
   return { ...DEFAULT_CONFIG.server, ...(config?.server ?? {}) };
 }
 

@@ -61,7 +61,7 @@ async function startServer(dirs) {
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
     child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`serve exited ${code}`)); });
-  });
+  }).catch((error) => { child.kill('SIGTERM'); throw error; });
   const url = `http://${privateIp}:${port}`;
   const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
   const get = async (route, directory) => {

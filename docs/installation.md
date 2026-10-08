@@ -108,6 +108,8 @@ No attach, o opc informa ao servidor o diretório do workspace (header `x-openco
 
 Os dois só valem em attach; no modo gerenciado são ignorados (com aviso, para `OPC_REMOTE_ROOT`). O `.opc.json` não aceita essas chaves: um repositório não pode redirecionar onde as ferramentas rodam no servidor. O `/opc:setup` mostra a raiz remota em uso (`- raiz remota: …`).
 
+NÃO VALIDADO: a TUI aberta pela linha do `/opc:attach` ou do `transfer` com raiz remota. A linha faz `cd` no checkout local e anexa a TUI ao servidor remoto; a sessão é aberta pelo id, mas o diretório que a TUI informa ao servidor pode ser o local.
+
 Fluxo git: as ferramentas leem e escrevem o clone **remoto**. Antes da tarefa, faça push aqui e pull lá; depois de tarefas com escrita, faça commit/push lá e pull aqui. O opc lembra disso a cada conexão com raiz remota. O contrato do OpenCode V2 usado pelo opc não expõe o branch/commit do diretório no servidor, então o opc não compara os dois lados: confira você mesmo (`git rev-parse HEAD` nas duas máquinas).
 
 ## 7. Desenvolvimento
