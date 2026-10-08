@@ -36,11 +36,12 @@ test('F7 live: compaction timing and pending revert + new prompt', { skip: SKIP,
   res = await run(['session', 'revert', sid, beta, '--confirmed-by-user', '--json']);
   assert.equal(res.code, 0, res.stderr);
   const afterStage = fileLines(notes);
+  const revertBeforePrompt = (await api.getSession(sid)).revert ? 'pending' : 'none';
   res = await run(['task', '--resume', sid, '--model', MODELS.deepseek, 'Reply with exactly OK.']);
   const session = await api.getSession(sid);
   const ids = (await api.messages(sid)).map((m) => m.id);
   fact('I2-pending-revert', {
-    afterStage, afterPrompt: fileLines(notes), promptExit: res.code,
+    afterStage, revertBeforePrompt, afterPrompt: fileLines(notes), promptExit: res.code,
     revertAfterPrompt: session.revert ? 'pending' : 'none', betaMessageKept: ids.includes(beta),
     verdict: session.revert ? 'keeps-pending' : ids.includes(beta) ? 'clears' : 'consolidates',
   }, dataDir);
@@ -59,10 +60,20 @@ test('F7 live: compaction timing and pending revert + new prompt', { skip: SKIP,
     if (!active && !current?.time?.compacting) break;
     await sleep(250);
   }
-  const types = (await api.messages(sid)).map((m) => m.type);
-  const busyAfterPost = timeline[0]?.active || Boolean(timeline[0]?.compacting);
+  const payload = async () => {
+    const messages = await api.messages(sid);
+    const marker = messages.find((m) => m.type === 'compaction');
+    return { payloadKeys: marker ? Object.keys(marker.payload ?? {}).sort() : null, payloadBytes: marker ? JSON.stringify(marker.payload ?? null).length : null, messageTypes: messages.map((m) => m.type) };
+  };
+  const afterSettle = await payload();
+  const busyAfterPost = Boolean(timeline[0]?.active || timeline[0]?.compacting);
+  // One follow-up turn: tells whether the compaction message is only filled once the session runs again.
+  res = await run(['task', '--resume', sid, '--model', MODELS.qwen, 'Reply with exactly OK.']);
+  const afterTurn = await payload();
+  const filled = (p) => (p.payloadBytes ?? 0) > 2;
   fact('I1-compaction', {
-    postMs, firstPoll: timeline[0], settledMs: timeline.at(-1)?.ms, polls: timeline.length, messageTypes: types,
-    verdict: busyAfterPost ? 'async' : 'sync',
+    postMs, firstPoll: timeline[0], settledMs: timeline.at(-1)?.ms, polls: timeline.length, followUpExit: res.code,
+    afterSettle, afterTurn,
+    verdict: busyAfterPost ? 'async' : filled(afterSettle) ? 'filled-on-post' : filled(afterTurn) ? 'filled-on-next-turn' : 'marker-only',
   }, dataDir);
 });
