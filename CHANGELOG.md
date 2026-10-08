@@ -13,7 +13,6 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - Raiz remota: `OPC_REMOTE_ROOT` e o mapa global travado `server.remoteRoots` (caminho local → caminho remoto POSIX) trocam o diretório enviado ao servidor (`x-opencode-directory`, SSE, export/import do `transfer`) e o usado no filtro do `/opc:sessions`. Só vale em attach; no modo gerenciado é ignorado, com aviso para a variável. O `/opc:setup` mostra a raiz remota, e cada conexão lembra o fluxo git (push aqui e pull lá antes; commit/push lá e pull aqui depois de tarefas com escrita). O contrato V2 não expõe branch/commit do diretório, então não há comparação automática entre as máquinas.
 - Documentação: servidor em outra máquina, túnel SSH e raiz remota em `docs/installation.md` §6; chaves em `docs/configuration.md`; dois casos novos em `docs/troubleshooting.md`.
 
-
 ### Corrigido — F10
 
 - `opc permissions` e o cancelamento (`existingServerApi`) aplicam as mesmas regras de transporte do attach: a senha nunca vai para uma URL `http://` que o attach recusaria (antes, esse caminho não validava a URL).
