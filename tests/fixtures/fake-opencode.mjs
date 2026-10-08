@@ -114,6 +114,10 @@ function safeConfigInfo(content) {
     const info = {};
     for (const key of ['share', 'model', 'small_model', 'agent']) {
       if (typeof source?.[key] === 'string') info[key] = source[key];
+      // V2 normalizes model fields to { providerID, model }; the fake echoes that form when the content declares it.
+      else if (key.endsWith('model') && typeof source?.[key]?.providerID === 'string' && typeof source[key].model === 'string') {
+        info[key] = { providerID: source[key].providerID, model: source[key].model };
+      }
     }
     if (typeof source?.snapshot === 'boolean') info.snapshot = source.snapshot;
     return info;

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, matchesGlob } from './config.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
+import { mergeOpencodeConfigSources } from './opencode-config.mjs';
 import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
@@ -235,9 +236,10 @@ async function worldCheck(client, config) {
     if (!Array.isArray(sources)) {
       throw new Error('Resposta de GET /api/config não é uma lista de fontes.');
     }
-    const documents = sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info));
-    if (documents.length === 0) throw new Error('Nenhuma fonte de configuração do OpenCode V2 foi encontrada.');
-    oc = Object.assign({}, ...documents.map((source) => source.info));
+    if (!sources.some((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info))) {
+      throw new Error('Nenhuma fonte de configuração do OpenCode V2 foi encontrada.');
+    }
+    oc = mergeOpencodeConfigSources(sources);
   } catch (err) {
     world.shareBlocked = true;
     world.shareReason = 'config-unavailable';

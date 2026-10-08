@@ -27,3 +27,18 @@ test('task falls back to the model declared in the OpenCode config sources', asy
   const [post] = requestsTo(ctx.env, 'POST', '/api/session');
   assert.deepEqual(post.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID });
 });
+
+test('task falls back to an object-form model ({ providerID, model }) as V2 normalizes the config', async (t) => {
+  const ctx = setupF2a(t, {
+    scenario: 'server-default-only',
+    config: {
+      defaultProvider: null,
+      defaultModel: null,
+      server: { configOverride: { share: 'disabled', model: { providerID: F2A_PROVIDER, model: F2A_MODEL_ID } } },
+    },
+  });
+  const r = await opc(ctx, ['task', '--raw-args-stdin'], { stdin: 'say hello\n' });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const [post] = requestsTo(ctx.env, 'POST', '/api/session');
+  assert.deepEqual(post.body.model, { providerID: F2A_PROVIDER, id: F2A_MODEL_ID });
+});
