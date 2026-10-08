@@ -30,19 +30,19 @@ test('summarize times out without claiming the session was summarized', async (t
 });
 
 test('summarize spends a single --timeout budget on the compact request plus the wait', async (t) => {
-  const args = ['session', 'summarize', SEED.session, '--timeout', '1', '--json'];
+  const args = ['session', 'summarize', SEED.session, '--timeout', '2', '--json'];
   const base = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000' });
   const t0 = Date.now();
   const fast = await runCli(args, { env: base.env, cwd: base.cwd });
   const baseline = Date.now() - t0;
   assert.equal(fast.code, 5);
-  // The compact answers after 800 ms; only the remaining ~200 ms may go to the wait, not a second full second.
-  const slow = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000', FAKE_COMPACT_DELAY_MS: '800' });
+  // The compact answers after 1200 ms; only the remaining ~800 ms may go to the wait, not a second full budget.
+  const slow = await setup(t, { FAKE_COMPACT_ASYNC_MS: '60000', FAKE_COMPACT_DELAY_MS: '1200' });
   const t1 = Date.now();
   const res = await runCli(args, { env: slow.env, cwd: slow.cwd });
   const elapsed = Date.now() - t1;
   assert.equal(res.code, 5);
-  assert.match(res.stdout + res.stderr, /não terminou em 1 s/);
+  assert.match(res.stdout + res.stderr, /não terminou em 2 s/);
   assert.ok(elapsed - baseline < 500, `elapsed ${elapsed} ms vs baseline ${baseline} ms: the wait got a fresh budget`);
 });
 
