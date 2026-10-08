@@ -118,9 +118,9 @@ test('plano cíclico é rejeitado', async () => {
 });
 
 test('falha estruturada de worker afeta apenas a subtarefa', async () => {
-  const { deps } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] }, turn: async (spec) => spec.subtaskId === 'a' ? { status: 'failed', errorType: 'StructuredOutputError', errorMessage: 'bad json', finalText: 'raw text' } : { status: 'completed', finalText: 'ok' } });
+  const { deps } = makeDeps({ plan: { rationale: 'r', subtasks: [sub('a'), sub('b')] }, turn: async (spec) => spec.subtaskId === 'a' ? { status: 'failed', errorType: 'InvalidStructuredOutput', errorMessage: 'bad json', finalText: 'raw text' } : { status: 'completed', finalText: 'ok' } });
   const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', flags: {}, deps });
-  assert.equal(pkg.subtasks[0].errorCode, 'structured_output');
+  assert.equal(pkg.subtasks[0].errorCode, 'turn_failed');
   assert.equal(pkg.subtasks[0].result, 'raw text');
   assert.equal(pkg.outcome, 'completed_with_warnings');
 });
@@ -134,9 +134,9 @@ test('grupo falha quando todas as subtarefas falham', async () => {
 });
 
 test('falha estruturada do planner preserva saída bruta', async () => {
-  const { deps, calls } = makeDeps({ plannerResult: { status: 'failed', errorType: 'StructuredOutputError', errorMessage: 'schema mismatch', finalText: 'I think the plan is...' } });
+  const { deps, calls } = makeDeps({ plannerResult: { status: 'failed', errorType: 'InvalidStructuredOutput', errorMessage: 'schema mismatch', finalText: 'I think the plan is...' } });
   const pkg = await runOrchestration({ ctx: ctxOf(), task: 't', flags: {}, deps });
-  assert.equal(pkg.errorCode, 'planner_structured_output');
+  assert.equal(pkg.errorCode, 'planner_failed');
   assert.equal(pkg.rawPlan, 'I think the plan is...');
   assert.equal(calls.length, 1);
 });

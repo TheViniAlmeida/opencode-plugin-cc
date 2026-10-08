@@ -37,10 +37,9 @@ test('renderReview reports no material findings for an empty list', () => {
   assert.match(out, /Veredito: approve\n\nParece bom\.\n\nNenhum achado relevante\.\n$/);
 });
 
-test('renderReview degrades to raw text on StructuredOutputError', () => {
-  const out = renderReview({ status: 'failed', errorType: 'StructuredOutputError', errorMessage: 'sem chamada de ferramenta', structured: null, finalText: 'RAW ```fenced``` TEXT' });
+test('renderReview degrades to raw text when a completed reply has no structured output', () => {
+  const out = renderReview({ status: 'completed', structured: null, finalText: 'RAW ```fenced``` TEXT' });
   assert.match(out, /O OpenCode não retornou uma saída estruturada válida\./);
-  assert.match(out, /- Erro: sem chamada de ferramenta/);
   assert.match(out, /````text\nRAW ```fenced``` TEXT\n````/);
 });
 
@@ -112,12 +111,12 @@ test('renderReview shows failure status before valid partial structured data', (
   assert.doesNotMatch(out, /^Veredito: approve$/m);
 });
 
-test('renderReview treats StructuredOutputError with structured approval as a failure', () => {
+test('renderReview treats a named error with structured approval as a failure', () => {
   const out = renderReview({
-    status: 'completed', errorName: 'StructuredOutputError',
+    status: 'completed', errorName: 'InvalidStructuredOutput',
     structured: { ...VALID, verdict: 'approve' },
   });
-  assert.match(out, /Falha na revisão: StructuredOutputError/);
+  assert.match(out, /Falha na revisão: InvalidStructuredOutput/);
   assert.match(out, /Dados parciais:/);
   assert.doesNotMatch(out, /^Veredito: approve$/m);
 });

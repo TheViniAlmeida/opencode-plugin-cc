@@ -491,7 +491,7 @@ OPC_ARGS_5f1d0c7a_EOF
 
 **Exit codes:** 0 concluída, inclusive com avisos; 2 uso; 3 subtarefa aguardando permissão;
 4 planner/sintetizador negado ou `OPC_INSIDE_SERVER=1`; 5 conexão; 6 `--wait-timeout`; 7
-`invalid_plan`, `planner_failed`, `planner_structured_output`, `all_subtasks_failed` ou
+`invalid_plan`, `planner_failed`, `all_subtasks_failed` ou
 `coordinator_error`; 130 cancelada.
 
 Planner e sintetizador passam pela política antes de criar o job. As rotas de subtarefa são

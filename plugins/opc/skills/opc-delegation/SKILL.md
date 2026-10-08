@@ -88,7 +88,7 @@ OPC_ARGS_5f1d0c7a_EOF
 
 **Ao receber o resultado:**
 
-1. **`invalid_plan`, `planner_failed`, `planner_structured_output` ou `all_subtasks_failed`:**
+1. **`invalid_plan`, `planner_failed` ou `all_subtasks_failed`:**
    mostre o motivo e o plano bruto. Não execute as subtarefas por conta própria; sugira
    reformular a tarefa, ajustar `--max` ou, se o plano pedia escrita, confirmar com o usuário
    antes de repetir com `--write`.

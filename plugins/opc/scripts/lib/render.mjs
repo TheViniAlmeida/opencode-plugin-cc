@@ -398,7 +398,7 @@ export function renderTurnResult(job) {
       lines.push(`- O servidor OpenCode foi perdido durante o turno; a sessão ${job.sessionID} foi preservada. Continue com: /opc:${RESUMABLE_KINDS.has(job.kind) ? job.kind : 'task'} --resume ${job.id}`);
     }
     if (r.finalText) {
-      lines.push('', job.errorType === 'StructuredOutputError' ? 'Saída bruta (falha na saída estruturada):' : 'Saída parcial:', '', r.finalText);
+      lines.push('', 'Saída parcial:', '', r.finalText);
     }
   }
   lines.push('', '---', `Tarefa: ${job.id} · Sessão: ${job.sessionID ?? '-'} · Modelo: ${job.model ?? '-'}`);
@@ -575,9 +575,6 @@ export function renderReview(result = {}, meta = {}) {
       lines.push('', 'Dados parciais:', '', ...renderReviewStructured(result.structured).split('\n').slice(2));
     } else if (result.structured != null) {
       lines.push('', ...renderInvalidReviewStructured(result.structured, partialError));
-    } else if (result.errorType === 'StructuredOutputError' || result.errorName === 'StructuredOutputError') {
-      lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
-      if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
     }
     const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
     if (raw) lines.push('', 'Mensagem final bruta:', '', reviewCodeFence(raw));
@@ -596,7 +593,7 @@ export function renderReview(result = {}, meta = {}) {
   }
 
   const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
-  if (result.errorType === 'StructuredOutputError' || result.status === 'completed') {
+  if (result.status === 'completed') {
     lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
     if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
     lines.push('', 'Mensagem final bruta:', '', raw ? reviewCodeFence(raw) : '(sem saída de texto)');
@@ -1073,7 +1070,7 @@ export function renderOrchestration(pkg, { jobId = null } = {}) {
       const detail = s.status === 'completed' ? status : `${status} (${safeOutputText(s.errorCode ?? '')}): ${safeOutputText(s.errorMessage ?? '')}`.trimEnd();
       lines.push(`\`${safeOutputText(s.kind)}\` · modelo \`${safeOutputText(s.model ?? '-')}\` · ${detail}${took}`, '');
       if (s.touchedFiles?.length) lines.push(`Arquivos tocados: ${s.touchedFiles.map(safeOutputText).join(', ')}`, '');
-      if (s.status === 'completed' || (s.result && s.errorCode === 'structured_output')) {
+      if (s.status === 'completed') {
         lines.push(s.result == null ? '' : safeOutputText(s.result), '');
         if (s.resultTruncated) lines.push(`_(resultado truncado em 64 KB; íntegra na sessão ${safeOutputText(s.sessionID ?? '-')})_`, '');
       }

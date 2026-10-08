@@ -499,7 +499,7 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
     if (aborted() || plannerResult.status === 'cancelled') return finish('cancelled', 'cancelled', 'cancelled', 'orquestração cancelada durante a decomposição');
     if (plannerResult.status !== 'completed' || plannerResult.structured == null) {
       pkg.rawPlan = plannerResult.structured ?? plannerResult.finalText ?? null;
-      const code = plannerResult.errorType === 'StructuredOutputError' ? 'planner_structured_output' : 'planner_failed';
+      const code = 'planner_failed';
       return finish('failed', 'failed', code, `o planejador falhou: ${plannerResult.errorMessage ?? 'nenhum plano estruturado foi retornado'}`);
     }
 
@@ -514,7 +514,7 @@ export async function runOrchestration({ ctx, task, flags = {}, deps }) {
       st.endedAt = now(); st.model = result.model ?? ordered[0].full; st.attempts = result.attempts ?? []; st.sessionID = result.sessionID ?? null; st.touchedFiles = result.touchedFiles ?? [];
       const cut = truncateBytes(result.finalText || (result.structured != null ? JSON.stringify(result.structured) : ''), RESULT_MAX_BYTES); st.result = cut.text; st.resultTruncated = cut.truncated;
       if (result.status === 'completed') st.status = 'completed'; else if (result.status === 'cancelled') { st.status = 'cancelled'; st.errorCode = 'cancelled'; st.errorMessage = result.errorMessage ?? 'cancelada'; }
-      else { st.status = 'failed'; st.errorCode = result.errorType === 'StructuredOutputError' ? 'structured_output' : 'turn_failed'; st.errorMessage = result.errorMessage ?? result.errorType ?? 'falha no turno'; }
+      else { st.status = 'failed'; st.errorCode = 'turn_failed'; st.errorMessage = result.errorMessage ?? result.errorType ?? 'falha no turno'; }
       used.add(st.model);
     };
     const runOne = async (s, ordered, fallbackEligible) => {

@@ -150,7 +150,7 @@ test('findings without a location pass validation even when the review schema re
 });
 
 test('review quorum not met fails without clusters', async () => {
-  const h = harness((spec) => (spec.label === 'A' ? ok(REVIEWS.A, 'ses_A') : failed('StructuredOutputError')));
+  const h = harness((spec) => (spec.label === 'A' ? ok(REVIEWS.A, 'ses_A') : failed('InvalidStructuredOutput')));
   const pkg = await h.run();
   assert.equal(pkg.status, 'failed');
   assert.equal(pkg.failure.code, 'QUORUM_NOT_MET');
