@@ -24,6 +24,7 @@ export const ONBOARDING_STEPS = Object.freeze([
   { id: 'allowedModels', keys: ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny'], locked: true },
   { id: 'allowedAgents', keys: ['policy.agents.allow', 'policy.agents.deny'], locked: true },
   { id: 'approver', keys: ['policy.approver'], locked: true },
+  { id: 'privateHttp', keys: ['server.allowPrivateHttp'], locked: true },
   { id: 'behaviour', keys: ['stopGate.enabled', 'delegation.auto'], globalOnly: true },
   { id: 'project', keys: ['project.goal', 'project.scope', 'project.taskTypes'] },
   { id: 'aliases', keys: ['aliases'] },
@@ -337,6 +338,8 @@ async function askStep(prompter, stepId, { draft, catalog, agents, existing, wor
     }
     case 'approver':
       return { policy: { approver: await prompter.select('Quem aprova pedidos de permissão?', [{ label: 'Eu (usuário) — recomendado', value: 'user' }, { label: 'O Claude (exceto destrutivos, fora do diretório e caminhos sensíveis)', value: 'claude' }]) } };
+    case 'privateHttp':
+      return { server: { allowPrivateHttp: await prompter.confirm('Aceitar OPC_SERVER_URL com http:// (sem TLS) em IP privado? A senha e o conteúdo trafegam em claro na rede; prefira https:// ou túnel SSH.', { defaultValue: false }) } };
     case 'behaviour':
       return {
         stopGate: { enabled: await prompter.confirm('Ligar a verificação de parada (revisão ao parar)?', { defaultValue: false }) },

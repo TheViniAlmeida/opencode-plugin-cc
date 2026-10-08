@@ -10,7 +10,7 @@ import { evaluate, evaluateAgent } from './policy.mjs';
 import { withLock } from './locks.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
-export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin']);
+export const LOCKED_KEYS = Object.freeze(['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin', 'server.allowPrivateHttp', 'server.remoteRoots']);
 const MISSING = Symbol('missing');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -63,7 +63,7 @@ export const DEFAULT_CONFIG = freezeDeep({
   orchestrate: { planner: null, maxSubtasks: 5, synthesizer: 'claude', structuredOutput: 'text' },
   delegation: { auto: false },
   jobs: { maxActive: 8, maxParallel: 4 },
-  server: { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' } },
+  server: { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' }, allowPrivateHttp: false, remoteRoots: {} },
 });
 
 const schemaField = (type, extra = {}) => Object.freeze({ type, ...extra });
@@ -121,6 +121,8 @@ export const CONFIG_SCHEMA = Object.freeze({
   'server.requestTimeoutSec': schemaField('integer', { min: 1, max: 600 }),
   'server.opencodeBin': schemaField('string'),
   'server.configOverride': schemaField('object'),
+  'server.allowPrivateHttp': schemaField('boolean'),
+  'server.remoteRoots': schemaField('path-map'),
 });
 
 const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-list-map': schemaField('modelref-list'), 'rules-map': schemaField('rules'), object: schemaField('json') });
@@ -187,6 +189,9 @@ function checkValue(desc, value) {
       for (const rules of Object.values(value)) { const e = checkRules(rules); if (e) return e; }
       return null;
     case 'object': return isObj(value) ? null : 'deve ser um objeto';
+    case 'path-map':
+      return isObj(value) && Object.entries(value).every(([local, remote]) => path.isAbsolute(local) && typeof remote === 'string' && remote.startsWith('/') && !remote.includes('\0'))
+        ? null : 'deve associar caminhos locais absolutos a caminhos remotos absolutos POSIX (começando com /)';
     case 'json': return null;
     default: return `tipo de esquema desconhecido: ${desc.type}`;
   }
@@ -506,7 +511,7 @@ export function coerceValue(dotted, raw) {
       if (problem) throw new UsageError('INVALID_VALUE', `${dotted} ${problem}`);
       return list;
     }
-    case 'model-map': case 'modelref-list-map': case 'rules-map': case 'rules': case 'object': case 'json': {
+    case 'model-map': case 'modelref-list-map': case 'rules-map': case 'rules': case 'object': case 'json': case 'path-map': {
       let parsed;
       try { parsed = JSON.parse(text); } catch { throw new UsageError('INVALID_VALUE', `${dotted} espera um JSON válido`); }
       const problem = checkValue(desc, parsed);

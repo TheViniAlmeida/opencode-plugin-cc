@@ -37,6 +37,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
     '1', '',             // models: no restriction; no provider deny
     '2', '',             // agents: only built-in; no deny
     '2',                 // approver: claude
+    's',                 // http em IP privado: sim
     's', 'n',            // stop gate on, delegation off
     '', 'todos',         // no goal; all task types (no dirs: empty workspace)
     'n', 's',            // aliases: skip fast, create strong
@@ -50,6 +51,7 @@ test('bootstrap wizard: invalid answer is re-asked, locked steps included, confi
   assert.equal(cfg.defaultVariant, null);
   assert.deepEqual(cfg.policy.agents.allow, ['build', 'plan', 'general', 'explore']);
   assert.equal(cfg.policy.approver, 'claude');
+  assert.equal(cfg.server.allowPrivateHttp, true);
   assert.equal(cfg.stopGate.enabled, true);
   assert.deepEqual(cfg.project, { goal: null, scope: [], taskTypes: ['ask', 'plan', 'review', 'task', 'orchestrate', 'conclave'] });
   assert.deepEqual(cfg.aliases, { strong: `${MV}/opencode-go/kimi-k3` });
@@ -67,6 +69,7 @@ test('reconfigure wizard asks the scope first and may decline saving', async (t)
     '1', EQ,             // models: no restriction; deny omniroute-work
     '1', '',             // agents: all; no deny
     '1',                 // approver user
+    'n',                 // http em IP privado: não
     'n', 'n',            // behaviour
     '', '',              // goal none; task types none
     'n', 'n',            // aliases
@@ -79,7 +82,7 @@ test('reconfigure wizard asks the scope first and may decline saving', async (t)
     'Modelo da revisão?', 'Modelo da verificação de parada?', 'Variante padrão?',
     'Todos do provedor padrão', 'Provedores a negar (padrões separados por vírgula',
     'Só nativos', 'Agentes a negar (padrões separados por vírgula',
-    'Ligar a verificação de parada (revisão ao parar)?',
+    'Ligar a verificação de parada (revisão ao parar)?', 'http:// (sem TLS) em IP privado',
     'Perguntar', 'Planejar', 'Revisar', 'Executar tarefa', 'Orquestrar', 'Conclave',
     'Criar apelido "fast"', 'Criar apelido "strong"', 'Gravar esta configuração?',
   ]) assert.ok(output.text().includes(label), `missing PT-BR label: ${label}`);
@@ -91,7 +94,7 @@ test('wizard can select a model denied by the existing policy and allow it in th
   const existing = { global: { defaultProvider: MV, policy: { models: { allow: ['unmatched/*'] } } }, workspace: null };
   const answers = [
     '1', '1', 'kimi-k3', '1', '1', '1', '1', 'o', `${MV}/*`, '',
-    '1', '', '1', 'n', 'n', '', '', 'n', 'n', 's',
+    '1', '', '1', 'n', 'n', 'n', '', '', 'n', 'n', 's',
   ];
   const { run, dataDir, output, log } = wizard(t, answers, { existing, hasGlobal: true });
   const result = await run;
@@ -117,7 +120,7 @@ test('wizard refuses commit when the new policy still denies the chosen model', 
   const existing = { global: { defaultProvider: MV }, workspace: null };
   const answers = [
     '1', '1', 'kimi-k3', '1', '1', '1', '1', 'o', 'unmatched/*', '',
-    '1', '', '1', 'n', 'n', '', '', 's',
+    '1', '', '1', 'n', 'n', 'n', '', '', 's',
   ];
   const { run } = wizard(t, answers, { existing, hasGlobal: true });
   await assert.rejects(run, { code: 'POLICY_DENIED' });

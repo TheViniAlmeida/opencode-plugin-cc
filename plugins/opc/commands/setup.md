@@ -65,6 +65,7 @@ OPC_JSON_5f1d0c7a_EOF
 | `allowedModels` | "Quais modelos o opc pode usar?" | `Todos do provider padrão (<provider>/*)`, `Só <families[0].glob>`, `Sem restrição` | `{"policy":{"models":{"allow":[...]}}}`; in "Other", comma-separated globs, and entries starting with `!` go to `deny` |
 | `allowedAgents` | "Quais agentes do OpenCode o opc pode usar?" | `Todos`, `Só os built-in (build, plan, general, explore)` | `{"policy":{"agents":{"allow":[...]}}}`; "Other" as above (`!work-*` → `deny`) |
 | `approver` | "Quem aprova os pedidos de permissão do OpenCode?" | `Eu aprovo (Recomendado)`, `O Claude aprova (destrutivos e caminhos sensíveis continuam comigo)` | `{"policy":{"approver":"user"}}` or `"claude"` |
+| `privateHttp` | "Aceitar `OPC_SERVER_URL` com http:// (sem TLS) em IP privado? A senha e o conteúdo trafegam em claro na rede." | `Não (Recomendado)`, `Sim` | `{"server":{"allowPrivateHttp":<bool>}}` |
 | `behaviour` | "Ligar o stop gate (review antes de encerrar)?" then "Ligar a delegação automática?" | `Não (Recomendado)`, `Sim` | `{"stopGate":{"enabled":<bool>},"delegation":{"auto":<bool>}}` |
 | `project` | "Objetivo do projeto?", then (multiSelect) "Quais diretórios fazem parte do escopo?", then (multiSelect) "Quais tipos de tarefa você vai delegar?" | goal: a one-line goal you infer from the README, `Sem objetivo`; scope: up to 3 of `onboarding.projectDirs` + `Todos`; task types: `ask`, `plan`, `review`, `task` | `{"project":{"goal":<text or null>,"scope":[...],"taskTypes":[...]}}` |
 | `aliases` | (multiSelect) "Criar os aliases sugeridos?" | `fast → <aliases.fast>`, `strong → <aliases.strong>` (only the non-null ones) | `{"aliases":{"fast":"<id>","strong":"<id>"}}` (only the selected ones; `{}` when none) |
@@ -96,7 +97,7 @@ opc setup commit --json
 
 ## Reconfigure and locked keys
 
-With `--reconfigure`, the locked keys (`policy.*`, `permissionProfiles`, `server.configOverride`) are skipped. If the user wants to change them, tell them to run, in their own terminal (alias from the diagnostic output), `opc config init` or `opc config set <key> <value> --tty-confirm`. Never pass `--tty-confirm` yourself and never edit the config files by hand.
+With `--reconfigure`, the locked keys (`policy.*`, `permissionProfiles`, `server.configOverride`, `server.opencodeBin`, `server.allowPrivateHttp`, `server.remoteRoots`) are skipped. If the user wants to change them, tell them to run, in their own terminal (alias from the diagnostic output), `opc config init` or `opc config set <key> <value> --tty-confirm`. Never pass `--tty-confirm` yourself and never edit the config files by hand.
 
 ## Output rules
 

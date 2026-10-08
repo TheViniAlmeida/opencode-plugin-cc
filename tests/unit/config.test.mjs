@@ -21,9 +21,9 @@ test('DEFAULT_CONFIG is neutral and LOCKED_KEYS match spec §3.3', () => {
   assert.deepEqual(DEFAULT_CONFIG.policy.models, { allow: [], deny: [] });
   assert.deepEqual(DEFAULT_CONFIG.aliases, {});
   assert.equal(DEFAULT_CONFIG.policy.approver, 'user');
-  assert.deepEqual(DEFAULT_CONFIG.server, { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' } });
+  assert.deepEqual(DEFAULT_CONFIG.server, { bootTimeoutSec: 60, requestTimeoutSec: 30, configOverride: { share: 'disabled' }, allowPrivateHttp: false, remoteRoots: {} });
   assert.deepEqual(DEFAULT_CONFIG.jobs, { maxActive: 8, maxParallel: 4 });
-  assert.deepEqual([...LOCKED_KEYS], ['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin']);
+  assert.deepEqual([...LOCKED_KEYS], ['policy', 'permissionProfiles', 'server.configOverride', 'server.opencodeBin', 'server.allowPrivateHttp', 'server.remoteRoots']);
 });
 
 test('server.opencodeBin is an optional global string and unavailable to workspace overrides', () => {

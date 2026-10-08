@@ -53,6 +53,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
     '2', EQ,                    // allowed models: <provider>/*; deny provider omniroute-work
     '1', 'work-*',                // agents: all; deny work-*
     '1',                        // approver: user
+    '',                         // http em IP privado: Enter mantém o padrão (não)
     'n', 'n',                   // stop gate, auto delegation
     'Plugin Claude Code para OpenCode', '1-2', '1,3', // goal; dirs src/ + tests/; task types ask + review
     's', 's',                   // aliases fast / strong
@@ -69,6 +70,7 @@ test('config init: scripted wizard writes the full config (numbered lists, filte
   assert.deepEqual(cfg.policy.providers.deny, [EQ]);
   assert.deepEqual(cfg.policy.agents, { allow: [], deny: ['work-*'] });
   assert.equal(cfg.policy.approver, 'user');
+  assert.equal(cfg.server.allowPrivateHttp, false);
   assert.deepEqual(cfg.project, { goal: 'Plugin Claude Code para OpenCode', scope: ['src/', 'tests/'], taskTypes: ['ask', 'review'] });
   assert.equal(cfg.aliases.fast, `${MV}/opencode-go/deepseek-v4.1-flash`);
   assert.equal(cfg.aliases.strong, `${MV}/opencode-go/kimi-k3`);
@@ -94,7 +96,7 @@ test('config init: interrupted input writes nothing (exit 2)', async (t) => {
 test('config init --json: declining to save returns a JSON result', async (t) => {
   const { ws, env } = setup(t, { git: false });
   const answers = [
-    '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', '', '', 'n', 'n', 'n',
+    '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', 'n', '', '', 'n', 'n', 'n',
   ];
   const r = await runInProcess('config', ['init', '--json'], { env, cwd: ws, stdin: scriptedTTY(answers) });
   assert.equal(r.code, 0, r.stderr);
