@@ -12,8 +12,8 @@ function readProcStat(pid) {
     const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const close = raw.lastIndexOf(')');
     const fields = raw.slice(close + 2).split(' ');
-    // fields[0] = state (field 3), fields[19] = starttime (field 22)
-    return { state: fields[0], startTime: fields[19] };
+    // fields[0] = state (field 3), fields[1] = ppid (field 4), fields[19] = starttime (field 22)
+    return { state: fields[0], ppid: Number(fields[1]), startTime: fields[19] };
   } catch {
     return null;
   }
@@ -63,6 +63,26 @@ export function getProcessIdentity(pid) {
   const command = psField(pid, 'command');
   if (!startTime || !command) return null;
   return { pid, startTime, cmdline: command.split(/\s+/) };
+}
+
+export function getParentPid(pid) {
+  if (!isPidAlive(pid)) return null;
+  if (process.platform === 'linux') return readProcStat(pid)?.ppid || null;
+  if (process.platform === 'win32') return null;
+  return Number(psField(pid, 'ppid')) || null;
+}
+
+const HOOK_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ash', 'ksh']);
+
+// Claude Code runs hook commands through a transient `sh -c`, so a hook's ppid dies right after the hook
+// (spec §15 item 9, measured live in F8). When the parent is a shell, the owner is the shell's parent.
+export function resolveHookOwner(pid = process.ppid, { identityOf = getProcessIdentity, parentOf = getParentPid } = {}) {
+  const identity = identityOf(pid);
+  const argv0 = identity?.cmdline?.[0];
+  if (!argv0 || !HOOK_SHELLS.has(path.basename(argv0))) return { pid, identity };
+  const parent = parentOf(pid);
+  const parentIdentity = parent ? identityOf(parent) : null;
+  return parentIdentity ? { pid: parent, identity: parentIdentity } : { pid, identity };
 }
 
 export function identityMatches(expected, matcher) {

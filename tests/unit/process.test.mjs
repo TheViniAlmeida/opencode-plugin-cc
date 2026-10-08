@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import {
-  getProcessIdentity, identityMatches, isPidAlive, spawnDetached, terminateProcessGroup,
+  getParentPid, getProcessIdentity, identityMatches, isPidAlive, resolveHookOwner, spawnDetached, terminateProcessGroup,
 } from '../../plugins/opc/scripts/lib/process.mjs';
 import { deadPid, makeTempDir, removeTempDir, waitFor } from '../helpers.mjs';
 
@@ -164,3 +165,23 @@ for (const mode of ['null', 'throw']) {
     assert.equal(isPidAlive(pid), false);
   });
 }
+
+test('resolveHookOwner skips a transient shell parent and keeps any other parent', () => {
+  const ids = { 10: { pid: 10, startTime: 's10', cmdline: ['/bin/sh', '-c', 'node hook'] }, 7: { pid: 7, startTime: 's7', cmdline: ['claude', '-p'] }, 20: { pid: 20, startTime: 's20', cmdline: ['claude'] } };
+  const deps = { identityOf: (pid) => ids[pid] ?? null, parentOf: (pid) => (pid === 10 ? 7 : null) };
+  assert.deepEqual(resolveHookOwner(10, deps), { pid: 7, identity: ids[7] });
+  assert.deepEqual(resolveHookOwner(20, deps), { pid: 20, identity: ids[20] });
+  assert.deepEqual(resolveHookOwner(10, { ...deps, parentOf: () => null }), { pid: 10, identity: ids[10] });
+  assert.deepEqual(resolveHookOwner(99, deps), { pid: 99, identity: null });
+});
+
+test('getParentPid and resolveHookOwner see through a real `sh -c` parent', linuxOnly, () => {
+  assert.equal(getParentPid(process.pid), process.ppid);
+  const script = `import { resolveHookOwner } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/process.mjs', import.meta.url).href)}; const o = resolveHookOwner(process.ppid); console.log(JSON.stringify({ pid: o.pid, start: o.identity?.startTime }));`;
+  // The trailing `; true` keeps sh alive as the parent, as Claude Code's hook runner does.
+  const res = spawnSync('sh', ['-c', `"${process.execPath}" --input-type=module -e '${script}'; true`], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  const owner = JSON.parse(res.stdout);
+  assert.equal(owner.pid, process.pid);
+  assert.equal(owner.start, getProcessIdentity(process.pid).startTime);
+});
