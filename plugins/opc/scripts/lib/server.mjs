@@ -526,30 +526,40 @@ export async function ensureServer(ctx) {
       } else {
         const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
-        if (health.ok) assertSupportedVersion(health);
-        if (health.error?.code === 'UNSUPPORTED_VERSION' || health.error?.code === 'NOT_JSON') throw health.error;
-        if (health.ok && health.version === record.version) {
-          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
-          record.world = checked.world;
-          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
-          return {
-            url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
-          };
+        // The identity check above proved this is opc's own process: an old (V1) server answers /api/info with
+        // the SPA (NOT_JSON) or an old version, so replace it instead of failing every command.
+        const incompatible = health.error?.code === 'NOT_JSON' || health.error?.code === 'UNSUPPORTED_VERSION'
+          || (health.ok && compareVersions(health.version, MIN_OPENCODE_VERSION) < 0);
+        if (incompatible) {
+          if (hasActiveJobs()) {
+            throw new UsageError('V1_SERVER_ACTIVE', 'O servidor gerenciado registrado é anterior ao OpenCode 2.0.22 e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.');
+          }
+          await shutdownRecorded(stateDir, record, full.opencodeBin);
+          warnings.push('Servidor gerenciado anterior ao OpenCode 2.0.22 encerrado; um servidor V2 será iniciado.');
+        } else {
+          if (health.ok && health.version === record.version) {
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            record.world = checked.world;
+            writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+            return {
+              url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
+              attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
+            };
+          }
+          if (health.ok && hasActiveJobs()) {
+            warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            record.world = checked.world;
+            writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+            return {
+              url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
+              attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
+            };
+          }
+          const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
+          await shutdownRecorded(stateDir, record, full.opencodeBin);
+          warnings.push(`Servidor anterior encerrado: ${why}.`);
         }
-        if (health.ok && hasActiveJobs()) {
-          warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
-          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
-          record.world = checked.world;
-          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
-          return {
-            url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
-          };
-        }
-        const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
-        await shutdownRecorded(stateDir, record, full.opencodeBin);
-        warnings.push(`Servidor anterior encerrado: ${why}.`);
       }
     }
     const booted = await bootServer(full, settings);
