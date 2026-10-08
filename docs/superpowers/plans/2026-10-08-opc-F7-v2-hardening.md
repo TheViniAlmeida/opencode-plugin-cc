@@ -1094,7 +1094,7 @@ import { persistManagedAttachSecret } from './attach.mjs';
     passwordFrom = `"$(cat ${shellQuote(attachSecretPath(ctx.stateDir))})"`;
   }
   // …
-    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && OPENCODE_SERVER_PASSWORD=${passwordFrom} ${bin} --server ${shellQuote(server.url)} -s ${imported.sessionID}`,
+    resumeCommand: `cd ${shellQuote(ctx.workspaceRoot)} && OPENCODE_SERVER_PASSWORD=${passwordFrom} ${bin} --server ${shellQuote(server.url)} -s ${imported.sessionID}`, // scan-secrets:allow (template, no secret)
 ```
 
 Verifique se `transfer.mjs` tem acesso a `server` (o objeto de `openApi`/`ensureServer`) neste ponto; ele já usa `server.url`. Em `renderTransfer`, depois da linha do comando, acrescente: `'A linha lê a senha do servidor sem expô-la na linha de comando.'`
