@@ -419,7 +419,8 @@ export function parseImportOutput(stdout) {
   return match ? match[1] : null;
 }
 
-export async function runImport({ opencodeBin = 'opencode', serverUrl, password, file, cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
+// `cwd` é o diretório local do processo; `directory` é o que o servidor recebe (padrão: o próprio cwd).
+export async function runImport({ opencodeBin = 'opencode', serverUrl, password, file, cwd, directory = cwd, env = process.env, timeoutMs = 120000, execFileImpl = execFile }) {
   if (typeof serverUrl !== 'string' || !serverUrl) {
     throw new OpcError('SERVER_URL_REQUIRED', 'A importação requer a URL do servidor gerenciado.', { exitCode: ExitCode.CONNECTION });
   }
@@ -427,7 +428,7 @@ export async function runImport({ opencodeBin = 'opencode', serverUrl, password,
     throw new OpcError('SERVER_PASSWORD_REQUIRED', 'A importação requer a senha do servidor gerenciado.', { exitCode: ExitCode.CONNECTION });
   }
   const childEnv = { ...env, OPENCODE_SERVER_PASSWORD: password };
-  const r = await execFileResult(execFileImpl, opencodeBin, ['session', 'import', '--server', serverUrl, '--directory', cwd, file], { cwd, env: childEnv, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
+  const r = await execFileResult(execFileImpl, opencodeBin, ['session', 'import', '--server', serverUrl, '--directory', directory, file], { cwd, env: childEnv, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' });
   const missing = notFound(r.error);
   if (missing) throw missing;
   const sessionID = parseImportOutput(r.stdout);

@@ -11,6 +11,7 @@ import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
 import { readServerRecord, resolveOpencodeBin } from './server.mjs';
 import { createClient } from './http.mjs';
+import { serverDirectory } from './remote.mjs';
 import { createApi } from './api.mjs';
 
 // Single source of truth for the active states is F0 state.mjs (the setup already uses it).
@@ -468,13 +469,15 @@ export function existingServerApi(ctx) {
   const env = ctx.env ?? {};
   let baseUrl = env.OPC_SERVER_URL || null;
   let password = env.OPC_SERVER_PASSWORD || null;
+  const attached = Boolean(baseUrl);
   if (!baseUrl) {
     const record = readServerRecord(ctx.stateDir);
     if (!record?.url) return null;
     baseUrl = record.url;
     password = record.password;
   }
-  return createApi(createClient({ baseUrl, password, directory: ctx.workspaceRoot, requestTimeoutMs: 5000 }));
+  const directory = serverDirectory({ workspaceRoot: ctx.workspaceRoot, env, config: ctx.config, attached });
+  return createApi(createClient({ baseUrl, password, directory, requestTimeoutMs: 5000 }));
 }
 
 export async function spawnWorker(ctx, jobId, { spawn: start = spawnDetached } = {}) {

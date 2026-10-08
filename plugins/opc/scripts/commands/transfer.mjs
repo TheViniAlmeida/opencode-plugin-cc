@@ -8,6 +8,7 @@ import { renderTransfer, safeResumeCommand } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
 import { attachSecretPath, ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
 import { serverContext } from '../lib/jobs.mjs';
+import { serverDirectory } from '../lib/remote.mjs';
 import { actionableServerWarnings } from '../lib/context.mjs';
 import { persistManagedAttachSecret } from './attach.mjs';
 import {
@@ -36,7 +37,9 @@ export async function execute(ctx, { source = null, model = null } = {}) {
     throw new OpcError('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.', { exitCode: ExitCode.USAGE });
   }
   const version = await detectOpencodeVersion({ env: ctx.env, opencodeBin });
-  const exported = buildExport(conversion, { model: resolvedModel, directory: ctx.workspaceRoot, version });
+  // A sessão importada pertence ao diretório que o servidor enxerga (raiz remota em attach com mapeamento).
+  const directory = serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(ctx.env.OPC_SERVER_URL) });
+  const exported = buildExport(conversion, { model: resolvedModel, directory, version });
   const errors = validateExportShape(exported);
   if (errors.length) {
     throw new OpcError('EXPORT_SHAPE_INVALID', 'A exportação gerada não corresponde ao formato do OpenCode.', { exitCode: ExitCode.JOB_FAILED });
@@ -47,7 +50,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   let server;
   try {
     server = await ensureServer(serverContext(ctx));
-    imported = await runImport({ file, cwd: ctx.workspaceRoot,
+    imported = await runImport({ file, cwd: ctx.workspaceRoot, directory,
       env: ctx.env, password: server.password, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {
       throw new OpcError('IMPORT_FAILED', 'O OpenCode informou um ID de sessão diferente do exportado.', { exitCode: ExitCode.JOB_FAILED });
