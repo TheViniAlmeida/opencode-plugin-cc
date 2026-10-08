@@ -41,17 +41,16 @@ test('model warm-up waits for the bootstrap model.updated before trusting a part
   const api = { models: async () => { calls += 1; return loaded ? [builtIn, { providerID: 'gateway', id: 'late' }] : [builtIn]; } };
   const pending = waitForModelCatalog(api, { bootstrap, bootstrapTimeoutMs: 5_000, pollMs: 1 });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(calls, 0, 'catalog read before the bootstrap event');
   loaded = true;
   announce(true);
-  assert.equal((await pending).length, 2);
+  assert.equal((await pending).models.length, 2);
 });
 
 test('model warm-up falls back to the non-empty check when the bootstrap event never comes', async () => {
   const started = performance.now();
-  const models = await waitForModelCatalog({ models: async () => [{ providerID: 'opencode', id: 'built-in' }] },
+  const result = await waitForModelCatalog({ models: async () => [{ providerID: 'opencode', id: 'built-in' }] },
     { bootstrap: new Promise(() => {}), bootstrapTimeoutMs: 30, pollMs: 1 });
-  assert.equal(models.length, 1);
+  assert.equal(result.models.length, 1);
   assert.ok(performance.now() - started < 1000);
 });
 
@@ -90,6 +89,7 @@ test('V2 config documents merge in source order before share check', async (t) =
   t.mock.method(globalThis, 'fetch', async (url) => {
     const route = new URL(url).pathname;
     if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
+    if (route === '/api/model') return new Response(JSON.stringify(loadContractSample('model.json')));
     assert.equal(route, '/api/config');
     return new Response(JSON.stringify([
       ...loadContractSample('config.json'),
@@ -132,6 +132,7 @@ for (const [scenario, status, body] of [
     const dir = trackTempDir(t, makeTempDir('opc-config-review-'));
     t.mock.method(globalThis, 'fetch', async (url) => {
       if (new URL(url).pathname === '/api/info') return new Response(JSON.stringify({ version: '2.0.22' }));
+      if (new URL(url).pathname === '/api/model') return new Response(JSON.stringify(loadContractSample('model.json')));
       assert.equal(new URL(url).pathname, '/api/config');
       return new Response(status === 204 ? null : JSON.stringify(body), { status });
     });

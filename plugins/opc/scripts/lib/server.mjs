@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, matchesGlob } from './config.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
-import { mergeOpencodeConfigSources } from './opencode-config.mjs';
+import { loadOpencodeConfig, mergeOpencodeConfigSources } from './opencode-config.mjs';
 import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
@@ -284,32 +284,46 @@ export function watchCatalogBootstrap(client, { fetchImpl } = {}) {
   return { ready, opened, stop: () => { settle(false); hub.stop(); } };
 }
 
-export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000 } = {}) {
-  if (bootstrap) {
-    // Without the event by the deadline, fall back to the non-empty check below instead of failing the boot.
-    let timer;
-    await Promise.race([bootstrap, new Promise((resolve) => { timer = setTimeout(resolve, bootstrapTimeoutMs); })]);
-    clearTimeout(timer);
-  }
-  const deadline = performance.now() + timeoutMs;
+export function expectedProviders(opencodeConfig) {
+  const declared = Object.keys(opencodeConfig?.provider ?? {});
+  const enabled = Array.isArray(opencodeConfig?.enabled_providers) ? new Set(opencodeConfig.enabled_providers) : null;
+  const disabled = new Set(Array.isArray(opencodeConfig?.disabled_providers) ? opencodeConfig.disabled_providers : []);
+  return declared.filter((id) => !disabled.has(id) && (!enabled || enabled.has(id)));
+}
+
+// Ready when every declared provider is listed (the bootstrap event only shortens the wait). A provider that
+// never loads (bad key, gateway down) ends the wait at the deadline and is reported in `missing`.
+export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000, expected = [] } = {}) {
+  let announced = false;
+  bootstrap?.then((value) => { announced = value === true; });
+  const bootstrapDeadline = performance.now() + bootstrapTimeoutMs;
+  const deadline = performance.now() + Math.max(timeoutMs, bootstrap ? bootstrapTimeoutMs : 0);
+  let models = [];
   while (true) {
     const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
-    let models;
+    if (remaining <= 0) {
+      if (models.length === 0) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou a tempo.');
+      return { models, missing: expected.filter((id) => !models.some((m) => m.providerID === id)) };
+    }
     try {
       models = await api.models({ timeoutMs: Math.max(1, Math.ceil(remaining)) });
     } catch (err) {
-      if (err.code === 'TIMEOUT' && performance.now() >= deadline) {
-        throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
-      }
+      if (err.code === 'TIMEOUT' && performance.now() >= deadline) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou a tempo.');
       throw err;
     }
     if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
-    if (models.length > 0) return models;
+    const missing = expected.filter((id) => !models.some((m) => m.providerID === id));
+    // With declared providers, their presence is the signal. Without any, keep the F6 rule: wait for
+    // model.updated until the bootstrap deadline (gateway providers can come from outside `provider`).
+    const bootstrapOver = !bootstrap || performance.now() >= bootstrapDeadline;
+    const ready = announced || (missing.length === 0 && (expected.length > 0 || bootstrapOver));
+    if (models.length > 0 && ready) return { models, missing };
     const delay = Math.min(pollMs, deadline - performance.now());
     if (delay > 0) await sleep(delay);
   }
 }
+
+const missingProvidersWarning = (missing) => `Providers declarados ainda sem modelos no catálogo: ${missing.join(', ')}. Confira credenciais e o gateway.`;
 
 async function attachServer(env, settings, config) {
   let parsed;
@@ -329,10 +343,13 @@ async function attachServer(env, settings, config) {
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
   const client = createClient({ baseUrl: url, password, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
-  const health = await createApi(client).info();
+  const api = createApi(client);
+  const health = await api.info();
   assertSupportedVersion(health);
+  const { missing } = await waitForModelCatalog(api, { timeoutMs: 15_000, expected: expectedProviders(await loadOpencodeConfig(api)) });
   const { world, warnings } = await worldCheck(client, config);
   warnings.unshift('Modo attach: o opc não sobe nem encerra este servidor, e o server.configOverride não se aplica.');
+  if (missing.length) warnings.push(missingProvidersWarning(missing));
   return { url, password, version: health.version, pid: null, port: Number(parsed.port) || null, attached: true, reused: true, world, warnings };
 }
 
@@ -396,6 +413,7 @@ async function bootServer(ctx, settings) {
     const bootstrap = watchCatalogBootstrap(client);
     let health;
     let identity;
+    const catalogWarnings = [];
     try {
       let openTimer;
       await Promise.race([bootstrap.opened, new Promise((resolve) => { openTimer = setTimeout(resolve, 5000); })]);
@@ -417,7 +435,9 @@ async function bootServer(ctx, settings) {
       try {
         const api = createApi(client);
         if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
-        await waitForModelCatalog(api, { bootstrap: bootstrap.ready });
+        const opencodeConfig = await loadOpencodeConfig(api);
+        const { missing } = await waitForModelCatalog(api, { bootstrap: bootstrap.ready, expected: expectedProviders(opencodeConfig) });
+        if (missing.length) catalogWarnings.push(missingProvidersWarning(missing));
       } catch (err) {
         await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
         throw err;
@@ -426,6 +446,7 @@ async function bootServer(ctx, settings) {
       bootstrap.stop();
     }
     const warnings = [];
+    warnings.push(...catalogWarnings);
     const checked = await worldCheck(client, config);
     warnings.push(...checked.warnings);
     const record = {
