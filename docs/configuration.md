@@ -57,7 +57,7 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `orchestrate.maxSubtasks` | inteiro 2–20 | `5` | global + workspace | Máximo de subtarefas |
 | `orchestrate.synthesizer` | modelref-or-claude | `claude` | global + workspace | Sintetizador |
 | `orchestrate.structuredOutput` | `text` | `text` | global + workspace | Contrato de saída do planner |
-| `delegation.auto` | boolean | `false` | só global | Lembrete de delegação (F4a) |
+| `delegation.auto` | boolean | `false` | global; o workspace só desliga (`false`) | Lembrete de delegação (F4a) |
 | `jobs.maxActive` / `.maxParallel` | inteiros 1–64 / 1–32 | `8` / `4` | só global | Limites de jobs |
 | `server.bootTimeoutSec` / `.requestTimeoutSec` | inteiros 1–600 | `60` / `30` | só global | Timeouts do servidor |
 | `server.opencodeBin` | string | `opencode` | travada, só global | Caminho do binário OpenCode V2; `OPC_OPENCODE_BIN` tem prioridade |
@@ -117,7 +117,7 @@ opc config show --effective
 |---|---|---|---|
 | `delegation.auto` | booleano | `false` | Com `true` na configuração global, o `SessionStart` injeta o lembrete de delegação |
 
-O `.opc.json` só pode desligar esse lembrete com `false`; `true` no workspace é ignorado.
+O `.opc.json` só pode desligar esse lembrete com `false`, sem aviso; `true` no workspace é ignorado com o aviso `delegation.auto: o workspace só pode desligar (false)`.
 
 ```bash
 opc config set delegation.auto true
