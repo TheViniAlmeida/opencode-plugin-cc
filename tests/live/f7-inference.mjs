@@ -63,17 +63,19 @@ test('F7 live: compaction timing and pending revert + new prompt', { skip: SKIP,
   const payload = async () => {
     const messages = await api.messages(sid);
     const marker = messages.find((m) => m.type === 'compaction');
-    return { payloadKeys: marker ? Object.keys(marker.payload ?? {}).sort() : null, payloadBytes: marker ? JSON.stringify(marker.payload ?? null).length : null, messageTypes: messages.map((m) => m.type) };
+    const body = marker?.payload;
+    // Filled = non-empty string or object with at least one key; null, {} and '' are empty markers.
+    const filled = typeof body === 'string' ? body.length > 0 : body !== null && typeof body === 'object' && Object.keys(body).length > 0;
+    return { payloadKeys: marker ? Object.keys(body ?? {}).sort() : null, payloadBytes: marker ? JSON.stringify(body ?? null).length : null, filled, messageTypes: messages.map((m) => m.type) };
   };
   const afterSettle = await payload();
   const busyAfterPost = Boolean(timeline[0]?.active || timeline[0]?.compacting);
   // One follow-up turn: tells whether the compaction message is only filled once the session runs again.
   res = await run(['task', '--resume', sid, '--model', MODELS.qwen, 'Reply with exactly OK.']);
   const afterTurn = await payload();
-  const filled = (p) => (p.payloadBytes ?? 0) > 2;
   fact('I1-compaction', {
     postMs, firstPoll: timeline[0], settledMs: timeline.at(-1)?.ms, polls: timeline.length, followUpExit: res.code,
     afterSettle, afterTurn,
-    verdict: busyAfterPost ? 'async' : filled(afterSettle) ? 'filled-on-post' : filled(afterTurn) ? 'filled-on-next-turn' : 'marker-only',
+    verdict: busyAfterPost ? 'async' : afterSettle.filled ? 'filled-on-post' : afterTurn.filled ? 'filled-on-next-turn' : 'marker-only',
   }, dataDir);
 });
