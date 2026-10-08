@@ -10,7 +10,7 @@
 
 | Item | Evidência | Resultado |
 |---|---|---|
-| Suíte completa | `node scripts/run-tests.mjs`: 2101 testes, 2100 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
+| Suíte completa | `node scripts/run-tests.mjs`: 2103 testes, 2102 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
 | `npm run scan-secrets` | `scan-secrets: nenhum achado.` | PASSOU |
 | `git diff --check` | Saída vazia, exit 0 | PASSOU |
 | Servidores falsos órfãos | `ps -eo ppid=,args= \| awk '$1==1 && $3 ~ /tests\/fixtures\/bin\/opencode$/' \| wc -l`: 0 | PASSOU |
