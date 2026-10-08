@@ -20,7 +20,7 @@
 | Attach (`OPC_SERVER_URL`): catálogo e aviso de providers sem modelos | `opc models` com exit 0 em cerca de 2,3 s; o aviso no stderr cita `ghost-gw` e `disabled-gw` | PASSOU |
 | Linha de retomada do transfer em attach | pty (`script -qfec`): `"$OPC_SERVER_PASSWORD"` na linha, a TUI mostrou o título da sessão importada, sem erro de autenticação e sem senha na linha | PASSOU |
 | Linha de retomada do transfer no gerenciado | pty: `$(cat '<stateDir>/attach.secret')` na linha, mesmo resultado da TUI | PASSOU |
-| P1 (§15, item 5): precedência das fontes de config | global, projeto e `OPENCODE_CONFIG_CONTENT` com `model`; a sessão sem modelo foi respondida pelo modelo do env (`env-wins`)  (medido só para o escalar `model`; merge de objetos e `configOverride` desligando MCPs não testados) | PASSOU |
+| P1 (§15, item 5): precedência das fontes de config | global, projeto e `OPENCODE_CONFIG_CONTENT` com `model`; a sessão sem modelo foi respondida pelo modelo do env (`env-wins`) (medido só para o escalar `model`; merge de objetos e `configOverride` desligando MCPs não testados) | PASSOU |
 | §15, item 3: `PATCH /api/session/:id {permissions}` | `replaces`: o PATCH substitui as regras | PASSOU |
 | §15, item 1: regras da sessão contra o arquivo | regras da sessão negando `read`: arquivo não lido, sem chamada de ferramenta (`session-rules-win`) (inferido: o modelo não chamou ferramenta nenhuma, o que é compatível com o `read` filtrado, mas não prova o bloqueio) | PASSOU |
 | §15, item 6: formato do `messageID` | observado na sessão de validação (registro manual em F8-live-output.md, `messageIdSample`): `msg_` + 12 hex + 14 base62, como no código; o aceite do ID enviado pelo cliente vem dos jobs ao vivo da F6/F7 | PASSOU |
