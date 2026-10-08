@@ -14,6 +14,7 @@
 | 1 | 25/09/2026 | Design inicial (abordagem A, conexão, permissões, jobs, fases F0–F4) |
 | 2 | 26/09/2026 | Onboarding/config, swarm, conclave, documentação, fases F0–F5 |
 | 3 | 26/09/2026 | Revisão dupla (fidelidade à API 1.18.32 + coerência/segurança): perfis de permissão refeitos, `always`→`once`, reaper do SessionEnd, classificação de erros pela união real, travas de política, `.opc.json` só restringe, lacunas de paridade, exit codes, fases divididas (F2a/F2b, F4a/F4b/F4c), cortes (`share`, `--auto-approve`, sync de agentes) |
+| 4 | 08/10/2026 | F9: fatos do V2 na tabela de fatos (PATCH substitui as regras; filha criada já com `permissions`) e respostas ao vivo da F8 no §15 |
 
 ---
 
@@ -128,8 +129,8 @@ Análise de 26/09/2026 sobre o HEAD `1f1f2ae` (05/04/2026):
 | Stop hook recebe `stop_hook_active` e `last_assistant_message`; bloqueio por `{"decision":"block"}` com exit 0; timeout padrão 600 s | docs de hooks | Stop gate (§9.3) |
 | `skills:` de agente não se aplica a teammate de Agent Teams | docs de agent teams | `opc-worker` com regras inline (§10.4) |
 | Tipos v1 do SDK instalado estão defasados (sem `json_schema`/`permission.asked`); `dist/v2/gen` bate com a OpenAPI | SDK local | Fixtures e contratos derivados da OpenAPI |
-| `PATCH /session/:id {permission}` **anexa** as regras às existentes (o `merge` concatena), não substitui | binário (plano F2a) | Resume: trocar para `read-only`/`custom` funciona, porque as regras novas vêm por último; trocar para `write` é recusado (exit 2) antes do PATCH (§7) |
-| Sessões filhas herdam do pai só as regras `deny` e `external_directory` | binário (plano F2a) | O runner reaplica o perfil do job a cada filha assim que ela é criada (§8.1). Resta uma janela curta entre a criação e o PATCH, documentada |
+| `PATCH /session/:id {permission}` **anexa** as regras às existentes (o `merge` concatena), não substitui | binário (plano F2a) | Resume: trocar para `read-only`/`custom` funciona, porque as regras novas vêm por último; trocar para `write` é recusado (exit 2) antes do PATCH (§7). V2 (F8): o `PATCH {permissions}` SUBSTITUI as regras (medido ao vivo na F8) |
+| Sessões filhas herdam do pai só as regras `deny` e `external_directory` | binário (plano F2a) | O runner reaplica o perfil do job a cada filha assim que ela é criada (§8.1). Resta uma janela curta entre a criação e o PATCH, documentada. V2 (F8): a sessão filha é criada já com `permissions` (F6), sem janela e sem PATCH |
 | A saída estruturada é uma ferramenta chamada `StructuredOutput` | binário (plano F2a) | Não conta como "ferramenta executada" (§7.1, §10.2) |
 | `messageID` do OpenCode: `msg_` + 12 hex + 14 base62, ascendente | binário (plano F2a) | `newMessageId` replica o formato (§5.2) |
 | `next` do `session.status{type:"retry"}` é um instante absoluto (epoch ms) | binário (planos F2a/F4a) | O teto usa `next - agora` (§10.2) |
@@ -1419,6 +1420,26 @@ Prefixo dos modelos: `omniroute-personal/opencode-go/`, com rodízio entre as fa
     (F4a).
 12. **Acesso concorrente ao storage** do OpenCode entre a TUI do usuário e o servidor do
     plugin (F3).
+
+### Respostas (F8)
+
+Ao vivo no OpenCode 2.0.22; o texto original acima fica como foi escrito. Evidência em
+`docs/phases/F8-live-output.md` e no relatório da F8.
+
+| # | Resposta |
+|---|---|
+| 1 | Regras da sessão negando `read` impediram a leitura (arquivo não lido, sem chamada de ferramenta): a sessão vence (inferido, pois nenhuma ferramenta foi chamada) |
+| 2 | Inconclusivo ao vivo (alcance do `always`) |
+| 3 | `PATCH /api/session/:id {permissions}` SUBSTITUI as regras (o runner já verifica a igualdade) |
+| 4 | Inconclusivo ao vivo (caminhos em grep/list/glob e curinga de nome para MCP) |
+| 5 | A fonte `OPENCODE_CONFIG_CONTENT` vence a global e a do projeto para o escalar `model` (`env-wins`), como no merge do opc; merge de objetos e `configOverride` desligando MCPs não testados |
+| 6 | Formato observado na sessão de validação: `msg_` + 12 hex + 14 base62 (registro manual) |
+| 7 | Sem resposta nesta fase |
+| 8 | Manual do operador: instalação real do plugin, NÃO VALIDADO |
+| 9 | Não: o hook roda sob um `sh -c` transitório; o opc registra o pai do shell (o `claude`, mesmo pai do servidor MCP). `/clear` interativo: manual do operador |
+| 10 | Import validado (F7 `f5-transfer.mjs` e as linhas de retomada da F8) |
+| 11 | Manual do operador: Agent Teams, A CONFIRMAR |
+| 12 | Parcial: a TUI se anexa ao servidor gerenciado enquanto ele roda (pty); TUI independente junto com o servidor do plugin, NÃO VALIDADO |
 
 ---
 

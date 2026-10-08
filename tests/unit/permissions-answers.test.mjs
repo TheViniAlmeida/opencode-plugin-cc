@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { list, parseAnswers, run } from '../../plugins/opc/scripts/commands/permissions.mjs';
-import { createJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
-import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { createJob, listJobs, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { ConnectionError, NotFoundError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 
 const questions = [
@@ -129,4 +129,37 @@ test('permissions list and reply discover a child session without an OPC title o
   assert.deepEqual(calls, ['ses_parent', 'ses_child']);
   assert.deepEqual(ctx.output.requests.map((request) => request.id), ['per_child']);
   await run(ctx, ['reply', 'per_child', 'once'], { getApi: () => api });
+});
+
+test('reply clears a grouped request on the member and on its group, and points to the member', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
+  const pendingId = 'per_562c642c123456789';
+  const sessionID = 'ses_session123456789';
+  const request = { id: pendingId, type: 'permission', permission: 'shell', patterns: ['echo ok'], sessionID };
+  // Member first, group second: the group is the newest job, so a first-match lookup would only see the group.
+  const member = await createJob(stateDir, { kind: 'task', title: 'member', workspaceRoot: '/ws', status: 'waiting_permission', role: 'worker:1', sessionID, pendingRequest: [request] });
+  const group = await createJob(stateDir, { kind: 'orchestrate', title: 'group', workspaceRoot: '/ws', status: 'waiting_permission', role: 'group', pendingRequest: [request] });
+  await updateJob(stateDir, member.id, { groupId: group.id });
+  const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
+  const api = { async listPermissions() { return [{ id: pendingId, permission: 'shell', sessionID }]; }, async replyPermission() {} };
+  await run(ctx, ['reply', pendingId, 'reject'], { getApi: () => api });
+  const jobs = listJobs(stateDir, { all: true });
+  for (const id of [member.id, group.id]) assert.deepEqual(jobs.find((j) => j.id === id).pendingRequest ?? [], [], id);
+  assert.match(ctx.output, new RegExp(`/opc:status ${member.id} --wait`));
+});
+
+test('answer clears a grouped question on both jobs even when the group was created first', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-permissions-'));
+  const sessionID = 'ses_session123456789';
+  const formID = 'frm_form123456789';
+  const request = { id: formID, type: 'question', sessionID, questions };
+  const group = await createJob(stateDir, { kind: 'orchestrate', title: 'group', workspaceRoot: '/ws', status: 'waiting_permission', role: 'group', pendingRequest: [request] });
+  const member = await createJob(stateDir, { kind: 'task', title: 'member', workspaceRoot: '/ws', status: 'waiting_permission', role: 'worker:1', groupId: group.id, sessionID, pendingRequest: [request] });
+  const ctx = { stateDir, out: (value) => { ctx.output = value; }, json() {} };
+  const api = { async listQuestions() { return [request]; }, async replyQuestion() {} };
+  const cleared = [];
+  const clearRequests = async (dir, jobId, ids) => { cleared.push(jobId); if (jobId === group.id) throw new NotFoundError('NOT_FOUND', 'gone'); await updateJob(dir, jobId, { pendingRequest: null }); };
+  assert.equal(await run(ctx, ['answer', formID, 'postgres', 'A', 'x'], { getApi: () => api, clearRequests }), 0);
+  assert.deepEqual(cleared, [member.id, group.id], 'members are cleared before the group');
+  assert.match(ctx.output, new RegExp(`/opc:status ${member.id} --wait`));
 });

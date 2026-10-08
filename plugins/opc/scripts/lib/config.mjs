@@ -281,6 +281,12 @@ export function mergeConfig(globalCfg, workspaceCfg) {
         if (sub === 'model') config.stopGate.model = cloneJson(v);
         else ignore(`stopGate.${sub}`, 'não pode ser substituído no workspace');
       }
+    } else if (key === 'delegation' && isObj(value)) {
+      // F4a: the workspace may only turn the delegation reminder off (see delegationAutoEnabled).
+      for (const [sub, v] of Object.entries(value)) {
+        if (sub === 'auto' && v === false) config.delegation.auto = false;
+        else ignore(`delegation.${sub}`, 'o workspace só pode desligar (false)');
+      }
     } else if (WORKSPACE_PREFERENCE_KEYS.includes(key)) {
       // A cleared workspace defaultModel inherits the global model, like unset.
       if (key === 'defaultModel' && value === null) continue;

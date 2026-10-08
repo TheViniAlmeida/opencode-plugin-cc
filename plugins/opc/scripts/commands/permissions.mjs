@@ -3,7 +3,7 @@ import { parseArgs } from '../lib/args.mjs';
 import { ConnectionError, ExitCode, NotFoundError, PolicyError, UsageError } from '../lib/opc-error.mjs';
 import { checkReply, displayValue } from '../lib/policy.mjs';
 import { redact } from '../lib/redact.mjs';
-import { clearJobRequests, existingServerApi, listJobs } from '../lib/jobs.mjs';
+import { clearJobRequests, existingServerApi, GROUP_ROLE, listJobs } from '../lib/jobs.mjs';
 import { renderPermissionList } from '../lib/render.mjs';
 
 const FLAGS = { json: { type: 'boolean' }, cwd: { type: 'string' }, 'confirmed-by-user': { type: 'boolean' } };
@@ -33,7 +33,21 @@ function requireServerApi(ctx, getApi = existingServerApi) {
   return api;
 }
 
-const jobForRequest = (ctx, id) => listJobs(ctx.stateDir, { all: true }).find((job) => (job.pendingRequest ?? []).some((request) => request.id === id)) ?? null;
+// A grouped request is mirrored on the member and on its group; clear every copy, and prefer the member for hints.
+const jobsForRequest = (ctx, id) => listJobs(ctx.stateDir, { all: true }).filter((job) => (job.pendingRequest ?? []).some((request) => request.id === id));
+const preferMember = (holders) => holders.find((job) => job.role !== GROUP_ROLE) ?? holders[0] ?? null;
+// Members first, so a concurrent group sync cannot copy the request back; the reply already reached the server,
+// so a job that vanished meanwhile must not fail the command.
+async function clearHolders(ctx, clearRequests, holders, ids) {
+  const ordered = [...holders.filter((job) => job.role !== GROUP_ROLE), ...holders.filter((job) => job.role === GROUP_ROLE)];
+  for (const job of ordered) {
+    try {
+      await clearRequests(ctx.stateDir, job.id, ids);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
+  }
+}
 const sessionForRequest = (job, id) => job?.pendingRequest?.find((request) => request.id === id)?.sessionID;
 const trackedSessions = (jobs) => [...new Set(jobs.flatMap((job) => [job.sessionID, ...(job.childSessionIDs ?? []), ...(job.pendingRequest ?? []).map((request) => request.sessionID)]).filter(Boolean))];
 
@@ -101,17 +115,19 @@ async function reply(ctx, flags, id, rest, { getApi = existingServerApi, clearRe
   const message = messageParts.join(' ').trim();
   if (id.startsWith('frm')) {
     if (decision !== 'reject') throw new UsageError('INVALID_REPLY', 'perguntas só podem ser recusadas aqui; responda com: permissions answer <id> <resposta...>');
-    const knownJob = jobForRequest(ctx, id);
+    const holders = jobsForRequest(ctx, id);
+    const knownJob = preferMember(holders);
     const api = requireServerApi(ctx, getApi);
     const found = await findPending(api, id, 'question', sessionForRequest(knownJob, id));
     if (!found) throw new NotFoundError('NOT_FOUND', `a pergunta ${displayValue(id)} não está pendente`);
     const { sessionID } = found;
     await api.rejectQuestion(sessionID, id);
-    if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id]);
+    await clearHolders(ctx, clearRequests, holders, [id]);
     ctx.out(`Pergunta ${displayValue(id)} recusada.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
     return ExitCode.OK;
   }
-  const knownJob = jobForRequest(ctx, id);
+  const holders = jobsForRequest(ctx, id);
+  const knownJob = preferMember(holders);
   const api = requireServerApi(ctx, getApi);
   const found = await findPending(api, id, 'permission', sessionForRequest(knownJob, id));
   if (!found) throw new NotFoundError('NOT_FOUND', `a solicitação de permissão ${displayValue(id)} não está pendente`);
@@ -120,7 +136,7 @@ async function reply(ctx, flags, id, rest, { getApi = existingServerApi, clearRe
   if (!verdict.ok) throw verdict.code === 'INVALID_REPLY' ? new UsageError(verdict.code, verdict.reason) : new PolicyError(verdict.code, verdict.reason);
   await api.replyPermission(sessionID, id, decision === 'reject' ? { reply: 'reject', ...(message ? { message } : {}) } : { reply: 'once' });
   const siblings = decision === 'reject' ? pending.filter((p) => p.sessionID === request.sessionID && p.id !== id).map((p) => p.id) : [];
-  if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id, ...siblings]);
+  await clearHolders(ctx, clearRequests, holders, [id, ...siblings]);
   const lines = [`Resposta ${decision} enviada para ${displayValue(id)} (${request.permission}).`];
   if (siblings.length) lines.push(`O OpenCode também recusou as outras solicitações pendentes desta sessão: ${siblings.join(', ')}.`);
   if (knownJob) lines.push(`Acompanhe a tarefa: /opc:status ${knownJob.id} --wait`);
@@ -130,14 +146,15 @@ async function reply(ctx, flags, id, rest, { getApi = existingServerApi, clearRe
 
 async function answer(ctx, id, values, { getApi = existingServerApi, clearRequests = clearJobRequests } = {}) {
   if (!id || !id.startsWith('frm') || values.length === 0) throw new UsageError('USAGE', USAGE);
-  const knownJob = jobForRequest(ctx, id);
+  const holders = jobsForRequest(ctx, id);
+  const knownJob = preferMember(holders);
   const api = requireServerApi(ctx, getApi);
   const found = await findPending(api, id, 'question', sessionForRequest(knownJob, id));
   if (!found) throw new NotFoundError('NOT_FOUND', `a pergunta ${displayValue(id)} não está pendente`);
   const { sessionID, request } = found;
   const answers = parseAnswers(request.questions ?? [], values);
   await api.replyQuestion(sessionID, request, answers);
-  if (knownJob) await clearRequests(ctx.stateDir, knownJob.id, [id]);
+  await clearHolders(ctx, clearRequests, holders, [id]);
   ctx.out(`Resposta enviada para ${displayValue(id)}.${knownJob ? `\nAcompanhe a tarefa: /opc:status ${knownJob.id} --wait` : ''}\n`);
   return ExitCode.OK;
 }

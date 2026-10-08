@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { delegationAutoEnabled } from '../../plugins/opc/scripts/lib/config.mjs';
+import { delegationAutoEnabled, mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { delegationReminder, DELEGATION_COMMANDS } from '../../plugins/opc/scripts/lib/render.mjs';
 
 test('delegationAutoEnabled: somente a configuração global pode ativar', () => {
@@ -46,4 +46,13 @@ test('delegationReminder lista comandos e regras em menos de 1.000 caracteres', 
 test('delegationReminder aceita comandos adicionais', () => {
   const text = delegationReminder([...DELEGATION_COMMANDS, { cli: 'opc orchestrate', slash: '/opc:orchestrate', use: 'trabalho em várias partes' }]);
   assert.match(text, /`opc orchestrate` \(\/opc:orchestrate\)/);
+});
+
+test('mergeConfig: workspace delegation.auto false applies silently; true is ignored with a clear warning', () => {
+  const off = mergeConfig({ delegation: { auto: true } }, { delegation: { auto: false } });
+  assert.equal(off.config.delegation.auto, false);
+  assert.deepEqual(off.warnings, []);
+  const on = mergeConfig({ delegation: { auto: false } }, { delegation: { auto: true } });
+  assert.equal(on.config.delegation.auto, false);
+  assert.deepEqual(on.warnings.map((w) => [w.path, w.message]), [['delegation.auto', '.opc.json: o workspace só pode desligar (false); ignorado']]);
 });

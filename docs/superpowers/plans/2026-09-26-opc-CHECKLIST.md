@@ -325,6 +325,18 @@ Ao vivo: OpenCode 2.0.22; evidência em `docs/phases/F8-live-output.md`, relató
 
 ---
 
+## F9 — Backlog · branch `feat/opc-f9-backlog`
+
+Triagem dos "Riscos em aberto" e dois ajustes de código; relatório em `docs/phases/F9-report.md`.
+
+- [x] `.opc.json` com `{"delegation":{"auto":false}}` desliga o lembrete sem aviso; `true` é ignorado com aviso (3075d1f)
+- [x] `permissions reply`/`answer` limpam o pedido em todos os jobs que o espelham (72ab1df)
+- [x] Teste do `errorCode: 'cancelled'` após cancelar durante o fallback (22691f4)
+- [x] Triagem dos 12 riscos em aberto e atualização da spec (§15 e fatos do V2)
+- [ ] **manual (operador):** os mesmos pendentes da F8 (instalação real, `/clear`, Agent Teams, `--pane`) — NÃO VALIDADO
+
+---
+
 ## Itens A CONFIRMAR da spec (§15)
 
 | # | Item | Fase | Resposta |
@@ -348,18 +360,18 @@ Ao vivo: OpenCode 2.0.22; evidência em `docs/phases/F8-live-output.md`, relató
 
 Acompanhar durante a execução; detalhes no "Registro de reconciliação" do mestre.
 
-- [ ] Testes de integração próprios de F2a–F5 ainda não validados: só rodam com o código real.
-- [ ] `permissions` em grupo limpa só o primeiro job que contém o pedido; o grupo se corrige no refresh do coordenador.
-- [ ] `runJobTurn` chama `updateJob` direto enquanto o worker usa o updater serial; só a fase exibida pode ficar desatualizada.
-- [ ] Cancelamento durante o fallback: `errorCode`/`errorMessage` podem ser sobrescritos pela parada (o status segue `cancelled`).
-- [ ] `delegation` no `.opc.json`: conferir se o `loadConfig` da F1 aceita a chave (o "workspace só desliga" da F4a).
-- [ ] A F5 endurece `resolveArgv` (F0) e `readRawArgs` (F2a); a F4b altera um teste da F4a. Conferir nas revisões de branch.
-- [ ] Timeout de 20 s explícito em esperas da F2a (ajuste de julgamento do revisor de testes).
-- [ ] `stopAllServers` por par env × workspace deixa a suíte mais lenta; medir e otimizar se incomodar.
-- [ ] Probes da F1 no contrato podem dar divergência falsa (campos em `optionalUsed`).
-- [ ] `config.json` da fixture da F0 tem `fake-provider/fake-model`, que não existe no catálogo; testes que resolvem modelo gravam `defaultModel`.
-- [ ] O teste de paridade MCP × CLI da F5 cobre só o caminho de erro (modelos inexistentes), de propósito.
-- [ ] Janela curta entre a criação de uma sessão filha e o PATCH do perfil (documentada na F2a).
+- [x] Testes de integração próprios de F2a–F5 ainda não validados: só rodam com o código real. (F9: resolvido; `scripts/run-tests.mjs` coleta `tests/{unit,integration}` e a suíte está verde, ver o relatório da F8)
+- [x] `permissions` em grupo limpa só o primeiro job que contém o pedido; o grupo se corrige no refresh do coordenador. (F9: corrigido em 72ab1df; `reply`/`answer` limpam o pedido em todos os jobs que o espelham)
+- [x] `runJobTurn` chama `updateJob` direto enquanto o worker usa o updater serial; só a fase exibida pode ficar desatualizada. (F9: aceito; `updateJob` roda sob o lock de estado, sem escrita perdida, e `tests/unit/jobs-attempts.test.mjs` cobre)
+- [x] Cancelamento durante o fallback: `errorCode`/`errorMessage` podem ser sobrescritos pela parada (o status segue `cancelled`). (F9: resolvido; o stop só vale sem cancelamento, e 22691f4 pina `errorCode: 'cancelled'` por teste)
+- [x] `delegation` no `.opc.json`: conferir se o `loadConfig` da F1 aceita a chave (o "workspace só desliga" da F4a). (F9: corrigido em 3075d1f; a chave é aceita e o workspace só desliga)
+- [x] A F5 endurece `resolveArgv` (F0) e `readRawArgs` (F2a); a F4b altera um teste da F4a. Conferir nas revisões de branch. (F9: resolvido; `splitAtTerminator`, ver `tests/unit/args-terminator.test.mjs`)
+- [x] Timeout de 20 s explícito em esperas da F2a (ajuste de julgamento do revisor de testes). (F9: aceito; é teto de espera, não sleep; revisitar só se houver flake)
+- [x] `stopAllServers` por par env × workspace deixa a suíte mais lenta; medir e otimizar se incomodar. (F9: aceito; medido em cerca de 0,08 s por chamada sem servidor, ~0,1 s por teste)
+- [x] Probes da F1 no contrato podem dar divergência falsa (campos em `optionalUsed`). (F9: resolvido; `tests/fixtures/contract-shapes.mjs` só diverge com o campo nos dois lados e tipo diferente, ver `tests/unit/contract-shapes.test.mjs`)
+- [x] `config.json` da fixture da F0 tem `fake-provider/fake-model`, que não existe no catálogo; testes que resolvem modelo gravam `defaultModel`. (F9: aceito; convenção documentada no cabeçalho de `tests/helpers.mjs`, ver `FIXTURE_MODELS`)
+- [x] O teste de paridade MCP × CLI da F5 cobre só o caminho de erro (modelos inexistentes), de propósito. (F9: aceito, texto desatualizado; `mcp-server.test.mjs` compara 7 leituras no caminho de sucesso e as recusas ficam em `mcp-jobs.test.mjs`)
+- [x] Janela curta entre a criação de uma sessão filha e o PATCH do perfil (documentada na F2a). (F9: obsoleto no V2; a filha herda as permissões e `dispatchSubagent` cria a sessão já com `permissions` em `runner.mjs`, sem PATCH)
 
 ## Backlog e sugestões (fora deste plano)
 
@@ -368,7 +380,7 @@ Acompanhar durante a execução; detalhes no "Registro de reconciliação" do me
 - [ ] Validar em macOS e Windows (hoje `NÃO VALIDADO`).
 - [ ] Reavaliar `share`/`unshare` só se houver necessidade real (cortado por risco de exfiltração).
 - [ ] Contribuir de volta ao `tasict/opencode-plugin-cc` os achados de bug (`--model` morto, stop gate com exit 1, reescrita do config global) — opcional.
-- [ ] Atualizar a spec a cada portão com as respostas do §15 (registro de revisões).
+- [x] Atualizar a spec a cada portão com as respostas do §15 (registro de revisões). (F9: spec com a subseção "Respostas (F8)" no §15 e a rev. 4)
 
 ## Registro de marcos
 

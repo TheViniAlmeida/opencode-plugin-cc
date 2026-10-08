@@ -92,6 +92,8 @@ test('cancelar durante espera de fallback não cria outra sessão', async (t) =>
   const c = await runCli(['cancel', job.id], { env, cwd: ws }); assert.equal(c.code, 0, output(c));
   await waitFor(() => jobsIn(env, ws).find((j) => j.id === job.id && j.status === 'cancelled'), { timeoutMs: 20_000 });
   await delay(500); assert.deepEqual(promptModels(env), [M.fast]); assert.equal(sessionCreates(env), 1);
+  // The fallback stop must not overwrite the cancellation's error fields.
+  assert.equal(jobsIn(env, ws).find((j) => j.id === job.id).errorCode, 'cancelled');
 });
 
 test('mascara texto de erro da tentativa em todos os canais de saída do CLI', async (t) => {
@@ -136,6 +138,7 @@ test('worker encerra como cancelled com cancelamento anterior à primeira tentat
   assert.equal(worker.code, 130, output(worker));
   const terminal = jobsIn(env, ws).find((entry) => entry.id === job.id);
   assert.equal(terminal.status, 'cancelled');
+  assert.equal(terminal.errorCode, 'cancelled');
   assert.deepEqual(terminal.attempts, []);
   assert.equal(requestsTo(env, 'POST', /^\/api\/session\/[^/]+\/prompt$/).length, 0);
 });

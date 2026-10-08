@@ -101,7 +101,12 @@ async function cmdEdit(ctx, flags, op, rest) {
   if (op === 'unset' ? valueParts.length > 0 : valueParts.length === 0) throw new UsageError('USAGE', USAGE);
   const raw = op === 'unset' ? undefined : valueParts.join(' ');
   const scope = flags.workspace ? 'workspace' : 'global';
-  if (scope === 'workspace' && !isWorkspaceKey(key)) {
+  // F4a: the workspace may only turn the delegation reminder off.
+  const workspaceDelegationOff = key === 'delegation.auto' && (raw === undefined || raw.trim() === 'false');
+  if (scope === 'workspace' && key === 'delegation.auto' && !workspaceDelegationOff) {
+    throw new UsageError('GLOBAL_ONLY_KEY', '"delegation.auto" no .opc.json só pode ser false (o workspace só desliga o lembrete); para ligar, use a configuração global');
+  }
+  if (scope === 'workspace' && !isWorkspaceKey(key) && !workspaceDelegationOff) {
     throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" não pode ser definida em .opc.json (o arquivo do workspace só pode restringir); use a configuração global`);
   }
   if (isLockedKey(key)) await confirmLocked(ctx, flags, { op, key, raw, scope });
