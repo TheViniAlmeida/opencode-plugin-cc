@@ -10,22 +10,23 @@
 
 | Item | Evidência | Resultado |
 |---|---|---|
-| Suíte completa | preenchido no portão | A CONFIRMAR |
-| `npm run scan-secrets` | preenchido no portão | A CONFIRMAR |
-| `git diff --check` | preenchido no portão | A CONFIRMAR |
-| Servidores falsos órfãos | preenchido no portão | A CONFIRMAR |
-| Guarda de docs da F8 | `tests/unit/docs-f8.test.mjs` | A CONFIRMAR |
+| Suíte completa | `node scripts/run-tests.mjs`: 2099 testes, 2098 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
+| `npm run scan-secrets` | `scan-secrets: nenhum achado.` | PASSOU |
+| `git diff --check` | Saída vazia, exit 0 | PASSOU |
+| Servidores falsos órfãos | `ps -eo ppid=,args= \| awk '$1==1 && $3 ~ /tests\/fixtures\/bin\/opencode$/' \| wc -l`: 0 | PASSOU |
+| Guarda de docs da F8 | `tests/unit/docs-f8.test.mjs` | PASSOU |
 | Claude Code headless (`claude -p --plugin-dir`, `--model haiku`) | servidor V2 isolado em attach e `OPC_DATA_DIR` temporário, sem tocar nas settings: a ferramenta MCP `opc_models` respondeu (`is_error` falso, `probe/a` na lista, 0 negações); os hooks `SessionStart` e `SessionEnd` gravaram `reaper.log` e `sessions.log` | PASSOU |
 | §15, item 9: `ppid` do hook | não é o Claude: o hook roda sob um `sh -c` transitório, já morto ao fim do hook; o servidor MCP é filho direto do `claude`. Depois da correção (c946a54), o registro guarda o `claude` (`pidComm` `claude`, vivo, mesmo pid que o pai do servidor MCP) | PASSOU |
 | Attach (`OPC_SERVER_URL`): catálogo e aviso de providers sem modelos | `opc models` com exit 0 em cerca de 2,3 s; o aviso no stderr cita `ghost-gw` e `disabled-gw` | PASSOU |
 | Linha de retomada do transfer em attach | pty (`script -qfec`): `"$OPC_SERVER_PASSWORD"` na linha, a TUI mostrou o título da sessão importada, sem erro de autenticação e sem senha na linha | PASSOU |
 | Linha de retomada do transfer no gerenciado | pty: `$(cat '<stateDir>/attach.secret')` na linha, mesmo resultado da TUI | PASSOU |
-| P1 (§15, item 5): precedência das fontes de config | global, projeto e `OPENCODE_CONFIG_CONTENT` com `model`; a sessão sem modelo foi respondida pelo modelo do env (`env-wins`) | PASSOU |
+| P1 (§15, item 5): precedência das fontes de config | global, projeto e `OPENCODE_CONFIG_CONTENT` com `model`; a sessão sem modelo foi respondida pelo modelo do env (`env-wins`)  (medido só para o escalar `model`; merge de objetos e `configOverride` desligando MCPs não testados) | PASSOU |
 | §15, item 3: `PATCH /api/session/:id {permissions}` | `replaces`: o PATCH substitui as regras | PASSOU |
-| §15, item 1: regras da sessão contra o arquivo | regras da sessão negando `read`: arquivo não lido, sem chamada de ferramenta (`session-rules-win`) | PASSOU |
-| §15, item 6: formato do `messageID` | observado `msg_` + 12 hex + 14 base62, como no código | PASSOU |
+| §15, item 1: regras da sessão contra o arquivo | regras da sessão negando `read`: arquivo não lido, sem chamada de ferramenta (`session-rules-win`) (inferido: o modelo não chamou ferramenta nenhuma, o que é compatível com o `read` filtrado, mas não prova o bloqueio) | PASSOU |
+| §15, item 6: formato do `messageID` | observado na sessão de validação (registro manual em F8-live-output.md, `messageIdSample`): `msg_` + 12 hex + 14 base62, como no código; o aceite do ID enviado pelo cliente vem dos jobs ao vivo da F6/F7 | PASSOU |
 | §15, item 10: import do transfer | `f5-transfer.mjs` (F7) e as linhas de retomada da F8 | PASSOU |
-| §15, item 12: TUI e servidor gerenciado | a TUI se anexou ao servidor gerenciado do opc enquanto ele rodava (pty) | PASSOU |
+| §15, item 12: TUI anexada ao servidor gerenciado | a TUI (`opencode --server <url> -s <id>`) se anexou ao servidor gerenciado do opc enquanto ele rodava (pty) | PASSOU |
+| §15, item 12: TUI independente (`opencode` sozinho no mesmo projeto) junto com o servidor do plugin | sem sonda; acesso concorrente ao storage não exercitado | NÃO VALIDADO |
 | Troca de servidor V1 registrado | o `serve` do V1 1.18.34 isolado não imprime nada em 25 s e o opc antigo deu `BOOT_FAILED` 3 vezes em 60 s; coberto por `tests/unit/server-v1-record.test.mjs` | N/A |
 
 ### Fatos ao vivo (resumo de F8-live-output.md)
@@ -50,7 +51,11 @@
   hooks. Com isso a associação MCP → sessão (`resolveClaudeSessionId`, que casa o pai do servidor MCP) nunca casava e
   a vida da sessão caía sempre no fallback de 24 h. `resolveHookOwner` (em `process.mjs`) sobe um nível quando o pai
   do hook é um shell e registra o processo do Claude.
-- **Sondas ao vivo (23db9a7):** attach, linhas de retomada e precedência de config.
+- **Sondas ao vivo (23db9a7):** attach, linhas de retomada e precedência de config. A de precedência virou
+  `tests/live/probe-f8-precedence.mjs` (fora do `npm run test:live`), nega só `read` e `bash` sobre os defaults e encerra
+  o servidor também quando ele não sobe.
+- **Revisão final:** `resolveHookOwner` só sobe quando o pai é um `sh -c` e nunca para o pid 1 (um shell interativo
+  segue como dono); itens 1, 5, 6 e 12 do §15 passaram a dizer exatamente o que a evidência mostra.
 - **Docs:** CHANGELOG, `troubleshooting.md`, nota de atualização no [relatório da F7](F7-report.md), checklist
   (§15 e backlog) e a guarda `tests/unit/docs-f8.test.mjs`.
 
@@ -63,6 +68,8 @@
 - A CONFIRMAR (operador): `opc-worker` num time real, Agent Teams (§15, item 11).
 - Inconclusivos ao vivo: §15, itens 2 (alcance do `always`) e 4 (grep/list/glob e curinga de nome para MCP).
 - NÃO VALIDADO: `/opc:attach --pane` (manual do operador).
+- NÃO VALIDADO: a TUI independente aberta no mesmo projeto enquanto o servidor gerenciado roda (§15, item 12, parte
+  do storage concorrente).
 - Limitação: nas ferramentas MCP o stderr é descartado em caso de sucesso, então o aviso de providers sem modelos
   não aparece lá; use a CLI.
 - N/A ao vivo: a troca de um servidor V1 registrado (ver o portão).

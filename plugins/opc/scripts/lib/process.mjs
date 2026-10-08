@@ -79,9 +79,9 @@ const HOOK_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ash', 'ksh']);
 export function resolveHookOwner(pid = process.ppid, { identityOf = getProcessIdentity, parentOf = getParentPid } = {}) {
   const identity = identityOf(pid);
   const argv0 = identity?.cmdline?.[0];
-  if (!argv0 || !HOOK_SHELLS.has(path.basename(argv0))) return { pid, identity };
+  if (!argv0 || !HOOK_SHELLS.has(path.basename(argv0)) || identity.cmdline[1] !== '-c') return { pid, identity };
   const parent = parentOf(pid);
-  const parentIdentity = parent ? identityOf(parent) : null;
+  const parentIdentity = parent > 1 ? identityOf(parent) : null;
   return parentIdentity ? { pid: parent, identity: parentIdentity } : { pid, identity };
 }
 

@@ -167,12 +167,16 @@ for (const mode of ['null', 'throw']) {
 }
 
 test('resolveHookOwner skips a transient shell parent and keeps any other parent', () => {
-  const ids = { 10: { pid: 10, startTime: 's10', cmdline: ['/bin/sh', '-c', 'node hook'] }, 7: { pid: 7, startTime: 's7', cmdline: ['claude', '-p'] }, 20: { pid: 20, startTime: 's20', cmdline: ['claude'] } };
+  const ids = { 11: { pid: 11, startTime: 's11', cmdline: ['-bash'] }, 12: { pid: 12, startTime: 's12', cmdline: ['/bin/bash'] }, 13: { pid: 13, startTime: 's13', cmdline: ['sh', '-c', 'x'] }, 1: { pid: 1, startTime: 's1', cmdline: ['/sbin/init'] }, 10: { pid: 10, startTime: 's10', cmdline: ['/bin/sh', '-c', 'node hook'] }, 7: { pid: 7, startTime: 's7', cmdline: ['claude', '-p'] }, 20: { pid: 20, startTime: 's20', cmdline: ['claude'] } };
   const deps = { identityOf: (pid) => ids[pid] ?? null, parentOf: (pid) => (pid === 10 ? 7 : null) };
   assert.deepEqual(resolveHookOwner(10, deps), { pid: 7, identity: ids[7] });
   assert.deepEqual(resolveHookOwner(20, deps), { pid: 20, identity: ids[20] });
   assert.deepEqual(resolveHookOwner(10, { ...deps, parentOf: () => null }), { pid: 10, identity: ids[10] });
   assert.deepEqual(resolveHookOwner(99, deps), { pid: 99, identity: null });
+  // An interactive shell (hook run by hand) is the owner itself; a `sh -c` reparented to init stays put.
+  assert.equal(resolveHookOwner(11, { ...deps, parentOf: () => 7 }).pid, 11);
+  assert.equal(resolveHookOwner(12, { ...deps, parentOf: () => 7 }).pid, 12);
+  assert.equal(resolveHookOwner(13, { ...deps, parentOf: () => 1 }).pid, 13);
 });
 
 test('getParentPid and resolveHookOwner see through a real `sh -c` parent', linuxOnly, () => {

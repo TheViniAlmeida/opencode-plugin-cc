@@ -108,7 +108,11 @@
 }
 ```
 
-### Claude Code headless (`claude -p --plugin-dir`)
+### Claude Code headless (`claude -p --plugin-dir`) — registro manual
+
+Sem sonda versionada: servidor V2 isolado (provider falso `probe-gw`) em attach, `OPC_DATA_DIR` temporário e
+`claude -p --plugin-dir plugins/opc --model haiku --output-format json --allowedTools=mcp__plugin_opc_opc__opc_models -- "<prompt>" < /dev/null`.
+O pai dos processos foi lido com `ps` durante a sessão; o `messageIdSample` veio da sessão de precedência.
 
 ```json
 {
@@ -121,8 +125,8 @@
     "hooks": { "sessionStart": "reaper.log start", "sessionEnd": "sessions.log end" },
     "mcpServerParent": "claude -p",
     "hookParentBeforeFix": { "pidComm": "sh", "aliveAfterHook": false },
-    "hookOwnerAfterFix": { "pidComm": "claude", "alive": true, "sameAsMcpParent": true }
+    "hookOwnerAfterFix": { "pidComm": "claude", "alive": true, "sameAsMcpParent": true },
+    "messageIdSample": "msg_11a4ff925001JvGmYLa0lvW7UV"
   }
 }
 ```
-
