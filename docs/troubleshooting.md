@@ -35,9 +35,9 @@ OPC_ARGS_5f1d0c7a_EOF
 
 ### Comandos falham com `TIMEOUT` em attach (catálogo vazio)
 
-- Sintoma: em attach (`OPC_SERVER_URL`), cada comando que resolve modelo espera até 15 s e termina com `TIMEOUT`; a mensagem informa o teto e o próximo passo.
+- Sintoma: em attach (`OPC_SERVER_URL`), todo comando que usa o servidor (inclusive `session show` e `status`) espera até 15 s e termina com `TIMEOUT`; a mensagem informa o teto e o próximo passo.
 - Causa: o servidor externo está com o catálogo de modelos vazio, porque nenhum provider carregou (chave inválida, gateway fora do ar, diretório recém-aberto ainda subindo).
-- Solução: corrija o provider no servidor externo (credencial, gateway) e confirme com `/opc:models` que o catálogo tem modelos; depois rode o comando de novo.
+- Solução: corrija o provider no servidor externo (credencial, gateway) e confirme direto no servidor externo (TUI do OpenCode ou `GET /api/model`) que o catálogo tem modelos, porque `/opc:models` também passa pela mesma espera; depois rode o comando de novo.
 
 ### Boot lento ou falho (`BOOT_FAILED`)
 

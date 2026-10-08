@@ -599,7 +599,7 @@ Com `--json`, o resumo contém `sessionID`, `title`, `model`, `workspaceRoot`,
 `messages` (`total`, `user`, `assistant`), `skipped` (`meta`, `sidechain`, `command`,
 `thinking`, `other`, `invalidLines`), `resumeCommand` e `warnings`.
 
-O `resumeCommand` usa o binário configurado (`server.opencodeBin` ou `OPC_OPENCODE_BIN`, senão `opencode`) e lê a senha de uma fonte fora do argv: no servidor gerenciado, `OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')"` (arquivo 600 regravado pelo opc); em servidor externo (`OPC_SERVER_URL`), `OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"`, e a variável precisa estar no ambiente do terminal. O valor da senha nunca aparece na linha. A execução da linha renderizada contra o OpenCode real segue **NÃO VALIDADO** (cobertura de testes unitários e de integração).
+O `resumeCommand` usa o binário configurado (`server.opencodeBin` ou `OPC_OPENCODE_BIN`, senão `opencode`) e lê a senha de uma fonte fora do argv: no servidor gerenciado, `OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')"` (arquivo 600 regravado pelo opc); em servidor externo (`OPC_SERVER_URL`), `OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"`, e a variável precisa estar no ambiente do terminal. O valor da senha nunca aparece na linha. Se o opc não conseguir regravar o arquivo da senha depois do import, a sessão importada é mantida, `resumeCommand` vem `null` e um aviso indica `/opc:attach <id>` para retomar. A execução da linha renderizada contra o OpenCode real segue **NÃO VALIDADO** (cobertura de testes unitários e de integração).
 
 | Exit code | Casos |
 |---|---|
