@@ -20,6 +20,18 @@ OPC_ARGS_5f1d0c7a_EOF
 - Sintoma: exit 5, versão anterior ao mínimo 2.0.22.
 - Solução: instale OpenCode V2 e configure `server.opencodeBin` ou `OPC_OPENCODE_BIN` se o primeiro binário no PATH for antigo. Sem jobs ativos, o próximo setup substitui o servidor registrado.
 
+### Servidor registrado anterior à 2.0.22 (`V1_SERVER_ACTIVE`)
+
+- Sintoma: exit 2 com `V1_SERVER_ACTIVE`. O servidor gerenciado registrado pelo opc responde como OpenCode anterior à 2.0.22 (o `/api/info` devolve a SPA, `NOT_JSON`, ou uma versão antiga) e ainda há jobs ativos nele.
+- Sem jobs ativos, o opc encerra esse servidor e sobe um V2, com um aviso. Com jobs ativos, ele não o derruba: aguarde (`/opc:status`) ou cancele (`/opc:cancel`) e rode o comando de novo.
+- A substituição só vale para o processo que o próprio opc registrou; processos de terceiros não recebem sinal.
+
+### Providers declarados sem modelos no catálogo
+
+- Sintoma: aviso `Providers declarados ainda sem modelos no catálogo: <providers>` ou `TIMEOUT` com a mensagem `O catálogo de modelos do OpenCode não carregou em <N> s`.
+- O catálogo é considerado pronto quando os providers declarados na config do OpenCode carregam. No servidor gerenciado, o opc espera o evento `model.updated`; em attach (`OPC_SERVER_URL`), espera até 15 s enquanto o catálogo está vazio e, com o catálogo já parcial, mais 2 s por providers faltantes.
+- Providers que não carregam (chave inválida, gateway fora do ar) não bloqueiam os demais: o aviso os nomeia. Confira credenciais e o gateway; se o `TIMEOUT` persistir, deixe o servidor terminar de subir e tente de novo.
+
 ### Boot lento ou falho (`BOOT_FAILED`)
 
 - O primeiro boot pode levar cerca de 20 s; cada tentativa espera `server.bootTimeoutSec` (padrão 60 s) e há até três portas candidatas.
@@ -133,6 +145,16 @@ O OpenCode só registra diff e revert com snapshots ligados. Com `"snapshot": fa
 
 Se a listagem de mensagens da sessão falhar, `opc session show` e `opc session revert` falham com o erro da API; não há modo degradado. No `revert`, uma mensagem que não pertence à sessão retorna `UNKNOWN_MESSAGE`. Tente de novo e, se persistir, consulte `server.log`.
 
+## `TIMEOUT` no `session summarize`
+
+O `summarize` envia a compactação e espera a sessão terminar dentro de um único `--timeout` (padrão 600 s). Se o prazo estourar, o comando retorna `TIMEOUT` (exit 5) com a mensagem "a compactação continua no servidor": o opc não cancela nada. Confira depois com `opc session show <sessionID>` ou rode de novo com um `--timeout` maior. O V2 registra a compactação como uma mensagem marcador, sem texto de resumo na API.
+
+## Revert pendente e `FORK_INHERITANCE_FAILED`
+
+- `task --resume` e `summarize` avisam no stderr quando a sessão tem revert pendente: um prompt novo o consolida e as mensagens revertidas deixam de poder voltar com `unrevert`. Faça o `unrevert` antes, se quiser as mensagens.
+- A prévia do `revert` avisa quando não foi possível confirmar se os snapshots estão ligados; nesse caso a reversão pode não restaurar arquivos.
+- `FORK_INHERITANCE_FAILED`: o fork foi criado, mas as regras de permissão ou o modelo da origem não puderam ser reaplicados e verificados (o OpenCode 2.0.22 devolve o fork sem eles). O opc não apaga o fork. Apague-o no OpenCode e rode `session fork` de novo; não use o fork criado.
+
 ## `/opc:attach --pane` não abre
 
 - `$TMUX` vazio: `--pane` retorna exit 2. Use a linha impressa por `/opc:attach` em um terminal ou execute dentro do tmux.
@@ -202,5 +224,4 @@ consenso criado pelo juiz.
   produzido uma sessão mesmo sem confirmação de sucesso.
 - **Sessão transferida ausente em `opencode session list`:** a lista é por projeto;
   execute dentro do workspace da transferência. Para retomar, use a linha
-  `cd … && opencode --server <url> -s <id>` retornada, com `OPENCODE_SERVER_PASSWORD` no ambiente. A retomada interativa ainda depende da
-  validação do portão F5.
+  `cd … && OPENCODE_SERVER_PASSWORD=… opencode --server <url> -s <id>` retornada. Ela usa o binário configurado (`server.opencodeBin` ou `OPC_OPENCODE_BIN`) e lê a senha fora do argv: do arquivo `attach.secret` no servidor gerenciado ou de `OPC_SERVER_PASSWORD` em servidor externo (a variável precisa estar no ambiente do terminal). Se o terminal pedir senha, gere a linha de novo com `/opc:transfer` ou `/opc:attach`. A execução dessa linha contra o OpenCode real ainda é **NÃO VALIDADO**.
