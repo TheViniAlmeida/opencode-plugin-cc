@@ -292,32 +292,50 @@ export function expectedProviders(opencodeConfig) {
 }
 
 // Ready when every declared provider is listed (the bootstrap event only shortens the wait). A provider that
-// never loads (bad key, gateway down) ends the wait at the deadline and is reported in `missing`.
-export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000, expected = [] } = {}) {
+// never loads (bad key, gateway down) ends the wait at the deadline and is reported in `missing`. `settleMs`
+// bounds how long to keep waiting for missing providers once the catalog is non-empty (default: until the
+// deadline); the deadline itself keeps applying while the catalog is empty.
+export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000, expected = [], settleMs = Infinity } = {}) {
   let announced = false;
-  bootstrap?.then((value) => { announced = value === true; });
-  const bootstrapDeadline = performance.now() + bootstrapTimeoutMs;
-  const deadline = performance.now() + Math.max(timeoutMs, bootstrap ? bootstrapTimeoutMs : 0);
+  let bootstrapSettled = false;
+  bootstrap?.then((value) => { announced = value === true; bootstrapSettled = true; });
+  const startedAt = performance.now();
+  const bootstrapDeadline = startedAt + bootstrapTimeoutMs;
+  const capMs = Math.max(timeoutMs, bootstrap ? bootstrapTimeoutMs : 0);
+  const deadline = startedAt + capMs;
+  const timeoutError = () => new ConnectionError('TIMEOUT', `O catálogo de modelos do OpenCode não carregou em ${Math.round(capMs / 1000)} s. Aguarde o servidor terminar de subir ou confira os providers da config do OpenCode.`);
+  const missingFrom = (list) => expected.filter((id) => !list.some((m) => m.providerID === id));
   let models = [];
+  let lastListed = [];
+  let firstListedAt = null;
   while (true) {
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      if (models.length === 0) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou a tempo.');
-      return { models, missing: expected.filter((id) => !models.some((m) => m.providerID === id)) };
+      if (lastListed.length === 0) throw timeoutError();
+      return { models: lastListed, missing: missingFrom(lastListed) };
     }
     try {
       models = await api.models({ timeoutMs: Math.max(1, Math.ceil(remaining)) });
     } catch (err) {
-      if (err.code === 'TIMEOUT' && performance.now() >= deadline) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou a tempo.');
+      if (err.code === 'TIMEOUT' && performance.now() >= deadline) {
+        if (lastListed.length === 0) throw timeoutError();
+        return { models: lastListed, missing: missingFrom(lastListed) };
+      }
       throw err;
     }
     if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
-    const missing = expected.filter((id) => !models.some((m) => m.providerID === id));
+    if (models.length > 0) {
+      lastListed = models;
+      firstListedAt ??= performance.now();
+    }
+    const missing = missingFrom(models);
     // With declared providers, their presence is the signal. Without any, keep the F6 rule: wait for
-    // model.updated until the bootstrap deadline (gateway providers can come from outside `provider`).
-    const bootstrapOver = !bootstrap || performance.now() >= bootstrapDeadline;
+    // model.updated until the bootstrap deadline (gateway providers can come from outside `provider`). A
+    // bootstrap that settled without the event (stream down or failed) is over: nothing more to wait for.
+    const bootstrapOver = !bootstrap || bootstrapSettled || performance.now() >= bootstrapDeadline;
     const ready = announced || (missing.length === 0 && (expected.length > 0 || bootstrapOver));
     if (models.length > 0 && ready) return { models, missing };
+    if (models.length > 0 && performance.now() - firstListedAt >= settleMs) return { models, missing };
     const delay = Math.min(pollMs, deadline - performance.now());
     if (delay > 0) await sleep(delay);
   }
@@ -346,7 +364,7 @@ async function attachServer(env, settings, config) {
   const api = createApi(client);
   const health = await api.info();
   assertSupportedVersion(health);
-  const { missing } = await waitForModelCatalog(api, { timeoutMs: 15_000, expected: expectedProviders(await loadOpencodeConfig(api)) });
+  const { missing } = await waitForModelCatalog(api, { timeoutMs: 15_000, settleMs: 2_000, expected: expectedProviders(await loadOpencodeConfig(api)) });
   const { world, warnings } = await worldCheck(client, config);
   warnings.unshift('Modo attach: o opc não sobe nem encerra este servidor, e o server.configOverride não se aplica.');
   if (missing.length) warnings.push(missingProvidersWarning(missing));

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureServer, expectedProviders, waitForModelCatalog } from '../../plugins/opc/scripts/lib/server.mjs';
+import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
@@ -60,4 +61,61 @@ test('attach waits for the declared providers to appear in the catalog without r
   const server = await ensureServer({ stateDir: dir, workspaceRoot: dir, config: {}, env: { OPC_SERVER_URL: 'http://127.0.0.1:43210' } });
   assert.equal(modelCalls, 2);
   assert.ok(!server.warnings.some((w) => w.includes('sem modelos no catálogo')));
+});
+
+test('a bootstrap that settled without the event (stream down) does not hold the wait when no provider is declared', async () => {
+  const started = performance.now();
+  const result = await waitForModelCatalog({ models: async () => [model('opencode')] },
+    { bootstrap: Promise.resolve(false), bootstrapTimeoutMs: 30_000, pollMs: 1, expected: [] });
+  assert.deepEqual(result.missing, []);
+  assert.ok(performance.now() - started < 1000, 'waited on a bootstrap that already settled');
+});
+
+test('settleMs bounds the wait for missing providers once the catalog is non-empty', async () => {
+  const started = performance.now();
+  const result = await waitForModelCatalog({ models: async () => [model('opencode')] },
+    { timeoutMs: 5_000, pollMs: 5, settleMs: 40, expected: ['gateway'] });
+  assert.deepEqual(result.missing, ['gateway']);
+  assert.ok(performance.now() - started < 1000, 'ran to the timeout instead of the settle window');
+});
+
+test('settleMs does not cut the wait while the catalog is still empty', async () => {
+  let calls = 0;
+  const api = { models: async () => { calls += 1; return calls < 6 ? [] : [model('opencode'), model('gateway')]; } };
+  const result = await waitForModelCatalog(api, { timeoutMs: 5_000, pollMs: 20, settleMs: 10, expected: ['gateway'] });
+  assert.deepEqual(result.missing, []);
+  assert.equal(calls, 6);
+});
+
+test('a catalog request that times out at the deadline after a non-empty poll returns the last catalog with missing providers', async () => {
+  let calls = 0;
+  const api = { models: async () => {
+    calls += 1;
+    if (calls === 1) return [model('opencode')];
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    throw new ConnectionError('TIMEOUT', 'request timed out');
+  } };
+  const result = await waitForModelCatalog(api, { timeoutMs: 50, pollMs: 1, expected: ['gateway'] });
+  assert.deepEqual(result.missing, ['gateway']);
+  assert.equal(result.models.length, 1);
+});
+
+test('the timeout error states the cap and the next step', async () => {
+  await assert.rejects(waitForModelCatalog({ models: async () => [] }, { timeoutMs: 30, pollMs: 5 }),
+    (err) => err.code === 'TIMEOUT' && /não carregou em \d+ s/.test(err.message) && /confira os providers/.test(err.message));
+});
+
+test('attach reports a declared provider that never loads in warnings after the settle window', async (t) => {
+  const dir = trackTempDir(t, makeTempDir('opc-attach-missing-'));
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const route = new URL(url).pathname;
+    if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
+    if (route === '/api/config') return new Response(JSON.stringify([{ type: 'document', info: { provider: { ghost: {} }, share: 'disabled' } }]));
+    assert.equal(route, '/api/model');
+    return new Response(JSON.stringify([model('opencode')]));
+  });
+  const started = performance.now();
+  const server = await ensureServer({ stateDir: dir, workspaceRoot: dir, config: {}, env: { OPC_SERVER_URL: 'http://127.0.0.1:43210' } });
+  assert.ok(server.warnings.some((w) => w.includes('sem modelos no catálogo') && w.includes('ghost')));
+  assert.ok(performance.now() - started < 10_000, 'attach ran to the 15 s cap instead of the settle window');
 });

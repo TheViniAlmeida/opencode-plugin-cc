@@ -149,3 +149,9 @@ test('attach mode: loopback http accepted, non-loopback http and credentials in 
   }
   await assert.rejects(ensureServer({ ...ctx, env: { ...env, OPC_SERVER_URL: fake.url, OPC_SERVER_PASSWORD: 'wrong-password-000000' } }), (e) => e.code === 'AUTH_FAILED');
 });
+
+test('managed boot reports a declared provider that is missing from the catalog in warnings', async (t) => {
+  const { ctx } = makeServerCtx(t, { config: { server: { configOverride: { share: 'disabled', provider: { 'ghost-gateway': {} } } } } });
+  const server = await ensureServer(ctx);
+  assert.ok(server.warnings.some((w) => w.includes('sem modelos no catálogo') && w.includes('ghost-gateway')), server.warnings.join(' | '));
+});
