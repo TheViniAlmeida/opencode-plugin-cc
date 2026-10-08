@@ -85,8 +85,11 @@ export function createApi(client) {
     return collectPages((next) => messagesPage(id, { limit: pageSize, cursor: next }), { limit, pageSize, cursor });
   };
   // The session list keeps the server's default page size unless a limit is given.
+  // The first page carries the filter; cursor pages send only the cursor (and limit), as the message list requires.
   const sessionsPage = async ({ parentID, limit, cursor } = {}) => {
-    const query = { ...(given(parentID) ? { parentID: assertId('ses', parentID) } : {}), ...(given(limit) ? { limit: pageLimit(limit) } : {}), ...(given(cursor) ? { cursor } : {}) };
+    const query = given(cursor)
+      ? { ...(given(limit) ? { limit: pageLimit(limit) } : {}), cursor }
+      : { ...(given(parentID) ? { parentID: assertId('ses', parentID) } : {}), ...(given(limit) ? { limit: pageLimit(limit) } : {}) };
     return toPage(await client.get('/api/session', { ...LIST_BODY, ...(Object.keys(query).length ? { query } : {}) }), 'GET /api/session');
   };
   // Every session (or the first `limit`). The parent filter is reapplied locally in case a cursor page ignores it.

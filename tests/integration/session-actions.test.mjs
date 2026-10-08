@@ -149,9 +149,10 @@ test('session children lists child sessions', async (t) => {
   const out = JSON.parse(res.stdout);
   assert.equal(out.children.length, 2);
   assert.ok(out.children.every((c) => c.parentID === SEED.session));
-  const query = fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session' && r.query.parentID);
-  // First page, then the cursor page that comes back empty (V2 fills cursor.next until an empty page).
-  assert.deepEqual(query.map((r) => [r.query.parentID, typeof r.query.cursor]), [[SEED.session, 'undefined'], [SEED.session, 'string']]);
+  const [first, ...cursorPages] = fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session');
+  // First page carries the parent filter; cursor pages send only the cursor (V2 fills cursor.next until an empty page).
+  assert.deepEqual([first.query.parentID, first.query.cursor], [SEED.session, undefined]);
+  assert.ok(cursorPages.length > 0 && cursorPages.every((r) => r.query.parentID === undefined && typeof r.query.cursor === 'string'));
   const text = await runCli(['session', 'children', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`Filhas de ${SEED.session}`));
   assert.match(text.stdout, /child one/);
