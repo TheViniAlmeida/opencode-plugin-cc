@@ -8,6 +8,7 @@ import { renderTransfer, safeResumeCommand } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
 import { attachSecretPath, ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
 import { serverContext } from '../lib/jobs.mjs';
+import { actionableServerWarnings } from '../lib/context.mjs';
 import { persistManagedAttachSecret } from './attach.mjs';
 import {
   buildExport, convertClaudeRecords, detectOpencodeVersion, readTranscript,
@@ -57,7 +58,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   // The resume line reads the password from a source instead of embedding it in argv.
   // The session already exists at this point: a failure to persist the secret must not hide its ID (a retry would
   // import the transcript again), so it degrades to a warning without the resume line.
-  const warnings = [];
+  const warnings = [...actionableServerWarnings(server.warnings)];
   let passwordFrom = null;
   if (server.attached) passwordFrom = '"$OPC_SERVER_PASSWORD"';
   else {

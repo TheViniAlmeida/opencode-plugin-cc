@@ -312,22 +312,35 @@ Estado (06/10/2026): mergeada na `main` pelo PR #12; Tasks 1–11 concluídas, c
 
 ---
 
+## F8 — Fechamento ao vivo · branch `feat/opc-f8-live-closure`
+
+Ao vivo: OpenCode 2.0.22; evidência em `docs/phases/F8-live-output.md`, relatório em `docs/phases/F8-report.md`.
+
+- [x] Avisos do servidor no stderr da CLI (`[opc] aviso: …`), deduplicados e silenciosos nos hooks; o `transfer` os inclui em `warnings`
+- [x] README em inglês (`README.en.md`)
+- [x] Sondas ao vivo: attach (catálogo e aviso de providers sem modelos), linhas de retomada do transfer num pty, precedência e permissões (§15, itens 1, 3, 5, 6, 10 e 12)
+- [x] Docs, CHANGELOG e guarda `tests/unit/docs-f8.test.mjs`
+- [ ] **manual (operador):** instalação real do plugin (§15, item 8), `/clear` interativo (§15, item 9; o `ppid` foi medido e corrigido na F8), Agent Teams (§15, item 11) e `/opc:attach --pane` — NÃO VALIDADO
+- [ ] itens 2 e 4 do §15 seguem inconclusivos ao vivo; servidor V1 registrado: N/A ao vivo (coberto por `tests/unit/server-v1-record.test.mjs`)
+
+---
+
 ## Itens A CONFIRMAR da spec (§15)
 
 | # | Item | Fase | Resposta |
 |---|---|---|---|
-| 1 | Precedência das regras de sessão sobre agente/global | F0 | pelo código: sessão vence; ao vivo: ____ |
+| 1 | Precedência das regras de sessão sobre agente/global | F0 | pelo código: sessão vence; ao vivo (F8): regras da sessão negando `read` impediram a leitura (arquivo não lido, sem chamada de ferramenta), então a sessão vence (inferido: nenhuma chamada de ferramenta) |
 | 2 | Alcance do `always` | F0 | pelo código: vale para a instância e vence o `deny` (o plugin não usa); ao vivo: ____ |
-| 3 | PATCH `permission` substitui ou anexa | F2a | pelo código: anexa; ao vivo: ____ |
+| 3 | PATCH `permission` substitui ou anexa | F2a | pelo código: anexa; ao vivo (F8): `PATCH /api/session/:id {permissions}` substitui as regras (o runner já verifica a igualdade) |
 | 4 | grep/list/glob usam caminhos? curinga de nome para MCP? | F0 | ____ |
-| 5 | Merge do `OPENCODE_CONFIG_CONTENT` | F0 | ____ |
-| 6 | Formato do `messageID` | F2a | pelo código: `msg_` + 12 hex + 14 base62; ao vivo: ____ |
+| 5 | Merge do `OPENCODE_CONFIG_CONTENT` | F0 | ao vivo (F8): global, projeto e `OPENCODE_CONFIG_CONTENT` com `model`; a sessão sem modelo foi respondida pelo modelo do env (`env-wins`), o que confirma o merge do opc para escalares (a última fonte vence); merge de objetos e `configOverride` desligando MCPs não testados |
+| 6 | Formato do `messageID` | F2a | pelo código: `msg_` + 12 hex + 14 base62; ao vivo (F8): formato observado na sessão de validação (`msg_` + 12 hex + 14 base62; registro manual) |
 | 7 | Agente em modo `subagent` como agente de sessão filha | F3 | ____ |
 | 8 | Id do plugin em `~/.claude/plugins/data/` | F0 | esperado: `opc-opencode-plugin-cc`; real: ____ |
-| 9 | `ppid` do hook é o processo do Claude | F2b | ____ |
-| 10 | Formato do export/import para o transfer | F5 | pelo plano: linha `Imported session: <id>` (o exit code não indica sucesso); ao vivo: ____ |
+| 9 | `ppid` do hook é o processo do Claude | F2b | ao vivo (F8): não, é um `sh -c` transitório; o hook agora registra o pai do shell (o `claude`, mesmo pai do servidor MCP). `/clear` interativo: NÃO VALIDADO (operador) |
+| 10 | Formato do export/import para o transfer | F5 | pelo plano: linha `Imported session: <id>` (o exit code não indica sucesso); ao vivo (F8): import validado (F7 `f5-transfer.mjs` e as linhas de retomada da F8) |
 | 11 | Ferramentas de Agent Teams disponíveis ao teammate | F4a | ____ |
-| 12 | Storage concorrente (TUI + servidor do plugin) | F3 | ____ |
+| 12 | Storage concorrente (TUI + servidor do plugin) | F3 | ao vivo (F8): a TUI se anexa ao servidor gerenciado do opc enquanto ele roda (pty), no mesmo servidor; TUI independente junto com o servidor do plugin: NÃO VALIDADO |
 
 ---
 
@@ -351,7 +364,7 @@ Acompanhar durante a execução; detalhes no "Registro de reconciliação" do me
 ## Backlog e sugestões (fora deste plano)
 
 - [ ] Sincronização de agentes do OpenCode como subagentes Claude (cortada da F5).
-- [ ] README em inglês para publicação.
+- [x] README em inglês para publicação (F8, `README.en.md`).
 - [ ] Validar em macOS e Windows (hoje `NÃO VALIDADO`).
 - [ ] Reavaliar `share`/`unshare` só se houver necessidade real (cortado por risco de exfiltração).
 - [ ] Contribuir de volta ao `tasict/opencode-plugin-cc` os achados de bug (`--model` morto, stop gate com exit 1, reescrita do config global) — opcional.

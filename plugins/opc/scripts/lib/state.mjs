@@ -213,7 +213,7 @@ import { getProcessIdentity as f2bGetProcessIdentity } from './process.mjs';
 export const CLAUDE_SESSION_ORPHAN_MS = 24 * 60 * 60 * 1000;
 
 // Live = the recorded pid still has the recorded start time, or the entry is younger than 24 h
-// (fallback while spec §15 item 9 — "is the hook ppid the Claude process?" — is unconfirmed).
+// (fallback for platforms without process identity; the hook records the Claude process, spec §15 item 9).
 export function isClaudeSessionLive(entry, { now = Date.now(), identityOf = f2bGetProcessIdentity } = {}) {
   if (entry?.pid && entry?.pidStartTime) {
     const identity = identityOf(entry.pid);

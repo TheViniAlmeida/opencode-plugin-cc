@@ -30,7 +30,9 @@ OPC_ARGS_5f1d0c7a_EOF
 
 - Sintoma: aviso `Providers declarados ainda sem modelos no catálogo: <providers>` ou `TIMEOUT` com a mensagem `O catálogo de modelos do OpenCode não carregou em <N> s`.
 - Os providers declarados são lidos da chave `providers` da config V2 (o V1 usava `provider`, aceito como reserva). Com providers declarados, o catálogo é considerado pronto quando eles carregam e o evento `model.updated` só encurta a espera; sem providers declarados, vale a regra da F6 (esperar o evento até o teto). Em attach (`OPC_SERVER_URL`), a espera vai até 15 s enquanto o catálogo está vazio e, depois do primeiro catálogo não vazio, até 2 s pelos providers faltantes.
-- A forma V2 de `enabled_providers` e `disabled_providers` é A CONFIRMAR (não observada ao vivo), e a espera do catálogo em attach está NÃO VALIDADA ao vivo (cobertura por fakes e fixtures).
+- O aviso diz: "Providers declarados ainda sem modelos no catálogo: <providers>. Confira credenciais e o gateway, ou se estão desligados por disabled_providers/enabled_providers (o GET /api/config do OpenCode V2 não expõe essas listas)." Ao vivo (2.0.22), o `GET /api/config` omite `disabled_providers` e `enabled_providers` (só traz share, mcp, plugins, providers e experimental), mas o catálogo `/api/model` respeita as duas listas; por isso um provider declarado e desligado por elas aparece no aviso como faltante.
+- O aviso sai no stderr da CLI como `[opc] aviso: …` (deduplicado, silencioso dentro de hooks). Nas ferramentas MCP o stderr é descartado quando o comando tem sucesso, então o aviso não aparece lá; rode `opc models` na CLI para vê-lo.
+- A espera do catálogo e o aviso em attach foram validados ao vivo na F8 (`opc models` com exit 0 e o aviso citando os providers faltantes).
 - Providers que não carregam (chave inválida, gateway fora do ar) não bloqueiam os demais: o aviso os nomeia. Confira credenciais e o gateway; se o `TIMEOUT` persistir, deixe o servidor terminar de subir e tente de novo.
 
 ### Comandos falham com `TIMEOUT` em attach (catálogo vazio)

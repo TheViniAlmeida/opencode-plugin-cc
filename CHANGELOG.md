@@ -6,6 +6,17 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Corrigido — F8
+
+- O hook `SessionStart` registrava o pid do `sh -c` transitório que o Claude Code usa para rodar hooks, e não o do Claude (§15, item 9, medido ao vivo). A associação de jobs MCP à sessão nunca casava e a vida da sessão caía sempre no fallback de 24 h. Agora o hook sobe um nível quando o pai é um shell (`resolveHookOwner`).
+- Os avisos do servidor (`surfaceServerWarnings`) saem no stderr da CLI como `[opc] aviso: …`, deduplicados e silenciosos dentro de hooks; o `transfer` os inclui em `warnings`. O aviso de providers sem modelos agora diz: "Providers declarados ainda sem modelos no catálogo: X. Confira credenciais e o gateway, ou se estão desligados por disabled_providers/enabled_providers (o GET /api/config do OpenCode V2 não expõe essas listas)." Nas ferramentas MCP o stderr é descartado em caso de sucesso, então o aviso não aparece lá.
+- Validado ao vivo (OpenCode 2.0.22): o catálogo e o aviso em attach (`OPC_SERVER_URL`), as linhas de retomada do `transfer` num pty (a TUI abre a sessão importada, sem erro de autenticação e sem senha na linha), a precedência das fontes de config (a de `OPENCODE_CONFIG_CONTENT` vence, como no merge do opc), o `PATCH` de permissões que substitui as regras e as regras da sessão que vencem as do arquivo. A troca de um servidor V1 registrado segue N/A ao vivo (coberta por `tests/unit/server-v1-record.test.mjs`).
+
+### Adicionado — F8
+
+- README em inglês (`README.en.md`).
+- Sondas ao vivo da F8 (attach, linhas de retomada e precedência de config), com a evidência saneada em `docs/phases/F8-live-output.md` e o relatório em `docs/phases/F8-report.md`.
+
 ### Corrigido — F7 (endurecimento V2)
 
 - `model` e `small_model` da config do OpenCode que chegam como objeto (`{providerID, model}`) são normalizados para `provider/modelo`; a precedência das fontes (global, projeto, `OPENCODE_CONFIG_CONTENT`, a última vence) segue a documentada e continua A CONFIRMAR no servidor.

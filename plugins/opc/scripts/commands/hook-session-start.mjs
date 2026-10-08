@@ -6,7 +6,7 @@ import { parseHookInput, readStdin } from '../lib/args.mjs';
 import { contextForCwd } from '../lib/context.mjs';
 import { loadConfig, delegationAutoEnabled } from '../lib/config.mjs';
 import { delegationReminder } from '../lib/render.mjs';
-import { getProcessIdentity } from '../lib/process.mjs';
+import { resolveHookOwner } from '../lib/process.mjs';
 import { registerClaudeSession } from '../lib/state.mjs';
 
 // O texto final vive em render.mjs; mantém o nome exportado da F2b.
@@ -48,9 +48,9 @@ export async function run(ctx) {
     });
     const hctx = contextForCwd(ctx, input.cwd || ctx.cwd, { allowInvalidConfig: true });
     if (input.session_id) {
-      const identity = getProcessIdentity(process.ppid);
+      const { pid, identity } = resolveHookOwner(process.ppid);
       await registerClaudeSession(hctx.stateDir, {
-        sessionId: input.session_id, pid: process.ppid,
+        sessionId: input.session_id, pid,
         pidStartTime: identity?.startTime ?? null,
         pidComm: identity?.cmdline?.[0] ? path.basename(identity.cmdline[0]) : null,
         source: input.source ?? null, startedAt: new Date().toISOString(),

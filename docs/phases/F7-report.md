@@ -85,3 +85,11 @@ arquivos foram restaurados e não entram nesta fase.
   opc trata a compactação como marcador e espera a sessão ociosa. `contract/opencode-2.0.22/compact.json` segue
   sintético.
 - Sessões criadas pelos testes ao vivo seguem nos bancos isolados dos servidores de teste.
+
+### Atualização F8
+
+A [F8](F8-report.md) resolveu, ao vivo no OpenCode 2.0.22, parte do que ficou pendente aqui (os vereditos acima
+seguem como foram registrados na F7): a espera do catálogo e o aviso em attach, a linha de retomada do transfer nas
+duas formas de senha, a precedência P1 (`env-wins`: a última fonte vence) e o fato de o `GET /api/config` do V2
+omitir `enabled_providers` e `disabled_providers` (o catálogo `/api/model` os respeita). A substituição de um
+servidor V1 registrado ficou N/A ao vivo (o `serve` do V1 isolado não responde); segue coberta por testes unitários.

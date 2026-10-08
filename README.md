@@ -1,12 +1,19 @@
 # opc — OpenCode dentro do Claude Code
 
+English: [README.en.md](README.en.md)
+
 Plugin do Claude Code que usa o [OpenCode](https://opencode.ai) como executor: o Claude delega
 análises, reviews e tarefas para modelos do OpenCode, com servidor gerenciado por workspace e
 permissões controladas pelo plugin.
 
-> Estado: **F6 — migração para OpenCode V2 implementada, portão em validação**. Descoberta, onboarding,
-> turnos, reviews, sessões, delegação, jobs, orquestração e conclave estão disponíveis.
-> O portão F6 e os procedimentos manuais no Claude Code/TUI seguem **NÃO VALIDADOS**.
+> Estado: **F7 integrada — OpenCode V2 (≥ 2.0.22) somente**. A migração da F6 e o endurecimento da F7
+> (catálogo, sessões, fork, summarize, transfer, paginação) estão na `main`. Descoberta, onboarding, turnos,
+> reviews, sessões, delegação, jobs, orquestração, conclave, servidor MCP e transfer estão disponíveis.
+> Validado ao vivo (Linux, OpenCode 2.0.22): sessões (new, show, fork, revert/unrevert, diff, summarize,
+> children), importação do transfer e a suíte automatizada; itens e resultados em
+> [docs/phases/F7-report.md](docs/phases/F7-report.md).
+> **NÃO VALIDADO**: procedimentos manuais no Claude Code e na TUI (instalação, `/mcp`, permissões,
+> `/opc:attach`, `--pane`, retomada após transfer), a espera do catálogo em attach e macOS/Windows.
 
 ## Requisitos
 
@@ -55,7 +62,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | roteamento/fallback, delegação, `opc-worker`, `opc monitor` | F4a | disponível |
 | `/opc:orchestrate` | F4b | disponível |
 | `/opc:conclave` | F4c | disponível |
-| servidor MCP, `/opc:transfer` | F5 | implementado, em validação |
+| servidor MCP, `/opc:transfer` | F5 | disponível; uso real no Claude e retomada na TUI não validados |
 
 ## Mapa do mínimo (paridade com o codex-plugin-cc)
 
@@ -75,7 +82,7 @@ O portão F1 confirmou descoberta, política, onboarding do companion e JSON sem
 | `/opc:command` | Roda um slash command do OpenCode em job próprio |
 | `/opc:attach` | Abre a sessão na TUI; `--pane` abre split no tmux e só o usuário invoca |
 | `/opc:permissions` | Responde pedidos de permissão e perguntas do OpenCode |
-| servidor MCP, `/opc:transfer` | Ferramentas `opc_*` e transferência da conversa para uma sessão OpenCode (F5, em validação) |
+| servidor MCP, `/opc:transfer` | Ferramentas `opc_*` e transferência da conversa para uma sessão OpenCode (F5; uso real no Claude não validado) |
 | Hooks | `SessionStart`/`SessionEnd` no ciclo do servidor e `Stop` no gate opcional |
 
 Primeiro review: `/opc:setup` → faça uma mudança → `/opc:review`.
@@ -92,7 +99,7 @@ do usuário. Veja o [catálogo e o formato dos resultados](docs/architecture.md#
 Para levar a conversa atual para o OpenCode, use `/opc:transfer` e depois
 `opencode --server <url> -s <id>` no terminal, com `OPENCODE_SERVER_PASSWORD` no ambiente. A [referência de comandos](docs/commands.md#opctransfer)
 explica a conversão, os limites e os erros. O uso real no Claude e a retomada interativa
-da sessão transferida ainda precisam de validação no portão F6.
+da sessão transferida seguem **NÃO VALIDADOS** (procedimento manual do operador; veja a [F7](docs/phases/F7-report.md)).
 
 ## Documentação
 
@@ -109,9 +116,10 @@ da sessão transferida ainda precisam de validação no portão F6.
 - [Relatório da F4b](docs/phases/F4b-report.md)
 - [Conclave](docs/conclave.md)
 - [Relatório da F4c](docs/phases/F4c-report.md)
-- [Plano e portão da F5 (em validação)](docs/superpowers/plans/2026-09-26-opc-F5-mcp-transfer.md)
+- [Plano e portão da F5](docs/superpowers/plans/2026-09-26-opc-F5-mcp-transfer.md)
 - [Relatório da F5 (aceite parcial)](docs/phases/F5-report.md)
 - [Relatório e portão da F6](docs/phases/F6-report.md)
+- [Relatório e portão da F7](docs/phases/F7-report.md)
 - [CHANGELOG](CHANGELOG.md)
 
 ## Licença e créditos
