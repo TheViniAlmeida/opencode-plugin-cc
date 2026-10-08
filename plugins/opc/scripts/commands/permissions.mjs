@@ -3,7 +3,7 @@ import { parseArgs } from '../lib/args.mjs';
 import { ConnectionError, ExitCode, NotFoundError, PolicyError, UsageError } from '../lib/opc-error.mjs';
 import { checkReply, displayValue } from '../lib/policy.mjs';
 import { redact } from '../lib/redact.mjs';
-import { clearJobRequests, existingServerApi, listJobs } from '../lib/jobs.mjs';
+import { clearJobRequests, existingServerApi, GROUP_ROLE, listJobs } from '../lib/jobs.mjs';
 import { renderPermissionList } from '../lib/render.mjs';
 
 const FLAGS = { json: { type: 'boolean' }, cwd: { type: 'string' }, 'confirmed-by-user': { type: 'boolean' } };
@@ -35,9 +35,18 @@ function requireServerApi(ctx, getApi = existingServerApi) {
 
 // A grouped request is mirrored on the member and on its group; clear every copy, and prefer the member for hints.
 const jobsForRequest = (ctx, id) => listJobs(ctx.stateDir, { all: true }).filter((job) => (job.pendingRequest ?? []).some((request) => request.id === id));
-const preferMember = (holders) => holders.find((job) => job.role !== 'group') ?? holders[0] ?? null;
+const preferMember = (holders) => holders.find((job) => job.role !== GROUP_ROLE) ?? holders[0] ?? null;
+// Members first, so a concurrent group sync cannot copy the request back; the reply already reached the server,
+// so a job that vanished meanwhile must not fail the command.
 async function clearHolders(ctx, clearRequests, holders, ids) {
-  for (const job of holders) await clearRequests(ctx.stateDir, job.id, ids);
+  const ordered = [...holders.filter((job) => job.role !== GROUP_ROLE), ...holders.filter((job) => job.role === GROUP_ROLE)];
+  for (const job of ordered) {
+    try {
+      await clearRequests(ctx.stateDir, job.id, ids);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
+  }
 }
 const sessionForRequest = (job, id) => job?.pendingRequest?.find((request) => request.id === id)?.sessionID;
 const trackedSessions = (jobs) => [...new Set(jobs.flatMap((job) => [job.sessionID, ...(job.childSessionIDs ?? []), ...(job.pendingRequest ?? []).map((request) => request.sessionID)]).filter(Boolean))];

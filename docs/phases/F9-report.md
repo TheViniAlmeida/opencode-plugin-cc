@@ -18,7 +18,7 @@
 ## O que mudou
 
 - **Config (3075d1f):** o `.opc.json` com `{"delegation":{"auto":false}}` desliga o lembrete de delegação sem aviso;
-  `true` é ignorado com o aviso `delegation.auto: o workspace só pode desligar (false)`. Antes, o aviso enganoso "não
+  `true` é ignorado com o aviso `.opc.json: o workspace só pode desligar (false); ignorado` (caminho `delegation.auto`). Antes, o aviso enganoso "não
   pode ser substituída no workspace; ignorado" saía mesmo quando o valor valia. `docs/configuration.md` foi atualizado
   em 4d8743a.
 - **Permissões (72ab1df):** `permissions reply` e `answer` limpam o pedido em todos os jobs que o espelham (membro e

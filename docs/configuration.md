@@ -117,10 +117,12 @@ opc config show --effective
 |---|---|---|---|
 | `delegation.auto` | booleano | `false` | Com `true` na configuração global, o `SessionStart` injeta o lembrete de delegação |
 
-O `.opc.json` só pode desligar esse lembrete com `false`, sem aviso; `true` no workspace é ignorado com o aviso `delegation.auto: o workspace só pode desligar (false)`.
+O `.opc.json` só pode desligar esse lembrete com `false`, sem aviso; `true` no workspace é ignorado com o aviso `.opc.json: o workspace só pode desligar (false); ignorado` (caminho `delegation.auto`).
 
 ```bash
 opc config set delegation.auto true
+# desligar só neste workspace (o .opc.json não aceita true)
+opc config set --workspace delegation.auto false
 ```
 
 ## `jobs`

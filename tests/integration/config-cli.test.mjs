@@ -278,3 +278,18 @@ test('arguments via --args-stdin are never expanded by a shell', async (t) => {
   assert.equal(prose.code, 0, prose.stderr);
   assert.equal(readGlobalConfig(env).project.goal, "can't-won't");
 });
+
+test('workspace edits: delegation.auto can only be turned off in .opc.json', async (t) => {
+  const { ws, cli } = setup(t, { config: { delegation: { auto: true } } });
+  const on = await cli(['config', 'set', 'delegation.auto', 'true', '--workspace']);
+  assert.equal(on.code, 2);
+  assert.match(all(on), /GLOBAL_ONLY_KEY/);
+  const off = await cli(['config', 'set', 'delegation.auto', 'false', '--workspace', '--json']);
+  assert.equal(off.code, 0, all(off));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')).delegation, { auto: false });
+  const shown = await cli(['config', 'show', '--effective', '--json']);
+  assert.equal(shown.code, 0, all(shown));
+  assert.doesNotMatch(all(shown), /não pode ser substituída/);
+  const unset = await cli(['config', 'unset', 'delegation.auto', '--workspace']);
+  assert.equal(unset.code, 0, all(unset));
+});
