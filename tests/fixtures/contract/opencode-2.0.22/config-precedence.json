@@ -1,0 +1,57 @@
+[
+  {
+    "type": "document",
+    "path": "<tmp>/config/opencode/opencode.json",
+    "info": {
+      "model": {
+        "providerID": "omniroute-personal",
+        "model": "probe/model-global"
+      }
+    }
+  },
+  {
+    "type": "directory",
+    "path": "<tmp>/config/opencode"
+  },
+  {
+    "type": "document",
+    "path": "<tmp>/workspace/opencode.json",
+    "info": {
+      "model": {
+        "providerID": "omniroute-personal",
+        "model": "probe/model-project"
+      }
+    }
+  },
+  {
+    "type": "document",
+    "info": {
+      "model": {
+        "providerID": "omniroute-personal",
+        "model": "probe/model-env"
+      },
+      "share": "disabled",
+      "providers": {
+        "omniroute-personal": {
+          "name": "Probe provider",
+          "package": "aisdk:@ai-sdk/openai-compatible",
+          "settings": {
+            "baseURL": "http://127.0.0.1:9/v1",
+            "apiKey": "fake-provider-key"
+          },
+          "models": {
+            "probe/model-env": {
+              "name": "env"
+            },
+            "probe/model-project": {
+              "name": "project"
+            },
+            "probe/model-global": {
+              "name": "global"
+            }
+          }
+        }
+      }
+    }
+  }
+]
