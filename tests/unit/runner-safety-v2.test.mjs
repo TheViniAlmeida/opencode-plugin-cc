@@ -45,6 +45,14 @@ test('C2: failed session persistence interrupts before sending the prompt', asyn
   assert.deepEqual(interrupts(api), ['ses_mem1']);
 });
 
+test('C2: an interrupt answered with interrupted:false on an idle session still confirms the abort', async () => {
+  const { api, hub } = memoryV2();
+  stubInterrupt(api, { result: false, idle: true });
+  const result = await runTurn({ api, hub, request: request({ idleWaitMs: 50 }), onSession: async () => { throw new Error('storage failed'); } });
+  assert.equal(result.errorType, 'CallbackFailed');
+  assert.equal(result.abortConfirmed, true);
+});
+
 for (const stage of ['createSession', 'onSession']) {
   for (const trigger of ['isCancelled', 'signal']) {
     for (const interruptMode of ['ok', 'server-down']) {
@@ -94,7 +102,7 @@ test('already aborted signal cancels before sending the prompt', async () => {
   assert.deepEqual(interrupts(api), ['ses_mem1']);
 });
 
-for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
+for (const mode of ['false', 'throws', 'busy', 'delayed-idle', 'false-idle']) {
   test(`F4a C1: retry cap requires a confirmed interrupt (${mode})`, async () => {
     const { api, hub, emit } = memoryV2();
     let idleObserved = false;
@@ -102,6 +110,7 @@ for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
       api.calls.push(['interrupt', id]);
       if (mode === 'throws') throw new Error('interrupt unavailable');
       if (mode === 'delayed-idle') setTimeout(() => { api.sessionStatus = async () => ({}); idleObserved = true; }, 10);
+      if (mode === 'false-idle') { api.sessionStatus = async () => ({}); idleObserved = true; return false; }
       return mode !== 'false';
     };
     const pending = runTurn({ api, hub, request: request({ fallbackCfg: { maxProviderRetries: 3 }, timeoutMs: 2000, idleWaitMs: mode === 'delayed-idle' ? 350 : 20 }) });
@@ -111,7 +120,7 @@ for (const mode of ['false', 'throws', 'busy', 'delayed-idle']) {
     emit({ type: 'session.retry.scheduled', data: { sessionID, attempt: 4, at: Date.now() + 1000, error: { type: 'provider.transport', message: 'retry' } } });
     const result = await pending;
     assert.equal(result.status, 'failed');
-    if (mode === 'delayed-idle') {
+    if (mode === 'delayed-idle' || mode === 'false-idle') {
       assert.equal(result.errorType, 'RetryCapExceeded');
       assert.equal(result.errorCode, 'retry_cap');
       assert.equal(result.errorClass, 'recoverable');
