@@ -114,8 +114,18 @@ function safeConfigInfo(content) {
     const info = {};
     for (const key of ['share', 'model', 'small_model', 'agent']) {
       if (typeof source?.[key] === 'string') info[key] = source[key];
+      // V2 normalizes model fields to { providerID, model }; the fake echoes that form when the content declares it.
+      else if (key.endsWith('model') && typeof source?.[key]?.providerID === 'string' && typeof source[key].model === 'string') {
+        info[key] = { providerID: source[key].providerID, model: source[key].model };
+      }
     }
     if (typeof source?.snapshot === 'boolean') info.snapshot = source.snapshot;
+    // Provider ids only: provider settings may carry credentials and the catalog tests need just the declaration.
+    // The real V2 reports them under `providers` (plural); the content may declare either spelling.
+    const declared = source?.providers ?? source?.provider;
+    if (declared && typeof declared === 'object' && !Array.isArray(declared)) {
+      info.providers = Object.fromEntries(Object.keys(declared).map((id) => [id, {}]));
+    }
     return info;
   } catch {
     return {};

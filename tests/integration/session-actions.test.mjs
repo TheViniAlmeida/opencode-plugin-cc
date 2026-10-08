@@ -14,6 +14,7 @@ async function setup(t, { scenario = 'f3-sessions', extra = {} } = {}) {
 
 const posts = (env, path) => fakeRequests(env).filter((r) => r.method === 'POST' && r.path === path);
 const IDLE_ID = 'msg_00000000000500000000000005';
+const forkIds = (env) => Object.keys(readFakeState(env).sessions).filter((id) => readFakeState(env).sessions[id].fork);
 const sessionCreates = (env) => posts(env, '/api/session');
 
 test('session new: title prefix, agent, model {id, providerID} and read-only rules', async (t) => {
@@ -66,7 +67,7 @@ test('session show: session, status and flat messages with ids', async (t) => {
   assert.deepEqual(out.messages.map((m) => m.id), [SEED.m1, SEED.m2, SEED.m3, SEED.m4, IDLE_ID]);
   assert.deepEqual(out.messages.map((m) => m.type), ['user', 'assistant', 'user', 'assistant', 'idle']);
   const list = fakeRequests(env).find((r) => r.method === 'GET' && r.path === `/api/session/${SEED.session}/message`);
-  assert.equal(list.query.order, 'asc');
+  assert.equal(list.query.order, 'desc', 'show reads the newest page with an explicit desc order and reverses it');
   const text = await runCli(['session', 'show', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`# Sessão ${SEED.session}`));
   assert.ok(text.stdout.includes(SEED.m3));
@@ -149,9 +150,10 @@ test('session children lists child sessions', async (t) => {
   const out = JSON.parse(res.stdout);
   assert.equal(out.children.length, 2);
   assert.ok(out.children.every((c) => c.parentID === SEED.session));
-  const query = fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session' && r.query.parentID);
-  // First page, then the cursor page that comes back empty (V2 fills cursor.next until an empty page).
-  assert.deepEqual(query.map((r) => [r.query.parentID, typeof r.query.cursor]), [[SEED.session, 'undefined'], [SEED.session, 'string']]);
+  const [first, ...cursorPages] = fakeRequests(env).filter((r) => r.method === 'GET' && r.path === '/api/session');
+  // First page carries the parent filter; cursor pages send only the cursor (V2 fills cursor.next until an empty page).
+  assert.deepEqual([first.query.parentID, first.query.cursor], [SEED.session, undefined]);
+  assert.ok(cursorPages.length > 0 && cursorPages.every((r) => r.query.parentID === undefined && typeof r.query.cursor === 'string'));
   const text = await runCli(['session', 'children', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`Filhas de ${SEED.session}`));
   assert.match(text.stdout, /child one/);
@@ -233,4 +235,102 @@ test('rejects malformed ids without contacting the server', async (t) => {
   try { readFakeState(env); } catch { started = false; }
   assert.ok(!started || fakeRequests(env).every((r) => !r.path.startsWith('/api/session')), 'no session request expected');
   assert.equal(existsSync(`${cwd}/pwned`), false);
+});
+
+test('session show --limit N shows the newest N messages in chronological order', async (t) => {
+  const { cwd, env } = await setup(t);
+  const all = JSON.parse((await runCli(['session', 'show', SEED.session, '--limit', '200', '--json'], { env, cwd })).stdout).messages;
+  const res = await runCli(['session', 'show', SEED.session, '--limit', '2', '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).messages.map((m) => m.id), all.slice(-2).map((m) => m.id));
+});
+
+test('session show warns in the text (not in the JSON) when --limit exceeds the page limit', async (t) => {
+  const { cwd, env } = await setup(t);
+  const text = await runCli(['session', 'show', SEED.session, '--limit', '500'], { env, cwd });
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /Aviso: mostrando as 200 mensagens mais recentes \(limite de página do OpenCode 2\)\./);
+  const json = await runCli(['session', 'show', SEED.session, '--limit', '500', '--json'], { env, cwd });
+  assert.equal(json.code, 0, json.stderr);
+  assert.doesNotMatch(json.stdout, /Aviso/);
+});
+
+test('session fork re-applies the source rules and model when the fork comes back without them', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.ok(state.sessions[SEED.session].permissions.length > 0, 'the source carries rules');
+  assert.deepEqual(state.sessions[forkId].permissions, state.sessions[SEED.session].permissions);
+  assert.deepEqual(state.sessions[forkId].model, state.sessions[SEED.session].model);
+  assert.deepEqual(JSON.parse(res.stdout).session.permissions, state.sessions[SEED.session].permissions, 'the output shows the re-read fork');
+});
+
+test('session fork fails loudly when the rules cannot be re-applied to the fork', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_PATCH_FAILS: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0, 'a fork without its source rules must not be reported as success');
+  assert.doesNotMatch(res.stdout, /"session"/);
+  const forkId = forkIds(env).at(-1);
+  assert.ok(forkId, 'the fork was created');
+  assert.ok((res.stdout + res.stderr).includes(forkId), 'the error names the fork');
+  assert.match(res.stdout + res.stderr, new RegExp(`Apague o fork ${forkId} no OpenCode e rode o fork de novo`));
+});
+
+test('session fork fails loudly when the rule write is acknowledged but not persisted', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_PATCH_NOOP: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0, 'a silently dropped write must not be reported as success');
+  assert.doesNotMatch(res.stdout, /"session"/);
+  const forkId = forkIds(env).at(-1);
+  assert.equal(readFakeState(env).sessions[forkId].permissions, undefined, 'the fake really dropped the write');
+  assert.match(res.stdout + res.stderr, new RegExp(`${forkId}.*não persistiu.*Apague o fork ${forkId}`, 's'));
+});
+
+test('session fork fails loudly when the model switch is acknowledged but not persisted', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_MODEL_NOOP: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0);
+  assert.doesNotMatch(res.stdout, /"session"/);
+  assert.match(res.stdout + res.stderr, /não persistiu/);
+});
+
+test('session fork repairs a fork that came back with only part of the source rules', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_PARTIAL_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.equal(state.sessions[SEED.session].permissions.length, 2);
+  assert.deepEqual(state.sessions[forkId].permissions, state.sessions[SEED.session].permissions);
+  assert.equal(posts(env, `/api/session/${forkId}/model`).length, 0, 'the inherited model needs no write');
+});
+
+test('session fork repairs a model that came back without its variant', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_VARIANT: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.equal(state.sessions[SEED.session].model.variant, 'default');
+  assert.deepEqual(state.sessions[forkId].model, state.sessions[SEED.session].model);
+});
+
+test('session fork of a source without rules makes no rule write and no error', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_SEED_NO_RULES: '1', FAKE_FORK_DROPS_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  assert.deepEqual(readFakeState(env).sessions[SEED.session].permissions, []);
+  assert.equal(fakeRequests(env).filter((r) => r.path === `/api/session/${forkId}` && r.method === 'PATCH').length, 0);
+});
+
+test('session fork leaves an inheriting fork alone (no extra rule or model writes)', async (t) => {
+  const { cwd, env } = await setup(t);
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  assert.equal(fakeRequests(env).filter((r) => r.path === `/api/session/${forkId}` && r.method === 'PATCH').length, 0);
+  assert.equal(posts(env, `/api/session/${forkId}/model`).length, 0);
 });

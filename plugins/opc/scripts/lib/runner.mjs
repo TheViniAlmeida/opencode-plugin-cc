@@ -232,7 +232,8 @@ export async function runTurn({
     if (forcedError || !retryExceedsCap(status, request.fallbackCfg ?? {})) return;
     forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
     try {
-      if (await api.interrupt(sessionID) === true && await waitIdle(api, sessionID, idleWaitMs)) forcedError = retryCapError(status);
+      await api.interrupt(sessionID); // V2: interrupted:false only means the session was already idle
+      if (await waitIdle(api, sessionID, idleWaitMs)) forcedError = retryCapError(status);
     } catch { /* Keep fail-closed error. */ }
     finish('forced-error');
   };
@@ -370,7 +371,7 @@ export async function runTurn({
       const sessionAborts = [];
       for (const id of [...tracked].reverse()) {
         let aborted = false;
-        try { aborted = await api.interrupt(id) === true; } catch { /* Unconfirmed. */ }
+        try { await api.interrupt(id); aborted = true; } catch { /* Unconfirmed. */ }
         sessionAborts.push({ sessionID: id, aborted, idle: false });
       }
       await Promise.all(sessionAborts.map(async (entry) => { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs); }));

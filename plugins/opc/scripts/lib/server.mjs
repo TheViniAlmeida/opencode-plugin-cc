@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, matchesGlob } from './config.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
+import { loadOpencodeConfig, mergeOpencodeConfigSources } from './opencode-config.mjs';
 import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
@@ -235,9 +236,10 @@ async function worldCheck(client, config) {
     if (!Array.isArray(sources)) {
       throw new Error('Resposta de GET /api/config não é uma lista de fontes.');
     }
-    const documents = sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info));
-    if (documents.length === 0) throw new Error('Nenhuma fonte de configuração do OpenCode V2 foi encontrada.');
-    oc = Object.assign({}, ...documents.map((source) => source.info));
+    if (!sources.some((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info))) {
+      throw new Error('Nenhuma fonte de configuração do OpenCode V2 foi encontrada.');
+    }
+    oc = mergeOpencodeConfigSources(sources);
   } catch (err) {
     world.shareBlocked = true;
     world.shareReason = 'config-unavailable';
@@ -282,32 +284,66 @@ export function watchCatalogBootstrap(client, { fetchImpl } = {}) {
   return { ready, opened, stop: () => { settle(false); hub.stop(); } };
 }
 
-export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000 } = {}) {
-  if (bootstrap) {
-    // Without the event by the deadline, fall back to the non-empty check below instead of failing the boot.
-    let timer;
-    await Promise.race([bootstrap, new Promise((resolve) => { timer = setTimeout(resolve, bootstrapTimeoutMs); })]);
-    clearTimeout(timer);
-  }
-  const deadline = performance.now() + timeoutMs;
+export function expectedProviders(opencodeConfig) {
+  // V2 reports the declared providers under `providers` (live fixtures opencode-2.0.22/config.json and
+  // config-precedence.json); the singular V1 `provider` is kept as a fallback.
+  const declared = Object.keys(opencodeConfig?.providers ?? opencodeConfig?.provider ?? {});
+  const enabled = Array.isArray(opencodeConfig?.enabled_providers) ? new Set(opencodeConfig.enabled_providers) : null;
+  const disabled = new Set(Array.isArray(opencodeConfig?.disabled_providers) ? opencodeConfig.disabled_providers : []);
+  return declared.filter((id) => !disabled.has(id) && (!enabled || enabled.has(id)));
+}
+
+// Ready when every declared provider is listed (the bootstrap event only shortens the wait). A provider that
+// never loads (bad key, gateway down) ends the wait at the deadline and is reported in `missing`. `settleMs`
+// bounds how long to keep waiting for missing providers once the catalog is non-empty (default: until the
+// deadline); the deadline itself keeps applying while the catalog is empty.
+export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 200, bootstrap = null, bootstrapTimeoutMs = 30_000, expected = [], settleMs = Infinity } = {}) {
+  let announced = false;
+  let bootstrapSettled = false;
+  bootstrap?.then((value) => { announced = value === true; bootstrapSettled = true; });
+  const startedAt = performance.now();
+  const bootstrapDeadline = startedAt + bootstrapTimeoutMs;
+  const capMs = Math.max(timeoutMs, bootstrap ? bootstrapTimeoutMs : 0);
+  const deadline = startedAt + capMs;
+  const timeoutError = () => new ConnectionError('TIMEOUT', `O catálogo de modelos do OpenCode não carregou em ${Math.round(capMs / 1000)} s. Aguarde o servidor terminar de subir ou confira os providers da config do OpenCode.`);
+  const missingFrom = (list) => expected.filter((id) => !list.some((m) => m.providerID === id));
+  let models = [];
+  let lastListed = [];
+  let firstListedAt = null;
   while (true) {
     const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
-    let models;
+    if (remaining <= 0) {
+      if (lastListed.length === 0) throw timeoutError();
+      return { models: lastListed, missing: missingFrom(lastListed) };
+    }
     try {
       models = await api.models({ timeoutMs: Math.max(1, Math.ceil(remaining)) });
     } catch (err) {
       if (err.code === 'TIMEOUT' && performance.now() >= deadline) {
-        throw new ConnectionError('TIMEOUT', 'O catálogo de modelos do OpenCode não carregou em 20 s.');
+        if (lastListed.length === 0) throw timeoutError();
+        return { models: lastListed, missing: missingFrom(lastListed) };
       }
       throw err;
     }
     if (!Array.isArray(models)) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de modelos não tem o formato do OpenCode V2.');
-    if (models.length > 0) return models;
+    if (models.length > 0) {
+      lastListed = models;
+      firstListedAt ??= performance.now();
+    }
+    const missing = missingFrom(models);
+    // With declared providers, their presence is the signal. Without any, keep the F6 rule: wait for
+    // model.updated until the bootstrap deadline (gateway providers can come from outside `provider`). A
+    // bootstrap that settled without the event (stream down or failed) is over: nothing more to wait for.
+    const bootstrapOver = !bootstrap || bootstrapSettled || performance.now() >= bootstrapDeadline;
+    const ready = announced || (missing.length === 0 && (expected.length > 0 || bootstrapOver));
+    if (models.length > 0 && ready) return { models, missing };
+    if (models.length > 0 && performance.now() - firstListedAt >= settleMs) return { models, missing };
     const delay = Math.min(pollMs, deadline - performance.now());
     if (delay > 0) await sleep(delay);
   }
 }
+
+const missingProvidersWarning = (missing) => `Providers declarados ainda sem modelos no catálogo: ${missing.join(', ')}. Confira credenciais e o gateway.`;
 
 async function attachServer(env, settings, config) {
   let parsed;
@@ -327,10 +363,13 @@ async function attachServer(env, settings, config) {
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
   const client = createClient({ baseUrl: url, password, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
-  const health = await createApi(client).info();
+  const api = createApi(client);
+  const health = await api.info();
   assertSupportedVersion(health);
+  const { missing } = await waitForModelCatalog(api, { timeoutMs: 15_000, settleMs: 2_000, expected: expectedProviders(await loadOpencodeConfig(api)) });
   const { world, warnings } = await worldCheck(client, config);
   warnings.unshift('Modo attach: o opc não sobe nem encerra este servidor, e o server.configOverride não se aplica.');
+  if (missing.length) warnings.push(missingProvidersWarning(missing));
   return { url, password, version: health.version, pid: null, port: Number(parsed.port) || null, attached: true, reused: true, world, warnings };
 }
 
@@ -394,6 +433,7 @@ async function bootServer(ctx, settings) {
     const bootstrap = watchCatalogBootstrap(client);
     let health;
     let identity;
+    const catalogWarnings = [];
     try {
       let openTimer;
       await Promise.race([bootstrap.opened, new Promise((resolve) => { openTimer = setTimeout(resolve, 5000); })]);
@@ -415,7 +455,9 @@ async function bootServer(ctx, settings) {
       try {
         const api = createApi(client);
         if (!Array.isArray(await api.agents())) throw new ConnectionError('UNSUPPORTED_VERSION', 'O catálogo de agentes não tem o formato do OpenCode V2.');
-        await waitForModelCatalog(api, { bootstrap: bootstrap.ready });
+        const opencodeConfig = await loadOpencodeConfig(api);
+        const { missing } = await waitForModelCatalog(api, { bootstrap: bootstrap.ready, expected: expectedProviders(opencodeConfig) });
+        if (missing.length) catalogWarnings.push(missingProvidersWarning(missing));
       } catch (err) {
         await terminateProcessGroup(expected, matcher, { graceMs: 3000 });
         throw err;
@@ -424,6 +466,7 @@ async function bootServer(ctx, settings) {
       bootstrap.stop();
     }
     const warnings = [];
+    warnings.push(...catalogWarnings);
     const checked = await worldCheck(client, config);
     warnings.push(...checked.warnings);
     const record = {
@@ -485,30 +528,40 @@ export async function ensureServer(ctx) {
       } else {
         const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
-        if (health.ok) assertSupportedVersion(health);
-        if (health.error?.code === 'UNSUPPORTED_VERSION' || health.error?.code === 'NOT_JSON') throw health.error;
-        if (health.ok && health.version === record.version) {
-          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
-          record.world = checked.world;
-          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
-          return {
-            url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
-          };
+        // The identity check above proved this is opc's own process: an old (V1) server answers /api/info with
+        // the SPA (NOT_JSON) or an old version, so replace it instead of failing every command.
+        const incompatible = health.error?.code === 'NOT_JSON' || health.error?.code === 'UNSUPPORTED_VERSION'
+          || (health.ok && compareVersions(health.version, MIN_OPENCODE_VERSION) < 0);
+        if (incompatible) {
+          if (hasActiveJobs()) {
+            throw new UsageError('V1_SERVER_ACTIVE', `O servidor gerenciado registrado é anterior ao OpenCode ${MIN_OPENCODE_VERSION} e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.`);
+          }
+          await shutdownRecorded(stateDir, record, full.opencodeBin);
+          warnings.push(`Servidor gerenciado anterior ao OpenCode ${MIN_OPENCODE_VERSION} encerrado; um servidor V2 será iniciado.`);
+        } else {
+          if (health.ok && health.version === record.version) {
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            record.world = checked.world;
+            writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+            return {
+              url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
+              attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
+            };
+          }
+          if (health.ok && hasActiveJobs()) {
+            warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            record.world = checked.world;
+            writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
+            return {
+              url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
+              attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
+            };
+          }
+          const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
+          await shutdownRecorded(stateDir, record, full.opencodeBin);
+          warnings.push(`Servidor anterior encerrado: ${why}.`);
         }
-        if (health.ok && hasActiveJobs()) {
-          warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
-          const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
-          record.world = checked.world;
-          writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
-          return {
-            url: record.url, password: record.password, version: record.version, pid: record.pid, port: record.port,
-            attached: false, reused: true, world: checked.world, warnings: [...warnings, ...checked.warnings],
-          };
-        }
-        const why = health.ok ? `versão mudou (${record.version} → ${health.version})` : 'servidor travado (health sem resposta)';
-        await shutdownRecorded(stateDir, record, full.opencodeBin);
-        warnings.push(`Servidor anterior encerrado: ${why}.`);
       }
     }
     const booted = await bootServer(full, settings);

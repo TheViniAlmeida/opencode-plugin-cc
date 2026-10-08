@@ -136,7 +136,7 @@ test('background review and result render the review', async (t) => {
   assert.match(result.stdout, /# OPC Revisão/); assert.match(result.stdout, /Veredito: needs-attention/);
 });
 
-test('StructuredOutputError degrades to raw text and exits 7', async (t) => {
+test('a review reply without JSON degrades to raw text and exits 7', async (t) => {
   const { cwd, env } = setup(t, { scenario: 'review-structured-error' }); makeDirty(cwd);
   const result = await runCli(['review', '--wait'], { env, cwd }); assert.equal(result.code, 7, result.stdout + result.stderr);
   assert.match(result.stdout, /O OpenCode não retornou uma saída estruturada válida\./); assert.match(result.stdout, /RAW_REVIEW_TEXT/);

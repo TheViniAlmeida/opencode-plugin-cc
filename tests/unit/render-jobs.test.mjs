@@ -52,9 +52,9 @@ test('renderTurnResult: texto concluído, estrutura, arquivos alterados e retoma
   assert.match(out, /Continuar: \/opc:task --resume task-abc-123456/);
 });
 
-test('renderTurnResult: erro de estrutura mostra texto bruto; server_lost oferece retomada', () => {
-  const s = renderTurnResult(job({ status: 'failed', errorType: 'StructuredOutputError', errorClass: 'recoverable', errorMessage: 'JSON inválido', result: { finalText: 'texto bruto' } }));
-  assert.match(s, /Saída bruta \(falha na saída estruturada\):\n\ntexto bruto/);
+test('renderTurnResult: falha com texto final mostra saída parcial; server_lost oferece retomada', () => {
+  const s = renderTurnResult(job({ status: 'failed', errorType: 'InvalidStructuredOutput', errorClass: 'recoverable', errorMessage: 'JSON inválido', result: { finalText: 'texto bruto' } }));
+  assert.match(s, /Saída parcial:\n\ntexto bruto/);
   const l = renderTurnResult(job({ kind: 'ask', status: 'failed', errorType: 'ServerLost', errorCode: 'server_lost', errorMessage: 'conexão perdida', result: {} }));
   assert.match(l, /Continue com: \/opc:ask --resume task-abc-123456/);
 });

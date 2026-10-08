@@ -53,7 +53,7 @@ test('renderiza plano inválido com erros e plano bruto', () => {
 });
 
 test('renderiza saída bruta do planner quando a decomposição falha', () => {
-  const out = renderOrchestration({ task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_structured_output', errorMessage: 'planner failed: schema mismatch', durationMs: 10, planner: { model: 'p/planner' }, plan: null, rawPlan: 'free text plan', planErrors: [], subtasks: [], synthesis: null, warnings: [] });
+  const out = renderOrchestration({ task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_failed', errorMessage: 'planner failed: schema mismatch', durationMs: 10, planner: { model: 'p/planner' }, plan: null, rawPlan: 'free text plan', planErrors: [], subtasks: [], synthesis: null, warnings: [] });
   assert.match(out, /## Saída bruta do planner\n\n```\nfree text plan\n```/);
 });
 
@@ -62,7 +62,7 @@ test('a cerca da saída bruta excede o maior conjunto de crases do conteúdo', (
     const run = '`'.repeat(runLength);
     const raw = `antes\n${run}\ndepois`;
     const out = renderOrchestration({
-      task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_structured_output', errorMessage: 'falha',
+      task: 't', status: 'failed', outcome: 'failed', errorCode: 'planner_failed', errorMessage: 'falha',
       durationMs: 10, planner: { model: 'p/planner' }, plan: null, rawPlan: raw,
       planErrors: [], subtasks: [], synthesis: null, warnings: [],
     });

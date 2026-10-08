@@ -34,7 +34,8 @@
 - Sessões: interromper com `interrupt`, revert só por stage (desfazível com `unrevert`; recusa com
   `SNAPSHOT_DISABLED` quando a config do OpenCode desliga snapshots), summarize por `compact` com corpo `{}`.
   Leitura de mensagens e sessões paginada por cursor (até 200 por página). `session todo` foi removido.
-- Transfer no formato V2 (`opencode session import`). A retomada usa `opencode --server <url> -s <id>`.
+- Transfer no formato V2 (`opencode session import`). A retomada usa `opencode --server <url> -s <id>` (a F7 passou a
+  usar o binário configurado e a senha fora do argv).
 - Boot do servidor gerenciado: espera o evento `model.updated` antes de confiar no catálogo (achado do portão ao
   vivo; detalhes na saída ao vivo).
 - Modelo padrão do servidor deixou de ser fallback de execução (`NO_MODEL`); `/opc:setup` não sugere mais o pacote
@@ -46,7 +47,7 @@
   de autorização explícita.
 - `f4c-opinion.mjs` exige três modelos distintos; o portão rodou com dois (`OPC_LIVE_POOL`).
 - Modo attach (`OPC_SERVER_URL`): a espera por `model.updated` só vale para servidores gerenciados. Um servidor
-  existente que abre um diretório novo pode responder com o catálogo ainda incompleto (A CONFIRMAR).
+  existente que abre um diretório novo pode responder com o catálogo ainda incompleto (A CONFIRMAR). **Resolvido em código na F7** (com a correção da chave `providers`): o catálogo é considerado pronto quando os providers declarados carregam, também em attach (ver [F7-report.md](F7-report.md)). NÃO VALIDADO ao vivo em attach: nenhum teste ao vivo usa `OPC_SERVER_URL`.
 - O vazamento de servidores falsos visto numa medição intermediária não se reproduziu: os seis arquivos de
   integração suspeitos passam e deixam zero órfãos.
 - Config do operador com `"snapshot": false`: nos servidores do operador, `session diff` fica vazio e
@@ -55,3 +56,10 @@
 - A CONFIRMAR: se a compactação é assíncrona (`delivery: steer`); `contract/opencode-2.0.22/compact.json` é
   sintético; a linha de retomada do transfer não diz de onde vem a senha; registro do servidor gerenciado V1 após
   upgrade; semântica de `interrupted:false` em `jobs.mjs`; permissões de `session fork`.
+  - **Resolvido na F7** (detalhes em [F7-report.md](F7-report.md)): a linha de retomada do transfer agora lê a
+    senha de uma fonte fora do argv (arquivo `attach.secret` ou `OPC_SERVER_PASSWORD`); um registro de servidor
+    gerenciado V1 é substituído (ou falha com `V1_SERVER_ACTIVE` com jobs ativos); `session fork` perde as regras
+    e o modelo no servidor (P3) e o opc os reaplica e verifica; a interrupção passou a ser confirmada pela
+    ociosidade, não por `interrupted`. A compactação no V2 2.0.22 deixa só um marcador e responde em ms (I1); se é
+    síncrona ou assíncrona segue indeterminado, e o opc espera a sessão ociosa dentro de um `--timeout`.
+    `compact.json` segue sintético.

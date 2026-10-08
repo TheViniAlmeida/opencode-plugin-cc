@@ -90,6 +90,14 @@ test('share-auto: world check marks sessions as blocked and assertCanCreateSessi
   assert.equal(reused.world.shareBlocked, true, 'block survives reuse');
 });
 
+test('world check: a denied default model arriving in the V2 object form { providerID, model } is still detected', async (t) => {
+  const configOverride = { share: 'disabled', model: { providerID: 'fake-provider', model: 'm1' }, small_model: { providerID: 'fake-provider', model: 'm2' } };
+  const { ctx } = makeServerCtx(t, { config: { policy: { providers: { deny: ['fake-provider'] } }, server: { configOverride } } });
+  const server = await ensureServer(ctx);
+  assert.deepEqual(server.world.deniedDefaults, ['model', 'small_model']);
+  assert.ok(server.warnings.some((w) => /"model"/.test(w) && /configOverride\.model/.test(w)));
+});
+
 test('world check: default override share:"disabled" keeps sessions allowed; denied model/small_model warn', async (t) => {
   const { ctx } = makeServerCtx(t, { config: { policy: { providers: { deny: ['fake-provider'] } } } });
   const server = await ensureServer(ctx);
@@ -148,4 +156,10 @@ test('attach mode: loopback http accepted, non-loopback http and credentials in 
     await assert.rejects(ensureServer({ ...ctx, env: { ...env, OPC_SERVER_URL: url } }), (e) => e.code === 'INSECURE_SERVER_URL' && e.exitCode === 2, url);
   }
   await assert.rejects(ensureServer({ ...ctx, env: { ...env, OPC_SERVER_URL: fake.url, OPC_SERVER_PASSWORD: 'wrong-password-000000' } }), (e) => e.code === 'AUTH_FAILED');
+});
+
+test('managed boot reports a declared provider that is missing from the catalog in warnings', async (t) => {
+  const { ctx } = makeServerCtx(t, { config: { server: { configOverride: { share: 'disabled', provider: { 'ghost-gateway': {} } } } } });
+  const server = await ensureServer(ctx);
+  assert.ok(server.warnings.some((w) => w.includes('sem modelos no catálogo') && w.includes('ghost-gateway')), server.warnings.join(' | '));
 });

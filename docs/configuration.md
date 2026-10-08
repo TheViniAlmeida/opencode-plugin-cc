@@ -73,6 +73,10 @@ Exemplo mínimo global:
 }
 ```
 
+## Modelo declarado na config do OpenCode
+
+O `model` e o `small_model` da config do OpenCode V2 podem vir como objeto (`{providerID, model}`); o opc os normaliza para o texto `provider/modelo` antes de usá-los. A config efetiva é a mescla das fontes na ordem arquivo global, arquivo do projeto e `OPENCODE_CONFIG_CONTENT`, em que a última vence, como na precedência documentada do OpenCode. Essa ordem **não foi confirmada no servidor** (A CONFIRMAR: o servidor não revela o vencedor sem inferência; fato `P1-precedence` na [saída ao vivo da F7](phases/F7-live-output.md)).
+
 ## IDs de modelo e aliases
 
 Um ID completo é `provider/modelo`; o nome do modelo pode conter barras. Um nome curto é completado por `defaultProvider`. Se mais de um ID puder corresponder, o comando recusa com `AMBIGUOUS_MODEL`; use `=` para exigir o ID literal, como `=opencode/big-pickle`. Globs aceitam `*`, inclusive sobre `/`.

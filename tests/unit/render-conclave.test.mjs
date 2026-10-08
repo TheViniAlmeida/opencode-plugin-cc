@@ -65,9 +65,9 @@ for (const error of [
 }
 
 test('failed judge and failures table are shown', () => {
-  const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error: { errorType: 'StructuredOutputError', message: 'bad' } }, failures: [{ label: 'C', round: 1, role: 'member', errorType: 'Timeout', message: 'timed out | late' }], warnings: ['falha do juiz'] };
+  const pkg = { ...base(), judge: { type: 'model', model: KM, status: 'failed', error: { errorType: 'InvalidStructuredOutput', message: 'bad' } }, failures: [{ label: 'C', round: 1, role: 'member', errorType: 'Timeout', message: 'timed out | late' }], warnings: ['falha do juiz'] };
   const out = renderConclave(pkg);
-  assert.match(out, /O juiz `omniroute-personal\/opencode-go\/kimi-k3` falhou\. Sintetize com a skill `opc-conclave`\.\n\n```\nStructuredOutputError: bad\n```/);
+  assert.match(out, /O juiz `omniroute-personal\/opencode-go\/kimi-k3` falhou\. Sintetize com a skill `opc-conclave`\.\n\n```\nInvalidStructuredOutput: bad\n```/);
   assert.match(out, /\| C \| 1 \| Timeout \| timed out \\\| late \|/);
   assert.match(out, /\*\*Avisos:\*\*\n- falha do juiz/);
 });

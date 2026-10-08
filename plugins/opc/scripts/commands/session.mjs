@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
-import { ExitCode, UsageError } from '../lib/opc-error.mjs';
+import { ExitCode, UsageError, RequestError, ConnectionError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, resolveModel, requireAgent, profileRules } from '../lib/context.mjs';
-import { assertId } from '../lib/api.mjs';
+import { assertId, MAX_PAGE_LIMIT } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
 import { maskDeep, safeOutputText } from '../lib/redact.mjs';
-import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
+import { loadOpencodeConfig, opencodeConfigUnavailable } from '../lib/opencode-config.mjs';
 
 const SPEC = {
   flags: {
@@ -30,6 +30,9 @@ const SPEC = {
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 export const EMPTY_DIFF_NOTICE = 'O OpenCode não informou alterações para esta sessão (o diff pode vir vazio mesmo com arquivos alterados); a fonte confiável é o git do workspace (ex.: git diff).';
 export const SNAPSHOT_DISABLED_NOTICE = 'O OpenCode está com "snapshot": false: sem snapshots, a sessão não registra diff e a reversão não restaura arquivos.';
+// A staged revert is consolidated by the next prompt (verified live, I2): the reverted messages stop being restorable.
+export const PENDING_REVERT_NOTICE = 'A sessão tem um revert pendente; um prompt novo o consolida e as mensagens revertidas deixam de poder voltar com unrevert.';
+export const SNAPSHOT_UNKNOWN_NOTICE = 'Aviso: não foi possível confirmar se os snapshots estão ligados (GET /api/config falhou); a reversão pode não restaurar arquivos.';
 export const REVERT_SCOPE_NOTICE = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo. A reversão pode alterar arquivos; confira o estado da sessão e do workspace antes de confirmar.';
 
 async function actionNew(ctx, api, { flags }) {
@@ -55,19 +58,47 @@ async function actionShow(ctx, api, { flags, sessionID }) {
   const [session, statusMap, messages] = await Promise.all([
     api.getSession(sessionID),
     api.sessionStatus(),
-    readSessionMessages(api, sessionID, { limit: flags.limit }),
+    readSessionMessages(api, sessionID, { limit: flags.limit, latest: true }),
   ]);
   const status = statusMap?.[sessionID]?.type ?? 'idle';
   const safeSession = maskDeep(session);
   const safeMessages = maskDeep(messages ?? []);
   if (flags.json) ctx.json({ session: safeSession, status, messages: safeMessages });
-  else ctx.out(renderSession(safeSession, { status, messages: safeMessages }));
+  else {
+    const capped = Number.isFinite(flags.limit) && flags.limit > MAX_PAGE_LIMIT;
+    const note = capped ? `Aviso: mostrando as ${MAX_PAGE_LIMIT} mensagens mais recentes (limite de página do OpenCode 2).` : null;
+    ctx.out(renderSession(safeSession, { status, messages: safeMessages, note }));
+  }
   return ExitCode.OK;
 }
 
+// The source's explicit rules and model that the fork does not carry (the variant counts only when the source has one).
+const rulesGap = (source, fork) => Array.isArray(source?.permissions) && source.permissions.length > 0
+  && JSON.stringify(fork?.permissions ?? null) !== JSON.stringify(source.permissions);
+const modelGap = (source, fork) => Boolean(source?.model?.id && source?.model?.providerID)
+  && (fork?.model?.id !== source.model.id || fork.model.providerID !== source.model.providerID
+    || (Boolean(source.model.variant) && fork.model.variant !== source.model.variant));
+const hasInheritanceGap = (source, fork) => rulesGap(source, fork) || modelGap(source, fork);
+const forkInheritanceError = (forkID, reason, cause) => new RequestError('FORK_INHERITANCE_FAILED',
+  `O fork ${forkID} foi criado, mas as regras ou o modelo da sessão de origem não foram reaplicados (${reason}); não use esse fork. Apague o fork ${forkID} no OpenCode e rode o fork de novo.`,
+  cause === undefined ? {} : { cause });
+
 async function actionFork(ctx, api, { flags, sessionID, rest }) {
   const messageID = flags.before ? assertId('msg', flags.before, 'mensagem') : undefined;
-  const forked = await api.fork(sessionID, { before: messageID });
+  const source = await api.getSession(sessionID);
+  let forked = await api.fork(sessionID, { before: messageID });
+  // V2 2.0.22 returns forks without the parent's rules and model; a fork must never end up with fewer rules than its source.
+  if (hasInheritanceGap(source, forked)) {
+    try {
+      if (rulesGap(source, forked)) await api.setPermissions(forked.id, source.permissions);
+      if (modelGap(source, forked)) await api.setModel(forked.id, { providerID: source.model.providerID, id: source.model.id, ...(source.model.variant ? { variant: source.model.variant } : {}) });
+      forked = await api.getSession(forked.id);
+    } catch (err) {
+      throw forkInheritanceError(forked.id, safeOutputText(err?.message ?? String(err)), err);
+    }
+    // A 2xx write that the server did not persist is as bad as a failed one.
+    if (hasInheritanceGap(source, forked)) throw forkInheritanceError(forked.id, 'o servidor não persistiu a alteração', undefined);
+  }
   if (flags.json) ctx.json(maskDeep({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } }));
   else ctx.out(renderSession(forked, { note: `Fork de ${sessionID}${messageID ? `, com o histórico anterior a ${messageID}` : ''}.` }));
   return ExitCode.OK;
@@ -85,7 +116,7 @@ async function actionDiff(ctx, api, { flags, sessionID }) {
   const diffs = (await api.diff(sessionID)) ?? [];
   const safeDiffs = maskDeep(diffs);
   // An empty V2 diff is not proof of an untouched workspace; never derive a diff locally.
-  const notices = safeDiffs.length ? [] : [EMPTY_DIFF_NOTICE, ...(await snapshotsDisabled(api) ? [SNAPSHOT_DISABLED_NOTICE] : [])];
+  const notices = safeDiffs.length ? [] : [EMPTY_DIFF_NOTICE, ...((await snapshotState(api)) === 'disabled' ? [SNAPSHOT_DISABLED_NOTICE] : [])];
   if (flags.json) ctx.json(maskDeep({ sessionID, messageID: null, source: 'session', notices, diffs: safeDiffs }));
   else ctx.out(`${renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}` })}${notices.map((notice) => `\nAviso: ${notice}\n`).join('')}`);
   return ExitCode.OK;
@@ -114,8 +145,26 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
 }
 
 // V2 diffs and file restores come from snapshots; the merged OpenCode config can turn them off.
-async function snapshotsDisabled(api) {
-  return (await loadOpencodeConfig(api))?.snapshot === false;
+// 'disabled' | 'enabled' | 'unknown' (GET /api/config failed).
+async function snapshotState(api) {
+  const config = await loadOpencodeConfig(api);
+  if (opencodeConfigUnavailable(config)) return 'unknown';
+  return config.snapshot === false ? 'disabled' : 'enabled';
+}
+
+// Compaction may be a marker (session already idle) or asynchronous (session active, `time.compacting` set).
+// True once the session is neither active nor compacting; false when the deadline passes first.
+// It always checks at least once, so an idle session answers true even with no budget left.
+export async function waitCompaction(api, sessionID, { timeoutMs = 0, pollMs = 250 } = {}) {
+  const deadline = performance.now() + Math.max(0, timeoutMs);
+  for (;;) {
+    const busy = Boolean((await api.sessionStatus())?.[sessionID]);
+    const compacting = Boolean((await api.getSession(sessionID))?.time?.compacting);
+    if (!busy && !compacting) return true;
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
+  }
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
@@ -125,13 +174,15 @@ async function actionRevert(ctx, api, { flags, sessionID, rest }) {
   if (flags.part) throw new UsageError('UNKNOWN_OPTION', '--part não está disponível no OpenCode 2');
   return withSessionGuard(ctx, api, sessionID, async () => {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
-    if (await snapshotsDisabled(api)) {
+    const snapshots = await snapshotState(api);
+    if (snapshots === 'disabled') {
       throw new UsageError('SNAPSHOT_DISABLED', `${SNAPSHOT_DISABLED_NOTICE} Defina "snapshot": true em server.configOverride na configuração global do opc (ou na do OpenCode) e reinicie o servidor (opc setup --stop-server).`);
     }
     if (!flags['confirmed-by-user']) {
       const command = `opc session revert ${sessionID} ${messageID} --confirmed-by-user`;
-      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
-      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
+      const notice = snapshots === 'unknown' ? `${REVERT_SCOPE_NOTICE}\n${SNAPSHOT_UNKNOWN_NOTICE}` : REVERT_SCOPE_NOTICE;
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice, command }));
+      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice, command }));
       return ExitCode.USAGE;
     }
     // Stage only: it restores the files and keeps the revert pending, so DELETE (unrevert) can undo it.
@@ -169,9 +220,18 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
   const discovery = await loadDiscovery(api);
   const model = resolveModel(ctx, discovery, 'summarize', flags.model);
   return withSessionGuard(ctx, api, sessionID, async () => {
+    // One --timeout budget covers the compact request and the wait for the compaction to finish.
+    const timeoutMs = (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000;
+    const deadline = performance.now() + timeoutMs;
+    if ((await api.getSession(sessionID))?.revert) ctx.err(`[opc] aviso: ${PENDING_REVERT_NOTICE}\n`);
     await api.setModel(sessionID, { providerID: model.providerID, id: model.modelID });
-    // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }).
-    const compaction = await api.compact(sessionID, { timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000 });
+    // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }); the compaction itself can outlive the answer.
+    const compaction = await api.compact(sessionID, { timeoutMs });
+    if (!(await waitCompaction(api, sessionID, { timeoutMs: Math.max(0, deadline - performance.now()) }))) {
+      // TIMEOUT is the code opc shares for every timeout (exit 5). WAIT_TIMEOUT (6) is deliberately not used:
+      // MCP treats it as a non-error, and here the summary was not confirmed.
+      throw new ConnectionError('TIMEOUT', `A compactação da sessão ${safeOutputText(sessionID)} não terminou em ${timeoutMs / 1000} s; a compactação continua no servidor. Confira depois com opc session show.`);
+    }
     const compactionMessageID = typeof compaction?.id === 'string' ? compaction.id : null;
     if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true, compactionMessageID }));
     else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\n${compactionMessageID ? `Mensagem de compactação: ${safeOutputText(compactionMessageID)}\n` : ''}Veja o resultado: opc session show ${safeOutputText(sessionID)}\n`);

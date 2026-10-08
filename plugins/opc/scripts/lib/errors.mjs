@@ -14,7 +14,6 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
     'execution.failed': 'A execução falhou.',
     APIError: 'Falha na API do provedor.',
     BadRequest: 'A requisição foi rejeitada.',
-    StructuredOutputError: 'A saída estruturada é inválida.',
     ContextOverflowError: 'O contexto do modelo foi excedido.',
   };
   const providerDetail = ['provider.no-route', 'provider.auth'].includes(errorType) && typeof (error?.data?.message ?? error?.message) === 'string'
@@ -40,8 +39,6 @@ export function classifyError(error, { toolsRan = false, candidateHasLargerConte
       return as('fatal');
     case 'permission.rejected':
       return as(toolsRan ? 'recoverable' : 'fatal');
-    case 'StructuredOutputError':
-      return as(toolsRan ? 'fatal' : 'recoverable');
     case 'ContextOverflowError':
       return as(candidateHasLargerContext ? 'recoverable' : 'fatal');
     default:

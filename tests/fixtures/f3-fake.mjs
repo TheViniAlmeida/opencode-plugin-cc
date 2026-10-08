@@ -56,6 +56,7 @@ export function seedSession(fake) {
   const make = (id, title, updated) => ({ ...structuredClone(base), id, title, time: { created: t0, updated }, location: { directory: process.cwd() } });
   fake.state.sessions[SEED.session] = make(SEED.session, 'OPC: task: seeded session', t0 + 4000);
   fake.state.sessions[SEED.userSession] = make(SEED.userSession, 'User session from the TUI', t0 + 1000);
+  if (process.env.FAKE_SEED_NO_RULES === '1') fake.state.sessions[SEED.session].permissions = [];
   const injected = process.env.FAKE_SESSION_CONTENT ?? '';
   if (injected) fake.state.sessions[SEED.session].title = `OPC: task: ${injected}`;
   fake.state.messages[SEED.session] = [userMessage(SEED.session, SEED.m1, injected || 'first question', t0 + 1000),
@@ -87,12 +88,28 @@ export const F3_SESSION_ROUTES = {
     const msgs = fake.state.messages[params.id] ?? [];
     const index = body.before ? msgs.findIndex((m) => m.id === body.before) : msgs.length;
     if (index < 0) return bad('Mensagem não encontrada');
-    const forked = createSessionRecord(fake, { title: `${src.title} (fork #1)`, permissions: src.permissions, model: src.model }, src.location.directory);
+    // V2 2.0.22 (P3) answers the fork without the parent's rules and model; FAKE_FORK_DROPS_RULES=1 reproduces that.
+    const dropsRules = process.env.FAKE_FORK_DROPS_RULES === '1';
+    const forked = createSessionRecord(fake, { title: `${src.title} (fork #1)`, ...(dropsRules ? {} : { permissions: src.permissions, model: src.model }) }, src.location.directory);
+    if (dropsRules) { delete forked.permissions; delete forked.model; }
+    // Partial inheritance modes: a shorter rule list, or the right model without its variant.
+    if (process.env.FAKE_FORK_PARTIAL_RULES === '1') forked.permissions = structuredClone(src.permissions).slice(0, 1);
+    if (process.env.FAKE_FORK_DROPS_VARIANT === '1') forked.model = { id: src.model.id, providerID: src.model.providerID };
     forked.fork = { sessionID: src.id, boundary: body.before ?? null };
     fake.state.messages[forked.id] = structuredClone(msgs.slice(0, index));
     persist(fake);
     return ok(forked);
   },
+  // FAKE_FORK_PATCH_FAILS=1 makes the rule write fail; otherwise the base session route answers (undefined falls through).
+  // FAKE_FORK_PATCH_NOOP=1 acknowledges the write (204) without persisting it, as the silent drop behind P3.
+  'PATCH /api/session/:id': () => {
+    if (process.env.FAKE_FORK_PATCH_FAILS === '1') return { status: 500, body: { _tag: 'InternalError', message: 'Falha simulada ao gravar as regras' } };
+    return process.env.FAKE_FORK_PATCH_NOOP === '1' ? { status: 204 } : undefined;
+  },
+  // FAKE_CONFIG_FAILS=1 makes GET /api/config answer 500; otherwise the base config route answers (undefined falls through).
+  'GET /api/config': () => (process.env.FAKE_CONFIG_FAILS === '1' ? { status: 500, body: { _tag: 'InternalError', message: 'Falha simulada ao ler a configuração' } } : undefined),
+  // FAKE_FORK_MODEL_NOOP=1 acknowledges the model switch (204) without persisting it.
+  'POST /api/session/:id/model': () => (process.env.FAKE_FORK_MODEL_NOOP === '1' ? { status: 204 } : undefined),
   // V2 2.0.22 (verified live with snapshots on): stage restores the files and leaves the revert pending
   // ({ messageID, snapshot, files[] }); DELETE undoes it; commit drops the messages for good and clears the revert.
   'POST /api/session/:id/revert/stage': (fake, { params, body = {} }) => {
@@ -135,6 +152,19 @@ export const F3_SESSION_ROUTES = {
       const created = Date.now();
       const compaction = { id: body.id ?? nextId(fake, 'msg'), sessionID: params.id, time: { created }, type: 'compaction', payload: {}, delivery: body.delivery ?? 'steer' };
       fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
+      // FAKE_COMPACT_ASYNC_MS keeps the compaction going after the 200: the session shows as active and
+      // `time.compacting` stays set until the timer ends (2.0.22 treats compaction as a marker, but it may be async).
+      const asyncMs = Number(process.env.FAKE_COMPACT_ASYNC_MS ?? 0);
+      if (asyncMs > 0) {
+        const session = fake.state.sessions[params.id];
+        session.time = { ...session.time, compacting: created };
+        fake.state.statuses[params.id] = { type: 'running' };
+        setTimeout(() => {
+          delete session.time.compacting;
+          delete fake.state.statuses[params.id];
+          persist(fake);
+        }, asyncMs).unref();
+      }
       persist(fake);
       return ok(compaction);
     };

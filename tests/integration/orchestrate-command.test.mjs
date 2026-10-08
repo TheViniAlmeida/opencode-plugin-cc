@@ -44,8 +44,11 @@ test('C1: cancel group aborts an in-flight member and returns a cancelled group'
     const state = readFakeState(env);
     return Object.values(state.sessions).find((s) => s.title.startsWith('OPC: orch-ask: ') && state.statuses?.[s.id]?.type === 'running')?.id;
   }, { timeoutMs: 20000, message: 'active worker session' });
-  const member = jobsIn(env, ws).find((m) => m.groupId === jobId && m.role.startsWith('worker:'));
-  assert.ok(member?.attemptInFlight);
+  // The server session can be running before the member persists its sessionID; cancelling in that window is
+  // deferred (the coordinator aborts the new session itself), so wait for the record before cancelling.
+  const member = await waitFor(() => jobsIn(env, ws).find((m) => m.groupId === jobId && m.role.startsWith('worker:') && m.sessionID === sessionID),
+    { timeoutMs: 20000, message: 'member records the active session' });
+  assert.ok(member.attemptInFlight);
   assert.equal(member.attempts?.length ?? 0, 0);
   const cancelled = await runCli(['cancel', jobId, '--json'], { env, cwd: ws });
   assert.equal(cancelled.code, 0, cancelled.stderr);

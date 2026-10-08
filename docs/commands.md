@@ -310,11 +310,11 @@ opc sessions --all --limit 10 --json
 | Ação | Uso | Resultado |
 | --- | --- | --- |
 | `new` | `new [--title t] [--agent a] [--model m] [--write]` | Cria sessão `OPC: session: <t>` com perfil `read-only` ou `write`. |
-| `show` | `show <sessionID> [--limit N]` | Mostra sessão, estado e mensagens; os IDs de mensagem servem para `fork` e `revert`. |
-| `fork` | `fork <sessionID> [--before messageID]` | Cria fork da sessão; com `--before`, usa o histórico anterior à mensagem indicada. O `messageID` posicional é recusado. |
+| `show` | `show <sessionID> [--limit N]` | Mostra sessão, estado e as mensagens mais recentes (até 200; acima disso a saída avisa); os IDs de mensagem servem para `fork` e `revert`. |
+| `fork` | `fork <sessionID> [--before messageID]` | Cria fork da sessão; com `--before`, usa o histórico anterior à mensagem indicada. O `messageID` posicional é recusado. O OpenCode 2.0.22 devolve o fork sem as regras de permissão e sem o modelo da origem; o opc os reaplica e confere o resultado. |
 | `revert` | `revert <sessionID> <messageID> [--confirmed-by-user]` | Exige confirmação e então aplica o revert (stage) da mensagem inteira: os arquivos voltam e o revert fica pendente, desfazível com `unrevert`. Não há revert por parte no OpenCode 2. Recusa com `SNAPSHOT_DISABLED` quando a config do OpenCode tem `"snapshot": false`. |
 | `unrevert` | `unrevert <sessionID> [--confirmed-by-user]` | Exige confirmação e desfaz o revert pendente, restaurando os arquivos. |
-| `summarize` | `summarize <sessionID> [--model m] [--timeout s]` | Resume sincronamente; o timeout padrão é 600 s. |
+| `summarize` | `summarize <sessionID> [--model m] [--timeout s]` | Compacta a sessão e espera a compactação terminar dentro de um único `--timeout` (padrão 600 s, compartilhado entre o pedido e a espera). Estourado o prazo, falha com `TIMEOUT` (exit 5) e a compactação continua no servidor. |
 | `children` | `children <sessionID>` | Lista sessões filhas. |
 | `diff` | `diff <sessionID>` | Mostra o diff da sessão; o OpenCode 2 não oferece diff por mensagem. |
 
@@ -330,13 +330,17 @@ OPC_ARGS_5f1d0c7a_EOF
 
 Para `unrevert`, o corpo é `unrevert ses_<id> --confirmed-by-user`. Nunca acrescente a flag sem a confirmação daquela ação e daquele alvo.
 
-O revert fica pendente até o `unrevert`. Um prompt novo na sessão (`/opc:task --resume`) ou um `summarize` pode consolidar o revert no OpenCode e apagar as mensagens revertidas; depois disso o `unrevert` não as traz de volta (A CONFIRMAR no OpenCode 2.0.22).
+O revert fica pendente até o `unrevert`. Um prompt novo na sessão (`/opc:task --resume`) consolida o revert no OpenCode: as mensagens revertidas somem e o `unrevert` não as traz de volta, enquanto os arquivos continuam revertidos (confirmado ao vivo no OpenCode 2.0.22, fato `I2-pending-revert` da [saída ao vivo da F7](phases/F7-live-output.md)). Por isso `task --resume` e `summarize` imprimem um aviso no stderr quando a sessão tem revert pendente. A prévia do `revert` também avisa quando não foi possível confirmar se os snapshots estão ligados (`GET /api/config` falhou): a reversão pode não restaurar arquivos.
+
+O `fork` não apaga o fork criado quando a reaplicação falha. Se as regras ou o modelo não puderem ser reaplicados e verificados, o comando retorna `FORK_INHERITANCE_FAILED` e a mensagem pede para apagar o fork no OpenCode e bifurcar de novo; não use esse fork, pois ele teria menos regras que a origem.
+
+O `summarize` no OpenCode 2.0.22 registra apenas uma mensagem `compaction` (marcador) e a resposta de `session show` não traz o texto do resumo (fato `I1-compaction`, leitura `marker-only`); a conclusão é a sessão voltar a ficar ociosa.
 
 O diff da sessão pode estar vazio. O OpenCode 2 não oferece diff por mensagem; confira o estado do workspace com o git. Com `"snapshot": false` na config do OpenCode, o diff fica sempre vazio e a saída avisa isso.
 
 ```bash
 opc session new --title "investigar login" --model fast
-opc session show ses_<id>
+opc session show ses_<id> --limit 50
 opc session fork ses_<id> --before msg_<id>
 opc session diff ses_<id>
 ```
@@ -491,7 +495,7 @@ OPC_ARGS_5f1d0c7a_EOF
 
 **Exit codes:** 0 concluída, inclusive com avisos; 2 uso; 3 subtarefa aguardando permissão;
 4 planner/sintetizador negado ou `OPC_INSIDE_SERVER=1`; 5 conexão; 6 `--wait-timeout`; 7
-`invalid_plan`, `planner_failed`, `planner_structured_output`, `all_subtasks_failed` ou
+`invalid_plan`, `planner_failed`, `all_subtasks_failed` ou
 `coordinator_error`; 130 cancelada.
 
 Planner e sintetizador passam pela política antes de criar o job. As rotas de subtarefa são
@@ -554,7 +558,7 @@ Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).
 ## `/opc:transfer`
 
 Converte uma conversa do Claude Code para uma nova sessão OpenCode, retomável no
-terminal com `opencode --server <url> -s <id>` e `OPENCODE_SERVER_PASSWORD` no ambiente. O slash command é invocado pelo usuário
+terminal com `opencode --server <url> -s <id>`; a linha de retomada já traz a origem da senha (veja abaixo). O slash command é invocado pelo usuário
 (`disable-model-invocation: true`); não há ferramenta MCP de transfer.
 
 ```text
@@ -595,6 +599,8 @@ Com `--json`, o resumo contém `sessionID`, `title`, `model`, `workspaceRoot`,
 `messages` (`total`, `user`, `assistant`), `skipped` (`meta`, `sidechain`, `command`,
 `thinking`, `other`, `invalidLines`), `resumeCommand` e `warnings`.
 
+O `resumeCommand` usa o binário configurado (`server.opencodeBin` ou `OPC_OPENCODE_BIN`, senão `opencode`) e lê a senha de uma fonte fora do argv: no servidor gerenciado, `OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')"` (arquivo 600 regravado pelo opc); em servidor externo (`OPC_SERVER_URL`), `OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"`, e a variável precisa estar no ambiente do terminal. O valor da senha nunca aparece na linha. Se o opc não conseguir regravar o arquivo da senha depois do import, a sessão importada é mantida, `resumeCommand` vem `null` e um aviso indica `/opc:attach <id>` para retomar. A execução da linha renderizada contra o OpenCode real segue **NÃO VALIDADO** (cobertura de testes unitários e de integração).
+
 | Exit code | Casos |
 |---|---|
 | 0 | Sessão importada |
@@ -619,7 +625,7 @@ Ignorados: 0 meta, 0 sidechain, 0 comandos locais, 0 blocos de raciocínio, 1 ou
 
 Para retomar no terminal:
 
-    cd '<workspace>' && opencode --server http://127.0.0.1:4096 -s ses_EXAMPLE
+    cd '<workspace>' && OPENCODE_SERVER_PASSWORD="$(cat '<stateDir>/attach.secret')" opencode --server http://127.0.0.1:4096 -s ses_EXAMPLE
 ```
 
 ### Ferramentas MCP

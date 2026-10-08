@@ -31,7 +31,7 @@ test('published transfer instructions select the managed V2 server', () => {
     assert.doesNotMatch(source, /opencode -s <id>|opencode -s ses_EXAMPLE|opencode import <arquivo>/, file);
     assert.match(source, /opencode --server/);
   }
-  assert.match(read('plugins/opc/scripts/commands/transfer.mjs'), /resumeCommand: `cd .*opencode --server/);
+  assert.match(read('plugins/opc/scripts/commands/transfer.mjs'), /resumeCommand: (?:passwordFrom === null \? null : )?`cd .*--server/);
 });
 
 test('F6 report records the live gate and keeps manual checks pending', () => {

@@ -5,9 +5,32 @@ import { OpcError, UsageError } from './opc-error.mjs';
 
 const UNAVAILABLE = Symbol('opc.opencodeConfigUnavailable');
 
+const MODEL_KEYS = ['model', 'small_model'];
+
+// OpenCode V2 normalizes `model`/`small_model` to { providerID, model } (older shapes use `id` for the model);
+// every opc consumer expects the "<provider>/<model>" string. Strings stay untouched; a malformed object is
+// dropped so an earlier valid declaration survives instead of becoming "undefined/...".
+function normalizeModelFields(info) {
+  const normalized = { ...info };
+  for (const key of MODEL_KEYS) {
+    const value = normalized[key];
+    if (typeof value === 'string' || value === undefined) continue;
+    const modelId = value?.model ?? value?.id;
+    if (value && typeof value === 'object' && !Array.isArray(value) && typeof value.providerID === 'string' && value.providerID && typeof modelId === 'string' && modelId) {
+      normalized[key] = `${value.providerID}/${modelId}`;
+    } else {
+      delete normalized[key];
+    }
+  }
+  return normalized;
+}
+
+// Sources are listed in ascending precedence (global file, project file, OPENCODE_CONFIG_CONTENT): the last
+// document wins per key. The server-side order is A CONFIRMAR (F7 P1 was inconclusive), so this pins the
+// documented order.
 export function mergeOpencodeConfigSources(sources) {
   if (!Array.isArray(sources)) throw new UsageError('UNSUPPORTED_VERSION', 'A configuração do OpenCode V2 não é uma lista de fontes.');
-  return Object.assign({}, ...sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info)).map((source) => source.info));
+  return Object.assign({}, ...sources.filter((source) => source?.type === 'document' && source.info && typeof source.info === 'object' && !Array.isArray(source.info)).map((source) => normalizeModelFields(source.info)));
 }
 
 // Merged user config, or a marker (no enumerable keys, so no `model`) when GET /api/config failed:

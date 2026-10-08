@@ -126,7 +126,9 @@ test('listSessions and children follow the session cursor and keep only matching
   calls.length = 0;
   // The stub ignores parentID, as a cursor page might: the local filter keeps only real children.
   assert.deepEqual((await api.children('ses_p')).map((s) => s.id), ['ses_1', 'ses_3']);
-  assert.deepEqual(calls[1].query, { parentID: 'ses_p', cursor: '2' });
+  // The cursor carries the query (as for messages): parentID only on the first page, local filter keeps children.
+  assert.deepEqual(calls[0].query, { parentID: 'ses_p' });
+  assert.deepEqual(calls[1].query, { cursor: '2' });
 });
 
 test('compact posts an object body and returns the V2 compaction message', async (t) => {
@@ -220,4 +222,13 @@ test('permissions list finds a pending request in an OPC session beyond the firs
   const ctx = { stateDir: '/missing-state', out() {}, json: (value) => { ctx.output = value; } };
   await list(ctx, { json: true }, () => createApi(client));
   assert.deepEqual(ctx.output.requests.map((request) => request.id), ['per_late']);
+});
+
+test('latestMessages returns the newest N in chronological order with a single desc page', async (t) => {
+  const { api, messageReads } = await boot(t, { extraMessages: 30 });
+  const all = await api.messages(SEED.session);
+  const latest = await api.latestMessages(SEED.session, { limit: 5 });
+  assert.deepEqual(latest.map((m) => m.id), all.slice(-5).map((m) => m.id));
+  assert.equal(messageReads().at(-1).query.order, 'desc', 'explicit desc order on the single page');
+  assert.equal(messageReads().at(-1).query.limit, '5');
 });

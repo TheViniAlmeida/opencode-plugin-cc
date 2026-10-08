@@ -153,7 +153,8 @@ test('V2 resync failure reports an unconfirmed interrupt', async () => {
   const result = await pending;
   assert.equal(result.status, 'failed');
   assert.equal(result.abortConfirmed, false);
-  assert.deepEqual(result.sessionAborts.map(({ aborted }) => aborted), [false]);
+  // The interrupt call was accepted, but the session stayed busy, so the abort is not confirmed.
+  assert.deepEqual(result.sessionAborts.map(({ aborted, idle }) => [aborted, idle]), [[true, false]]);
 });
 
 test('V2 prompt timeout resends same id without reading messages', async () => {

@@ -398,7 +398,7 @@ export function renderTurnResult(job) {
       lines.push(`- O servidor OpenCode foi perdido durante o turno; a sessão ${job.sessionID} foi preservada. Continue com: /opc:${RESUMABLE_KINDS.has(job.kind) ? job.kind : 'task'} --resume ${job.id}`);
     }
     if (r.finalText) {
-      lines.push('', job.errorType === 'StructuredOutputError' ? 'Saída bruta (falha na saída estruturada):' : 'Saída parcial:', '', r.finalText);
+      lines.push('', 'Saída parcial:', '', r.finalText);
     }
   }
   lines.push('', '---', `Tarefa: ${job.id} · Sessão: ${job.sessionID ?? '-'} · Modelo: ${job.model ?? '-'}`);
@@ -575,9 +575,6 @@ export function renderReview(result = {}, meta = {}) {
       lines.push('', 'Dados parciais:', '', ...renderReviewStructured(result.structured).split('\n').slice(2));
     } else if (result.structured != null) {
       lines.push('', ...renderInvalidReviewStructured(result.structured, partialError));
-    } else if (result.errorType === 'StructuredOutputError' || result.errorName === 'StructuredOutputError') {
-      lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
-      if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
     }
     const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
     if (raw) lines.push('', 'Mensagem final bruta:', '', reviewCodeFence(raw));
@@ -596,7 +593,7 @@ export function renderReview(result = {}, meta = {}) {
   }
 
   const raw = typeof result.finalText === 'string' ? result.finalText.trim() : '';
-  if (result.errorType === 'StructuredOutputError' || result.status === 'completed') {
+  if (result.status === 'completed') {
     lines.push('', 'O OpenCode não retornou uma saída estruturada válida.');
     if (result.errorMessage) lines.push('', `- Erro: ${result.errorMessage}`);
     lines.push('', 'Mensagem final bruta:', '', raw ? reviewCodeFence(raw) : '(sem saída de texto)');
@@ -1073,7 +1070,7 @@ export function renderOrchestration(pkg, { jobId = null } = {}) {
       const detail = s.status === 'completed' ? status : `${status} (${safeOutputText(s.errorCode ?? '')}): ${safeOutputText(s.errorMessage ?? '')}`.trimEnd();
       lines.push(`\`${safeOutputText(s.kind)}\` · modelo \`${safeOutputText(s.model ?? '-')}\` · ${detail}${took}`, '');
       if (s.touchedFiles?.length) lines.push(`Arquivos tocados: ${s.touchedFiles.map(safeOutputText).join(', ')}`, '');
-      if (s.status === 'completed' || (s.result && s.errorCode === 'structured_output')) {
+      if (s.status === 'completed') {
         lines.push(s.result == null ? '' : safeOutputText(s.result), '');
         if (s.resultTruncated) lines.push(`_(resultado truncado em 64 KB; íntegra na sessão ${safeOutputText(s.sessionID ?? '-')})_`, '');
       }
@@ -1232,6 +1229,14 @@ export function renderConclave(pkg) {
   return safeOutputText(lines.join('\n'));
 }
 
+// The attach-mode reference names an environment variable, not a secret value; keep it out of pattern masking.
+const ATTACH_PASSWORD_REF = 'OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"'; // scan-secrets:allow (variable reference)
+
+// Masks every segment around the exact literal, so the literal itself is never re-masked.
+export function safeResumeCommand(text) {
+  return String(text ?? '').split(ATTACH_PASSWORD_REF).map(safeOutputText).join(ATTACH_PASSWORD_REF);
+}
+
 export function renderTransfer(result) {
   const s = result.skipped;
   const lines = [
@@ -1243,6 +1248,8 @@ export function renderTransfer(result) {
     `Ignorados: ${s.meta} meta, ${s.sidechain} sidechain, ${s.command} comandos locais, ${s.thinking} blocos de raciocínio, ${s.other} outros, ${s.invalidLines} linhas inválidas`,
   ];
   for (const warning of result.warnings ?? []) lines.push(`Aviso: ${warning}`);
-  lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '');
-  return safeOutputText(lines.join('\n'));
+  if (result.resumeCommand) lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
+  else lines.push('');
+  // The whole document goes through the literal-preserving mask, so attach mode keeps its variable reference.
+  return safeResumeCommand(lines.join('\n'));
 }
