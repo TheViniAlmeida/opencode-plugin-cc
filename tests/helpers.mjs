@@ -1,6 +1,8 @@
 // Shared test helpers (F0). Later phases only APPEND at the end of this file (never rewrite it), using the
 // default imports below (fs, os, path, spawn, execFileSync) or aliased imports (`<phase><Name>`), and never
 // re-export a name that already exists here (a duplicate export is a SyntaxError).
+// Fixture models (`tests/fixtures/data/config.json`, `fake-provider/*`) do not exist in the fake catalog; tests that resolve a
+// model write `defaultModel` (see `FIXTURE_MODELS`).
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

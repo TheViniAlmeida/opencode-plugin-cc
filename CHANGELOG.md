@@ -6,6 +6,11 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Unreleased]
 
+### Corrigido — F9
+
+- O `.opc.json` com `{"delegation":{"auto":false}}` agora desliga o lembrete de delegação sem aviso; `true` é ignorado com o aviso "delegation.auto: o workspace só pode desligar (false)". Antes, o aviso enganoso "não pode ser substituída no workspace; ignorado" saía mesmo quando o valor valia.
+- `permissions reply` e `permissions answer` limpam o pedido em todos os jobs que o espelham (membro e grupo), e a dica do `/opc:status` aponta para o membro. Antes só o primeiro achado era limpo (o grupo, se fosse o mais novo).
+
 ### Corrigido — F8
 
 - O hook `SessionStart` registrava o pid do `sh -c` transitório que o Claude Code usa para rodar hooks, e não o do Claude (§15, item 9, medido ao vivo). A associação de jobs MCP à sessão nunca casava e a vida da sessão caía sempre no fallback de 24 h. Agora o hook sobe um nível quando o pai é um shell (`resolveHookOwner`).
