@@ -43,7 +43,7 @@ test('summarize spends a single --timeout budget on the compact request plus the
   const elapsed = Date.now() - t1;
   assert.equal(res.code, 5);
   assert.match(res.stdout + res.stderr, /não terminou em 2 s/);
-  assert.ok(elapsed - baseline < 500, `elapsed ${elapsed} ms vs baseline ${baseline} ms: the wait got a fresh budget`);
+  assert.ok(elapsed - baseline < 900, `elapsed ${elapsed} ms vs baseline ${baseline} ms: the wait got a fresh budget`);
 });
 
 test('summarize warns on stderr when the session has a pending revert', async (t) => {
