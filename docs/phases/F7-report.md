@@ -10,7 +10,7 @@
 
 | Item | Evidência | Resultado |
 |---|---|---|
-| Suíte completa | `node scripts/run-tests.mjs`: 2080 testes, 2079 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
+| Suíte completa | `node scripts/run-tests.mjs`: 2088 testes, 2087 aprovados, 0 falhas, 0 cancelados (1 ignorado) | PASSOU |
 | `npm run scan-secrets` | `scan-secrets: nenhum achado` | PASSOU |
 | `git diff --check` | Saída vazia, exit 0 | PASSOU |
 | Servidores falsos órfãos | `ps -eo ppid=,args= \| awk '$1==1 && $3 ~ /tests\/fixtures\/bin\/opencode$/' \| wc -l`: 0 | PASSOU |
@@ -21,6 +21,8 @@
 | Summarize ao vivo | Exit 0, `summarized: true`, `compactionMessageID` presente | PASSOU |
 | Linha de retomada do transfer (`resumeCommand` renderizado) | `f5-transfer.mjs` não a exercita; cobertura só por testes unitários e de integração | NÃO VALIDADO |
 | Instalação, `/mcp`, permissões e associação de sessão no Claude Code | Procedimento manual do operador | NÃO VALIDADO |
+| Espera do catálogo em attach (`OPC_SERVER_URL`) e com providers declarados (chave `providers`) | Nenhum teste ao vivo usa `OPC_SERVER_URL`, e a correção da chave `providers` veio depois da rodada ao vivo; cobertura só por fakes e pelos fixtures V2 capturados | NÃO VALIDADO |
+| Substituição de um servidor registrado anterior à 2.0.22 (Tarefa 4) | Não havia servidor antigo real; coberto só por processo falso e `/api/info` simulado | NÃO VALIDADO |
 | TUI: `/opc:attach`, `--pane` e retomada após transfer | Procedimento manual do operador | NÃO VALIDADO |
 
 Os testes ao vivo rodaram por conta do controlador, em servidores isolados, com os modelos
@@ -44,9 +46,11 @@ arquivos foram restaurados e não entram nesta fase.
 - **Config (Tarefa 2):** `model` e `small_model` da config do OpenCode, quando objetos, são normalizados para
   `provider/modelo`. A precedência das fontes (a última vence) foi fixada por teste; sem a Variante B (P1 ficou
   `unknown`).
-- **Catálogo (Tarefa 3):** o catálogo está pronto quando os providers declarados carregam, em gerenciado e em
-  attach. Attach espera até 15 s com o catálogo vazio e 2 s por providers faltantes; o aviso nomeia os faltantes e
-  o `TIMEOUT` informa o teto e o próximo passo.
+- **Catálogo (Tarefa 3):** os providers declarados são lidos da chave `providers` da config V2 (fixtures
+  capturados ao vivo), com a chave `provider` do V1 como reserva. Com providers declarados, o catálogo está pronto
+  quando eles carregam e `model.updated` só encurta a espera; sem providers declarados, vale a regra da F6 (esperar o
+  evento até o teto). Em attach, a espera vai até 15 s com o catálogo vazio e até 2 s depois do primeiro catálogo
+  não vazio; o aviso nomeia os faltantes e o `TIMEOUT` informa o teto e o próximo passo.
 - **Servidor V1 registrado (Tarefa 4):** um servidor do opc que responde como anterior à 2.0.22 é substituído; com
   jobs ativos nele, o erro é `V1_SERVER_ACTIVE`.
 - **Paginação (Tarefa 5):** as páginas seguintes de `children` enviam só `cursor` e `limit` (P2).
@@ -57,7 +61,9 @@ arquivos foram restaurados e não entram nesta fase.
   `summarize` avisam de revert pendente (I2); a prévia do `revert` avisa quando o estado dos snapshots é
   desconhecido.
 - **Transfer (Tarefa 9):** o `resumeCommand` usa o binário configurado e uma fonte de senha fora do argv
-  (`"$(cat '<stateDir>/attach.secret')"` no gerenciado, `"$OPC_SERVER_PASSWORD"` em attach).
+  (`"$(cat '<stateDir>/attach.secret')"` no gerenciado, `"$OPC_SERVER_PASSWORD"` em attach). Se o segredo não puder
+  ser gravado depois da importação, o comando devolve o ID da sessão, `resumeCommand: null` e um aviso para usar
+  `/opc:attach`, em vez de falhar e induzir uma segunda importação.
 - **Limpeza (Tarefa 10):** removidos os ramos `StructuredOutputError` e `planner_structured_output` do OpenCode 1.
 - **Docs (Tarefa 11):** `commands.md`, `troubleshooting.md`, `configuration.md`, os comandos
   `session.md` e `transfer.md`, o CHANGELOG e os A CONFIRMAR resolvidos no [relatório da F6](F6-report.md).
@@ -67,6 +73,11 @@ arquivos foram restaurados e não entram nesta fase.
 - A CONFIRMAR (P1): a precedência entre a config global, a do projeto e `OPENCODE_CONFIG_CONTENT` no servidor. A
   ordem do opc segue a documentação do OpenCode; só uma sessão com inferência sem modelo explícito revelaria o
   vencedor.
+- NÃO VALIDADO ao vivo: a espera do catálogo em attach (nenhum teste ao vivo usa `OPC_SERVER_URL`) e com providers
+  declarados pela chave `providers` (corrigida após a rodada ao vivo).
+- NÃO VALIDADO ao vivo: a substituição de um servidor registrado anterior à 2.0.22 (Tarefa 4).
+- A CONFIRMAR: a forma V2 de `enabled_providers` e `disabled_providers`; o opc os trata como listas de ids, como na
+  documentação do V1, e isso não foi observado ao vivo.
 - NÃO VALIDADO ao vivo: a linha de retomada do transfer (`resumeCommand`) renderizada, nas duas formas de senha.
 - NÃO VALIDADO: testes manuais do operador no Claude Code e na TUI (`/opc:attach`, `--pane`, retomada após
   transfer, instalação, `/mcp`, permissões). macOS e Windows seguem indisponíveis.

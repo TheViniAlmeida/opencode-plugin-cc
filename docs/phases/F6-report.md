@@ -47,7 +47,7 @@
   de autorização explícita.
 - `f4c-opinion.mjs` exige três modelos distintos; o portão rodou com dois (`OPC_LIVE_POOL`).
 - Modo attach (`OPC_SERVER_URL`): a espera por `model.updated` só vale para servidores gerenciados. Um servidor
-  existente que abre um diretório novo pode responder com o catálogo ainda incompleto (A CONFIRMAR). **Resolvido na F7:** o catálogo é considerado pronto quando os providers declarados carregam, também em attach (ver [F7-report.md](F7-report.md)).
+  existente que abre um diretório novo pode responder com o catálogo ainda incompleto (A CONFIRMAR). **Resolvido em código na F7** (com a correção da chave `providers`): o catálogo é considerado pronto quando os providers declarados carregam, também em attach (ver [F7-report.md](F7-report.md)). NÃO VALIDADO ao vivo em attach: nenhum teste ao vivo usa `OPC_SERVER_URL`.
 - O vazamento de servidores falsos visto numa medição intermediária não se reproduziu: os seis arquivos de
   integração suspeitos passam e deixam zero órfãos.
 - Config do operador com `"snapshot": false`: nos servidores do operador, `session diff` fica vazio e

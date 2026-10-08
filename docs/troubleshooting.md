@@ -29,8 +29,15 @@ OPC_ARGS_5f1d0c7a_EOF
 ### Providers declarados sem modelos no catálogo
 
 - Sintoma: aviso `Providers declarados ainda sem modelos no catálogo: <providers>` ou `TIMEOUT` com a mensagem `O catálogo de modelos do OpenCode não carregou em <N> s`.
-- O catálogo é considerado pronto quando os providers declarados na config do OpenCode carregam. No servidor gerenciado, o opc espera o evento `model.updated`; em attach (`OPC_SERVER_URL`), espera até 15 s enquanto o catálogo está vazio e, com o catálogo já parcial, mais 2 s por providers faltantes.
+- Os providers declarados são lidos da chave `providers` da config V2 (o V1 usava `provider`, aceito como reserva). Com providers declarados, o catálogo é considerado pronto quando eles carregam e o evento `model.updated` só encurta a espera; sem providers declarados, vale a regra da F6 (esperar o evento até o teto). Em attach (`OPC_SERVER_URL`), a espera vai até 15 s enquanto o catálogo está vazio e, depois do primeiro catálogo não vazio, até 2 s pelos providers faltantes.
+- A forma V2 de `enabled_providers` e `disabled_providers` é A CONFIRMAR (não observada ao vivo), e a espera do catálogo em attach está NÃO VALIDADA ao vivo (cobertura por fakes e fixtures).
 - Providers que não carregam (chave inválida, gateway fora do ar) não bloqueiam os demais: o aviso os nomeia. Confira credenciais e o gateway; se o `TIMEOUT` persistir, deixe o servidor terminar de subir e tente de novo.
+
+### Comandos falham com `TIMEOUT` em attach (catálogo vazio)
+
+- Sintoma: em attach (`OPC_SERVER_URL`), cada comando que resolve modelo espera até 15 s e termina com `TIMEOUT`; a mensagem informa o teto e o próximo passo.
+- Causa: o servidor externo está com o catálogo de modelos vazio, porque nenhum provider carregou (chave inválida, gateway fora do ar, diretório recém-aberto ainda subindo).
+- Solução: corrija o provider no servidor externo (credencial, gateway) e confirme com `/opc:models` que o catálogo tem modelos; depois rode o comando de novo.
 
 ### Boot lento ou falho (`BOOT_FAILED`)
 

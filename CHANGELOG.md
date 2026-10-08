@@ -9,13 +9,14 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 ### Corrigido — F7 (endurecimento V2)
 
 - `model` e `small_model` da config do OpenCode que chegam como objeto (`{providerID, model}`) são normalizados para `provider/modelo`; a precedência das fontes (global, projeto, `OPENCODE_CONFIG_CONTENT`, a última vence) segue a documentada e continua A CONFIRMAR no servidor.
-- O catálogo de modelos é considerado pronto quando os providers declarados carregam, nos modos gerenciado e attach; em attach a espera tem teto de 15 s com o catálogo vazio e 2 s para providers faltantes, o aviso nomeia os faltantes e o `TIMEOUT` informa o teto e o próximo passo.
-- Um servidor gerenciado registrado pelo opc que responde como anterior à 2.0.22 é substituído em vez de falhar com `NOT_JSON`; com jobs ativos nele, o erro é `V1_SERVER_ACTIVE`.
+- O catálogo de modelos é considerado pronto quando os providers declarados (chave `providers` da config V2, com `provider` do V1 como reserva) carregam, nos modos gerenciado e attach; em attach a espera tem teto de 15 s com o catálogo vazio e até 2 s depois do primeiro catálogo não vazio, o aviso nomeia os faltantes e o `TIMEOUT` informa o teto e o próximo passo. NÃO VALIDADO ao vivo em attach; a forma V2 de `enabled_providers` e `disabled_providers` segue A CONFIRMAR.
+- Um servidor gerenciado registrado pelo opc que responde como anterior à 2.0.22 é substituído em vez de falhar com `NOT_JSON`; com jobs ativos nele, o erro é `V1_SERVER_ACTIVE`. NÃO VALIDADO ao vivo (sem servidor antigo real).
 - As páginas seguintes de `children` enviam só `cursor` e `limit` (o cursor já mantém o filtro de `parentID`).
 - O runner confirma a interrupção pela ociosidade da sessão, não pela flag `interrupted`.
 - `session show` mostra as mensagens mais recentes; `session fork` reaplica e verifica as regras de permissão e o modelo da origem, que o OpenCode 2.0.22 não carrega para o fork, e falha com `FORK_INHERITANCE_FAILED` (sem apagar o fork) quando não consegue.
 - `session summarize` espera a compactação dentro de um único `--timeout` e, no prazo estourado, falha com `TIMEOUT` (exit 5) informando que a compactação continua no servidor.
 - `task --resume` e `summarize` avisam quando a sessão tem revert pendente (um prompt novo o consolida), e a prévia do `revert` avisa quando o estado dos snapshots é desconhecido.
+- Se o segredo de attach não puder ser gravado depois da importação, o `transfer` devolve o ID da sessão com um aviso para usar `/opc:attach`, em vez de falhar e levar a uma segunda importação.
 - A linha de retomada do `transfer` usa o binário configurado e lê a senha fora do argv (`"$(cat '<stateDir>/attach.secret')"` no servidor gerenciado, `"$OPC_SERVER_PASSWORD"` em attach).
 - Removidos os ramos de `StructuredOutputError` e `planner_structured_output` herdados do OpenCode 1.
 
