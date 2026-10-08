@@ -15,7 +15,7 @@
   },
   {
     "type": "document",
-    "path": "<tmp>/workspace/opencode.json",
+    "path": "<workspace>/opencode.json",
     "info": {
       "model": {
         "providerID": "omniroute-personal",
@@ -41,13 +41,13 @@
           },
           "models": {
             "probe/model-env": {
-              "name": "env"
+              "name": "probe/model-env"
             },
             "probe/model-project": {
-              "name": "project"
+              "name": "probe/model-project"
             },
             "probe/model-global": {
-              "name": "global"
+              "name": "probe/model-global"
             }
           }
         }
