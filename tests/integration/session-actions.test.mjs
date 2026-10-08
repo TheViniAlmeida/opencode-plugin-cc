@@ -67,7 +67,7 @@ test('session show: session, status and flat messages with ids', async (t) => {
   assert.deepEqual(out.messages.map((m) => m.id), [SEED.m1, SEED.m2, SEED.m3, SEED.m4, IDLE_ID]);
   assert.deepEqual(out.messages.map((m) => m.type), ['user', 'assistant', 'user', 'assistant', 'idle']);
   const list = fakeRequests(env).find((r) => r.method === 'GET' && r.path === `/api/session/${SEED.session}/message`);
-  assert.equal(list.query.order, undefined, 'show reads the newest page in the default V2 order and reverses it');
+  assert.equal(list.query.order, 'desc', 'show reads the newest page with an explicit desc order and reverses it');
   const text = await runCli(['session', 'show', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`# Sessão ${SEED.session}`));
   assert.ok(text.stdout.includes(SEED.m3));

@@ -84,9 +84,9 @@ export function createApi(client) {
     const pageSize = Math.min(MAX_PAGE_LIMIT, given(limit) ? positiveInt(limit, 'O limite de mensagens') : MAX_PAGE_LIMIT);
     return collectPages((next) => messagesPage(id, { limit: pageSize, cursor: next }), { limit, pageSize, cursor });
   };
-  // The newest `limit` messages (one page in the V2 default desc order), returned oldest first.
+  // The newest `limit` messages (one explicit desc page), returned oldest first.
   const latestMessages = async (id, { limit } = {}) => {
-    const { data } = toPage(await client.get(`${sessionPath(id)}/message`, { ...LIST_BODY, query: { limit: pageLimit(limit) } }), 'GET /api/session/<id>/message');
+    const { data } = toPage(await client.get(`${sessionPath(id)}/message`, { ...LIST_BODY, query: { order: 'desc', limit: pageLimit(limit) } }), 'GET /api/session/<id>/message');
     return [...data].reverse();
   };
   // The session list keeps the server's default page size unless a limit is given.

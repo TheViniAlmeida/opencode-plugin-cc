@@ -229,6 +229,6 @@ test('latestMessages returns the newest N in chronological order with a single d
   const all = await api.messages(SEED.session);
   const latest = await api.latestMessages(SEED.session, { limit: 5 });
   assert.deepEqual(latest.map((m) => m.id), all.slice(-5).map((m) => m.id));
-  assert.equal(messageReads().at(-1).query.order, undefined, 'default V2 order (desc) on the single page');
+  assert.equal(messageReads().at(-1).query.order, 'desc', 'explicit desc order on the single page');
   assert.equal(messageReads().at(-1).query.limit, '5');
 });
