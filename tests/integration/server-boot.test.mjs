@@ -90,6 +90,14 @@ test('share-auto: world check marks sessions as blocked and assertCanCreateSessi
   assert.equal(reused.world.shareBlocked, true, 'block survives reuse');
 });
 
+test('world check: a denied default model arriving in the V2 object form { providerID, model } is still detected', async (t) => {
+  const configOverride = { share: 'disabled', model: { providerID: 'fake-provider', model: 'm1' }, small_model: { providerID: 'fake-provider', model: 'm2' } };
+  const { ctx } = makeServerCtx(t, { config: { policy: { providers: { deny: ['fake-provider'] } }, server: { configOverride } } });
+  const server = await ensureServer(ctx);
+  assert.deepEqual(server.world.deniedDefaults, ['model', 'small_model']);
+  assert.ok(server.warnings.some((w) => /"model"/.test(w) && /configOverride\.model/.test(w)));
+});
+
 test('world check: default override share:"disabled" keeps sessions allowed; denied model/small_model warn', async (t) => {
   const { ctx } = makeServerCtx(t, { config: { policy: { providers: { deny: ['fake-provider'] } } } });
   const server = await ensureServer(ctx);

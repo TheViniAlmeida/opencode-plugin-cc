@@ -534,10 +534,10 @@ export async function ensureServer(ctx) {
           || (health.ok && compareVersions(health.version, MIN_OPENCODE_VERSION) < 0);
         if (incompatible) {
           if (hasActiveJobs()) {
-            throw new UsageError('V1_SERVER_ACTIVE', 'O servidor gerenciado registrado é anterior ao OpenCode 2.0.22 e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.');
+            throw new UsageError('V1_SERVER_ACTIVE', `O servidor gerenciado registrado é anterior ao OpenCode ${MIN_OPENCODE_VERSION} e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.`);
           }
           await shutdownRecorded(stateDir, record, full.opencodeBin);
-          warnings.push('Servidor gerenciado anterior ao OpenCode 2.0.22 encerrado; um servidor V2 será iniciado.');
+          warnings.push(`Servidor gerenciado anterior ao OpenCode ${MIN_OPENCODE_VERSION} encerrado; um servidor V2 será iniciado.`);
         } else {
           if (health.ok && health.version === record.version) {
             const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);

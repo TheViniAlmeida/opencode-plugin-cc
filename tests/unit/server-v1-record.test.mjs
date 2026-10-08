@@ -2,18 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureServer } from '../../plugins/opc/scripts/lib/server.mjs';
+import { ensureServer, MIN_OPENCODE_VERSION } from '../../plugins/opc/scripts/lib/server.mjs';
 import { spawnDetached, terminateProcessGroup, isPidAlive } from '../../plugins/opc/scripts/lib/process.mjs';
 import { makeTempDir, registerStopper, trackTempDir } from '../helpers.mjs';
 
-async function recordedV1(t) {
+async function recordedV1(t, { json = false } = {}) {
   const dir = trackTempDir(t, makeTempDir('opc-v1-record-'));
   const script = path.join(dir, 'opencode');
   fs.writeFileSync(script, 'setInterval(() => {}, 1000);');
   const proc = await spawnDetached(process.execPath, [script, 'serve', '--port', '43211'], { cwd: dir, env: process.env, logFile: path.join(dir, 'child.log') });
   registerStopper(t, async () => terminateProcessGroup(proc, (argv) => argv.includes(script), { graceMs: 500 }));
   fs.writeFileSync(path.join(dir, 'server.json'), JSON.stringify({ schemaVersion: 1, ...proc, port: 43211, url: 'http://127.0.0.1:43211', version: '1.18.34', password: 'fixture-only' }));
-  t.mock.method(globalThis, 'fetch', async () => new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+  // Either the old SPA answer (NOT_JSON) or a JSON /api/info that reports a pre-2.0.22 version.
+  t.mock.method(globalThis, 'fetch', async () => (json
+    ? new Response(JSON.stringify({ version: '1.18.34' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    : new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } })));
   return { dir, proc, script };
 }
 
@@ -32,4 +35,22 @@ test('with active jobs a recorded V1 server is kept and the command is refused',
   const { dir, proc, script } = await recordedV1(t);
   await assert.rejects(ensureServer({ stateDir: dir, workspaceRoot: dir, config: {}, env: {}, opencodeBin: script, hasActiveJobs: () => true }), { code: 'V1_SERVER_ACTIVE' });
   assert.equal(isPidAlive(proc.pid), true);
+});
+
+test('a recorded server answering JSON with a pre-2.0.22 version is replaced', async (t) => {
+  const { dir, proc, script } = await recordedV1(t, { json: true });
+  const config = { server: { opencodeBin: path.join(dir, 'missing-opencode'), bootTimeoutSec: 1 } };
+  await assert.rejects(ensureServer({ stateDir: dir, workspaceRoot: dir, config, env: {}, opencodeBin: script }), (error) => {
+    assert.notEqual(error.code, 'UNSUPPORTED_VERSION');
+    return true;
+  });
+  assert.equal(isPidAlive(proc.pid), false, 'the old server was stopped');
+  assert.equal(fs.existsSync(path.join(dir, 'server.json')), false);
+});
+
+test('with active jobs a recorded JSON pre-2.0.22 server is kept: V1_SERVER_ACTIVE and server.json stays', async (t) => {
+  const { dir, proc, script } = await recordedV1(t, { json: true });
+  await assert.rejects(ensureServer({ stateDir: dir, workspaceRoot: dir, config: {}, env: {}, opencodeBin: script, hasActiveJobs: () => true }), (error) => error.code === 'V1_SERVER_ACTIVE' && error.message.includes(MIN_OPENCODE_VERSION));
+  assert.equal(isPidAlive(proc.pid), true);
+  assert.equal(fs.existsSync(path.join(dir, 'server.json')), true);
 });
