@@ -95,6 +95,26 @@ export async function createContext({
   };
 }
 
+// ---- server warnings: ensureServer reports them, the connection helpers surface them ----
+const ATTACH_INFO_PREFIX = 'Modo attach:';
+const surfacedWarnings = new Set();
+
+// Drops the static attach-mode info line; everything else is an actionable warning.
+export function actionableServerWarnings(warnings) {
+  return (warnings ?? []).filter((warning) => !String(warning).startsWith(ATTACH_INFO_PREFIX));
+}
+
+// Prints each server warning once per process on the context's stderr writer; never touches stdout.
+// Hooks (hookEnteredAt) stay silent: their stderr is not a user channel and must not change hook output.
+export function surfaceServerWarnings(ctx, warnings) {
+  if (typeof ctx?.err !== 'function' || ctx.hookEnteredAt !== undefined) return;
+  for (const warning of actionableServerWarnings(warnings)) {
+    if (surfacedWarnings.has(warning)) continue;
+    surfacedWarnings.add(warning);
+    ctx.err(`[opc] aviso: ${warning}\n`);
+  }
+}
+
 // ---- F1: connection helper for discovery/config commands ----
 export async function connectApi(ctx) {
   const { ensureServer, clientFor } = await import('./server.mjs');
@@ -102,6 +122,7 @@ export async function connectApi(ctx) {
   const { serverContext } = await import('./jobs.mjs');
   const serverCtx = serverContext(ctx);
   const server = await ensureServer(serverCtx);
+  surfaceServerWarnings(ctx, server.warnings);
   const client = clientFor(serverCtx, server);
   return { api: createApi(client), server, client };
 }
@@ -156,6 +177,7 @@ export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
   } else {
     const { serverContext } = await import('./jobs.mjs');
     server = await ensureServer(serverContext(ctx));
+    surfaceServerWarnings(ctx, server.warnings);
     client = createClient({
       baseUrl: server.url,
       password: server.password,

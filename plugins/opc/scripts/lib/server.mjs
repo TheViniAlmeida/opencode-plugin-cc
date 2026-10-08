@@ -343,7 +343,7 @@ export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 20
   }
 }
 
-const missingProvidersWarning = (missing) => `Providers declarados ainda sem modelos no catálogo: ${missing.join(', ')}. Confira credenciais e o gateway.`;
+const missingProvidersWarning = (missing) => `Providers declarados ainda sem modelos no catálogo: ${missing.join(', ')}. Confira credenciais e o gateway, ou se estão desligados por disabled_providers/enabled_providers (o GET /api/config do OpenCode V2 não expõe essas listas).`;
 
 async function attachServer(env, settings, config) {
   let parsed;
