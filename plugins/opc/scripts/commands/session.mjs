@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
-import { ExitCode, UsageError } from '../lib/opc-error.mjs';
+import { ExitCode, UsageError, RequestError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, resolveModel, requireAgent, profileRules } from '../lib/context.mjs';
-import { assertId } from '../lib/api.mjs';
+import { assertId, MAX_PAGE_LIMIT } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
@@ -55,19 +55,36 @@ async function actionShow(ctx, api, { flags, sessionID }) {
   const [session, statusMap, messages] = await Promise.all([
     api.getSession(sessionID),
     api.sessionStatus(),
-    readSessionMessages(api, sessionID, { limit: flags.limit }),
+    readSessionMessages(api, sessionID, { limit: flags.limit, latest: true }),
   ]);
   const status = statusMap?.[sessionID]?.type ?? 'idle';
   const safeSession = maskDeep(session);
   const safeMessages = maskDeep(messages ?? []);
   if (flags.json) ctx.json({ session: safeSession, status, messages: safeMessages });
-  else ctx.out(renderSession(safeSession, { status, messages: safeMessages }));
+  else {
+    const capped = Number.isFinite(flags.limit) && flags.limit > MAX_PAGE_LIMIT;
+    const note = capped ? `Aviso: mostrando as ${MAX_PAGE_LIMIT} mensagens mais recentes (limite de página do OpenCode 2).` : null;
+    ctx.out(renderSession(safeSession, { status, messages: safeMessages, note }));
+  }
   return ExitCode.OK;
 }
 
 async function actionFork(ctx, api, { flags, sessionID, rest }) {
   const messageID = flags.before ? assertId('msg', flags.before, 'mensagem') : undefined;
-  const forked = await api.fork(sessionID, { before: messageID });
+  const source = await api.getSession(sessionID);
+  let forked = await api.fork(sessionID, { before: messageID });
+  // V2 2.0.22 returns forks without the parent's rules and model; a fork must never end up with fewer rules than its source.
+  const sameRules = JSON.stringify(forked?.permissions ?? null) === JSON.stringify(source?.permissions ?? null);
+  const sameModel = forked?.model?.id === source?.model?.id && forked?.model?.providerID === source?.model?.providerID;
+  if (!sameRules || !sameModel) {
+    try {
+      if (Array.isArray(source?.permissions) && source.permissions.length && !sameRules) await api.setPermissions(forked.id, source.permissions);
+      if (source?.model?.id && source?.model?.providerID && !sameModel) await api.setModel(forked.id, { providerID: source.model.providerID, id: source.model.id, ...(source.model.variant ? { variant: source.model.variant } : {}) });
+      forked = await api.getSession(forked.id);
+    } catch (err) {
+      throw new RequestError('FORK_INHERITANCE_FAILED', `O fork ${forked.id} foi criado, mas as regras ou o modelo da sessão de origem não puderam ser reaplicados (${err.message}); não use esse fork.`, { cause: err });
+    }
+  }
   if (flags.json) ctx.json(maskDeep({ session: forked, forkedFrom: { sessionID, messageID: messageID ?? null } }));
   else ctx.out(renderSession(forked, { note: `Fork de ${sessionID}${messageID ? `, com o histórico anterior a ${messageID}` : ''}.` }));
   return ExitCode.OK;

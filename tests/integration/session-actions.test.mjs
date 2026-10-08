@@ -66,7 +66,7 @@ test('session show: session, status and flat messages with ids', async (t) => {
   assert.deepEqual(out.messages.map((m) => m.id), [SEED.m1, SEED.m2, SEED.m3, SEED.m4, IDLE_ID]);
   assert.deepEqual(out.messages.map((m) => m.type), ['user', 'assistant', 'user', 'assistant', 'idle']);
   const list = fakeRequests(env).find((r) => r.method === 'GET' && r.path === `/api/session/${SEED.session}/message`);
-  assert.equal(list.query.order, 'asc');
+  assert.equal(list.query.order, undefined, 'show reads the newest page in the default V2 order and reverses it');
   const text = await runCli(['session', 'show', SEED.session], { env, cwd });
   assert.match(text.stdout, new RegExp(`# Sessão ${SEED.session}`));
   assert.ok(text.stdout.includes(SEED.m3));
@@ -234,4 +234,50 @@ test('rejects malformed ids without contacting the server', async (t) => {
   try { readFakeState(env); } catch { started = false; }
   assert.ok(!started || fakeRequests(env).every((r) => !r.path.startsWith('/api/session')), 'no session request expected');
   assert.equal(existsSync(`${cwd}/pwned`), false);
+});
+
+test('session show --limit N shows the newest N messages in chronological order', async (t) => {
+  const { cwd, env } = await setup(t);
+  const all = JSON.parse((await runCli(['session', 'show', SEED.session, '--limit', '200', '--json'], { env, cwd })).stdout).messages;
+  const res = await runCli(['session', 'show', SEED.session, '--limit', '2', '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).messages.map((m) => m.id), all.slice(-2).map((m) => m.id));
+});
+
+test('session show warns in the text (not in the JSON) when --limit exceeds the page limit', async (t) => {
+  const { cwd, env } = await setup(t);
+  const text = await runCli(['session', 'show', SEED.session, '--limit', '500'], { env, cwd });
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /Aviso: mostrando as 200 mensagens mais recentes \(limite de página do OpenCode 2\)\./);
+  const json = await runCli(['session', 'show', SEED.session, '--limit', '500', '--json'], { env, cwd });
+  assert.equal(json.code, 0, json.stderr);
+  assert.doesNotMatch(json.stdout, /Aviso/);
+});
+
+test('session fork re-applies the source rules and model when the fork comes back without them', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  const state = readFakeState(env);
+  assert.ok(state.sessions[SEED.session].permissions.length > 0, 'the source carries rules');
+  assert.deepEqual(state.sessions[forkId].permissions, state.sessions[SEED.session].permissions);
+  assert.deepEqual(state.sessions[forkId].model, state.sessions[SEED.session].model);
+  assert.deepEqual(JSON.parse(res.stdout).session.permissions, state.sessions[SEED.session].permissions, 'the output shows the re-read fork');
+});
+
+test('session fork fails loudly when the rules cannot be re-applied to the fork', async (t) => {
+  const { cwd, env } = await setup(t, { extra: { FAKE_FORK_DROPS_RULES: '1', FAKE_FORK_PATCH_FAILS: '1' } });
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.notEqual(res.code, 0, 'a fork without its source rules must not be reported as success');
+  assert.doesNotMatch(res.stdout, /"session"/);
+});
+
+test('session fork leaves an inheriting fork alone (no extra rule or model writes)', async (t) => {
+  const { cwd, env } = await setup(t);
+  const res = await runCli(['session', 'fork', SEED.session, '--json'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  const forkId = JSON.parse(res.stdout).session.id;
+  assert.equal(fakeRequests(env).filter((r) => r.path === `/api/session/${forkId}` && r.method === 'PATCH').length, 0);
+  assert.equal(posts(env, `/api/session/${forkId}/model`).length, 0);
 });

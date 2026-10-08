@@ -87,12 +87,17 @@ export const F3_SESSION_ROUTES = {
     const msgs = fake.state.messages[params.id] ?? [];
     const index = body.before ? msgs.findIndex((m) => m.id === body.before) : msgs.length;
     if (index < 0) return bad('Mensagem não encontrada');
-    const forked = createSessionRecord(fake, { title: `${src.title} (fork #1)`, permissions: src.permissions, model: src.model }, src.location.directory);
+    // V2 2.0.22 (P3) answers the fork without the parent's rules and model; FAKE_FORK_DROPS_RULES=1 reproduces that.
+    const dropsRules = process.env.FAKE_FORK_DROPS_RULES === '1';
+    const forked = createSessionRecord(fake, { title: `${src.title} (fork #1)`, ...(dropsRules ? {} : { permissions: src.permissions, model: src.model }) }, src.location.directory);
+    if (dropsRules) { delete forked.permissions; delete forked.model; }
     forked.fork = { sessionID: src.id, boundary: body.before ?? null };
     fake.state.messages[forked.id] = structuredClone(msgs.slice(0, index));
     persist(fake);
     return ok(forked);
   },
+  // FAKE_FORK_PATCH_FAILS=1 makes the rule write fail; otherwise the base session route answers (undefined falls through).
+  'PATCH /api/session/:id': () => (process.env.FAKE_FORK_PATCH_FAILS === '1' ? { status: 500, body: { _tag: 'InternalError', message: 'Falha simulada ao gravar as regras' } } : undefined),
   // V2 2.0.22 (verified live with snapshots on): stage restores the files and leaves the revert pending
   // ({ messageID, snapshot, files[] }); DELETE undoes it; commit drops the messages for good and clears the revert.
   'POST /api/session/:id/revert/stage': (fake, { params, body = {} }) => {

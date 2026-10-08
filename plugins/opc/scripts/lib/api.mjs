@@ -84,6 +84,11 @@ export function createApi(client) {
     const pageSize = Math.min(MAX_PAGE_LIMIT, given(limit) ? positiveInt(limit, 'O limite de mensagens') : MAX_PAGE_LIMIT);
     return collectPages((next) => messagesPage(id, { limit: pageSize, cursor: next }), { limit, pageSize, cursor });
   };
+  // The newest `limit` messages (one page in the V2 default desc order), returned oldest first.
+  const latestMessages = async (id, { limit } = {}) => {
+    const { data } = toPage(await client.get(`${sessionPath(id)}/message`, { ...LIST_BODY, query: { limit: pageLimit(limit) } }), 'GET /api/session/<id>/message');
+    return [...data].reverse();
+  };
   // The session list keeps the server's default page size unless a limit is given.
   // The first page carries the filter; cursor pages send only the cursor (and limit), as the message list requires.
   const sessionsPage = async ({ parentID, limit, cursor } = {}) => {
@@ -114,6 +119,7 @@ export function createApi(client) {
     sessionStatus: async () => toSessionStatus(await client.get('/api/session/active', GET)),
     messagesPage,
     messages,
+    latestMessages,
     message: (id, messageID) => client.get(`${sessionPath(id)}/message/${seg('msg', messageID)}`, GET),
     listPermissions: async (sessionID) => (await client.get(`${sessionPath(sessionID)}/permission`, GET)).map(toPermissionRequest),
     listQuestions: async (sessionID) => (await client.get(`${sessionPath(sessionID)}/form`, GET)).map(toQuestion).filter(Boolean),
