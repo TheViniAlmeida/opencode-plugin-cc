@@ -144,7 +144,7 @@ test('preference scalars are overridable; other keys are not', () => {
   assert.equal(config.stopGate.enabled, false);
   assert.equal(config.delegation.auto, false);
   assert.equal(config.jobs.maxActive, 8);
-  assert.deepEqual(paths(warnings).sort(), ['delegation', 'jobs', 'jobs.maxActive', 'stopGate.enabled']);
+  assert.deepEqual(paths(warnings).sort(), ['delegation.auto', 'jobs', 'jobs.maxActive', 'stopGate.enabled']);
 });
 
 test('invalid workspace values are dropped with a warning', () => {
