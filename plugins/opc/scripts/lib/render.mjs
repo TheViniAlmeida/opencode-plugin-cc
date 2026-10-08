@@ -1232,6 +1232,13 @@ export function renderConclave(pkg) {
   return safeOutputText(lines.join('\n'));
 }
 
+// The attach-mode reference names an environment variable, not a secret value; keep it out of pattern masking.
+const ATTACH_PASSWORD_REF = 'OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"'; // scan-secrets:allow (variable reference)
+
+export function safeResumeCommand(command) {
+  return String(command ?? '').split(ATTACH_PASSWORD_REF).map(safeOutputText).join(ATTACH_PASSWORD_REF);
+}
+
 export function renderTransfer(result) {
   const s = result.skipped;
   const lines = [
@@ -1243,6 +1250,6 @@ export function renderTransfer(result) {
     `Ignorados: ${s.meta} meta, ${s.sidechain} sidechain, ${s.command} comandos locais, ${s.thinking} blocos de raciocínio, ${s.other} outros, ${s.invalidLines} linhas inválidas`,
   ];
   for (const warning of result.warnings ?? []) lines.push(`Aviso: ${warning}`);
-  lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '');
+  lines.push('', 'Para retomar no terminal:', '', `    ${safeResumeCommand(result.resumeCommand)}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
   return safeOutputText(lines.join('\n'));
 }

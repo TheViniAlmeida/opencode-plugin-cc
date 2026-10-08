@@ -64,7 +64,13 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(r.data.model, MODEL);
   assert.equal(r.data.workspaceRoot, ws);
   const server = readServerRecord(stateDirFor(env, ws));
-  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(server.url)} -s ${r.data.sessionID}`);
+  const secret = path.join(stateDirFor(env, ws), 'attach.secret');
+  assert.equal(r.data.resumeCommand, `cd ${shellQuote(ws)} && OPENCODE_SERVER_PASSWORD="$(cat ${shellQuote(secret)})" ${shellQuote(env.OPC_OPENCODE_BIN ?? 'opencode')} --server ${shellQuote(server.url)} -s ${r.data.sessionID}`);
+  assert.equal(fs.readFileSync(secret, 'utf8'), server.password);
+  assert.equal((fs.statSync(secret).mode & 0o777).toString(8), '600');
+  assert.ok(server.password.length > 0);
+  assert.doesNotMatch(JSON.stringify(r.data) + r.stderr, new RegExp(server.password));
+  assert.equal(r.data.resumeCommand.includes(server.password), false);
   assert.deepEqual(r.data.warnings, []);
   assert.equal(Object.hasOwn(r.data, 'source'), false);
   assert.doesNotMatch(r.stdout + r.stderr, /List the files|Now add a --verbose|session\.jsonl|\[tool call:/);
@@ -90,7 +96,10 @@ test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t
   env.OPC_BIN_CALLS = calls;
   const result = await cliJson(transferArgs(source), { env, cwd: ws });
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.data.resumeCommand, `cd ${shellQuote(ws)} && opencode --server ${shellQuote(external.url)} -s ${result.data.sessionID}`);
+  assert.equal(result.data.resumeCommand, `cd ${shellQuote(ws)} && OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD" ${shellQuote(bin)} --server ${shellQuote(external.url)} -s ${result.data.sessionID}`);
+  assert.doesNotMatch(JSON.stringify(result.data) + result.stderr, new RegExp(external.password));
+  assert.equal(result.data.resumeCommand.includes(external.password), false);
+  assert.equal(fs.existsSync(path.join(stateDirFor(env, ws), 'attach.secret')), false);
   const invoked = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(invoked.map((args) => args[0]), ['--version', 'session']);
   assert.deepEqual(invoked[1].slice(1, 3), ['import', '--server']);
@@ -103,7 +112,9 @@ test('transfer uses the SessionStart source and default model alias and renders 
   const r = await runCli(['transfer'], { env: { ...env, OPC_COMPANION_TRANSCRIPT_PATH: source }, cwd: ws });
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^# opc transfer\n/);
-  assert.match(r.stdout, /opencode --server http:\/\/127\.0\.0\.1:\d+ -s ses_[0-9A-Za-z]+/);
+  assert.match(r.stdout, /OPENCODE_SERVER_PASSWORD="\$\(cat \S+attach\.secret\)" \S+ --server http:\/\/127\.0\.0\.1:\d+ -s ses_[0-9A-Za-z]+/);
+  assert.doesNotMatch(r.stdout, new RegExp(readServerRecord(stateDirFor(env, ws)).password));
+  assert.match(r.stdout, /A linha lê a senha do servidor sem expô-la na linha de comando\./);
   assert.match(r.stdout, /4 \(2 do usuário, 2 do assistente\)/);
   assert.doesNotMatch(r.stdout + r.stderr, /Origem:|session\.jsonl|Now add a --verbose/);
   assert.equal(imports(env).length, 1);

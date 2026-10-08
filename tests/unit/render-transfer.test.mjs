@@ -17,7 +17,7 @@ test('renderTransfer reports counts, warnings and resume command without disclos
   assert.match(rendered, /4 \(2 do usuário, 2 do assistente\)/);
   assert.match(rendered, /1 meta, 2 sidechain, 3 comandos locais, 4 blocos de raciocínio, 5 outros, 6 linhas inválidas/);
   assert.match(rendered, /Aviso: Texto truncado\./);
-  assert.match(rendered, /    cd \/tmp\/fixture && opencode -s ses_example\n$/);
+  assert.match(rendered, /    cd \/tmp\/fixture && opencode -s ses_example\n\nA linha lê a senha do servidor sem expô-la na linha de comando\.\n$/);
   assert.doesNotMatch(rendered, /private-person|secret-transcript|Origem:/);
 });
 
