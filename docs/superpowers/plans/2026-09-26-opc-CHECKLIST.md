@@ -337,7 +337,7 @@ Ao vivo: OpenCode 2.0.22; evidência em `docs/phases/F8-live-output.md`, relató
 | 6 | Formato do `messageID` | F2a | pelo código: `msg_` + 12 hex + 14 base62; ao vivo (F8): formato confirmado (`msg_` + 12 hex + 14 base62) |
 | 7 | Agente em modo `subagent` como agente de sessão filha | F3 | ____ |
 | 8 | Id do plugin em `~/.claude/plugins/data/` | F0 | esperado: `opc-opencode-plugin-cc`; real: ____ |
-| 9 | `ppid` do hook é o processo do Claude | F2b | ____ |
+| 9 | `ppid` do hook é o processo do Claude | F2b | ao vivo (F8): não, é um `sh -c` transitório; o hook agora registra o pai do shell (o `claude`, mesmo pai do servidor MCP). `/clear` interativo: NÃO VALIDADO (operador) |
 | 10 | Formato do export/import para o transfer | F5 | pelo plano: linha `Imported session: <id>` (o exit code não indica sucesso); ao vivo (F8): import validado (F7 `f5-transfer.mjs` e as linhas de retomada da F8) |
 | 11 | Ferramentas de Agent Teams disponíveis ao teammate | F4a | ____ |
 | 12 | Storage concorrente (TUI + servidor do plugin) | F3 | ao vivo (F8): a TUI se anexa ao servidor gerenciado do opc enquanto ele roda (pty), no mesmo servidor e no mesmo armazenamento |

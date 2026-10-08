@@ -8,7 +8,7 @@ const read = (file) => fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
 
 test('F8 live output records every live fact and stays sanitized', () => {
   const live = read('docs/phases/F8-live-output.md');
-  for (const key of ['attachCatalog', 'attachResume', 'P1-bare-session-model', 'item3-patch-permissions', 'item1-session-rules']) assert.match(live, new RegExp(`"${key}"`));
+  for (const key of ['attachCatalog', 'attachResume', 'P1-bare-session-model', 'item3-patch-permissions', 'item1-session-rules', 'claudeHeadless']) assert.match(live, new RegExp(`"${key}"`));
   assert.doesNotMatch(live, /omniroute-(?!personal)[a-z]/);
   assert.doesNotMatch(live, /\/home\/|\/storage\//);
 });
@@ -18,7 +18,8 @@ test('F8 report exists with the gate table', () => {
   assert.match(report, /\| Item \| Evidência \| Resultado \|/);
   assert.match(report, /\| Suíte completa \|/);
   assert.match(report, /\| `npm run scan-secrets` \|/);
-  assert.match(report, /\| Claude Code headless/);
+  assert.match(report, /\| Claude Code headless[^\n]*\| PASSOU \|/);
+  assert.match(report, /\| §15, item 9[^\n]*\| PASSOU \|/);
   assert.doesNotMatch(report, /omniroute-(?!personal)[a-z]/);
   assert.doesNotMatch(report, /\/home\/|\/storage\//);
 });

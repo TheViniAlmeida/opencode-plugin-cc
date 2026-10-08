@@ -108,3 +108,21 @@
 }
 ```
 
+### Claude Code headless (`claude -p --plugin-dir`)
+
+```json
+{
+  "claudeHeadless": {
+    "claudeExit": 0,
+    "mcpTool": "opc_models",
+    "isError": false,
+    "listsProbeModel": true,
+    "permissionDenials": 0,
+    "hooks": { "sessionStart": "reaper.log start", "sessionEnd": "sessions.log end" },
+    "mcpServerParent": "claude -p",
+    "hookParentBeforeFix": { "pidComm": "sh", "aliveAfterHook": false },
+    "hookOwnerAfterFix": { "pidComm": "claude", "alive": true, "sameAsMcpParent": true }
+  }
+}
+```
+
