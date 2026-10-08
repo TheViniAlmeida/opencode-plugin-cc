@@ -83,6 +83,38 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(readFakeState(env).bootAttempts, 1, 'import uses the managed V2 server');
 });
 
+test('transfer keeps the imported sessionID and degrades the resume line when the attach secret cannot be persisted', async (t) => {
+  const { env, ws, source } = setup(t);
+  // The fake import changes the managed server record, so persistManagedAttachSecret throws SERVER_CHANGED afterwards.
+  const recordFile = path.join(stateDirFor(env, ws), 'server.json');
+  env.FAKE_IMPORT_TAMPER_RECORD = recordFile;
+  // Puts the real password back so the test cleanup can still stop the managed server.
+  const restoreRecord = () => {
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    fs.writeFileSync(recordFile, JSON.stringify({ ...record, password: fs.readFileSync(path.join(stateDirFor(env, ws), 'attach.secret'), 'utf8') }));
+  };
+  const r = await cliJson(transferArgs(source), { env, cwd: ws });
+  assert.equal(r.code, 0, r.stderr);
+  const [imp] = imports(env);
+  assert.equal(imports(env).length, 1);
+  assert.equal(r.data.sessionID, imp.sessionID);
+  assert.equal(r.data.resumeCommand, null);
+  assert.equal(r.data.warnings.length, 1);
+  assert.match(r.data.warnings[0], /SERVER_CHANGED/);
+  assert.match(r.data.warnings[0], new RegExp(`/opc:attach ${imp.sessionID}`));
+  const secret = fs.readFileSync(path.join(stateDirFor(env, ws), 'attach.secret'), 'utf8');
+  assert.ok(secret.length > 0);
+  assert.equal(JSON.stringify(r.data).includes(secret), false, 'the secret is never printed');
+  restoreRecord();
+  const text = await runCli(transferArgs(source), { env, cwd: ws });
+  assert.equal(text.code, 0, text.stderr);
+  assert.equal(text.stdout.includes(secret), false);
+  assert.match(text.stdout, /Sessão OpenCode criada: `ses_/);
+  assert.match(text.stdout, /Aviso: A sessão foi importada, mas a linha de retomada não pôde ser gerada/);
+  assert.doesNotMatch(text.stdout, /Para retomar no terminal/);
+  restoreRecord();
+});
+
 test('transfer uses OPC_OPENCODE_BIN for version detection and import', async (t) => {
   const { env, ws, source } = setup(t);
   const external = await startExternalFake(t, { scenario: 'ok' });

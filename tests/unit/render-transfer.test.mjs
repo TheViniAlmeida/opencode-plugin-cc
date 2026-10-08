@@ -28,6 +28,13 @@ test('renderTransfer masks credentials in every public text field', () => {
   assert.match(rendered, /\*\*\*/);
 });
 
+test('renderTransfer omits the resume block when there is no resume command', () => {
+  const rendered = renderTransfer({ ...result, resumeCommand: null, warnings: ['Use /opc:attach.'] });
+  assert.match(rendered, /Sessão OpenCode criada: `ses_example`/);
+  assert.match(rendered, /Aviso: Use \/opc:attach\./);
+  assert.doesNotMatch(rendered, /Para retomar no terminal|null/);
+});
+
 const ATTACH_REF = 'OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"';
 
 test('renderTransfer keeps the attach-mode variable reference verbatim and still masks the rest', () => {

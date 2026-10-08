@@ -1248,7 +1248,8 @@ export function renderTransfer(result) {
     `Ignorados: ${s.meta} meta, ${s.sidechain} sidechain, ${s.command} comandos locais, ${s.thinking} blocos de raciocínio, ${s.other} outros, ${s.invalidLines} linhas inválidas`,
   ];
   for (const warning of result.warnings ?? []) lines.push(`Aviso: ${warning}`);
-  lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
+  if (result.resumeCommand) lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
+  else lines.push('');
   // The whole document goes through the literal-preserving mask, so attach mode keeps its variable reference.
   return safeResumeCommand(lines.join('\n'));
 }

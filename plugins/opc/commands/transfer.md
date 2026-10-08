@@ -15,7 +15,7 @@ $ARGUMENTS
 OPC_ARGS_5f1d0c7a_EOF
 ```
 
-- Apresente a saída ao usuário exatamente como retornada, preservando o ID da sessão e a linha de retomada (`cd … && OPENCODE_SERVER_PASSWORD=… opencode --server <url> -s <id>`). A linha lê a senha de uma fonte fora do argv (o arquivo `attach.secret` no servidor gerenciado; a variável `OPC_SERVER_PASSWORD` em servidor externo, que precisa estar no ambiente do terminal) e usa o binário configurado.
+- Apresente a saída ao usuário exatamente como retornada, preservando o ID da sessão e a linha de retomada (`cd … && OPENCODE_SERVER_PASSWORD=… opencode --server <url> -s <id>`). A linha lê a senha de uma fonte fora do argv (o arquivo `attach.secret` no servidor gerenciado; a variável `OPC_SERVER_PASSWORD` em servidor externo, que precisa estar no ambiente do terminal) e usa o binário configurado. Se a linha de retomada não puder ser gerada, a saída traz o ID da sessão e um aviso: não rode o transfer de novo, use `/opc:attach` para obter a linha.
 - Em erro, mostre o código e a mensagem (`TRANSCRIPT_OUTSIDE_ALLOWED_ROOT`, `NO_MODEL`, `IMPORT_FAILED`…) sem tentar contornar.
 - Sem `--source`, o comando usa a transcrição desta sessão (`OPC_COMPANION_TRANSCRIPT_PATH`, exportado pelo hook SessionStart).
 - Não rode `opencode` você mesmo e não altere a configuração.
