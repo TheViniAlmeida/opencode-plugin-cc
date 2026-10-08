@@ -1235,8 +1235,9 @@ export function renderConclave(pkg) {
 // The attach-mode reference names an environment variable, not a secret value; keep it out of pattern masking.
 const ATTACH_PASSWORD_REF = 'OPENCODE_SERVER_PASSWORD="$OPC_SERVER_PASSWORD"'; // scan-secrets:allow (variable reference)
 
-export function safeResumeCommand(command) {
-  return String(command ?? '').split(ATTACH_PASSWORD_REF).map(safeOutputText).join(ATTACH_PASSWORD_REF);
+// Masks every segment around the exact literal, so the literal itself is never re-masked.
+export function safeResumeCommand(text) {
+  return String(text ?? '').split(ATTACH_PASSWORD_REF).map(safeOutputText).join(ATTACH_PASSWORD_REF);
 }
 
 export function renderTransfer(result) {
@@ -1250,6 +1251,7 @@ export function renderTransfer(result) {
     `Ignorados: ${s.meta} meta, ${s.sidechain} sidechain, ${s.command} comandos locais, ${s.thinking} blocos de raciocínio, ${s.other} outros, ${s.invalidLines} linhas inválidas`,
   ];
   for (const warning of result.warnings ?? []) lines.push(`Aviso: ${warning}`);
-  lines.push('', 'Para retomar no terminal:', '', `    ${safeResumeCommand(result.resumeCommand)}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
-  return safeOutputText(lines.join('\n'));
+  lines.push('', 'Para retomar no terminal:', '', `    ${result.resumeCommand}`, '', 'A linha lê a senha do servidor sem expô-la na linha de comando.', '');
+  // The whole document goes through the literal-preserving mask, so attach mode keeps its variable reference.
+  return safeResumeCommand(lines.join('\n'));
 }
