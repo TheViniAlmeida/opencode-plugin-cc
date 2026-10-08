@@ -106,6 +106,8 @@ export const F3_SESSION_ROUTES = {
     if (process.env.FAKE_FORK_PATCH_FAILS === '1') return { status: 500, body: { _tag: 'InternalError', message: 'Falha simulada ao gravar as regras' } };
     return process.env.FAKE_FORK_PATCH_NOOP === '1' ? { status: 204 } : undefined;
   },
+  // FAKE_CONFIG_FAILS=1 makes GET /api/config answer 500; otherwise the base config route answers (undefined falls through).
+  'GET /api/config': () => (process.env.FAKE_CONFIG_FAILS === '1' ? { status: 500, body: { _tag: 'InternalError', message: 'Falha simulada ao ler a configuração' } } : undefined),
   // FAKE_FORK_MODEL_NOOP=1 acknowledges the model switch (204) without persisting it.
   'POST /api/session/:id/model': () => (process.env.FAKE_FORK_MODEL_NOOP === '1' ? { status: 204 } : undefined),
   // V2 2.0.22 (verified live with snapshots on): stage restores the files and leaves the revert pending
@@ -150,6 +152,19 @@ export const F3_SESSION_ROUTES = {
       const created = Date.now();
       const compaction = { id: body.id ?? nextId(fake, 'msg'), sessionID: params.id, time: { created }, type: 'compaction', payload: {}, delivery: body.delivery ?? 'steer' };
       fake.state.messages[params.id].push(assistantMessage(params.id, nextId(fake, 'msg'), null, 'Resumo da conversa.', { providerID: selected.providerID, modelID: selected.id, agent: 'compaction' }));
+      // FAKE_COMPACT_ASYNC_MS keeps the compaction going after the 200: the session shows as active and
+      // `time.compacting` stays set until the timer ends (2.0.22 treats compaction as a marker, but it may be async).
+      const asyncMs = Number(process.env.FAKE_COMPACT_ASYNC_MS ?? 0);
+      if (asyncMs > 0) {
+        const session = fake.state.sessions[params.id];
+        session.time = { ...session.time, compacting: created };
+        fake.state.statuses[params.id] = { type: 'running' };
+        setTimeout(() => {
+          delete session.time.compacting;
+          delete fake.state.statuses[params.id];
+          persist(fake);
+        }, asyncMs).unref();
+      }
       persist(fake);
       return ok(compaction);
     };

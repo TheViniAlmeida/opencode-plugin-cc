@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
-import { ExitCode, UsageError, RequestError } from '../lib/opc-error.mjs';
+import { ExitCode, UsageError, RequestError, ConnectionError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, resolveModel, requireAgent, profileRules } from '../lib/context.mjs';
 import { assertId, MAX_PAGE_LIMIT } from '../lib/api.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview } from '../lib/render.mjs';
 import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
 import { maskDeep, safeOutputText } from '../lib/redact.mjs';
-import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
+import { loadOpencodeConfig, opencodeConfigUnavailable } from '../lib/opencode-config.mjs';
 
 const SPEC = {
   flags: {
@@ -30,6 +30,9 @@ const SPEC = {
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 export const EMPTY_DIFF_NOTICE = 'O OpenCode não informou alterações para esta sessão (o diff pode vir vazio mesmo com arquivos alterados); a fonte confiável é o git do workspace (ex.: git diff).';
 export const SNAPSHOT_DISABLED_NOTICE = 'O OpenCode está com "snapshot": false: sem snapshots, a sessão não registra diff e a reversão não restaura arquivos.';
+// A staged revert is consolidated by the next prompt (verified live, I2): the reverted messages stop being restorable.
+export const PENDING_REVERT_NOTICE = 'A sessão tem um revert pendente; um prompt novo o consolida e as mensagens revertidas deixam de poder voltar com unrevert.';
+export const SNAPSHOT_UNKNOWN_NOTICE = 'Aviso: não foi possível confirmar se os snapshots estão ligados (GET /api/config falhou); a reversão pode não restaurar arquivos.';
 export const REVERT_SCOPE_NOTICE = 'O OpenCode 2 não fornece um diff restrito às mensagens a partir do alvo. A reversão pode alterar arquivos; confira o estado da sessão e do workspace antes de confirmar.';
 
 async function actionNew(ctx, api, { flags }) {
@@ -113,7 +116,7 @@ async function actionDiff(ctx, api, { flags, sessionID }) {
   const diffs = (await api.diff(sessionID)) ?? [];
   const safeDiffs = maskDeep(diffs);
   // An empty V2 diff is not proof of an untouched workspace; never derive a diff locally.
-  const notices = safeDiffs.length ? [] : [EMPTY_DIFF_NOTICE, ...(await snapshotsDisabled(api) ? [SNAPSHOT_DISABLED_NOTICE] : [])];
+  const notices = safeDiffs.length ? [] : [EMPTY_DIFF_NOTICE, ...((await snapshotState(api)) === 'disabled' ? [SNAPSHOT_DISABLED_NOTICE] : [])];
   if (flags.json) ctx.json(maskDeep({ sessionID, messageID: null, source: 'session', notices, diffs: safeDiffs }));
   else ctx.out(`${renderSessionDiff(safeDiffs, { title: `Diff da sessão ${sessionID}` })}${notices.map((notice) => `\nAviso: ${notice}\n`).join('')}`);
   return ExitCode.OK;
@@ -142,8 +145,24 @@ export async function collectAffectedDiff(api, sessionID, messageID) {
 }
 
 // V2 diffs and file restores come from snapshots; the merged OpenCode config can turn them off.
-async function snapshotsDisabled(api) {
-  return (await loadOpencodeConfig(api))?.snapshot === false;
+// 'disabled' | 'enabled' | 'unknown' (GET /api/config failed).
+async function snapshotState(api) {
+  const config = await loadOpencodeConfig(api);
+  if (opencodeConfigUnavailable(config)) return 'unknown';
+  return config.snapshot === false ? 'disabled' : 'enabled';
+}
+
+// Compaction may be a marker (session already idle) or asynchronous (session active, `time.compacting` set).
+// True once the session is neither active nor compacting; false when the deadline passes first.
+export async function waitCompaction(api, sessionID, { timeoutMs, pollMs = 250 } = {}) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const busy = Boolean((await api.sessionStatus())?.[sessionID]);
+    const compacting = Boolean((await api.getSession(sessionID))?.time?.compacting);
+    if (!busy && !compacting) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return false;
 }
 
 async function actionRevert(ctx, api, { flags, sessionID, rest }) {
@@ -153,13 +172,15 @@ async function actionRevert(ctx, api, { flags, sessionID, rest }) {
   if (flags.part) throw new UsageError('UNKNOWN_OPTION', '--part não está disponível no OpenCode 2');
   return withSessionGuard(ctx, api, sessionID, async () => {
     const affected = await collectAffectedDiff(api, sessionID, messageID);
-    if (await snapshotsDisabled(api)) {
+    const snapshots = await snapshotState(api);
+    if (snapshots === 'disabled') {
       throw new UsageError('SNAPSHOT_DISABLED', `${SNAPSHOT_DISABLED_NOTICE} Defina "snapshot": true em server.configOverride na configuração global do opc (ou na do OpenCode) e reinicie o servidor (opc setup --stop-server).`);
     }
     if (!flags['confirmed-by-user']) {
       const command = `opc session revert ${sessionID} ${messageID} --confirmed-by-user`;
-      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
-      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice: REVERT_SCOPE_NOTICE, command }));
+      const notice = snapshots === 'unknown' ? `${REVERT_SCOPE_NOTICE}\n${SNAPSHOT_UNKNOWN_NOTICE}` : REVERT_SCOPE_NOTICE;
+      if (flags.json) ctx.json(maskDeep({ confirmed: false, action: 'revert', sessionID, messageID, affected, notice, command }));
+      else ctx.out(renderRevertPreview({ action: 'revert', sessionID, messageID, affected, notice, command }));
       return ExitCode.USAGE;
     }
     // Stage only: it restores the files and keeps the revert pending, so DELETE (unrevert) can undo it.
@@ -197,9 +218,14 @@ async function actionSummarize(ctx, api, { flags, sessionID }) {
   const discovery = await loadDiscovery(api);
   const model = resolveModel(ctx, discovery, 'summarize', flags.model);
   return withSessionGuard(ctx, api, sessionID, async () => {
+    const timeoutMs = (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000;
+    if ((await api.getSession(sessionID))?.revert) ctx.err(`[opc] aviso: ${PENDING_REVERT_NOTICE}\n`);
     await api.setModel(sessionID, { providerID: model.providerID, id: model.modelID });
-    // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }).
-    const compaction = await api.compact(sessionID, { timeoutMs: (flags.timeout ?? DEFAULT_SUMMARIZE_TIMEOUT_SEC) * 1000 });
+    // V2 answers 200 with the compaction message ({ id, type: 'compaction', … }); the compaction itself can outlive the answer.
+    const compaction = await api.compact(sessionID, { timeoutMs });
+    if (!(await waitCompaction(api, sessionID, { timeoutMs }))) {
+      throw new ConnectionError('TIMEOUT', `A compactação da sessão ${safeOutputText(sessionID)} não terminou em ${timeoutMs / 1000} s; a compactação continua no servidor. Confira depois com opc session show.`);
+    }
     const compactionMessageID = typeof compaction?.id === 'string' ? compaction.id : null;
     if (flags.json) ctx.json(maskDeep({ sessionID, model: model.full, summarized: true, compactionMessageID }));
     else ctx.out(`# Sessão ${safeOutputText(sessionID)} resumida\n\nModelo: ${safeOutputText(model.full)}\n${compactionMessageID ? `Mensagem de compactação: ${safeOutputText(compactionMessageID)}\n` : ''}Veja o resultado: opc session show ${safeOutputText(sessionID)}\n`);

@@ -13,6 +13,7 @@ import { newMessageId } from '../lib/runner.mjs';
 import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
 import { loadPrompt, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
+import { PENDING_REVERT_NOTICE } from './session.mjs';
 export { loadPrompt, projectContextBlock, summarize, sessionTitle } from '../lib/prompts.mjs';
 export const JOB_ID_RE = /^(task|review|ask|plan|sub|cmd|orch|conc|gate)-[0-9a-z]+-[0-9a-z]{6}$/;
 export const SESSION_REF_RE = /^ses[_0-9A-Za-z]+$/;
@@ -234,6 +235,7 @@ export async function runKindCommand(ctx, argv, kind) {
   let patchPermission = null;
   if (sessionID) {
     const session = await api.getSession(sessionID);
+    if (session?.revert) ctx.err(`[opc] aviso: ${PENDING_REVERT_NOTICE}\n`);
     if (JSON.stringify(session?.permissions) !== JSON.stringify(rules)) patchPermission = rules;
   }
   const template = spec.template ? loadPrompt(spec.template) : null;

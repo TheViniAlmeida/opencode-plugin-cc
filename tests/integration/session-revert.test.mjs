@@ -5,6 +5,7 @@ import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, readFa
 import { F3_TEST_CONFIG, SEED } from '../fixtures/f3-fake.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
+import { PENDING_REVERT_NOTICE } from '../../plugins/opc/scripts/commands/session.mjs';
 
 async function setup(t, { config = {} } = {}) {
   const cwd = makeWorkspace(t);
@@ -201,4 +202,31 @@ test('summarize: --timeout bounds the compact request (default is long; a short 
   const patient = await runCli(['session', 'summarize', SEED.session, '--timeout', '30', '--json'], { env, cwd });
   assert.equal(patient.code, 0, patient.stderr);
   assert.equal(JSON.parse(patient.stdout).summarized, true);
+});
+
+test('revert preview warns when snapshots cannot be confirmed (config unreadable)', async (t) => {
+  const cwd = makeWorkspace(t);
+  const env = testEnv(t, { scenario: 'f3-sessions', extra: { FAKE_CONFIG_FAILS: '1' } });
+  writeGlobalConfig(env, F3_TEST_CONFIG);
+  const res = await runCli(['session', 'revert', SEED.session, SEED.m3], { env, cwd });
+  assert.equal(res.code, 2);
+  assert.match(res.stdout, /não foi possível confirmar se os snapshots estão ligados/);
+  const json = await runCli(['session', 'revert', SEED.session, SEED.m3, '--json'], { env, cwd });
+  assert.match(JSON.parse(json.stdout).notice, /não foi possível confirmar se os snapshots estão ligados/);
+});
+
+test('revert preview has no snapshot warning when the config is readable', async (t) => {
+  const { cwd, env } = await setup(t);
+  const res = await runCli(['session', 'revert', SEED.session, SEED.m3], { env, cwd });
+  assert.equal(res.code, 2);
+  assert.doesNotMatch(res.stdout, /não foi possível confirmar/);
+});
+
+test('task --resume warns on stderr when the resumed session has a pending revert', async (t) => {
+  const { cwd, env } = await setup(t);
+  const staged = await runCli(['session', 'revert', SEED.session, SEED.m3, '--confirmed-by-user'], { env, cwd });
+  assert.equal(staged.code, 0, staged.stderr);
+  const res = await runCli(['task', '--background', '--resume', SEED.session, 'continue the work'], { env, cwd });
+  assert.equal(res.code, 0, res.stderr);
+  assert.ok(res.stderr.includes(PENDING_REVERT_NOTICE), res.stderr);
 });
