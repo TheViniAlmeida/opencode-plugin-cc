@@ -121,8 +121,10 @@ function safeConfigInfo(content) {
     }
     if (typeof source?.snapshot === 'boolean') info.snapshot = source.snapshot;
     // Provider ids only: provider settings may carry credentials and the catalog tests need just the declaration.
-    if (source?.provider && typeof source.provider === 'object' && !Array.isArray(source.provider)) {
-      info.provider = Object.fromEntries(Object.keys(source.provider).map((id) => [id, {}]));
+    // The real V2 reports them under `providers` (plural); the content may declare either spelling.
+    const declared = source?.providers ?? source?.provider;
+    if (declared && typeof declared === 'object' && !Array.isArray(declared)) {
+      info.providers = Object.fromEntries(Object.keys(declared).map((id) => [id, {}]));
     }
     return info;
   } catch {

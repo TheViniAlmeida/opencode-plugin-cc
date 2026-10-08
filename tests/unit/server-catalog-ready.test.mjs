@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { mergeOpencodeConfigSources } from '../../plugins/opc/scripts/lib/opencode-config.mjs';
 import { ensureServer, expectedProviders, waitForModelCatalog } from '../../plugins/opc/scripts/lib/server.mjs';
 import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
-import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { REPO_ROOT, makeTempDir, trackTempDir } from '../helpers.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 const model = (providerID, id = 'm') => ({ providerID, id });
@@ -11,6 +14,19 @@ test('expectedProviders honours provider, enabled_providers and disabled_provide
   assert.deepEqual(expectedProviders({ provider: { a: {}, b: {}, c: {} }, disabled_providers: ['b'] }), ['a', 'c']);
   assert.deepEqual(expectedProviders({ provider: { a: {}, b: {} }, enabled_providers: ['b'] }), ['b']);
   assert.deepEqual(expectedProviders({}), []);
+});
+
+test('expectedProviders reads the V2 plural key and falls back to the V1 singular one', () => {
+  assert.deepEqual(expectedProviders({ providers: { a: {}, b: {} }, disabled_providers: ['b'] }), ['a']);
+  assert.deepEqual(expectedProviders({ providers: { v2: {} }, provider: { v1: {} } }), ['v2']);
+  assert.deepEqual(expectedProviders({ provider: { v1: {} } }), ['v1']);
+});
+
+test('expectedProviders finds the provider declared in the live V2 config fixtures', () => {
+  for (const name of ['config.json', 'config-precedence.json']) {
+    const sources = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests/fixtures/contract/opencode-2.0.22', name), 'utf8'));
+    assert.deepEqual(expectedProviders(mergeOpencodeConfigSources(sources)), ['omniroute-personal'], name);
+  }
 });
 
 test('catalog is ready as soon as every declared provider is listed, without waiting for model.updated', async () => {
@@ -53,7 +69,7 @@ test('attach waits for the declared providers to appear in the catalog without r
   t.mock.method(globalThis, 'fetch', async (url) => {
     const route = new URL(url).pathname;
     if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
-    if (route === '/api/config') return new Response(JSON.stringify([{ type: 'document', info: { provider: { gateway: {} }, share: 'disabled' } }]));
+    if (route === '/api/config') return new Response(JSON.stringify([{ type: 'document', info: { providers: { gateway: {} }, share: 'disabled' } }]));
     assert.equal(route, '/api/model');
     modelCalls += 1;
     return new Response(JSON.stringify(modelCalls < 2 ? [model('opencode')] : [model('opencode'), model('gateway')]));
@@ -110,7 +126,7 @@ test('attach reports a declared provider that never loads in warnings after the 
   t.mock.method(globalThis, 'fetch', async (url) => {
     const route = new URL(url).pathname;
     if (route === '/api/info') return new Response(JSON.stringify(loadContractSample('info.json')));
-    if (route === '/api/config') return new Response(JSON.stringify([{ type: 'document', info: { provider: { ghost: {} }, share: 'disabled' } }]));
+    if (route === '/api/config') return new Response(JSON.stringify([{ type: 'document', info: { providers: { ghost: {} }, share: 'disabled' } }]));
     assert.equal(route, '/api/model');
     return new Response(JSON.stringify([model('opencode')]));
   });

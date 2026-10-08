@@ -285,7 +285,9 @@ export function watchCatalogBootstrap(client, { fetchImpl } = {}) {
 }
 
 export function expectedProviders(opencodeConfig) {
-  const declared = Object.keys(opencodeConfig?.provider ?? {});
+  // V2 reports the declared providers under `providers` (live fixtures opencode-2.0.22/config.json and
+  // config-precedence.json); the singular V1 `provider` is kept as a fallback.
+  const declared = Object.keys(opencodeConfig?.providers ?? opencodeConfig?.provider ?? {});
   const enabled = Array.isArray(opencodeConfig?.enabled_providers) ? new Set(opencodeConfig.enabled_providers) : null;
   const disabled = new Set(Array.isArray(opencodeConfig?.disabled_providers) ? opencodeConfig.disabled_providers : []);
   return declared.filter((id) => !disabled.has(id) && (!enabled || enabled.has(id)));
