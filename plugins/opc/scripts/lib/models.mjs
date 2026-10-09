@@ -3,9 +3,12 @@ import { UsageError } from './opc-error.mjs';
 import { safeOutputText } from './redact.mjs';
 
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
+const GLOB_CACHE = new Map();
+const GLOB_CACHE_LIMIT = 512;
 
 export function globToRegExp(glob) {
   const source = String(glob);
+  if (GLOB_CACHE.has(source)) return GLOB_CACHE.get(source);
   const parts = [{ wildcard: null, literal: '' }];
   for (let i = 0; i < source.length; i += 1) {
     if (source[i] !== '*') { parts.at(-1).literal += source[i]; continue; }
@@ -27,12 +30,16 @@ export function globToRegExp(glob) {
     // fixed chunk. Later wildcards absorb any extra text without exponential retries.
     body += last ? `${prefix}${fixed}` : `(?=(${prefix}${fixed}))\\${i}`;
   }
-  return new RegExp(`^${body}$`);
+  const expression = new RegExp(`^${body}$`);
+  if (GLOB_CACHE.size >= GLOB_CACHE_LIMIT) GLOB_CACHE.delete(GLOB_CACHE.keys().next().value);
+  GLOB_CACHE.set(source, expression);
+  return expression;
 }
 
 export function matchesAny(value, globs) {
   if (!Array.isArray(globs) || globs.length === 0) return false;
-  return globs.some((glob) => globToRegExp(glob).test(String(value)));
+  const text = String(value);
+  return globs.some((glob) => globToRegExp(glob).test(text));
 }
 
 export function parseFullId(full) {

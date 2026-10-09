@@ -72,6 +72,20 @@ test('matchesAny: empty list never matches', () => {
   assert.equal(matchesAny('work-reviewer', ['build', 'work-*']), true);
 });
 
+test('matchesAny: repeated matching remains correct after more than 512 distinct globs', () => {
+  for (let i = 0; i < 600; i += 1) {
+    const globs = [`synthetic-${i}/*`];
+    assert.equal(matchesAny(`synthetic-${i}/model`, globs), true);
+    assert.equal(matchesAny('other/model', globs), false);
+  }
+  for (let i = 0; i < 2; i += 1) {
+    assert.equal(matchesAny('synthetic-0/model', ['synthetic-0/*']), true);
+    assert.equal(matchesAny('other/model', ['synthetic-0/*']), false);
+    assert.equal(matchesAny('id_rsa', ['**/id_rsa*']), true);
+    assert.equal(matchesAny('src/main.js', ['**/id_rsa*']), false);
+  }
+});
+
 test('globToRegExp: optional **/ directories require a path boundary', () => {
   for (const value of ['b', 'a/b', 'a/nested/b']) assert.ok(globToRegExp('**/b').test(value), value);
   for (const value of ['a/b', 'a/nested/b']) assert.ok(globToRegExp('a/**/b').test(value), value);

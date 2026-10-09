@@ -469,9 +469,11 @@ const WRAPPER_OPTIONS = {
     values: ['-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w'], positionals: 1, shell: true },
 };
 
-const SHELL_DECLARATIONS = new Set(['export', 'declare', 'typeset']);
+const SHELL_DECLARATIONS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const GIT_ENVIRONMENT = new Set(['PAGER', 'EDITOR', 'VISUAL', 'SSH_ASKPASS']);
+const EXECUTION_ENVIRONMENT = new Set(['BASH_ENV', 'ENV', 'PATH', 'PROMPT_COMMAND', 'PS4', 'SHELLOPTS', 'BASHOPTS']);
+const unsafeExecutionEnvironment = (name) => name.startsWith('LD_') || EXECUTION_ENVIRONMENT.has(name);
 const unsafeGitEnvironment = (name) => GIT_ENVIRONMENT.has(name)
   || (name.startsWith('GIT_') && name !== 'GIT_TERMINAL_PROMPT' && !name.startsWith('GIT_TRACE'));
 
@@ -479,23 +481,52 @@ function declaredEnvironment(words) {
   const offset = words?.findIndex((word) => !ASSIGNMENT.test(word.value)) ?? -1;
   if (offset < 0 || !SHELL_DECLARATIONS.has(words[offset].value)) return [];
   return words.slice(offset + 1).filter((word) => !word.value.startsWith('-'))
+    .filter((word) => word.value.includes('=') || !unsafeExecutionEnvironment(word.value))
     .map((word) => word.value.split('=')[0]);
 }
 
-function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = []) {
+function enablesAllexport(words) {
+  if (!words) return false;
+  let offset = 0;
+  while (ASSIGNMENT.test(words[offset]?.value ?? '')) offset += 1;
+  while (['command', 'builtin'].includes(words[offset]?.value)) {
+    offset += 1;
+    if (words[offset]?.value === '-p') offset += 1;
+  }
+  if (words[offset]?.value !== 'set') return false;
+  const args = words.slice(offset + 1);
+  for (let i = 0; i < args.length; i += 1) {
+    const { value, dynamic } = args[i];
+    if (value === '--' || !/^[+-]/.test(value)) break;
+    if (dynamic) return true;
+    if (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(value)) return true;
+    if (/^[+-][a-zA-Z]*o$/.test(value)) {
+      if (value.startsWith('-') && (args[i + 1]?.value === 'allexport' || args[i + 1]?.dynamic)) return true;
+      i += 1;
+    }
+  }
+  return false;
+}
+
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], allexport = false) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
   const commands = segments.map(shellWords);
   const declared = commands.flatMap(declaredEnvironment);
-  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared]));
+  allexport ||= commands.some(enablesAllexport);
+  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared], allexport));
 }
 
 function shellTouchesSensitive(words, sensitivePaths) {
   const samples = [
     '.env', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc', '.git-credentials', 'secrets.env',
-    '.aws/credentials', 'x.pem', 'x.key', ...sensitivePaths.filter((path) => !/[*?\[]/.test(path)),
+    '.aws/credentials', '.kube/config', 'kubeconfig', 'x.pem', 'x.key', ...sensitivePaths.filter((path) => !/[*?\[]/.test(path)),
   ].filter((path) => matchesAny(path, sensitivePaths));
+  const normalizeDirectory = (path) => path.split('/').filter((part) => part && part !== '.' && part !== '~').join('/');
+  const directories = sensitivePaths.filter((path) => path.includes('/'))
+    .map((path) => normalizeDirectory(path.slice(0, path.lastIndexOf('/'))))
+    .filter((path) => /[^/*?\[\]]/.test(path));
   return words.some(({ value, dynamic }) => {
     const candidates = value.startsWith('-') ? [] : [value];
     if (value.startsWith('-') && value.includes('=')) candidates.push(value.slice(value.indexOf('=') + 1));
@@ -510,6 +541,8 @@ function shellTouchesSensitive(words, sensitivePaths) {
         const prefix = expansion < 0 ? null : path.slice(0, expansion);
         const patterns = /[*?\[]/.test(path) ? [path, basename] : [];
         if (prefix) {
+          const directory = prefix.includes('/') ? normalizeDirectory(prefix.slice(0, prefix.lastIndexOf('/'))) : '';
+          if (directory && matchesAny(directory, directories)) return true;
           patterns.push(`${prefix}*`);
           const basePrefix = prefix.split('/').at(-1);
           if (basePrefix) patterns.push(`${basePrefix}*`);
@@ -593,7 +626,7 @@ function normalizeGitWords(words) {
       if (!harmlessGitConfig(word.value.slice(2))) return null;
       i += 1; continue;
     }
-    if ([...values.filter((option) => option.startsWith('--')), '--exec-path'].some((option) => word.value.startsWith(`${option}=`))) {
+    if (values.filter((option) => option.startsWith('--')).some((option) => word.value.startsWith(`${option}=`))) {
       if (word.value.startsWith('--config-env=') && !harmlessGitConfig(word.value.slice('--config-env='.length))) return null;
       i += 1; continue;
     }
@@ -603,6 +636,8 @@ function normalizeGitWords(words) {
 }
 
 const GIT_VALUE_OPTIONS = {
+  log: ['--grep', '--author', '--committer', '--format', '--pretty', '--date', '--output', '-n', '--max-count', '--skip'],
+  diff: ['--output'],
   push: ['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules'],
   reset: ['--pathspec-from-file'],
   clean: ['-e', '--exclude'],
@@ -653,7 +688,7 @@ function gitOptions(args, subcommand) {
   return { short, long, hasLong, operands };
 }
 
-function inspectWords(words, destructive, depth, sensitivePaths, environment = []) {
+function inspectWords(words, destructive, depth, sensitivePaths, environment = [], allexport = false) {
   if (!words || depth > 32) return true;
   if (shellTouchesSensitive(words, sensitivePaths)) return true;
   // Carry assignments through wrappers/scripts so git configuration cannot hide in env.
@@ -662,21 +697,26 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
   while (ASSIGNMENT.test(words[offset]?.value ?? '')) {
     environment.push(ASSIGNMENT.exec(words[offset].value)[1]); offset += 1;
   }
+  if (environment.some(unsafeExecutionEnvironment)) return true;
   words = words.slice(offset);
   if (!words.length) return false;
   const [head, ...args] = words;
   if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
-  if (SHELL_DECLARATIONS.has(executable) && declaredEnvironment(words).some((name) => name.startsWith('GIT_'))) return true;
+  if (SHELL_DECLARATIONS.has(executable)) {
+    if (args.some((word) => word.dynamic && /[$`*?\[\]{}]/.test(word.value.split('=')[0]))) return true;
+    if (declaredEnvironment(words).some((name) => name.startsWith('GIT_') || unsafeExecutionEnvironment(name))) return true;
+  }
   if (executable === 'git') {
-    if (environment.some(unsafeGitEnvironment)) return true;
+    if (allexport || environment.some(unsafeGitEnvironment)) return true;
     const normalized = normalizeGitWords(words);
     if (!normalized) return true;
     const [, subcommand, ...rest] = normalized.map((word) => word.value);
     if (['push', 'reset', 'clean', 'branch', 'tag', 'checkout', 'switch', 'restore', 'stash', 'update-ref', 'rm'].includes(subcommand)
       && normalized.slice(2).some((word) => word.dynamic)) return true;
     const { short, long, hasLong, operands } = gitOptions(rest, subcommand);
+    if (['log', 'diff'].includes(subcommand) && hasLong('--output')) return true;
     const force = short.has('f') || hasLong('--force');
     const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
     if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
@@ -715,7 +755,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       if (option.dynamic) return true;
       if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
         const script = args[i + 1];
-        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment);
+        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, allexport);
       }
       if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
     }
@@ -723,7 +763,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
   }
   if (executable === 'eval') {
     return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment);
+      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, allexport);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -731,7 +771,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, allexport)) return true;
         i = end;
       }
     }
@@ -773,13 +813,13 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     if (!args[i] || args[i].dynamic) return true;
     positionals -= 1; i += 1;
   }
-  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment);
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, allexport);
   if (i === args.length) return true;
   if (options.shell) {
     return args.slice(i).some((word) => word.dynamic)
-      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment);
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, allexport);
   }
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment);
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, allexport);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

@@ -11,6 +11,102 @@ const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.acti
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
 const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
 
+const fix3Cases = [
+  ['allexport cannot hide git environment assignments', true, [
+    ...['-a', '-ae', '-ka', '-aeu', '-o allexport', '-e -o allexport'].map((options) =>
+      `set ${options}; GIT_SSH_COMMAND=synthetic; git ls-remote h:x`),
+    'set -a; git status', 'set -o allexport; FOO=bar; git log',
+    'set -a && GIT_PAGER=synthetic && git log', 'set -a\nGIT_PAGER=synthetic\ngit log',
+    'set -a; sh -c "GIT_PAGER=synthetic; git log"',
+    'sh -c "set -a; GIT_SSH_COMMAND=synthetic; git ls-remote h:x"',
+    'command set -a; GIT_SSH_COMMAND=synthetic; git ls-remote h:x',
+    'builtin set -o allexport; GIT_SSH_COMMAND=synthetic; git ls-remote h:x',
+    'set -a; rm -rf synthetic', 'set -o allexport; docker volume rm synthetic',
+  ]],
+  ['declarations with dynamic names require the user', true, [
+    ...['export', 'declare', 'typeset', 'readonly', 'local'].flatMap((command) => [
+      `${command} "$N=synthetic"`, `${command} $N=synthetic`, `${command} \${N}=x`,
+      `${command} PREFIX_\${N}=synthetic`, `${command} "$N"`,
+    ]),
+    'N=GIT_SSH_COMMAND; export "$N=synthetic"; git ls-remote h:x',
+    'N=GIT_SSH_COMMAND; export $N=synthetic; git ls-remote h:x',
+    'N=GIT_SSH_COMMAND; export ${N}=synthetic; git ls-remote h:x',
+    'export -- $N=synthetic', 'declare -x $N=synthetic', 'declare -gx "$N=synthetic"',
+    'typeset -x ${N}=synthetic', 'command export "$N=synthetic"',
+  ]],
+  ['execution environment assignments require the user', true, [
+    ...['LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_SYNTHETIC', 'BASH_ENV', 'ENV', 'PATH',
+      'PROMPT_COMMAND', 'PS4', 'SHELLOPTS', 'BASHOPTS'].flatMap((name) => [
+      `${name}=synthetic git log`, `${name}=synthetic ls`, `env ${name}=synthetic ls`,
+      `export ${name}=synthetic; ls`, `declare -x ${name}=synthetic; ls`,
+      `typeset -x ${name}=synthetic; ls`, `readonly ${name}=synthetic; ls`, `local ${name}=synthetic`,
+    ]),
+    'LD_PRELOAD=synthetic.so git log', 'PATH=/synthetic:$PATH git log', 'BASH_ENV=/synthetic/startup ls',
+    'env -i LD_AUDIT=synthetic ls', 'timeout 5 env ENV=synthetic ls',
+    'sh -c "export BASH_ENV=synthetic; ls"',
+  ]],
+  ['git output and exec path overrides require the user', true, [
+    'git log --output=synthetic', 'git log --output synthetic', 'git --no-pager log --output=synthetic',
+    'git log --oneline -5 --output=synthetic', 'git diff --output=synthetic',
+    'git --exec-path=/synthetic status', 'git --exec-path=/synthetic x',
+    'git -C /synthetic --exec-path=/synthetic log',
+  ]],
+  ['dynamic paths inside sensitive directories require the user', true, [
+    'cat ~/.aws/$X', 'cat ./.aws/$X', 'cat /home/u/.aws/$X', 'cat ~/.kube/$X',
+    'cat ~/.kube/conf$X', 'cat /home/u/kubec$X', 'cat ~/.aws/"$X"',
+    'cat ./.kube/${X}', 'cat /home/u/./.aws//$X',
+  ]],
+  ['required benign commands stay free', false, [
+    'git status', 'git log', 'git log --oneline -5', 'git commit -m "$MSG"',
+    'export FOO=bar; git status', 'export PATH; git status', 'PATH_SUFFIX=x npm test', 'set -e; git status',
+    'set -euo pipefail; git status', 'set -x; ls', 'cat ~/.config/app/$X', 'ls ./src/$X',
+    'NODE_ENV=test npm test', 'local x=1', 'export FOO="$VALUE"; git status',
+    'declare -x FOO="$VALUE"; git status', 'typeset -x FOO="$VALUE"; ls',
+    'readonly FOO="$VALUE"; ls', 'local FOO="$VALUE"', 'set -- -a; git status',
+    'set +a; git status', 'set +o allexport; git status', 'set -o; git status',
+    'set -a; ls', 'git --exec-path', 'git log --grep --output=synthetic',
+  ]],
+];
+for (const [group, expected, commands] of fix3Cases) {
+  for (const command of commands) {
+    test(`F11 fix3: ${group}: ${command}`, () => {
+      assert.equal(claude(command), expected, command);
+      if (expected) {
+        assert.equal(checkReply({ approver: 'claude', request: { permission: 'shell', patterns: [command] }, reply: 'once' }).code, 'NEEDS_USER');
+      }
+    });
+  }
+}
+
+test('F11 fix3: dynamic directory checks respect configured sensitive paths', () => {
+  assert.equal(claude('cat ~/.aws/$X', { sensitivePaths: [] }), false);
+  assert.equal(claude('cat ~/.kube/$X', { sensitivePaths: ['**/.aws/credentials'] }), false);
+  assert.equal(claude('cat /home/u/.vault/$X', { sensitivePaths: ['**/.vault/credentials'] }), true);
+  assert.equal(claude('cat ./.private/$X', { sensitivePaths: ['.private/credentials'] }), true);
+  assert.equal(claude('cat /home/u/.vault/$X', { sensitivePaths: ['**/.other/credentials'] }), false);
+  assert.equal(claude('cat .vaultX$X', { sensitivePaths: ['**/.vault/credentials'] }), false);
+});
+
+test('F11 fix3: ten thousand shell words finish within 250 ms per command', () => {
+  const script = `
+    import { requiresUser } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/policy.mjs', import.meta.url).href)};
+    const check = (command) => requiresUser({ permission: 'shell', patterns: [command] });
+    check('cat a'); check('git status');
+    const results = ['cat ', 'git status '].map((prefix) => {
+      const command = prefix + 'a '.repeat(10000);
+      const start = performance.now();
+      const required = check(command);
+      return { required, elapsed: performance.now() - start };
+    });
+    console.log(JSON.stringify(results));
+  `;
+  const results = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 3000 }));
+  for (const { required, elapsed } of results) {
+    assert.equal(required, false);
+    assert.ok(elapsed < 250, `${elapsed} ms`);
+  }
+});
+
 test('F11 fix2: shell globs with repeated or separated stars finish within 50 ms', () => {
   const script = `
     import { requiresUser } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/policy.mjs', import.meta.url).href)};
@@ -141,7 +237,7 @@ test('known git global options are stripped without changing benign subcommands'
     '-C /repo', '-c core.quotePath=false', '--git-dir .git', '--git-dir=.git',
     '--work-tree /repo', '--work-tree=/repo', '--namespace test', '--namespace=test',
     '--no-pager', '-p', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs',
-    '--exec-path', '--exec-path=/tools', '-C /repo --no-pager -c core.quotePath=false',
+    '--exec-path', '-C /repo --no-pager -c core.quotePath=false',
   ]) {
     assert.equal(claude(`git ${option} reset --hard`), true, option);
     assert.equal(claude(`git ${option} status`), false, option);
