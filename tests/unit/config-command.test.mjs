@@ -13,20 +13,26 @@ for (const source of ['ancestor', 'environment']) {
   test(`--tty-confirm refuses Claude Code ${source} before creating a prompter`, async () => {
     const stderr = captureStream();
     const ctx = {
-      env: source === 'environment' ? { CLAUDECODE: '1' } : {},
+      env: source === 'environment' ? { CLAUDECODE: 'synthetic-env-value' } : {},
       stdin: scriptedTTY(['policy.approver']), stderr, err: (text) => stderr.write(text),
     };
     await assert.rejects(configCommand.confirmLocked(ctx, { 'tty-confirm': true }, {
       op: 'set', key: 'policy.approver', raw: 'synthetic-value', scope: 'global',
     }, {
-      hasClaudeAncestor: () => source === 'ancestor',
+      hasClaudeAncestor: () => {
+        assert.equal(source, 'ancestor', 'CLAUDECODE must short-circuit ancestor detection');
+        return true;
+      },
       createPrompter: () => assert.fail('Claude Code must be refused before prompting'),
     }), (err) => {
       assert.equal(err.code, 'LOCKED_KEY');
       assert.equal(err.exitCode, 4);
       assert.match(err.message, /Claude Code.*terminal próprio/);
+      assert.ok(err.message.includes(source === 'environment'
+        ? '(CLAUDECODE definido)' : '(processo ancestral do Claude Code)'));
       assert.equal(err.details.command, "opc config set policy.approver '<valor>' --tty-confirm");
       assert.equal(JSON.stringify(err).includes('synthetic-value'), false);
+      assert.equal(JSON.stringify(err).includes('synthetic-env-value'), false);
       return true;
     });
     assert.equal(stderr.text(), '');

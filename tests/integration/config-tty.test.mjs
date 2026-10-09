@@ -27,6 +27,7 @@ test('--tty-confirm refuses CLAUDECODE even with matching TTY input and preserve
   assert.equal(r.code, 4);
   assert.match(r.stderr, /LOCKED_KEY/);
   assert.match(r.stderr, /Claude Code.*terminal próprio/);
+  assert.match(r.stderr, /\(CLAUDECODE definido\)/);
   assert.doesNotMatch(r.stderr, /Digite/);
   assert.equal(fs.readFileSync(file, 'utf8'), before);
   assert.equal(fs.existsSync(path.join(ws, '.opc.json')), false);

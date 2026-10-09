@@ -72,6 +72,18 @@ export function getParentPid(pid) {
   return Number(psField(pid, 'ppid')) || null;
 }
 
+const CLAUDE_RUNTIMES = new Set(['node', 'nodejs', 'bun', 'deno']);
+
+export function isClaudeCmdline(cmdline) {
+  const argv0 = cmdline[0] ?? '';
+  const isClaudeEntrypoint = (entrypoint) => path.basename(entrypoint) === 'claude'
+    || entrypoint.includes('/claude/versions/')
+    || entrypoint.includes('/.claude/remote/ccd-cli/')
+    || entrypoint.includes('@anthropic-ai/claude-code');
+  return isClaudeEntrypoint(argv0)
+    || (CLAUDE_RUNTIMES.has(path.basename(argv0)) && isClaudeEntrypoint(cmdline[1] ?? ''));
+}
+
 export function hasClaudeAncestor(pid = process.pid, { parentOf = getParentPid, identityOf = getProcessIdentity, maxDepth = 32 } = {}) {
   const seen = new Set([pid]);
   for (let depth = 0; Number.isInteger(pid) && pid > 1 && depth < maxDepth; depth += 1) {
@@ -79,8 +91,7 @@ export function hasClaudeAncestor(pid = process.pid, { parentOf = getParentPid, 
     if (!Number.isInteger(pid) || pid <= 1 || seen.has(pid)) return false;
     seen.add(pid);
     const cmdline = identityOf(pid)?.cmdline ?? [];
-    if (path.basename(cmdline[0] ?? '') === 'claude'
-      || cmdline.some((arg) => arg.includes('/claude') || arg.includes('@anthropic-ai/claude-code'))) return true;
+    if (isClaudeCmdline(cmdline)) return true;
   }
   return false;
 }

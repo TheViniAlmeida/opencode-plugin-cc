@@ -28,19 +28,39 @@ test('hasClaudeAncestor walks through node, script and shell parents', () => {
   assert.equal(processLib.hasClaudeAncestor(50, deps), false);
 });
 
-test('hasClaudeAncestor recognizes the executable and Claude Code entrypoints', () => {
-  for (const cmdline of [
-    ['/usr/local/bin/claude'],
-    ['node', '/opt/tools/claude/cli.js'],
-    ['node', '/opt/node_modules/@anthropic-ai/claude-code/cli.js'],
-  ]) {
+const CLAUDE_CMDLINE_CASES = [
+  { cmdline: ['code', '/home/u/claude-notes'], expected: false },
+  { cmdline: ['vim', '/home/u/claude-notes/x'], expected: false },
+  { cmdline: ['node', '/home/u/work/claude-tools/run.js'], expected: false },
+  { cmdline: ['bash', '-c', 'cd /srv/claude-proxy && x; pwd -P >| /tmp/claude-1000-cwd'], expected: false },
+  { cmdline: ['/home/u/.claude/remote/ccd-cli/2.1.293-abc', '--output-format', 'stream-json'], expected: true },
+  { cmdline: ['claude'], expected: true },
+  { cmdline: ['/usr/local/bin/claude', '-p'], expected: true },
+  { cmdline: ['node', '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['/home/u/.local/share/claude/versions/2.1.0'], expected: true },
+  { cmdline: ['bun', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['/usr/bin/nodejs', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['deno', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '/opt/tools/claude/cli.js'], expected: false },
+  { cmdline: ['claude-helper'], expected: false },
+  { cmdline: ['code', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
+  { cmdline: ['node', 'opc', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
+  { cmdline: ['node'], expected: false },
+  { cmdline: [], expected: false },
+];
+
+for (const { cmdline, expected } of CLAUDE_CMDLINE_CASES) {
+  test(`isClaudeCmdline classifies ${JSON.stringify(cmdline)} as ${expected}`, () => {
+    assert.equal(processLib.isClaudeCmdline(cmdline), expected);
+  });
+}
+
+test('hasClaudeAncestor classifies only executable and runtime script entrypoints', () => {
+  for (const { cmdline, expected } of CLAUDE_CMDLINE_CASES) {
     assert.equal(processLib.hasClaudeAncestor(50, {
       parentOf: (pid) => pid === 50 ? 20 : 1, identityOf: () => ({ cmdline }),
-    }), true, JSON.stringify(cmdline));
+    }), expected, JSON.stringify(cmdline));
   }
-  assert.equal(processLib.hasClaudeAncestor(50, {
-    parentOf: (pid) => pid === 50 ? 20 : 1, identityOf: () => ({ cmdline: ['claude-helper'] }),
-  }), false);
 });
 
 test('hasClaudeAncestor stops at init, missing parents, cycles and the depth limit', () => {

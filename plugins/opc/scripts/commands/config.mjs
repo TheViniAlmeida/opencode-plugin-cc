@@ -81,8 +81,10 @@ export async function confirmLocked(ctx, flags, { op, key, raw, scope }, {
   if (!ctx.stdin || !ctx.stdin.isTTY) {
     throw new PolicyError('LOCKED_KEY', `--tty-confirm exige um terminal interativo (stdin não é TTY); execute no seu terminal: ${command}`, { details: { setting: key, command } });
   }
-  if (ctx.env?.CLAUDECODE || hasClaudeAncestorImpl()) {
-    throw new PolicyError('LOCKED_KEY', `--tty-confirm não é aceito dentro de uma sessão do Claude Code; rode em um terminal próprio: ${command}`, { details: { setting: key, command } });
+  const claudeSource = ctx.env?.CLAUDECODE ? 'CLAUDECODE definido'
+    : hasClaudeAncestorImpl() ? 'processo ancestral do Claude Code' : null;
+  if (claudeSource) {
+    throw new PolicyError('LOCKED_KEY', `--tty-confirm não é aceito dentro de uma sessão do Claude Code (${claudeSource}); rode em um terminal próprio: ${command}`, { details: { setting: key, command } });
   }
   const prompter = createPrompterImpl({ input: ctx.stdin, output: ctx.stderr });
   try {
