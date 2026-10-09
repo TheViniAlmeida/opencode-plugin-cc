@@ -6,7 +6,7 @@ import { parseHookInput, readStdin } from '../lib/args.mjs';
 import { connectApi, contextForCwd } from '../lib/context.mjs';
 import { OpcError } from '../lib/opc-error.mjs';
 import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
-import { ACTIVE_STATUSES, cancelJob, liveActiveJobs, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
+import { ACTIVE_STATUSES, cancelJob, jobWarningHandler, liveActiveJobs, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, projectContextBlock } from '../lib/prompts.mjs';
 import { collectReviewContext, resolveReviewTarget } from '../lib/git.mjs';
 import { maskSecretPatterns, redactText } from '../lib/redact.mjs';
@@ -117,7 +117,7 @@ function allowAfterFailure(ctx, err) {
 }
 
 function noteActiveJobs(ctx, sessionId) {
-  for (const job of liveActiveJobs(ctx.stateDir, { claudeSessionId: sessionId })) {
+  for (const job of liveActiveJobs(ctx.stateDir, { claudeSessionId: sessionId, onWarning: jobWarningHandler(ctx) })) {
     ctx.err(redactText(`[opc] a tarefa ${job.id} (${job.kind}) ainda está em execução. Consulte /opc:status ${job.id} ou cancele com /opc:cancel ${job.id}.\n`));
   }
 }

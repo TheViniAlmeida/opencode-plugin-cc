@@ -76,6 +76,34 @@ test('confirmed gc surfaces only one warning when rescanning a corrupt job for i
   assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
 });
 
+for (const ageDays of [0, 40]) {
+  test(`gc cleans readable terminal inputs despite an unreadable job in a ${ageDays}-day-old workspace`, async (t) => {
+    const root = rootFor(t);
+    const dir = makeState(root, 'mixed-0123456789abcdef', ageDays);
+    const unreadable = join(dir, 'jobs', 'task-abc123-abcdef.json');
+    const id = 'task-def456-abcdef';
+    const input = join(dir, 'jobs', `${id}.input.json`);
+    writeFileSync(unreadable, '{}');
+    chmodSync(unreadable, 0o000);
+    writeFileSync(join(dir, 'jobs', `${id}.json`), JSON.stringify({ id, status: 'completed' }));
+    writeFileSync(input, '{"synthetic":"private input"}');
+    const when = new Date(Date.now() - ageDays * 86400000);
+    for (const file of [unreadable, input, join(dir, 'jobs', `${id}.json`), join(dir, 'jobs'), dir]) utimesSync(file, when, when);
+    const stale = findStaleStates(root, { olderThanMs: 30 * 86400000 });
+    assert.equal(stale.length, 0);
+    assert.deepEqual(stale.inputCleanup.map(({ id, files }) => ({ id, files })), [{ id, files: [`${id}.input.json`] }]);
+    assert.match(stale.skipped[0].reason, /ilegível/);
+    let output;
+    const ctx = { dataDir: root, stdin: { isTTY: false }, err() {}, json: (value) => { output = value; } };
+    assert.equal(await run(ctx, ['--json', '--confirmed-by-user']), 0);
+    assert.deepEqual(output.removedInputs, [id]);
+    assert.deepEqual(output.removed, []);
+    assert.equal(existsSync(input), false);
+    assert.equal(existsSync(unreadable), true);
+    assert.equal(statSync(unreadable).mode & 0o777, 0);
+  });
+}
+
 test('gc recognizes a live server with a custom opencode binary from config or env', async (t) => {
   const binary = '/opt/oc/bin/oc-v2';
   assert.equal(serverMatcher(4100, binary)([binary, 'serve', '--port', '4100']), true);

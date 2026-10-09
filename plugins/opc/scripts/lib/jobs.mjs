@@ -2,7 +2,7 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } from './redact.mjs';
@@ -276,9 +276,7 @@ function pruneTerminal(stateDir, state, jobs) {
     const file = join(jobsDir(stateDir), name);
     try {
       if (statSync(file).isFile()) unlinkSync(file);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-    }
+    } catch { /* quarantine cleanup is best effort; keep creating jobs */ }
   }
   const ids = new Set(selectJobsToPrune(jobs, MAX_TERMINAL_JOBS));
   if (ids.size === 0) return;
@@ -417,9 +415,9 @@ export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnl
   throw new NotFoundError('NO_ACTIVE_JOB', claudeSessionId ? 'nenhuma tarefa opc ativa nesta sessão do Claude' : 'nenhuma tarefa opc ativa');
 }
 
-export function findResumeCandidate(stateDir, { kind, claudeSessionId }) {
+export function findResumeCandidate(stateDir, { kind, claudeSessionId, onWarning }) {
   if (!claudeSessionId) return null;
-  return listJobs(stateDir, { claudeSessionId })
+  return listJobs(stateDir, { claudeSessionId, onWarning })
     .filter((j) => j.kind === kind && j.sessionID && isTerminal(j))
     .sort((a, b) => String(b.completedAt ?? '').localeCompare(String(a.completedAt ?? ''))
       || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))[0] ?? null;
@@ -500,19 +498,21 @@ export function acquireSessionLock(stateDir, sessionID) {
 }
 
 export function serverContext(ctx) {
+  let unreadableJobCount = 0;
   return {
     stateDir: ctx.stateDir,
     workspaceRoot: ctx.workspaceRoot,
     config: ctx.config,
     env: ctx.env,
     opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
+    getUnreadableJobCount: () => unreadableJobCount,
     hasActiveJobs: () => {
-      let unreadable = false;
+      unreadableJobCount = 0;
       const jobs = listJobs(ctx.stateDir, { all: true, onWarning: (warning, details) => {
-        if (details.code === 'READ_FAILED') unreadable = true;
+        if (details.code === 'READ_FAILED') unreadableJobCount += 1;
         jobWarningHandler(ctx)(warning, details);
       } });
-      return unreadable || jobs.some(isActive);
+      return unreadableJobCount > 0 || jobs.some(isActive);
     },
   };
 }
@@ -681,10 +681,16 @@ export function isJobLive(job, { now = Date.now() } = {}) {
   return isActive(job) && !workerLost(job, now);
 }
 
-export function liveActiveJobs(stateDir, { claudeSessionId = null, now = Date.now() } = {}) {
-  return listJobs(stateDir, { all: true }).filter(
+export function liveActiveJobs(stateDir, { claudeSessionId = null, now = Date.now(), onWarning } = {}) {
+  const unreadable = [];
+  const jobs = listJobs(stateDir, { all: true, onWarning: (warning, details) => {
+    if (details.code === 'READ_FAILED') unreadable.push({ id: basename(details.path, '.json'), status: 'unknown', unreadable: true });
+    onWarning?.(warning, details);
+  } });
+  // An unreadable record cannot prove its worker is lost or which session owns it.
+  return [...jobs.filter(
     (job) => (claudeSessionId ? job.claudeSessionId === claudeSessionId : true) && isJobLive(job, { now }),
-  );
+  ), ...unreadable];
 }
 
 async function waitSessionIdle(api, sessionID, maxMs) {

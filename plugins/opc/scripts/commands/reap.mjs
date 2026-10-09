@@ -2,7 +2,7 @@
 import { parseArgs } from '../lib/args.mjs';
 import { contextForCwd } from '../lib/context.mjs';
 import { UsageError } from '../lib/opc-error.mjs';
-import { ACTIVE_STATUSES, cancelJob, listJobs, liveActiveJobs, withServerLock } from '../lib/jobs.mjs';
+import { ACTIVE_STATUSES, cancelJob, jobWarningHandler, listJobs, liveActiveJobs, withServerLock } from '../lib/jobs.mjs';
 import { redactText } from '../lib/redact.mjs';
 import { liveClaudeSessions, removeClaudeSession } from '../lib/state.mjs';
 import { readServerRecord, stopServer } from '../lib/server.mjs';
@@ -26,7 +26,7 @@ function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function log(ctx, event, fields) { ctx.out(`${JSON.stringify({ at: new Date().toISOString(), event, ...fields })}\n`); }
 
 async function cancelSessionJobs(ctx, sessionId, capMs, cancelJobFn = cancelJob) {
-  const ids = listJobs(ctx.stateDir, { all: true }).filter((job) => job.claudeSessionId === sessionId && ACTIVE_STATUSES.includes(job.status)).map((job) => job.id);
+  const ids = listJobs(ctx.stateDir, { all: true, onWarning: jobWarningHandler(ctx) }).filter((job) => job.claudeSessionId === sessionId && ACTIVE_STATUSES.includes(job.status)).map((job) => job.id);
   if (!ids.length) return { ids, timedOut: false, failed: [] };
   let timer;
   const cap = new Promise((resolve) => { timer = setTimeout(() => resolve('cap'), capMs); });
@@ -73,7 +73,7 @@ export async function run(ctx, argv, dependencies = {}) {
       // A job whose cancel failed or timed out keeps the server even if its worker looks lost:
       // its OpenCode session may still be running a turn.
       const blocking = () => {
-        const live = liveActiveJobs(rctx.stateDir);
+        const live = liveActiveJobs(rctx.stateDir, { onWarning: jobWarningHandler(rctx) });
         const liveIds = new Set(live.map((job) => job.id));
         return [...live, ...cancelled.failed.filter((id) => !liveIds.has(id)).map((id) => ({ id }))];
       };

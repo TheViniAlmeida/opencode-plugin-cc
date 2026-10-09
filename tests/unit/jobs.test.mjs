@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import {
   ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, clearJobRequests, createJob, findResumeCandidate, groupStatus, jobLogPath,
   listJobs, newJobId, readJob, readJobProgress, resolveJobRef, updateJob, waitForJob, workerMatcher, acquireSessionLock,
-  assertNotInsideServer, workerLogPath, serverContext,
+  assertNotInsideServer, workerLogPath, serverContext, liveActiveJobs,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { identityMatches, spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
@@ -15,11 +15,37 @@ import { ACTIVE_JOB_STATUSES } from '../../plugins/opc/scripts/lib/state.mjs';
 import { makeTempDir, trackTempDir, waitFor } from '../helpers.mjs';
 import { run as runStatus } from '../../plugins/opc/scripts/commands/status.mjs';
 import { run as runResult } from '../../plugins/opc/scripts/commands/result.mjs';
+import { run as runCancel } from '../../plugins/opc/scripts/commands/cancel.mjs';
+import { run as runTask } from '../../plugins/opc/scripts/commands/task.mjs';
+import { list as listPermissions } from '../../plugins/opc/scripts/commands/permissions.mjs';
+import { run as runReap } from '../../plugins/opc/scripts/commands/reap.mjs';
 
 function stateDir(t) {
   return trackTempDir(t, makeTempDir('opc-jobs-'));
 }
 const base = (over = {}) => ({ kind: 'task', title: 'opc task', summary: 's', workspaceRoot: '/ws', claudeSessionId: 'c1', permissionProfile: 'read-only', ...over });
+
+for (const [name, run, expectedCode] of [
+  ['cancel', (ctx) => runCancel(ctx, ['--json']), 'NO_ACTIVE_JOB'],
+  ['task resume by id', (ctx) => runTask(ctx, ['--resume', 'task-abc123-abcdef', '--json']), 'NOT_FOUND'],
+  ['task resume last', (ctx) => runTask(ctx, ['--resume', '--json']), 'NOTHING_TO_RESUME'],
+  ['permissions list', (ctx) => listPermissions(ctx, { json: true }, () => null), null],
+  ['reap', (ctx) => runReap(ctx, ['--session', 'c1', '--reason', 'clear']), null],
+]) {
+  test(`${name} surfaces a corrupt job warning from its listing`, async (t) => {
+    const dir = stateDir(t);
+    const job = await createJob(dir, base());
+    await updateJob(dir, job.id, { status: 'completed' });
+    const id = 'task-abc123-abcdef';
+    writeFileSync(join(dir, 'jobs', `${id}.json`), '');
+    let stderr = '';
+    const ctx = { stateDir: dir, claudeSessionId: 'c1', env: {}, stdin: { isTTY: true }, err: (warning) => { stderr += warning; }, json() {}, out() {} };
+    if (expectedCode) await assert.rejects(run(ctx), { code: expectedCode });
+    else assert.equal(await run(ctx), 0);
+    assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+    assert.ok(stderr.includes(`job ${id} ilegível (INVALID_JSON); movido para `));
+  });
+}
 
 for (const [name, run] of [['status', runStatus], ['result', runResult]]) {
   for (const explicit of [false, true]) {
@@ -153,7 +179,12 @@ test('serverContext treats unreadable jobs as potentially active and surfaces on
   const server = serverContext(ctx);
   assert.equal(server.hasActiveJobs(), true);
   assert.equal(server.hasActiveJobs(), true);
+  assert.equal(server.getUnreadableJobCount(), 1);
   assert.equal(stderr, `[opc] aviso: job ${job.id} ilegível (EACCES); ignorado nesta listagem\n`);
+  chmodSync(join(dir, 'jobs', `${job.id}.json`), 0o600);
+  await updateJob(dir, job.id, { status: 'completed' });
+  assert.equal(server.hasActiveJobs(), false);
+  assert.equal(server.getUnreadableJobCount(), 0);
 });
 
 test('createJob prunes only quarantined job files older than 30 days by quarantine timestamp', async (t) => {
@@ -168,6 +199,41 @@ test('createJob prunes only quarantined job files older than 30 days by quaranti
   assert.equal(existsSync(old), false);
   assert.equal(existsSync(recent), true);
   assert.equal(existsSync(unrelated), true);
+});
+
+for (const code of ['EACCES', 'EPERM']) {
+  test(`createJob continues pruning when a quarantined file cannot be removed (${code})`, async (t) => {
+    const dir = stateDir(t);
+    await createJob(dir, base());
+    const timestamp = Date.now() - 31 * 86400000;
+    const blocked = join(dir, 'jobs', `task-abc123-abcdef.json.corrupt-${timestamp}`);
+    const removable = join(dir, 'jobs', `task-def456-abcdef.json.corrupt-${timestamp}`);
+    writeFileSync(blocked, '');
+    writeFileSync(removable, '');
+    failFsOperation(t, 'unlinkSync', blocked, code);
+    const job = await createJob(dir, base());
+    assert.equal(readJob(dir, job.id).id, job.id);
+    assert.equal(existsSync(blocked), true);
+    assert.equal(existsSync(removable), false);
+  });
+}
+
+test('liveActiveJobs keeps unreadable jobs across session filters and forwards warnings', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base());
+  const terminal = await createJob(dir, base());
+  await updateJob(dir, terminal.id, { status: 'completed' });
+  chmodSync(join(dir, 'jobs', `${job.id}.json`), 0o000);
+  const corrupt = 'task-abc123-abcdef';
+  writeFileSync(join(dir, 'jobs', `${corrupt}.json`), '');
+  const warnings = [];
+  const live = liveActiveJobs(dir, { claudeSessionId: 'another-session', onWarning: (warning) => warnings.push(warning) });
+  assert.deepEqual(live.map((entry) => entry.id), [job.id]);
+  assert.equal(live[0].unreadable, true);
+  assert.equal(live[0].status, 'unknown');
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.some((warning) => warning.includes('EACCES')));
+  assert.ok(warnings.some((warning) => warning.includes('INVALID_JSON')));
 });
 
 function killHard(pid) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -68,7 +68,12 @@ test('attach without id uses the session of the last job; unknown session → ex
   assert.equal((await runCli(['sessions'], { env, cwd })).code, 0);
   const stateDir = await stateDirFor(env, cwd);
   await createJob(stateDir, { kind: 'task', title: 'done', status: 'completed', claudeSessionId: 'claude-attach', sessionID: SEED.session, workspaceRoot: cwd });
-  const json = JSON.parse((await runCli(['attach', '--json'], { env, cwd })).stdout);
+  writeFileSync(join(stateDir, 'jobs', 'task-abc123-abcdef.json'), '');
+  const attached = await runCli(['attach', '--json'], { env, cwd });
+  assert.equal(attached.code, 0, attached.stderr);
+  assert.equal((attached.stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+  assert.match(attached.stderr, /job task-abc123-abcdef ilegível \(INVALID_JSON\); movido para /);
+  const json = JSON.parse(attached.stdout);
   assert.equal(json.sessionID, SEED.session);
   assert.equal((await runCli(['attach', 'ses_missing'], { env, cwd })).code, 2);
   assert.equal((await runCli(['attach', 'not-a-session'], { env, cwd })).code, 2);

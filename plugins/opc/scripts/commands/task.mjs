@@ -11,7 +11,7 @@ import { buildCatalog } from '../lib/models.mjs';
 import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
-import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
+import { assertNotInsideServer, findResumeCandidate, jobWarningHandler, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
 import { loadPrompt, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
 import { PENDING_REVERT_NOTICE } from './session.mjs';
@@ -179,7 +179,7 @@ function resolveResumeSession(ctx, flags, kind) {
   if (flags['resume-id']) {
     const ref = flags['resume-id'];
     if (SESSION_REF_RE.test(ref)) return ref;
-    const job = resolveJobRef(ctx.stateDir, ref);
+    const job = resolveJobRef(ctx.stateDir, ref, { onWarning: jobWarningHandler(ctx) });
     if (!job.sessionID) throw new UsageError('NO_SESSION', `a tarefa ${job.id} não tem uma sessão OpenCode para retomar`);
     return job.sessionID;
   }
@@ -187,7 +187,7 @@ function resolveResumeSession(ctx, flags, kind) {
     if (!ctx.claudeSessionId) {
       throw new UsageError('RESUME_NEEDS_ID', '--resume sem id exige uma sessão Claude (OPC_COMPANION_SESSION_ID); informe --resume <job-id|session-id>');
     }
-    const candidate = findResumeCandidate(ctx.stateDir, { kind, claudeSessionId: ctx.claudeSessionId });
+    const candidate = findResumeCandidate(ctx.stateDir, { kind, claudeSessionId: ctx.claudeSessionId, onWarning: jobWarningHandler(ctx) });
     if (!candidate) throw new UsageError('NOTHING_TO_RESUME', `não há tarefa ${kind} concluída com sessão nesta sessão Claude`);
     return candidate.sessionID;
   }

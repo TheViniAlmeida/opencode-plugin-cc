@@ -108,12 +108,12 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
         if (details.code === 'READ_FAILED') unreadable = true;
         onWarning?.(warning, details);
       } });
+      for (const inputs of terminalInputFiles(dir, jobs)) {
+        stale.inputCleanup.push({ dir, id: inputs.id, files: inputs.files, dev: identity.dev, ino: identity.ino, uid: identity.uid });
+      }
       if (unreadable) {
         skip(stale, dir, entry.name, 'Há job ilegível; candidato preservado porque seu estado não pôde ser verificado.');
         continue;
-      }
-      for (const inputs of terminalInputFiles(dir, jobs)) {
-        stale.inputCleanup.push({ dir, id: inputs.id, files: inputs.files, dev: identity.dev, ino: identity.ino, uid: identity.uid });
       }
       const lastUsed = newestMtime(dir);
       if (now - lastUsed <= olderThanMs) continue;

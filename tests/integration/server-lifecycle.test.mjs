@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
-import { createJob, isActive, listJobs } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { createJob, isActive, listJobs, serverContext } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { clientFor, ensureServer, serverMatcher, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
@@ -183,6 +183,33 @@ test('a busy hung server that recovers during retries is reused with its world c
   assert.equal(healthCount() - before, 3);
   assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
 });
+
+for (const code of ['SERVER_UNRESPONSIVE', 'V1_SERVER_ACTIVE']) {
+  test(`${code} explains the unreadable job count and recovery without stopping the server`, async (t) => {
+    const { env, ctx, stateDir } = makeServerCtx(t, { scenario: code === 'SERVER_UNRESPONSIVE' ? 'hung-server' : 'version-changed' });
+    const first = await ensureServer(ctx);
+    for (let index = 0; index < 2; index += 1) {
+      const job = await createJob(stateDir, { kind: 'task' });
+      fs.chmodSync(path.join(stateDir, 'jobs', `${job.id}.json`), 0o000);
+    }
+    if (code === 'SERVER_UNRESPONSIVE') fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+    else fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.version`, '1.18.34');
+    let stderr = '';
+    const jobsDirectory = path.join(stateDir, 'jobs');
+    const busyCtx = serverContext({ ...ctx, err: (warning) => { stderr += warning; } });
+    await assert.rejects(ensureServer(busyCtx, { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 }), (error) => {
+      assert.equal(error.code, code);
+      assert.ok(error.message.includes(`há 2 job(s) ilegível(is) em ${jobsDirectory}; corrija as permissões ou use /opc:setup --stop-server --force`));
+      assert.deepEqual(error.details, { unreadableJobCount: 2, jobsDir: jobsDirectory });
+      return true;
+    });
+    assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 2);
+    assert.ok(processAlive(first.pid));
+    assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+    assert.equal(readFakeState(env).bootAttempts, 1);
+    assert.equal(readFakeState(env).signals.length, 0);
+  });
+}
 
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {
   const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'version-changed' });

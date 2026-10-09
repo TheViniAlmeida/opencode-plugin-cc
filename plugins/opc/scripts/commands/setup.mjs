@@ -14,7 +14,7 @@ import { renderSetup, renderReviewGate } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, resolveOpencodeBin, stopServer } from '../lib/server.mjs';
 import { mergeOpencodeConfigSources } from '../lib/opencode-config.mjs';
 import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
-import { liveActiveJobs } from '../lib/jobs.mjs';
+import { jobWarningHandler, liveActiveJobs } from '../lib/jobs.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -176,7 +176,7 @@ async function stop(ctx, flags) {
   const result = await stopServer({
     ...serverContext(ctx),
     hasActiveJobs: () => {
-      activeJobs = liveActiveJobs(ctx.stateDir);
+      activeJobs = liveActiveJobs(ctx.stateDir, { onWarning: jobWarningHandler(ctx) });
       return activeJobs.length > 0;
     },
   }, { force: flags.force, confirmedByUser: flags['confirmed-by-user'] });

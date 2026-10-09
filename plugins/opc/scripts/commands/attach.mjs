@@ -6,7 +6,7 @@ import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { openApi } from '../lib/context.mjs';
 import { assertId } from '../lib/api.mjs';
 import { attachSecretPath, readServerRecord, resolveOpencodeBin, writeAttachSecret } from '../lib/server.mjs';
-import { listJobs } from '../lib/jobs.mjs';
+import { jobWarningHandler, listJobs } from '../lib/jobs.mjs';
 import { renderAttach } from '../lib/render.mjs';
 
 export const PANE_SCRIPT_NAME = 'attach-pane.sh';
@@ -57,7 +57,7 @@ export async function persistManagedAttachSecret(ctx, server) {
 }
 
 function lastJobSession(ctx) {
-  const jobs = listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId, all: !ctx.claudeSessionId })
+  const jobs = listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId, all: !ctx.claudeSessionId, onWarning: jobWarningHandler(ctx) })
     .filter((job) => job.sessionID && !job.groupId)
     .sort((a, b) => String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? '')));
   return jobs[0]?.sessionID ?? null;
