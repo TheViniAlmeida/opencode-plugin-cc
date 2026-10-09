@@ -117,9 +117,11 @@ export const READ_ONLY_ALLOW = Object.freeze(['read', 'glob', 'skill', 'question
 export const SENSITIVE_PATH_PERMISSIONS = Object.freeze(['read', 'grep', 'glob']);
 export const DEFAULT_SENSITIVE_PATHS = Object.freeze([
   '*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env',
+  '**/.npmrc', '**/.netrc', '**/.git-credentials', '**/.aws/credentials', '**/kubeconfig', '**/.kube/config',
 ]);
 export const PATCH_PERMISSION_MODE = 'replace';
 const RULE_ACTIONS = new Set(['allow', 'deny', 'ask']);
+const USER_FREE_PERMISSIONS = new Set(['read', 'glob', 'grep', 'list', 'edit', 'skill', 'question', 'todowrite', 'task']);
 const r = (action, resource, effect) => ({ action, resource, effect });
 
 export function displayValue(value) {
@@ -192,17 +194,19 @@ export function bridgeModeOf(profile) {
 
 export function requiresUser(request, policy = {}) {
   if (!request || typeof request.permission !== 'string') return true;
-  const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
   if (request.permission === 'external_directory') return true;
   if (request.permission === 'shell') {
-    const commands = [request.metadata?.command ?? patterns[0]].filter((command) => typeof command === 'string');
+    const commands = [...new Set([request.metadata?.command, ...(Array.isArray(request.patterns) ? request.patterns : [])]
+      .filter((command) => typeof command === 'string'))];
     const destructive = destructiveBashOf(policy);
-    return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive));
+    const sensitive = sensitivePathsOf(policy);
+    return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive, 0, sensitive));
   }
-  if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || request.permission === 'edit') {
+  const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
+  if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || ['list', 'edit'].includes(request.permission)) {
     return patterns.some((pattern) => matchesAny(pattern, sensitivePathsOf(policy)));
   }
-  return false;
+  return !USER_FREE_PERMISSIONS.has(request.permission);
 }
 
 function bashSegments(command) {
@@ -393,15 +397,42 @@ const WRAPPER_OPTIONS = {
   builtin: { flags: [], values: [] },
 };
 
-function bashRequiresUser(source, destructive, depth = 0) {
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = []) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
-  return segments.some((segment) => inspectWords(shellWords(segment), destructive, depth));
+  return segments.some((segment) => inspectWords(shellWords(segment), destructive, depth, sensitivePaths));
 }
 
-function inspectWords(words, destructive, depth) {
+function shellTouchesSensitive(words, sensitivePaths) {
+  return words.some(({ value }) => !value.startsWith('-')
+    && (matchesAny(value, sensitivePaths) || matchesAny(value.split('/').at(-1), sensitivePaths)));
+}
+
+function normalizeGitWords(words) {
+  const flags = ['--no-pager', '-p', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs', '--exec-path'];
+  const values = ['-C', '-c', '--git-dir', '--work-tree', '--namespace'];
+  let i = 1;
+  while (i < words.length) {
+    const word = words[i];
+    if (word.dynamic) return null;
+    if (!word.value.startsWith('-')) break;
+    if (flags.includes(word.value)) { i += 1; continue; }
+    if (values.includes(word.value)) {
+      if (!words[i + 1] || words[i + 1].dynamic) return null;
+      i += 2; continue;
+    }
+    if ([...values.filter((option) => option.startsWith('--')), '--exec-path'].some((option) => word.value.startsWith(`${option}=`))) {
+      i += 1; continue;
+    }
+    return null;
+  }
+  return [words[0], ...words.slice(i)];
+}
+
+function inspectWords(words, destructive, depth, sensitivePaths) {
   if (!words || depth > 32) return true;
+  if (shellTouchesSensitive(words, sensitivePaths)) return true;
   // Literal environment assignments do not change the executable, but a later $CMD does.
   let offset = 0;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[offset]?.value ?? '')) offset += 1;
@@ -412,6 +443,21 @@ function inspectWords(words, destructive, depth) {
   const executable = head.value.split('/').at(-1);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
   if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
+  if (executable === 'git') {
+    const normalized = normalizeGitWords(words);
+    if (!normalized) return true;
+    const [, subcommand, ...rest] = normalized.map((word) => word.value);
+    if (subcommand === 'push' && rest.some((arg) => ['--force', '-f', '--delete', '-d', '--mirror', '--prune'].includes(arg)
+      || arg.startsWith('--force-with-lease') || arg.startsWith('+') || arg.startsWith(':'))) return true;
+    if (subcommand === 'reset' && rest.some((arg) => ['--hard', '--merge', '--keep'].includes(arg))) return true;
+    if (subcommand === 'clean' && rest.some((arg) => arg === '--force' || /^-[^-]*[fx]/.test(arg))) return true;
+    if (subcommand === 'branch' && (rest.includes('-D') || (rest.includes('--delete') && rest.some((arg) => ['--force', '-f'].includes(arg))))) return true;
+    if (subcommand === 'tag' && rest.some((arg) => ['-d', '--delete'].includes(arg))) return true;
+    if (['checkout', 'restore'].includes(subcommand) && (rest.includes('.') || (rest.includes('--') && rest.indexOf('--') < rest.length - 1))) return true;
+    if (subcommand === 'stash' && rest.some((arg) => ['drop', 'clear'].includes(arg))) return true;
+    if (subcommand === 'filter-branch' || (subcommand === 'update-ref' && rest.includes('-d'))) return true;
+    return matchesAny(['git', subcommand, ...rest].join(' '), destructive);
+  }
   if (SHELLS.has(executable)) {
     // A shell script, stdin shell, or expansion in the script cannot be inspected here.
     for (let i = 0; i < args.length; i += 1) {
@@ -419,7 +465,7 @@ function inspectWords(words, destructive, depth) {
       if (option.dynamic) return true;
       if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
         const script = args[i + 1];
-        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1);
+        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths);
       }
       if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
     }
@@ -427,7 +473,7 @@ function inspectWords(words, destructive, depth) {
   }
   if (executable === 'eval') {
     return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1);
+      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -435,7 +481,7 @@ function inspectWords(words, destructive, depth) {
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths)) return true;
         i = end;
       }
     }
@@ -462,7 +508,7 @@ function inspectWords(words, destructive, depth) {
     return true;
   }
   if (i === args.length) return true;
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1);
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

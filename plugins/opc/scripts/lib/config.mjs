@@ -6,7 +6,7 @@ import path, { join as joinPathF1 } from 'node:path';
 import { OpcError, UsageError } from './opc-error.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
 import { matchesAny, resolveModelRef, normalizeModelId, validateVariant } from './models.mjs';
-import { evaluate, evaluateAgent } from './policy.mjs';
+import { DEFAULT_SENSITIVE_PATHS, evaluate, evaluateAgent } from './policy.mjs';
 import { withLock } from './locks.mjs';
 
 // ---- F1: complete schema, restrictive merge, locked keys, edits and server validation (spec §3.2, §3.3) ----
@@ -52,7 +52,7 @@ export const DEFAULT_CONFIG = freezeDeep({
     models: { allow: [], deny: [] },
     agents: { allow: [], deny: [] },
     tools: { deny: [] },
-    sensitivePaths: ['*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env'],
+    sensitivePaths: [...DEFAULT_SENSITIVE_PATHS],
     destructiveBash: [],
     approver: 'user',
     permissionTimeoutSec: 600,

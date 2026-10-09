@@ -1,8 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  evaluate, assertAllowed, evaluateAgent, evaluateCommand, assertAgentUsable, assertCommandUsable, pinnedModelOf,
+  evaluate, assertAllowed, evaluateAgent, evaluateCommand, assertAgentUsable, assertCommandUsable, pinnedModelOf, requiresUser,
 } from '../../plugins/opc/scripts/lib/policy.mjs';
+import { matchesAny } from '../../plugins/opc/scripts/lib/models.mjs';
+
+test('**/ matches zero directories and the new sensitive defaults', () => {
+  for (const p of [
+    'id_rsa', 'a/id_rsa', '/abs/id_ed25519', '.npmrc', 'home/.git-credentials', '.aws/credentials',
+    '.netrc', 'nested/.netrc', 'kubeconfig', 'nested/kubeconfig', '.kube/config', 'nested/.kube/config',
+  ]) assert.equal(requiresUser({ permission: 'read', patterns: [p] }), true, p);
+  assert.equal(matchesAny('id_rsa', ['**/id_rsa*']), true);
+  assert.equal(matchesAny('a/b/id_rsa.pub', ['**/id_rsa*']), true);
+  assert.equal(matchesAny('src/main.js', ['**/id_rsa*']), false);
+  assert.equal(matchesAny('.ssh/config', ['**/.ssh/**']), true);
+  assert.equal(matchesAny('a/.kube/config', ['**/.kube/config']), true);
+  assert.equal(matchesAny('aXb/config', ['**/a.b/*']), false);
+  assert.equal(matchesAny('src/main.js', ['src*']), true);
+});
 
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';

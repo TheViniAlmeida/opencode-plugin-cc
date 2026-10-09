@@ -5,7 +5,9 @@ import { safeOutputText } from './redact.mjs';
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
 
 export function globToRegExp(glob) {
-  const body = String(glob).split('*').map((part) => part.replace(REGEX_SPECIALS, '\\$&')).join('.*');
+  const directoryMarker = '\u0000';
+  const body = String(glob).replaceAll('**/', directoryMarker).split('*')
+    .map((part) => part.replace(REGEX_SPECIALS, '\\$&')).join('.*').replaceAll(directoryMarker, '(?:.*/)?');
   return new RegExp(`^${body}$`);
 }
 

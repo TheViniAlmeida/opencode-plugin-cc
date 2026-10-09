@@ -8,6 +8,17 @@ import {
   setPath, validateConfigShape,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 import { makeTempDir, removeTempDir } from '../helpers.mjs';
+import { DEFAULT_SENSITIVE_PATHS } from '../../plugins/opc/scripts/lib/policy.mjs';
+
+test('config and policy share the complete sensitive path defaults', () => {
+  const expected = [
+    '*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env',
+    '**/.npmrc', '**/.netrc', '**/.git-credentials', '**/.aws/credentials', '**/kubeconfig', '**/.kube/config',
+  ];
+  assert.deepEqual(DEFAULT_SENSITIVE_PATHS, expected);
+  assert.deepEqual(DEFAULT_CONFIG.policy.sensitivePaths, expected);
+  assert.deepEqual(mergeConfig({}, null).config.policy.sensitivePaths, expected);
+});
 
 function temp(t) {
   const dir = makeTempDir('opc-cfg-');

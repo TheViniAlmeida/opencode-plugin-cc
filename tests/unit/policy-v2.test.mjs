@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPermissionRules, planPermissionSwitch, requiresUser } from '../../plugins/opc/scripts/lib/policy.mjs';
+import { buildPermissionRules, checkReply, planPermissionSwitch, requiresUser } from '../../plugins/opc/scripts/lib/policy.mjs';
 import { toPermissionRequest } from '../../plugins/opc/scripts/lib/opencode-v2.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 import { createRequestBridge } from '../../plugins/opc/scripts/commands/task-worker.mjs';
@@ -8,6 +8,101 @@ import { globToRegExp } from '../../plugins/opc/scripts/lib/models.mjs';
 
 const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.action === '*' || rule.action === action)
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
+const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
+
+test('git global options and argument order do not hide destructive subcommands', () => {
+  for (const command of [
+    'git -C /repo reset --hard', 'git -c core.hooksPath=/dev/null push --force', 'git --no-pager reset --hard HEAD~3',
+    'git push origin main --force', 'git push origin +main', 'git push origin :feature', 'git push --force-with-lease',
+    'git clean -df', 'git clean -xdf', 'git branch --delete --force x', 'git --git-dir=.git reset --hard',
+    'git --weird-global reset --soft',
+  ]) assert.equal(claude(command), true, command);
+  for (const command of ['git status', 'git -C /repo log --oneline', 'git push origin main', 'git clean -n']) {
+    assert.equal(claude(command), false, command);
+  }
+});
+
+test('known git global options are stripped without changing benign subcommands', () => {
+  for (const option of [
+    '-C /repo', '-c core.hooksPath=/dev/null', '--git-dir .git', '--git-dir=.git',
+    '--work-tree /repo', '--work-tree=/repo', '--namespace test', '--namespace=test',
+    '--no-pager', '-p', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs',
+    '--exec-path', '--exec-path=/tools', '-C /repo --no-pager -c core.hooksPath=/dev/null',
+  ]) {
+    assert.equal(claude(`git ${option} reset --hard`), true, option);
+    assert.equal(claude(`git ${option} status`), false, option);
+  }
+  for (const command of ['git -C', 'git -c', 'git --git-dir', 'git --work-tree', 'git --namespace']) {
+    assert.equal(claude(command), true, command);
+  }
+});
+
+test('git destructive flags and refspecs are classified across subcommands', () => {
+  for (const command of [
+    'git push origin main -f', 'git push origin main --force-with-lease=main',
+    'git push origin feature --delete', 'git push origin feature -d', 'git push origin --mirror', 'git push origin --prune',
+    'git reset HEAD~1 --merge', 'git reset HEAD~1 --keep',
+    'git clean -fd', 'git clean -x', 'git clean -d -f', 'git clean --force',
+    'git branch -D feature', 'git branch feature --delete -f',
+    'git tag release -d', 'git tag release --delete',
+    'git checkout -- src/app.js', 'git checkout .', 'git restore -- src/app.js', 'git restore .',
+    'git stash drop', 'git stash clear', 'git filter-branch --all', 'git update-ref refs/heads/feature -d',
+    'sudo -u root git -C /repo reset --hard', 'bash -c "git -C /repo push origin main --force"',
+  ]) assert.equal(claude(command), true, command);
+  for (const command of [
+    'git reset --soft HEAD~1', 'git clean --dry-run', 'git clean -d',
+    'git branch --delete feature', 'git branch --force feature', 'git tag release',
+    'git checkout feature', 'git restore --help', 'git stash list', 'git update-ref refs/heads/feature HEAD',
+  ]) assert.equal(claude(command), false, command);
+});
+
+test('custom destructive patterns also inspect normalized git commands', () => {
+  const policy = { destructiveBash: ['git push *', 'git archive *'] };
+  assert.equal(claude('git -C /repo push origin main', policy), true);
+  assert.equal(claude('git --no-pager archive HEAD', policy), true);
+  assert.equal(claude('git -C /repo status', policy), false);
+});
+
+test('every shell resource is inspected', () => {
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['echo ok', 'rm -rf /x'], metadata: { command: 'echo ok' } }), true);
+  assert.equal(claude('echo ok && git -C . push origin main --force'), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['echo ok', 'git -C . push origin main --force'], metadata: { command: 'echo ok' } }), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: [null, 'git -C . reset --hard'], metadata: { command: 42 } }), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: [null, 42] }), true);
+  assert.equal(requiresUser({ permission: 'shell', patterns: [null, 'echo ok'], metadata: { command: 42 } }), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: [Object.create(null), 'echo ok'] }), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: [], metadata: { command: 'git -C . reset --hard' } }), true);
+});
+
+test('shell reading a sensitive path, webfetch and unknown permissions need the user', () => {
+  for (const command of [
+    'cat .env', 'cat ".npmrc"', 'cat .aws/credentials', 'cat .kube/config',
+    'echo ok && cat .netrc', 'echo $(cat .git-credentials)', 'cat .npmrc | wc -c',
+    'bash -c "cat .npmrc"', 'eval "cat .netrc"',
+  ]) assert.equal(claude(command), true, command);
+  assert.equal(claude('cat src/app.js'), false);
+  assert.equal(claude('cat private/credentials', { sensitivePaths: ['credentials'] }), true);
+  assert.equal(claude('cat private/credentials', { sensitivePaths: ['private/*'] }), true);
+  assert.equal(claude('cat .npmrc', { sensitivePaths: [] }), false);
+  assert.equal(claude('printf --secret', { sensitivePaths: ['--secret'] }), false);
+  assert.equal(requiresUser({ permission: 'shell', patterns: ['echo ok', 'cat .npmrc'], metadata: { command: 'echo ok' } }), true);
+  for (const permission of ['webfetch', 'websearch', 'something-new', 'external_directory']) {
+    assert.equal(requiresUser({ permission, patterns: ['*'] }), true, permission);
+  }
+  for (const permission of ['read', 'glob', 'grep', 'list', 'edit', 'skill', 'question', 'todowrite', 'task']) {
+    assert.equal(requiresUser({ permission, patterns: ['src/app.js'] }), false, permission);
+  }
+  for (const permission of ['read', 'glob', 'grep', 'list', 'edit']) {
+    assert.equal(requiresUser({ permission, patterns: ['.npmrc'] }), true, permission);
+  }
+});
+
+test('checkReply refuses claude approval for the bypasses', () => {
+  const request = { permission: 'shell', patterns: ['git -C /w reset --hard'], metadata: { command: 'git -C /w reset --hard' } };
+  assert.equal(checkReply({ approver: 'claude', request, reply: 'once' }).code, 'NEEDS_USER');
+  assert.equal(checkReply({ approver: 'claude', request, reply: 'once', confirmedByUser: true }).ok, true);
+  assert.equal(checkReply({ approver: 'claude', request, reply: 'reject' }).ok, true);
+});
 
 test('tools.deny shell beats destructive ask (write profile)', () => {
   const rules = buildPermissionRules('write', { policy: { tools: { deny: ['shell'] } } });
