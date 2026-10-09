@@ -40,7 +40,7 @@ export const SERVER_INSTRUCTIONS = [
 const IDENT_PATTERN = '^[A-Za-z0-9_][A-Za-z0-9_.:-]*$';
 const MODEL_PATTERN = '^[A-Za-z0-9_][A-Za-z0-9_./:@+-]*$';
 
-const CWD = { type: 'string', minLength: 1, maxLength: 4096, description: 'Diretório absoluto do workspace. Padrão: diretório do projeto Claude Code.' };
+const CWD = { type: 'string', minLength: 1, maxLength: 4096, description: 'Diretório absoluto do projeto Claude Code ou de uma subpasta dele. Padrão: diretório do projeto Claude Code.' };
 const ident = (description) => ({ type: 'string', pattern: IDENT_PATTERN, maxLength: 200, description });
 const modelId = (description) => ({ type: 'string', pattern: MODEL_PATTERN, maxLength: 300, description });
 const text = (description, maxLength = 1_000_000) => ({ type: 'string', minLength: 1, maxLength, description });
@@ -386,7 +386,7 @@ export const TOOLS = Object.freeze([
     description: 'Responde uma pergunta pendente, com uma entrada por questão na ordem (mesma codificação de /opc:permissions answer). Pergunte ao usuário quando a resposta for dele. A resposta pode entregar data como string Markdown.',
     annotations: STATEFUL,
     inputSchema: object({
-      requestId: { type: 'string', pattern: '^que[A-Za-z0-9_]*$', maxLength: 200, description: 'ID da pergunta (que_…).' },
+      requestId: { type: 'string', pattern: '^frm_[A-Za-z0-9]+$', maxLength: 200, description: 'ID do formulário (frm_…).' },
       answers: { type: 'array', minItems: 1, maxItems: 20, items: text('Rótulo da resposta ou texto livre.', 2000), description: 'Respostas na ordem das perguntas.' },
     }, ['requestId', 'answers']),
     toArgv: (a) => new ArgvBuilder('permissions', 'answer').pos(a.requestId).tail(a.answers).build(),
@@ -468,9 +468,12 @@ export function toolResult({ envelope, isError }) {
   return { content: [{ type: 'text', text: JSON.stringify(envelope, null, 2) }], isError };
 }
 
-function isDirectory(dir) {
+function isProjectDirectory(dir, defaultCwd) {
+  if (!path.isAbsolute(dir)) return false;
   try {
-    return fs.statSync(dir).isDirectory();
+    if (!fs.statSync(dir).isDirectory()) return false;
+    const relative = path.relative(fs.realpathSync(defaultCwd), fs.realpathSync(dir));
+    return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
   } catch {
     return false;
   }
@@ -486,18 +489,19 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-function maskInputEcho(message, input) {
+export function maskInputEcho(message, input) {
   const values = [];
   function collect(value) {
-    if (typeof value === 'string' && value.length > 0) values.push(value);
+    if (typeof value === 'string' && value.length >= 8) values.push(value);
     else if (Array.isArray(value)) value.forEach(collect);
     else if (value && typeof value === 'object') Object.values(value).forEach(collect);
   }
   collect(input);
-  if (values.length === 0) return String(message);
-  const pattern = values.sort((left, right) => right.length - left.length)
-    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return String(message).replace(new RegExp(pattern, 'gu'), '***');
+  let text = String(message);
+  for (const value of values.sort((left, right) => right.length - left.length)) {
+    text = text.split(value.length > 4096 ? value.slice(0, 64) : value).join('***');
+  }
+  return text;
 }
 
 export function createToolCaller({ dispatch, env = process.env, defaultCwd = env.CLAUDE_PROJECT_DIR || process.cwd(), ppid = process.ppid, resolveSessionId = resolveClaudeSessionId, callTimeoutMs = CALL_TIMEOUT_MS, log = () => {} }) {
@@ -514,8 +518,8 @@ export function createToolCaller({ dispatch, env = process.env, defaultCwd = env
       return toolResult(buildEnvelope({ exitCode: toExitCode(err), error: { code: err.code, message: maskInputEcho(err.message, input) } }));
     }
     const cwd = input.cwd ?? defaultCwd;
-    if (!path.isAbsolute(cwd) || !isDirectory(cwd)) {
-      return toolResult(buildEnvelope({ exitCode: ExitCode.USAGE, error: { code: 'INVALID_CWD', message: 'cwd deve ser um diretório absoluto existente' } }));
+    if (!isProjectDirectory(cwd, defaultCwd)) {
+      return toolResult(buildEnvelope({ exitCode: ExitCode.USAGE, error: { code: 'INVALID_CWD', message: 'cwd deve ser um diretório absoluto existente dentro do projeto Claude Code' } }));
     }
     const callEnv = { ...env };
     const sessionId = resolveSessionId({ env: callEnv, cwd, ppid });
@@ -535,8 +539,14 @@ export function createToolCaller({ dispatch, env = process.env, defaultCwd = env
     }
     await new Promise((resolve) => setImmediate(resolve));
     log(`[opc] mcp ${tool.name} → exit ${exitCode}`);
-    const safeError = captured && { code: captured.code, message: maskInputEcho(captured.message ?? captured, input) };
-    const safeStdout = NON_ERROR_EXITS.has(exitCode) ? stdout.text() : maskInputEcho(stdout.text(), input);
-    return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: maskInputEcho(stderr.text(), input), error: safeError, truncated: stdout.truncated() }));
+    let safeStdout = '';
+    try {
+      safeStdout = NON_ERROR_EXITS.has(exitCode) ? stdout.text() : maskInputEcho(stdout.text(), input);
+      const safeError = captured && { code: captured.code, message: maskInputEcho(captured.message ?? captured, input) };
+      return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: maskInputEcho(stderr.text(), input), error: safeError, truncated: stdout.truncated() }));
+    } catch {
+      log('[opc] mcp: falha no mascaramento da entrada; detalhes do erro omitidos.');
+      return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: '', truncated: stdout.truncated() }));
+    }
   };
 }

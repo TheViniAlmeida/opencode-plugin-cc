@@ -123,6 +123,33 @@ test('opc_task inicia job somente leitura e envia o prompt integralmente', async
   assert.equal(fs.existsSync(path.join(ws, 'pwned2')), false);
 });
 
+test('a 300 KB MCP prompt returns a job envelope and reaches the fake intact', async (t) => {
+  const { env, c } = setup(t);
+  await c.initialize();
+  const prompt = 'x'.repeat(300_000);
+  const started = await c.callTool('opc_task', { prompt });
+  assert.equal(started.isError, false);
+  assert.equal(started.envelope.exitCode, 0);
+  const jobId = jobIdIn(started.envelope, 'task');
+  assert.ok(jobId);
+  const done = await c.callTool('opc_job_status', { jobId, wait: true, timeoutSec: 60 });
+  assert.equal(done.envelope.exitCode, 0);
+  assert.ok(promptText(promptBodies(env)[0]).includes(prompt));
+});
+
+test('MCP cwd accepts a project subdirectory and refuses an outside directory', async (t) => {
+  const { ws, c } = setup(t);
+  const child = path.join(ws, 'child');
+  fs.mkdirSync(child);
+  await c.initialize();
+  const outside = await c.callTool('opc_job_status', { cwd: path.dirname(ws) });
+  assert.equal(outside.envelope.error.code, 'INVALID_CWD');
+  assert.equal(outside.isError, true);
+  const inside = await c.callTool('opc_job_status', { cwd: child });
+  assert.equal(inside.envelope.exitCode, 0);
+  assert.equal(inside.isError, false);
+});
+
 test('opc_job_result e opc_job_status coincidem com a CLI para o mesmo job', async (t) => {
   const { env, ws, c } = setup(t);
   await c.initialize();

@@ -20,7 +20,7 @@ async function setup(t, approver) {
   delete mcpEnv.OPC_COMPANION_SESSION_ID;
   const c = startMcpClient({ env: mcpEnv, cwd: ws });
   registerStopper(t, () => c.close());
-  return { env, ws, c };
+  return { env, ws, c, fake: external.fake };
 }
 
 function replies(env) {
@@ -41,6 +41,23 @@ test('opc_permissions_list devolve as mesmas solicitações pendentes da CLI', a
   assert.equal(mcp.envelope.exitCode, cli.code);
   assert.deepEqual(mcp.envelope.data, cli.data);
   assert.ok(mcp.envelope.data.requests.some((request) => request.id === DESTRUCTIVE_ID));
+});
+
+test('opc_permissions_answer sends frm_ form answers through the V2 API', async (t) => {
+  const { env, c, fake } = await setup(t, 'user');
+  const session = Object.values(fake.state.sessions)[0];
+  const requestId = 'frm_example';
+  fake.state.forms[requestId] = {
+    id: requestId, sessionID: session.id, title: 'Synthetic question', metadata: { kind: 'question' },
+    fields: [{ key: 'q0', title: 'Choice', type: 'string', options: [{ value: 'sim', label: 'sim' }], custom: false }],
+  };
+  fake.persist();
+  await c.initialize();
+  await assertPending(c, requestId);
+  const result = await c.callTool('opc_permissions_answer', { requestId, answers: ['sim'] });
+  assert.equal(result.envelope.exitCode, 0);
+  assert.equal(result.isError, false);
+  assert.deepEqual(readFakeState(env).formReplies, [{ id: requestId, answer: { q0: 'sim' } }]);
 });
 
 for (const [label, id] of [['comando destrutivo', DESTRUCTIVE_ID], ['caminho sensível', SENSITIVE_ID]]) {
