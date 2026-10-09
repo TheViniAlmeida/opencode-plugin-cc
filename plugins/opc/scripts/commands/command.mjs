@@ -5,7 +5,7 @@ import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from
 import { assertCanCreateSessions } from '../lib/server.mjs';
 import { assertCommandUsable } from '../lib/policy.mjs';
 import {
-  createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock,
+  createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock, jobWarningHandler,
 } from '../lib/jobs.mjs';
 import { classifyError } from '../lib/errors.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
@@ -95,7 +95,7 @@ export async function run(ctx, argv) {
     permissionProfile: profile,
     request: { command: name, arguments: args, argumentsPreview, argumentsBytes, agent, model, variant: flags.variant ?? null,
       timeoutMs: timeoutSec * 1000, profile, rules: profileRules(ctx, profile), subtask: Boolean(cmd.subtask) },
-  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:cmd' });
+  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: 'register-job:cmd' });
   await spawnWorker(ctx, job.id);
   if (flags.background) {
     if (flags.json) ctx.json({ job: readJob(ctx.stateDir, job.id) ?? job });

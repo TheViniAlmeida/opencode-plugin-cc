@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { jobIdFrom, jobIn, jobsIn, opc, requestsTo, setupF2a, stateDirFor, waitFor } from '../helpers.mjs';
 
@@ -16,6 +18,19 @@ async function waitRunning(ctx, id) {
     return job?.status === 'running' && job.sessionID ? job : null;
   }, { timeoutMs: 20000, intervalMs: 100, message: `job ${id} running with a session` });
 }
+
+test('task creation surfaces corrupt job quarantine warnings once on command stderr', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok' });
+  const dir = stateDirFor(ctx.env, ctx.cwd);
+  await createJob(dir, { kind: 'task' });
+  const id = 'task-abc123-abcdef';
+  writeFileSync(join(dir, 'jobs', `${id}.json`), '');
+  const result = await opc(ctx, ['task', '--json', 'synthetic prompt']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(JSON.parse(result.stdout));
+  assert.match(result.stderr, new RegExp(`\\[opc\\] aviso: job ${id} ilegível \\(INVALID_JSON\\); movido para .*${id}\\.json\\.corrupt-\\d+\\n`));
+  assert.equal((result.stderr.match(new RegExp(`job ${id} ilegível`, 'g')) ?? []).length, 1);
+});
 
 test('background → status → status --wait → result', async (t) => {
   const ctx = setupF2a(t, { scenario: 'ok' });

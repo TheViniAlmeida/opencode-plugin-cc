@@ -99,6 +99,12 @@ export function serverSettings(config) {
   return { ...DEFAULT_CONFIG.server, ...(config?.server ?? {}) };
 }
 
+// Leave 3 s of slack beyond the initial probe and all busy retries, even with a small boot timeout.
+export function serverLockTimeoutMs(config) {
+  return Math.max(4 * serverSettings(config).bootTimeoutSec * 1000,
+    HEALTH_REUSE_TIMEOUT_MS + HEALTH_BUSY_RETRIES * HEALTH_BUSY_TIMEOUT_MS + 3000);
+}
+
 function recordIdentityOk(record, opencodeBin = 'opencode') {
   const identity = getProcessIdentity(record.pid);
   if (!identity) return false;
@@ -542,11 +548,11 @@ async function bootServer(ctx, settings) {
   });
 }
 
-export async function ensureServer(ctx) {
+export async function ensureServer(ctx, { healthReuseTimeoutMs = HEALTH_REUSE_TIMEOUT_MS, healthBusyTimeoutMs = HEALTH_BUSY_TIMEOUT_MS } = {}) {
   const { stateDir, config, env = process.env, hasActiveJobs = () => false } = ctx;
   const full = { ...ctx, opencodeBin: ctx.opencodeBin ?? resolveOpencodeBin({ env, config }), env, hasActiveJobs };
   const settings = serverSettings(config);
-  const lockTimeout = 4 * settings.bootTimeoutSec * 1000;
+  const lockTimeout = Math.max(serverLockTimeoutMs(config), healthReuseTimeoutMs + HEALTH_BUSY_RETRIES * healthBusyTimeoutMs + 3000);
   const server = await withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
     if (env.OPC_SERVER_URL) return attachServer(env, settings, config, ctx.workspaceRoot);
     let record = readServerRecord(stateDir);
@@ -568,11 +574,11 @@ export async function ensureServer(ctx) {
         removeServerRecord(stateDir);
         warnings.push(`Registro de servidor antigo descartado (pid ${record.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
       } else {
-        let health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
+        let health = await probeHealth(record.url, record.password, healthReuseTimeoutMs);
         const unresponsive = () => !health.ok && !['AUTH_FAILED', 'NOT_JSON', 'UNSUPPORTED_VERSION'].includes(health.error?.code);
         if (unresponsive() && hasActiveJobs()) {
           for (let retry = 0; retry < HEALTH_BUSY_RETRIES && unresponsive(); retry += 1) {
-            health = await probeHealth(record.url, record.password, HEALTH_BUSY_TIMEOUT_MS);
+            health = await probeHealth(record.url, record.password, healthBusyTimeoutMs);
           }
           if (unresponsive()) {
             throw new ConnectionError('SERVER_UNRESPONSIVE', 'O servidor gerenciado não respondeu e há jobs ativos; aguarde (/opc:status), cancele (/opc:cancel) ou pare com opc setup --stop-server --force.');
@@ -659,7 +665,7 @@ export async function stopServer(ctx, { force = false, confirmedByUser = false, 
   if (lockHeld) return run();
   return withLock(
     path.join(ctx.stateDir, 'server.lock'),
-    { timeoutMs: 4 * serverSettings(ctx.config).bootTimeoutSec * 1000, purpose: 'stop-server' },
+    { timeoutMs: serverLockTimeoutMs(ctx.config), purpose: 'stop-server' },
     run,
   );
 }

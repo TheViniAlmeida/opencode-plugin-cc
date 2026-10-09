@@ -6,7 +6,7 @@ import { ConnectionError, ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { identityMatches } from '../lib/process.mjs';
 import { readServerRecord, resolveOpencodeBin, serverMatcher } from '../lib/server.mjs';
 import { createPrompter } from '../lib/tty.mjs';
-import { cleanupJobInputFiles, isActive, isTerminal, listJobs } from '../lib/jobs.mjs';
+import { cleanupJobInputFiles, isActive, isTerminal, jobWarningHandler, listJobs } from '../lib/jobs.mjs';
 import { renderTable } from '../lib/render.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
 
@@ -84,7 +84,7 @@ function skip(stale, dir, name, reason) {
   stale.skipped.push({ dir, name, reason });
 }
 
-export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Date.now(), env, config } = {}, overrides = {}) {
+export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Date.now(), env, config, onWarning } = {}, overrides = {}) {
   const deps = { ...defaultDeps, ...overrides };
   const root = join(dataDir, 'state');
   let entries = [];
@@ -103,7 +103,15 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
     try {
       const identity = lstatSync(dir);
       if (!identity.isDirectory() || identity.isSymbolicLink() || (uid !== null && identity.uid !== uid)) continue;
-      const jobs = listJobs(dir, { all: true });
+      let unreadable = false;
+      const jobs = listJobs(dir, { all: true, quarantine: false, onWarning: (warning, details) => {
+        if (details.code === 'READ_FAILED') unreadable = true;
+        onWarning?.(warning, details);
+      } });
+      if (unreadable) {
+        skip(stale, dir, entry.name, 'Há job ilegível; candidato preservado porque seu estado não pôde ser verificado.');
+        continue;
+      }
       for (const inputs of terminalInputFiles(dir, jobs)) {
         stale.inputCleanup.push({ dir, id: inputs.id, files: inputs.files, dev: identity.dev, ino: identity.ino, uid: identity.uid });
       }
@@ -131,7 +139,8 @@ export async function run(ctx, argv, overrides = {}) {
   });
   if (!Number.isInteger(flags.days) || flags.days < 1) throw new UsageError('USAGE', '--days deve ser um inteiro maior ou igual a 1.');
   const days = flags.days;
-  const stale = findStaleStates(ctx.dataDir, { olderThanMs: days * DAY_MS, exclude: ctx.stateDir, env: ctx.env, config: ctx.config }, deps);
+  const onWarning = jobWarningHandler(ctx);
+  const stale = findStaleStates(ctx.dataDir, { olderThanMs: days * DAY_MS, exclude: ctx.stateDir, env: ctx.env, config: ctx.config, onWarning }, deps);
   if (stale.length === 0 && stale.inputCleanup.length === 0) {
     if (flags.json) ctx.json({ removed: [], candidates: [], skipped: stale.skipped });
     else if (stale.skipped.length) ctx.out(`# opc gc\n\nNenhum candidato removido. Estados preservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n`);
@@ -186,7 +195,7 @@ export async function run(ctx, argv, overrides = {}) {
         skipped.push({ dir: input.dir, name: input.dir.split(/[\\/]/).at(-1), reason: 'Identidade do diretório mudou; entradas preservadas.' });
         continue;
       }
-      const job = listJobs(input.dir, { all: true }).find((entry) => entry.id === input.id);
+      const job = listJobs(input.dir, { all: true, onWarning }).find((entry) => entry.id === input.id);
       if (!job || !isTerminal(job)) continue;
       const existing = terminalInputFiles(input.dir, [job]).find((entry) => entry.id === input.id)?.files ?? [];
       if (!existing.length) continue;
@@ -228,8 +237,13 @@ export async function run(ctx, argv, overrides = {}) {
         continue;
       }
       try {
-        if (listJobs(s.dir, { all: true }).some(isActive)) {
-          skipped.push({ dir: s.dir, name: s.name, reason: 'Estado em uso: há jobs ativos.' });
+        let unreadable = false;
+        const jobs = listJobs(s.dir, { all: true, onWarning: (warning, details) => {
+          if (details.code === 'READ_FAILED') unreadable = true;
+          onWarning(warning, details);
+        } });
+        if (unreadable || jobs.some(isActive)) {
+          skipped.push({ dir: s.dir, name: s.name, reason: unreadable ? 'Há job ilegível; candidato preservado.' : 'Estado em uso: há jobs ativos.' });
           continue;
         }
         const server = serverStatus(s.dir, deps, ctx);

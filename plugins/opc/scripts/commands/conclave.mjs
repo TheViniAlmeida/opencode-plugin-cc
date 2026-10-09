@@ -6,7 +6,7 @@ import { assertCanCreateSessions } from '../lib/server.mjs';
 import { DEFAULT_AGENT } from '../lib/policy.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
-import { createGroup, updateJob, readJob, spawnWorker, waitForJob, assertNotInsideServer, withServerLock, refreshGroup, appendJobLog, ACTIVE_STATUSES, listGroupMembers, recordAttempt } from '../lib/jobs.mjs';
+import { createGroup, updateJob, readJob, spawnWorker, waitForJob, assertNotInsideServer, withServerLock, refreshGroup, appendJobLog, ACTIVE_STATUSES, listGroupMembers, recordAttempt, jobWarningHandler } from '../lib/jobs.mjs';
 import { resolveReviewTarget, collectReviewContext } from '../lib/git.mjs';
 import { composeMembers, validateConclaveOptions, runConclave, buildKnownNames, loadConclaveAssets, ConclavePersistenceError } from '../lib/conclave.mjs';
 import { renderConclave } from '../lib/render.mjs';
@@ -62,7 +62,7 @@ export async function run(ctx, argv) {
         claudeSessionId: ctx.claudeSessionId ?? null,
         request: { type: 'conclave', question, mode, rounds: composition.rounds, quorum: composition.quorum,
           members: composition.members, judge: composition.judge, warnings: composition.warnings, target, reviewCwd: ctx.cwd },
-      }, memberFields, { maxActive: ctx.config?.jobs?.maxActive ?? 8 });
+      }, memberFields, { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) });
       return result;
     }, { purpose: 'register-job:conclave' });
     const { group } = created;

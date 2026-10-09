@@ -2,7 +2,7 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
-import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef, topLevelJobs } from '../lib/jobs.mjs';
+import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, jobWarningHandler, listGroupMembers, listJobs, reconcileJob, resolveJobRef, topLevelJobs } from '../lib/jobs.mjs';
 import { renderAttempts, renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { reviewExitCode } from './review.mjs';
@@ -16,12 +16,13 @@ export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
   if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
   const ref = positionals[0] ?? null;
+  const onWarning = jobWarningHandler(ctx);
   let job;
   if (ref) {
-    job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref));
+    job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref, { onWarning }));
   } else {
     const jobs = [];
-    for (const candidate of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null })) {
+    for (const candidate of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null, onWarning })) {
       jobs.push(await reconcileJob(ctx.stateDir, candidate));
     }
     job = topLevelJobs(jobs).find(isTerminal) ?? null;

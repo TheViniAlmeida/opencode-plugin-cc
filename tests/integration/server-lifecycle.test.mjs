@@ -135,13 +135,15 @@ test('hung-server: identity ok but health silent → terminated and replaced', a
 });
 
 test('hung server with active write jobs is not killed after three busy health retries', async (t) => {
+  const started = performance.now();
   const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'hung-server' });
   const first = await ensureServer(ctx);
   const job = await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
   fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
   const healthCount = () => readFakeState(env).requests.filter((request) => request.path === '/api/info').length;
   const before = healthCount();
-  await assert.rejects(ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) }), (err) => {
+  await assert.rejects(ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) },
+    { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 }), (err) => {
     assert.equal(err.name, 'ConnectionError');
     assert.equal(err.code, 'SERVER_UNRESPONSIVE');
     assert.match(err.message, /\/opc:status/);
@@ -155,16 +157,22 @@ test('hung server with active write jobs is not killed after three busy health r
   assert.equal(listJobs(stateDir, { all: true }).find((entry) => entry.id === job.id).status, 'queued');
   assert.equal(readFakeState(env).bootAttempts, 1);
   assert.equal(readFakeState(env).signals.length, 0);
+  assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
 });
 
 test('a busy hung server that recovers during retries is reused with its world checks', async (t) => {
+  const started = performance.now();
   const { env, ctx, stateDir, ws } = makeServerCtx(t, { scenario: 'hung-server' });
   const first = await ensureServer(ctx);
   await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
   fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
-  const timer = setTimeout(() => fs.unlinkSync(`${env.FAKE_OPENCODE_STATE}.hang`), 2500);
-  t.after(() => clearTimeout(timer));
-  const reused = await ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) });
+  const healthCount = () => readFakeState(env).requests.filter((request) => request.path === '/api/info').length;
+  const before = healthCount();
+  const recovering = ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) },
+    { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 });
+  await waitFor(() => healthCount() >= before + 2, { timeoutMs: 10000, intervalMs: 10, message: 'first busy retry' });
+  fs.unlinkSync(`${env.FAKE_OPENCODE_STATE}.hang`);
+  const reused = await recovering;
   assert.equal(reused.pid, first.pid);
   assert.equal(reused.reused, true);
   assert.equal(reused.world.shareBlocked, false);
@@ -172,6 +180,8 @@ test('a busy hung server that recovers during retries is reused with its world c
   assert.equal(fake.bootAttempts, 1);
   assert.equal(fake.signals.length, 0);
   assert.equal(fake.requests.filter((request) => request.path === '/api/config').at(-1).directory, ws);
+  assert.equal(healthCount() - before, 3);
+  assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
 });
 
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {

@@ -112,6 +112,8 @@ test('serverLockPath and serverLockTimeoutMs follow the spec', () => {
   assert.equal(serverLockPath('/x/state'), path.join('/x/state', 'server.lock'));
   assert.equal(serverLockTimeoutMs({ server: { bootTimeoutSec: 60 } }), 240000);
   assert.equal(serverLockTimeoutMs({}), 240000);
+  assert.equal(serverLockTimeoutMs({ server: { bootTimeoutSec: 1 } }), 20000);
+  assert.ok(serverLockTimeoutMs({ server: { bootTimeoutSec: 1 } }) >= 2000 + 3 * 5000);
 });
 
 test('withServerLock waits while another owner holds server.lock', async (t) => {

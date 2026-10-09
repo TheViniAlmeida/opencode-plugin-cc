@@ -6,7 +6,7 @@ import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from
 import { assertCanCreateSessions } from '../lib/server.mjs';
 import {
   createGroup, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, listGroupMembers, refreshGroup,
-  runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES,
+  runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES, jobWarningHandler,
 } from '../lib/jobs.mjs';
 import { DEFAULT_AGENT, dispatchSubagent, SUBAGENT_MECHANISMS } from '../lib/runner.mjs';
 import { renderGroupStatus, renderGroupResult } from '../lib/render.mjs';
@@ -108,7 +108,7 @@ export async function run(ctx, argv) {
     kind: 'sub', title: `OPC: subagents: ${summary}`, summary, workspaceRoot: ctx.workspaceRoot,
     claudeSessionId: ctx.claudeSessionId, permissionProfile: profile, request,
   }, buildMemberFields(specs, summary, profile),
-  { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:sub' });
+  { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: 'register-job:sub' });
   await spawnWorker(ctx, group.id);
   if (flags.background) {
     const current = readJob(ctx.stateDir, group.id) ?? group;
