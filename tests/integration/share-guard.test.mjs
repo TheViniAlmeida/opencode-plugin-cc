@@ -8,9 +8,9 @@ import { connectApi, openApi } from '../../plugins/opc/scripts/lib/context.mjs';
 import { createJob, readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { ExitCode } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import * as serverLib from '../../plugins/opc/scripts/lib/server.mjs';
-import { SEED } from '../fixtures/f3-fake.mjs';
+import { F3_MODELS, SEED } from '../fixtures/f3-fake.mjs';
 import {
-  F2A_MODEL, jobIdFrom, jobIn, makeServerCtx, makeWorkspace, opc, readFakeState,
+  F2A_MODEL, jobIdFrom, jobIn, jobsIn, makeServerCtx, makeWorkspace, opc, readFakeState,
   readJsonFile, requestsTo, runCli, setupF2a, startExternalFake, testEnv,
 } from '../helpers.mjs';
 
@@ -25,16 +25,52 @@ for (const [scenario, reason, message] of [
   ['share-auto', 'share-auto', /share "auto"/],
   ['config-unavailable-recover', 'config-unavailable', /configuração de compartilhamento/],
 ]) {
-  test(`task refuses session creation with ${reason} and records the policy failure`, async (t) => {
-    const ctx = setupF2a(t, { scenario, git: false });
-    const result = await opc(ctx, ['task', '--model', F2A_MODEL, 'oi']);
-    // Task runs in a detached worker; its policy error is reported as a failed job.
-    assert.equal(result.code, ExitCode.JOB_FAILED, result.stderr);
-    assert.match(result.stderr, message);
-    assert.equal(jobIn(ctx.env, ctx.cwd, jobIdFrom(result.stderr)).errorType, 'SHARE_AUTO');
+  for (const background of [false, true]) {
+    test(`task refuses ${reason} before queuing${background ? ' in background' : ''}`, async (t) => {
+      const ctx = setupF2a(t, { scenario, git: false });
+      const result = await opc(ctx, ['task', '--model', F2A_MODEL, ...(background ? ['--background'] : []), 'oi']);
+      assert.equal(result.code, ExitCode.POLICY, result.stderr);
+      assert.match(result.stderr, /SHARE_AUTO/);
+      assert.match(result.stderr, message);
+      assert.deepEqual(jobsIn(ctx.env, ctx.cwd), []);
+      assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 0);
+    });
+  }
+}
+
+for (const argv of [
+  ['command', 'init'],
+  ['subagent', '--agent', 'general', '--model', F2A_MODEL, 'oi'],
+  ['conclave', '--models', `${F2A_MODEL},${F3_MODELS.qwen}`, 'oi'],
+  ['orchestrate', '--planner', F2A_MODEL, 'oi'],
+]) {
+  test(`${argv[0]} refuses share auto before queuing a job`, async (t) => {
+    const ctx = setupF2a(t, { scenario: 'share-auto', git: false });
+    const result = await opc(ctx, argv);
+    assert.equal(result.code, ExitCode.POLICY, result.stderr);
+    assert.match(result.stderr, /SHARE_AUTO/);
+    assert.match(result.stderr, /share "auto"/);
+    assert.deepEqual(jobsIn(ctx.env, ctx.cwd), []);
     assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 0);
   });
 }
+
+test('task resume remains allowed with share auto without creating a session', async (t) => {
+  const external = await startExternalFake(t);
+  external.fake.configOverride = { share: 'auto' };
+  const ctx = setupF2a(t, { git: false, extraEnv: {
+    OPC_SERVER_URL: external.url, OPC_SERVER_PASSWORD: external.password,
+  } });
+  external.fake.state.sessions[SEED.session].location.directory = ctx.cwd;
+  const result = await opc(ctx, ['task', '--resume', SEED.session, '--model', F2A_MODEL, 'continue']);
+  assert.equal(result.code, ExitCode.OK, result.stderr);
+  const job = jobIn(ctx.env, ctx.cwd, jobIdFrom(result.stderr));
+  assert.equal(job.status, 'completed');
+  assert.equal(job.sessionID, SEED.session);
+  const requests = readJsonFile(external.stateFile).requests;
+  assert.equal(requests.filter((r) => r.method === 'POST' && r.path === '/api/session').length, 0);
+  assert.equal(requests.filter((r) => r.method === 'POST' && r.path === `/api/session/${SEED.session}/prompt`).length, 1);
+});
 
 test('read-only models command still works with share auto', async (t) => {
   const env = testEnv(t, { scenario: 'share-auto' });
@@ -92,11 +128,16 @@ test('guardSessionCreation preserves other methods, arguments, return values and
   assert.equal(guarded.info(), 'api');
   assert.equal(await guarded.createSession(SESSION_BODY), 'created');
   assert.equal(await guarded.fork('ses_source', { before: 'msg_boundary' }), 'forked');
-  assert.deepEqual(calls, [['create', api, [SESSION_BODY]], ['fork', api, ['ses_source', { before: 'msg_boundary' }]]]);
+  assert.equal(await guarded.createSession.call({ marker: 'other' }, SESSION_BODY), 'created');
+  assert.equal(await guarded.fork.call({ marker: 'other' }, 'ses_source'), 'forked');
+  assert.deepEqual(calls, [
+    ['create', api, [SESSION_BODY]], ['fork', api, ['ses_source', { before: 'msg_boundary' }]],
+    ['create', api, [SESSION_BODY]], ['fork', api, ['ses_source']],
+  ]);
   server.world = { shareBlocked: true, shareReason: 'share-auto' };
   await assert.rejects(async () => guarded.createSession(SESSION_BODY), isShareError);
   await assert.rejects(async () => guarded.fork('ses_source'), isShareError);
-  assert.equal(calls.length, 2, 'blocked calls never reach the underlying API');
+  assert.equal(calls.length, 4, 'blocked calls never reach the underlying API');
 });
 
 for (const mapping of ['local', 'env', 'config']) {
@@ -111,7 +152,8 @@ for (const mapping of ['local', 'env', 'config']) {
       config: { ...ctx.config, server: { ...ctx.config.server,
         ...(mapping === 'config' ? { remoteRoots: { [ws]: directory } } : {}) } },
     };
-    const { api } = await connectApi(attachedCtx);
+    const { api, server } = await connectApi(attachedCtx);
+    assert.equal(server.world.shareBlocked, false);
     await api.listSessions();
     const requests = readJsonFile(external.stateFile).requests;
     const configs = requests.filter((r) => r.path === '/api/config');
@@ -125,6 +167,7 @@ for (const versionChanged of [false, true]) {
   test(`reuse world check carries the workspace directory${versionChanged ? ' with active jobs and a changed version' : ''}`, async (t) => {
     const { ctx, env, ws, stateDir } = makeServerCtx(t);
     const first = await serverLib.ensureServer(ctx);
+    assert.equal(first.world.shareBlocked, false);
     const requestCount = readFakeState(env).requests.length;
     if (versionChanged) {
       const file = path.join(stateDir, 'server.json');
@@ -132,6 +175,7 @@ for (const versionChanged of [false, true]) {
     }
     const reused = await serverLib.ensureServer({ ...ctx, hasActiveJobs: () => versionChanged });
     assert.equal(reused.reused, true);
+    assert.equal(reused.world.shareBlocked, false);
     assert.equal(reused.pid, first.pid);
     const configs = readFakeState(env).requests.slice(requestCount).filter((r) => r.path === '/api/config');
     assert.ok(configs.length > 0);

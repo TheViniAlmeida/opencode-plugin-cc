@@ -2,6 +2,7 @@
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, profileRules, requireAgent } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { DEFAULT_AGENT } from '../lib/policy.mjs';
 import { resolveCandidates, runWithFallback, attemptRequest, describeStop, backoffFromEnv } from '../lib/routing.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
@@ -58,6 +59,7 @@ export async function run(ctx, argv) {
   const request = normalizeRequest(ctx.config ?? {}, flags, raw.text != null ? [raw.text] : positionals);
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
+  assertCanCreateSessions(conn.server);
   const discovery = await loadDiscovery(conn.api);
   requireAgent(discovery, DEFAULT_AGENT, ctx.config.policy, { implicit: true });
   const plannerRoute = resolveRoute(ctx, discovery, 'planner', request.planner);

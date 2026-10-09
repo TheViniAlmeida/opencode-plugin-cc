@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { assertCommandUsable } from '../lib/policy.mjs';
 import {
   createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock,
@@ -67,7 +68,10 @@ export async function run(ctx, argv) {
   const conn = await openApi(ctx);
   let commands;
   let discovery;
-  try { [commands, discovery] = await Promise.all([conn.api.commands(), loadDiscovery(conn.api)]); }
+  try {
+    assertCanCreateSessions(conn.server);
+    [commands, discovery] = await Promise.all([conn.api.commands(), loadDiscovery(conn.api)]);
+  }
   finally { conn.close(); }
   const cmd = (commands ?? []).find((entry) => entry.name === name);
   if (!cmd) {

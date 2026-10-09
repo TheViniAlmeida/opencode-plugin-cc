@@ -264,8 +264,9 @@ async function worldCheck(client, config) {
 }
 
 export function assertCanCreateSessions(server) {
-  if (server?.world?.shareBlocked) {
-    if (server.world.shareReason === 'config-unavailable') {
+  const world = server?.world ?? { shareBlocked: true, shareReason: 'config-unavailable' };
+  if (world.shareBlocked) {
+    if (world.shareReason === 'config-unavailable') {
       throw new PolicyError('SHARE_AUTO', 'Criação de sessões bloqueada: não foi possível confirmar a configuração de compartilhamento. Tente novamente e verifique o servidor OpenCode.');
     }
     throw new PolicyError('SHARE_AUTO', 'Criação de sessões recusada: o OpenCode está com share "auto". Rode /opc:setup para ver como desligar.');

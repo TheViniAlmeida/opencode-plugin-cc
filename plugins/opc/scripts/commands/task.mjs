@@ -5,6 +5,7 @@ import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
@@ -216,7 +217,9 @@ export async function runKindCommand(ctx, argv, kind) {
   const config = ctx.config ?? {};
   const policy = config.policy ?? {};
 
+  const sessionID = resolveResumeSession(ctx, flags, kind);
   const { api, server } = await connectApi(ctx);
+  if (!sessionID) assertCanCreateSessions(server);
   const { catalog, resolution } = await resolveTaskCandidates({ api, kind, flags: { model: flags.model, tier: flags.tier }, config });
   const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
@@ -231,7 +234,6 @@ export async function runKindCommand(ctx, argv, kind) {
   }
   const selection = validateSelection({ candidate, variant, agentName, agents, catalog, policy });
   const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
-  const sessionID = resolveResumeSession(ctx, flags, kind);
   let patchPermission = null;
   if (sessionID) {
     const session = await api.getSession(sessionID);

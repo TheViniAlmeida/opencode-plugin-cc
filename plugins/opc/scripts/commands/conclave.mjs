@@ -2,6 +2,7 @@
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, OpcError, toExitCode } from '../lib/opc-error.mjs';
 import { openApi, profileRules, requireAgent } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { DEFAULT_AGENT } from '../lib/policy.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
@@ -48,6 +49,7 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   try {
+    assertCanCreateSessions(conn.server);
     requireAgent({ agents: await conn.api.agents() }, DEFAULT_AGENT, ctx.config.policy, { implicit: true });
     const composition = await composeFromDiscovery(conn.api, models, { pool: flags.pool ?? null, config: ctx.config, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
     for (const warning of composition.warnings) ctx.err(`[opc] aviso: ${warning}\n`);

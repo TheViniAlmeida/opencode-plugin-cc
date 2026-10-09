@@ -51,7 +51,7 @@ test('gate 1: worker consumes private input once and sends the raw prompt', asyn
   };
   const hub = { async start() {}, stop() {}, track() { return () => {}; }, onReconnect() { return () => {}; } };
   assert.equal(await runWorker({ stateDir: dir, workspaceRoot: dir }, ['--job-id', job.id], {
-    ensureServer: async () => ({ url: 'http://unused.invalid' }), createApi: () => api, createHub: () => hub, scheduleExit: () => {},
+    ensureServer: async () => ({ url: 'http://unused.invalid', world: { shareBlocked: false } }), createApi: () => api, createHub: () => hub, scheduleExit: () => {},
   }), 0, readJob(dir, job.id).errorMessage);
   assert.equal(sent.text, text);
   assert.equal(existsSync(input), false);
@@ -184,7 +184,7 @@ for (const failure of ['resync', 'bridge']) {
       async diff() { return []; },
     };
     await runWorker({ stateDir: dir, workspaceRoot: dir }, ['--job-id', job.id], {
-      ensureServer: async () => ({ url: 'http://unused.invalid' }), createApi: () => api,
+      ensureServer: async () => ({ url: 'http://unused.invalid', world: { shareBlocked: false } }), createApi: () => api,
       createHub: () => hub, scheduleExit: () => {},
     });
     const stored = readJob(dir, job.id);

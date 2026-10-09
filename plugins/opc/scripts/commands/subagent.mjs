@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import {
   createGroup, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, listGroupMembers, refreshGroup,
   runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES,
@@ -85,7 +86,10 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   let discovery;
-  try { discovery = await loadDiscovery(conn.api); } finally { conn.close(); }
+  try {
+    assertCanCreateSessions(conn.server);
+    discovery = await loadDiscovery(conn.api);
+  } finally { conn.close(); }
   const policy = ctx.config.policy ?? {};
   requireAgent(discovery, DEFAULT_AGENT, policy, { implicit: true });
   const profile = flags.write ? 'write' : 'read-only';
