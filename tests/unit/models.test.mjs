@@ -86,6 +86,32 @@ test('matchesAny: repeated matching remains correct after more than 512 distinct
   }
 });
 
+test('globToRegExp: LRU retains recently used entries and evicts at 4096 globs', () => {
+  const hot = globToRegExp('synthetic-lru-hot/*');
+  const cold = globToRegExp('synthetic-lru-cold/*');
+  for (let i = 0; i < 4094; i += 1) globToRegExp(`synthetic-lru-${i}/*`);
+  assert.equal(globToRegExp('synthetic-lru-hot/*'), hot);
+  globToRegExp('synthetic-lru-overflow/*');
+  assert.equal(globToRegExp('synthetic-lru-hot/*'), hot);
+  assert.notEqual(globToRegExp('synthetic-lru-cold/*'), cold);
+  assert.equal(matchesAny('synthetic-lru-cold/model', ['synthetic-lru-cold/*']), true);
+});
+
+test('matchesAny: 600 distinct globs across 2000 words finish within one second', (t) => {
+  const script = `
+    import { matchesAny } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/models.mjs', import.meta.url).href)};
+    const globs = Array.from({ length: 600 }, (_, i) => 'synthetic-perf-' + i + '/*');
+    const start = performance.now();
+    let matched = 0;
+    for (let i = 0; i < 2000; i += 1) matched += Number(matchesAny('other/word-' + i, globs));
+    console.log(JSON.stringify({ matched, elapsed: performance.now() - start }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 }));
+  assert.equal(result.matched, 0);
+  assert.ok(result.elapsed < 1000, `${result.elapsed} ms`);
+  t.diagnostic(`${result.elapsed} ms for 600 globs across 2000 words`);
+});
+
 test('globToRegExp: optional **/ directories require a path boundary', () => {
   for (const value of ['b', 'a/b', 'a/nested/b']) assert.ok(globToRegExp('**/b').test(value), value);
   for (const value of ['a/b', 'a/nested/b']) assert.ok(globToRegExp('a/**/b').test(value), value);

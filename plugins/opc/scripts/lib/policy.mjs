@@ -436,7 +436,7 @@ function ansiEscape(source, offset) {
   return { value: `\\${next}`, end: offset + 1 };
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const UNSUPPORTED_SHELL_WORDS = new Set(['.', 'source', 'if', 'then', 'else', 'elif', 'fi', 'for', 'select', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '!', 'coproc']);
 const WRAPPER_OPTIONS = {
   exec: { flags: ['-c', '-l'], values: ['-a'] },
@@ -485,37 +485,48 @@ function declaredEnvironment(words) {
     .map((word) => word.value.split('=')[0]);
 }
 
-function enablesAllexport(words) {
+const SAFE_SET_OPTIONS = ['pipefail', 'errexit', 'nounset', 'xtrace', 'noglob'];
+const SAFE_SHOPT_OPTIONS = new Set(['nullglob', 'globstar', 'extglob', 'dotglob', 'failglob', 'nocaseglob']);
+
+function allowedShellOption(word, next, flags, names) {
+  const letters = /^[+-]([a-zA-Z]+)$/.exec(word.value)?.[1];
+  if (word.dynamic || !letters || [...letters].some((letter) => !flags.includes(letter) && letter !== 'o')) return false;
+  if (!letters.includes('o')) return true;
+  return letters.indexOf('o') === letters.lastIndexOf('o') && !!next && !next.dynamic && names.includes(next.value);
+}
+
+function unsafeShellSettings(words) {
   if (!words) return false;
   let offset = 0;
   while (ASSIGNMENT.test(words[offset]?.value ?? '')) offset += 1;
   while (['command', 'builtin'].includes(words[offset]?.value)) {
     offset += 1;
-    if (words[offset]?.value === '-p') offset += 1;
+    while (words[offset]?.value === '-p') offset += 1;
+    if (words[offset]?.value === '--') offset += 1;
   }
-  if (words[offset]?.value !== 'set') return false;
+  const executable = words[offset]?.value.split('/').at(-1);
+  if (!['set', 'shopt'].includes(executable)) return false;
   const args = words.slice(offset + 1);
+  if (args.some((word) => word.dynamic)) return true;
+  if (executable === 'shopt') return args.some(({ value }) => !['-s', '-u'].includes(value) && !SAFE_SHOPT_OPTIONS.has(value));
   for (let i = 0; i < args.length; i += 1) {
-    const { value, dynamic } = args[i];
-    if (value === '--' || !/^[+-]/.test(value)) break;
-    if (dynamic) return true;
-    if (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(value)) return true;
-    if (/^[+-][a-zA-Z]*o$/.test(value)) {
-      if (value.startsWith('-') && (args[i + 1]?.value === 'allexport' || args[i + 1]?.dynamic)) return true;
-      i += 1;
-    }
+    // Literal positional parameters after -- cannot change shell options.
+    if (args[i].value === '--') return false;
+    const names = args[i].value.startsWith('+') ? ['pipefail'] : SAFE_SET_OPTIONS;
+    if (!allowedShellOption(args[i], args[i + 1], 'euxf', names)) return true;
+    if (args[i].value.includes('o')) i += 1;
   }
   return false;
 }
 
-function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], allexport = false) {
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], unsafeShellOptions = false) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
   const commands = segments.map(shellWords);
   const declared = commands.flatMap(declaredEnvironment);
-  allexport ||= commands.some(enablesAllexport);
-  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared], allexport));
+  unsafeShellOptions ||= commands.some(unsafeShellSettings);
+  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared], unsafeShellOptions));
 }
 
 function shellTouchesSensitive(words, sensitivePaths) {
@@ -688,7 +699,7 @@ function gitOptions(args, subcommand) {
   return { short, long, hasLong, operands };
 }
 
-function inspectWords(words, destructive, depth, sensitivePaths, environment = [], allexport = false) {
+function inspectWords(words, destructive, depth, sensitivePaths, environment = [], unsafeShellOptions = false) {
   if (!words || depth > 32) return true;
   if (shellTouchesSensitive(words, sensitivePaths)) return true;
   // Carry assignments through wrappers/scripts so git configuration cannot hide in env.
@@ -709,14 +720,14 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     if (declaredEnvironment(words).some((name) => name.startsWith('GIT_') || unsafeExecutionEnvironment(name))) return true;
   }
   if (executable === 'git') {
-    if (allexport || environment.some(unsafeGitEnvironment)) return true;
+    if (unsafeShellOptions || environment.some(unsafeGitEnvironment)) return true;
     const normalized = normalizeGitWords(words);
     if (!normalized) return true;
     const [, subcommand, ...rest] = normalized.map((word) => word.value);
     if (['push', 'reset', 'clean', 'branch', 'tag', 'checkout', 'switch', 'restore', 'stash', 'update-ref', 'rm'].includes(subcommand)
       && normalized.slice(2).some((word) => word.dynamic)) return true;
     const { short, long, hasLong, operands } = gitOptions(rest, subcommand);
-    if (['log', 'diff'].includes(subcommand) && hasLong('--output')) return true;
+    if (hasLong('--output')) return true;
     const force = short.has('f') || hasLong('--force');
     const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
     if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
@@ -750,20 +761,28 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
   if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
   if (SHELLS.has(executable)) {
     // A shell script, stdin shell, or expansion in the script cannot be inspected here.
+    let commandMode = false;
     for (let i = 0; i < args.length; i += 1) {
       const option = args[i];
       if (option.dynamic) return true;
-      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
-        const script = args[i + 1];
-        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, allexport);
+      if (option.value === '--' || !/^[+-]/.test(option.value)) {
+        const script = option.value === '--' ? args[i + 1] : option;
+        return !commandMode || !script || script.dynamic
+          || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
       }
-      if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
+      const allowed = allowedShellOption(option, args[i + 1], 'ceuxlf', ['pipefail']);
+      unsafeShellOptions ||= !allowed;
+      if (/^[+-][a-zA-Z]*o[a-zA-Z]*$/.test(option.value) || ['--rcfile', '--init-file'].includes(option.value)) {
+        if (!args[i + 1] || args[i + 1].dynamic) return true;
+        i += 1;
+      }
+      commandMode ||= /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value);
     }
     return true;
   }
   if (executable === 'eval') {
     return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, allexport);
+      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -771,7 +790,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, allexport)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions)) return true;
         i = end;
       }
     }
@@ -813,13 +832,13 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     if (!args[i] || args[i].dynamic) return true;
     positionals -= 1; i += 1;
   }
-  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, allexport);
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
   if (i === args.length) return true;
   if (options.shell) {
     return args.slice(i).some((word) => word.dynamic)
-      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, allexport);
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
   }
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, allexport);
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

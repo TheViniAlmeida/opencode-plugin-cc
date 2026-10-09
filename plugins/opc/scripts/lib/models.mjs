@@ -4,11 +4,16 @@ import { safeOutputText } from './redact.mjs';
 
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
 const GLOB_CACHE = new Map();
-const GLOB_CACHE_LIMIT = 512;
+const GLOB_CACHE_LIMIT = 4096;
 
 export function globToRegExp(glob) {
   const source = String(glob);
-  if (GLOB_CACHE.has(source)) return GLOB_CACHE.get(source);
+  if (GLOB_CACHE.has(source)) {
+    const expression = GLOB_CACHE.get(source);
+    GLOB_CACHE.delete(source);
+    GLOB_CACHE.set(source, expression);
+    return expression;
+  }
   const parts = [{ wildcard: null, literal: '' }];
   for (let i = 0; i < source.length; i += 1) {
     if (source[i] !== '*') { parts.at(-1).literal += source[i]; continue; }

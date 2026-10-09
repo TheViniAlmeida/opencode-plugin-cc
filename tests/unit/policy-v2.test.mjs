@@ -11,6 +11,99 @@ const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.acti
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
 const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
 
+const fix4Cases = [
+  ['set and shopt fail closed outside their literal allowlists with git', true, [
+    'F=-a; set $F; GIT_SSH_COMMAND=x git ls-remote h:x',
+    ...['$F', '"$F"', '${F}', '$F $G', '-e $F', '+e $F', '-- $F', '-o "$OPTION"',
+      '-a', '+a', '-o allexport', '+o allexport', '-o', '-k', '-euaf', '-o vi',
+      '+o errexit', '-e literal'].map((options) => `set ${options}; git status`),
+    'command set "$F"; git status', 'builtin set -o allexport; git status',
+    'command -p -- set -a; git status', 'command -p -- shopt -so allexport; git status',
+    'shopt -so allexport; GIT_SSH_COMMAND=x git ls-remote h:x',
+    ...['-so allexport', '-o -s allexport', '-s allexport', '-s "$OPTION"',
+      '-s $OPTION', '-s expand_aliases', '-s extdebug', '-p', '-s globstar $OPTION']
+      .map((options) => `shopt ${options}; git status`),
+    'command shopt -so allexport; git status', 'builtin shopt -s "$OPTION"; git status',
+    'sh -c \'set "$F"; git status\'',
+    'set -a; env git status', 'set "$F"; nice git status',
+    'set -a; timeout 5 sh -c \'git status\'',
+    'env sh -c \'set "$F"; git status\'',
+  ]],
+  ['shell startup options fail closed with git through every shell and wrappers', true, [
+    ...['bash', 'sh', 'dash', 'zsh', 'ksh', 'busybox sh', 'env bash', 'nice sh', 'timeout 5 ksh']
+      .flatMap((shell) => ['-ac', '-ca', '-a -c', '+a -c', '-o allexport -c', '-i -c',
+        '--rcfile synthetic -c', '--init-file synthetic -c', '-c -a', '-c -i', '-c -o allexport']
+        .map((options) => `${shell} ${options} 'git status'`)),
+    'bash -ac \'GIT_SSH_COMMAND=x git ls-remote h:x\'',
+    'sh -ac \'GIT_SSH_COMMAND=x git ls-remote h:x\'',
+    'bash -ac \'GIT_SSH_COMMAND=x; git ls-remote h:x\'',
+    'sh -ac \'GIT_SSH_COMMAND=x; git ls-remote h:x\'',
+    'bash -o "$OPTION" -c \'git status\'', 'bash "$OPTIONS" -c \'git status\'',
+    'bash -c "$SCRIPT"', 'ksh -c "$SCRIPT"', 'busybox sh -c "$SCRIPT"',
+    'bash --rcfile synthetic -c \'rm -rf synthetic\'',
+  ]],
+  ['git output options require the user across subcommands', true, [
+    ...['show', 'format-patch', 'stash show', 'whatchanged', 'diff-tree', 'range-diff',
+      'reflog', 'shortlog', 'blame', 'status', 'archive', 'log', 'diff']
+      .flatMap((command) => [`git ${command} --output=victim HEAD`, `git ${command} --output victim`]),
+    'git format-patch --output=x', 'git -C /synthetic show --output=victim HEAD',
+    'env git show --output=victim HEAD', 'sh -c \'git show --output=victim HEAD\'',
+  ]],
+  ['literal shell option allowlists preserve benign commands', false, [
+    ...['-e', '-u', '-x', '-f', '+e', '+u', '+x', '+f', '-eu', '-eux', '-euxf', '+euxf',
+      '-o pipefail', '+o pipefail', '-o errexit', '-o nounset', '-o xtrace', '-o noglob',
+      '-euo pipefail', '-euxfo pipefail', '-e -u -o pipefail', '-- a b', '-- -a']
+      .map((options) => `set ${options}; git status`),
+    'set -euo pipefail; git log', 'set -x; git diff',
+    ...['nullglob', 'globstar', 'extglob', 'dotglob', 'failglob', 'nocaseglob']
+      .flatMap((name) => [`shopt -s ${name}; git status`, `shopt -u ${name}; git log`]),
+    'shopt -s globstar nullglob; git diff',
+    'command set -e; git status', 'builtin shopt -s globstar; git status',
+    'command -p -- set -e; git status', 'command -p -- shopt -s globstar; git status',
+    ...['bash', 'sh', 'dash', 'zsh', 'ksh', 'busybox sh', 'env bash', 'nice sh', 'timeout 5 ksh']
+      .flatMap((shell) => ['-c', '-ec', '-euxlc', '-e -u -c', '-o pipefail -c', '-euo pipefail -c',
+        '-c -e', '-c --', '-eco pipefail', '-oc pipefail', '-c -o pipefail']
+        .map((options) => `${shell} ${options} 'git log'`)),
+    'bash -c \'git status\'', 'bash -ec \'git log\'', 'sh -c \'npm test\'',
+    'set -a; npm test', 'set $F; npm test', 'shopt -so allexport; npm test',
+    'set +a', 'set -o allexport',
+    'bash -ac \'npm test\'', 'bash -i -c \'npm test\'',
+    'bash --rcfile synthetic -c \'npm test\'',
+    'git show -- --output=victim', 'git log --grep --output=victim',
+    'git push --push-option --output=victim origin main',
+  ]],
+  ['benign probes from rereview3 remain free', false, [
+    'git status', 'git log', 'git diff', 'git show', 'git add', 'git commit', 'git push',
+    'git push origin main', 'git pull --rebase', 'git fetch', 'git fetch --all --prune',
+    'ls', 'ls -la', 'cat README.md', 'npm test', 'echo hi', 'export FOO=bar; git status',
+    'NODE_ENV=test npm test', 'set -e; git status', 'set -x; ls', 'set -euo pipefail; git status',
+    'cat ~/.config/app/$X', 'ls ./src/$X', 'PATH_SUFFIX=x npm test', 'local x=1',
+    'git commit -m "$MSG"', 'git log --oneline -5', 'LDFLAGS=-x make', 'ENVIRONMENT=x npm test',
+    'cat src/$X', 'set -- a b; git status', 'readonly FOO=1', 'git -C /repo status',
+    'git branch -d feature', 'git checkout main', 'git stash', 'git rebase', 'git merge',
+    'grep -rn foo src', 'GIT_TERMINAL_PROMPT=0 git status', 'GIT_TRACE=1 git status',
+    'export PATH; git status', 'git --exec-path',
+  ]],
+];
+for (const [group, expected, commands] of fix4Cases) {
+  for (const command of commands) {
+    test(`F11 fix4: ${group}: ${command}`, () => {
+      assert.equal(claude(command), expected, command);
+      if (expected) {
+        assert.equal(checkReply({ approver: 'claude', request: { permission: 'shell', patterns: [command] }, reply: 'once' }).code, 'NEEDS_USER');
+      }
+    });
+  }
+}
+
+test('F11 fix4: unsafe shell options still honor custom destructive commands', () => {
+  const policy = { destructiveBash: ['deploy *'] };
+  for (const command of ['set "$F"; deploy synthetic', 'shopt -so allexport; deploy synthetic',
+    'bash -ac \'deploy synthetic\'', 'ksh --rcfile synthetic -c \'deploy synthetic\'']) {
+    assert.equal(claude(command, policy), true, command);
+  }
+});
+
 const fix3Cases = [
   ['allexport cannot hide git environment assignments', true, [
     ...['-a', '-ae', '-ka', '-aeu', '-o allexport', '-e -o allexport'].map((options) =>
@@ -63,7 +156,6 @@ const fix3Cases = [
     'NODE_ENV=test npm test', 'local x=1', 'export FOO="$VALUE"; git status',
     'declare -x FOO="$VALUE"; git status', 'typeset -x FOO="$VALUE"; ls',
     'readonly FOO="$VALUE"; ls', 'local FOO="$VALUE"', 'set -- -a; git status',
-    'set +a; git status', 'set +o allexport; git status', 'set -o; git status',
     'set -a; ls', 'git --exec-path', 'git log --grep --output=synthetic',
   ]],
 ];
