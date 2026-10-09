@@ -46,7 +46,7 @@ test('opc_permissions_list devolve as mesmas solicitações pendentes da CLI', a
 test('opc_permissions_answer sends frm_ form answers through the V2 API', async (t) => {
   const { env, c, fake } = await setup(t, 'user');
   const session = Object.values(fake.state.sessions)[0];
-  const requestId = 'frm_example';
+  const requestId = 'frm_f3_1';
   fake.state.forms[requestId] = {
     id: requestId, sessionID: session.id, title: 'Synthetic question', metadata: { kind: 'question' },
     fields: [{ key: 'q0', title: 'Choice', type: 'string', options: [{ value: 'sim', label: 'sim' }], custom: false }],

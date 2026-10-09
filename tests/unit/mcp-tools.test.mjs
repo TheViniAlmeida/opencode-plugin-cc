@@ -179,9 +179,12 @@ test('invalid arguments and bad cwd never reach the dispatcher', async (t) => {
 });
 
 test('a 300 KB prompt returns the envelope, not an internal error', async (t) => {
-  const spy = spyDispatch({ exitCode: 0, stdout: '{"jobId":"task-abc123-abcdef"}', stderr: 'model p/m failed\n' });
+  const prompt = 'start'.repeat(13) + 'x'.repeat(299_870) + 'end!!'.repeat(13);
+  const spy = spyDispatch({ exitCode: 0, stdout: '{"jobId":"task-abc123-abcdef"}', stderr: `model p/m failed: ${prompt.slice(0, 64)} / ${prompt.slice(-64)}\n` });
   const callTool = createToolCaller({ dispatch: spy.dispatch, env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null });
-  const result = await callTool(byName.get('opc_task'), { prompt: 'x'.repeat(300_000) });
+  const started = performance.now();
+  const result = await callTool(byName.get('opc_task'), { prompt });
+  assert.ok(performance.now() - started < 200, '300 KB call must take less than 200 ms');
   assert.equal(result.isError, false);
   assert.equal(JSON.parse(result.content[0].text).data.jobId, 'task-abc123-abcdef');
   assert.equal(spy.calls.length, 1);
@@ -193,12 +196,21 @@ test('input echoes use literal replacements, longest first, and ignore short val
   assert.equal(mcpTools.maskInputEcho('a.*[b](c) a.*[b](c) extended', { nested: { answers: ['a.*[b](c)', 'a.*[b](c) extended'] } }), '*** ***');
 });
 
-test('input echoes over 4096 characters mask the first 64 characters', () => {
+test('long input echoes mask the full value and both 64-character windows', () => {
   const bounded = 'b'.repeat(4096);
-  const long = 'c'.repeat(64) + 'd'.repeat(4097 - 64);
   assert.equal(mcpTools.maskInputEcho(bounded, { prompt: bounded }), '***');
-  assert.equal(mcpTools.maskInputEcho(long.slice(0, 64), { prompt: long }), '***');
-  assert.equal(mcpTools.maskInputEcho(long, { prompt: long }), '***' + long.slice(64));
+  for (const size of [4097, 5000, 300_000]) {
+    const long = 'c'.repeat(64) + 'd'.repeat(size - 128) + 'e'.repeat(64);
+    const started = performance.now();
+    assert.equal(mcpTools.maskInputEcho(long, { prompt: long }), '***');
+    assert.equal(mcpTools.maskInputEcho(`error: ${long} / ${long}`, { prompt: long }), 'error: *** / ***');
+    for (const echo of [long.slice(0, 64), long.slice(-64)]) {
+      const masked = mcpTools.maskInputEcho(`error: ${echo}`, { prompt: long });
+      assert.equal(masked, 'error: ***');
+      assert.ok(!masked.includes(echo));
+    }
+    assert.ok(performance.now() - started < 200, `${size}-character masking must take less than 200 ms`);
+  }
 });
 
 test('masking failure preserves the dispatched result and logs no input', async (t) => {
@@ -225,19 +237,84 @@ test('masking failure preserves the dispatched result and logs no input', async 
   assert.ok(!logs.join('\n').includes(prompt));
 });
 
+test('masking failure preserves the captured error code with a generic message', async (t) => {
+  const prompt = 'synthetic private prompt';
+  const message = `Denied: ${prompt}`;
+  const split = String.prototype.split;
+  t.mock.method(String.prototype, 'split', function (...args) {
+    if (String(this) === message) throw new Error(prompt);
+    return split.apply(this, args);
+  });
+  const logs = [];
+  const callTool = createToolCaller({
+    dispatch: spyDispatch({ throw: new OpcError('POLICY_DENIED', message, { exitCode: 4 }) }).dispatch,
+    env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null, log: (line) => logs.push(line),
+  });
+  const result = await callTool(byName.get('opc_task'), { prompt });
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(result.isError, true);
+  assert.equal(envelope.exitCode, 4);
+  assert.equal(envelope.state, 'policy_denied');
+  assert.equal(envelope.error.code, 'POLICY_DENIED');
+  assert.equal(typeof envelope.error.message, 'string');
+  assert.ok(envelope.error.message.length > 0);
+  assert.ok(!result.content[0].text.includes(prompt));
+  assert.ok(!logs.join('\n').includes(prompt));
+});
+
+for (const exitCode of [0, 4]) {
+  test(`repeated envelope failure returns a minimal envelope for exit ${exitCode}`, async (t) => {
+    const prompt = 'synthetic private prompt';
+    const stdout = '{"jobId":"task-abc123-abcdef"}';
+    const logs = [];
+    let failures = 0;
+    const trim = String.prototype.trim;
+    const callTool = createToolCaller({
+      dispatch: async (argv, io) => {
+        io.stdout.write(stdout);
+        if (exitCode === 4) io.onError(new OpcError('POLICY_DENIED', `Denied: ${prompt}`, { exitCode }));
+        t.mock.method(String.prototype, 'trim', function (...args) {
+          if (String(this) === stdout) {
+            failures += 1;
+            throw new Error(prompt);
+          }
+          return trim.apply(this, args);
+        });
+        return exitCode;
+      },
+      env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null, log: (line) => logs.push(line),
+    });
+    const result = await callTool(byName.get('opc_task'), { prompt });
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(failures, 2);
+    assert.equal(result.isError, exitCode === 4);
+    assert.equal(envelope.exitCode, exitCode);
+    assert.equal(envelope.state, exitCode === 4 ? 'policy_denied' : 'ok');
+    assert.equal(envelope.data, undefined);
+    if (exitCode === 4) {
+      assert.equal(envelope.error.code, 'POLICY_DENIED');
+      assert.ok(envelope.error.message.length > 0);
+    }
+    assert.ok(!result.content[0].text.includes(prompt));
+    assert.ok(!logs.join('\n').includes(prompt));
+  });
+}
+
 test('opc_permissions_answer accepts only frm_ form IDs and dispatches answers', async (t) => {
   const spy = spyDispatch();
   const callTool = createToolCaller({ dispatch: spy.dispatch, env: {}, defaultCwd: tempDir(t), resolveSessionId: () => null });
-  const result = await callTool(byName.get('opc_permissions_answer'), { requestId: 'frm_example', answers: ['sim'] });
-  assert.equal(result.isError, false);
-  assert.deepEqual(spy.calls[0].argv, ['permissions', 'answer', 'frm_example', '--json', '--', 'sim']);
+  for (const requestId of ['frm_example', 'frm_f3_1', 'frm_a-b']) {
+    const result = await callTool(byName.get('opc_permissions_answer'), { requestId, answers: ['sim'] });
+    assert.equal(result.isError, false);
+    assert.deepEqual(spy.calls.at(-1).argv, ['permissions', 'answer', requestId, '--json', '--', 'sim']);
+  }
   const schema = byName.get('opc_permissions_answer').inputSchema;
   assert.match(schema.properties.requestId.description, /ID do formulário \(frm_…\)/);
-  for (const requestId of ['que_1', 'frm_', 'frm_example_1', 'frm-example']) {
+  for (const requestId of ['que_x', 'frm', 'frm_', 'frm-example']) {
     const invalid = await callTool(byName.get('opc_permissions_answer'), { requestId, answers: ['sim'] });
     assert.equal(JSON.parse(invalid.content[0].text).error.code, 'INVALID_ARGUMENTS');
   }
-  assert.equal(spy.calls.length, 1);
+  assert.equal(spy.calls.length, 3);
 });
 
 test('cwd outside the project, including symlink escapes and prefix siblings, is refused', async (t) => {

@@ -386,7 +386,7 @@ export const TOOLS = Object.freeze([
     description: 'Responde uma pergunta pendente, com uma entrada por questão na ordem (mesma codificação de /opc:permissions answer). Pergunte ao usuário quando a resposta for dele. A resposta pode entregar data como string Markdown.',
     annotations: STATEFUL,
     inputSchema: object({
-      requestId: { type: 'string', pattern: '^frm_[A-Za-z0-9]+$', maxLength: 200, description: 'ID do formulário (frm_…).' },
+      requestId: { type: 'string', pattern: '^frm_[A-Za-z0-9_-]+$', maxLength: 200, description: 'ID do formulário (frm_…).' },
       answers: { type: 'array', minItems: 1, maxItems: 20, items: text('Rótulo da resposta ou texto livre.', 2000), description: 'Respostas na ordem das perguntas.' },
     }, ['requestId', 'answers']),
     toArgv: (a) => new ArgvBuilder('permissions', 'answer').pos(a.requestId).tail(a.answers).build(),
@@ -499,7 +499,11 @@ export function maskInputEcho(message, input) {
   collect(input);
   let text = String(message);
   for (const value of values.sort((left, right) => right.length - left.length)) {
-    text = text.split(value.length > 4096 ? value.slice(0, 64) : value).join('***');
+    text = text.split(value).join('***');
+    if (value.length > 4096) {
+      text = text.split(value.slice(0, 64)).join('***');
+      text = text.split(value.slice(-64)).join('***');
+    }
   }
   return text;
 }
@@ -546,7 +550,16 @@ export function createToolCaller({ dispatch, env = process.env, defaultCwd = env
       return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: maskInputEcho(stderr.text(), input), error: safeError, truncated: stdout.truncated() }));
     } catch {
       log('[opc] mcp: falha no mascaramento da entrada; detalhes do erro omitidos.');
-      return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: '', truncated: stdout.truncated() }));
+      const error = captured && { code: captured.code ?? 'INTERNAL', message: 'Não foi possível preparar os detalhes do resultado.' };
+      const truncated = stdout.truncated();
+      try {
+        return toolResult(buildEnvelope({ exitCode, stdout: safeStdout, stderr: '', error, truncated }));
+      } catch {
+        const envelope = { exitCode, state: EXIT_STATE[exitCode] ?? 'error' };
+        if (error) envelope.error = error;
+        if (truncated) envelope.truncated = true;
+        return toolResult({ envelope, isError: !NON_ERROR_EXITS.has(exitCode) });
+      }
     }
   };
 }
