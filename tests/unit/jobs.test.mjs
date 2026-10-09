@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, clearJobRequests, createJob, findResumeCandidate, groupStatus, jobLogPath,
@@ -16,6 +16,53 @@ function stateDir(t) {
   return trackTempDir(t, makeTempDir('opc-jobs-'));
 }
 const base = (over = {}) => ({ kind: 'task', title: 'opc task', summary: 's', workspaceRoot: '/ws', claudeSessionId: 'c1', permissionProfile: 'read-only', ...over });
+
+test('listJobs quarantines corrupt records, warns once and leaves healthy jobs visible; createJob still works', async (t) => {
+  const dir = stateDir(t);
+  const healthy = await createJob(dir, base());
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  const warnings = [];
+  const before = Date.now();
+  writeFileSync(file, '', { mode: 0o644 });
+  assert.deepEqual(listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) }).map((job) => job.id), [healthy.id]);
+  assert.equal(existsSync(file), false);
+  const quarantined = readdirSync(join(dir, 'jobs')).filter((name) => name.startsWith(`${id}.json.corrupt-`));
+  assert.equal(quarantined.length, 1);
+  const timestamp = Number(quarantined[0].split('.corrupt-')[1]);
+  assert.ok(timestamp >= before && timestamp <= Date.now());
+  assert.equal(statSync(join(dir, 'jobs', quarantined[0])).mode & 0o777, 0o600);
+  assert.equal(readFileSync(join(dir, 'jobs', quarantined[0]), 'utf8'), '');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], new RegExp(id));
+  assert.match(warnings[0], /INVALID_JSON/);
+  listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) });
+  assert.equal(warnings.length, 1);
+
+  writeFileSync(file, '{invalid');
+  const created = await createJob(dir, base());
+  assert.ok(listJobs(dir, { all: true }).some((job) => job.id === created.id));
+  assert.equal(existsSync(file), false);
+});
+
+test('listJobs quarantines unreadable job records with mode 0600', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX file modes required');
+  const dir = stateDir(t);
+  const healthy = await createJob(dir, base());
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(file, '{"synthetic":"preserved"}');
+  chmodSync(file, 0o000);
+  const warnings = [];
+  assert.deepEqual(listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) }).map((job) => job.id), [healthy.id]);
+  assert.equal(existsSync(file), false);
+  const quarantined = readdirSync(join(dir, 'jobs')).find((name) => name.startsWith(`${id}.json.corrupt-`));
+  assert.ok(quarantined);
+  assert.equal(statSync(join(dir, 'jobs', quarantined)).mode & 0o777, 0o600);
+  assert.equal(readFileSync(join(dir, 'jobs', quarantined), 'utf8'), '{"synthetic":"preserved"}');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /READ_FAILED/);
+});
 
 function killHard(pid) {
   try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }

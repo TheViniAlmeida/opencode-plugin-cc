@@ -1,7 +1,7 @@
 // Job records, worker lifecycle, limits and cancel (spec §9.1–§9.2).
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
@@ -189,7 +189,7 @@ export function readJob(stateDir, id) {
   return safeJob(readJson(jobPath(stateDir, id), null));
 }
 
-export function listJobs(stateDir, { claudeSessionId = null, all = false } = {}) {
+export function listJobs(stateDir, { claudeSessionId = null, all = false, onWarning } = {}) {
   let names;
   try {
     names = readdirSync(jobsDir(stateDir));
@@ -202,7 +202,22 @@ export function listJobs(stateDir, { claudeSessionId = null, all = false } = {})
     if (!name.endsWith('.json')) continue;
     const id = name.slice(0, -'.json'.length);
     if (!JOB_ID_RE.test(id)) continue;
-    const job = readJob(stateDir, id);
+    let job;
+    try {
+      job = readJob(stateDir, id);
+    } catch (err) {
+      if (err.code !== 'INVALID_JSON' && err.code !== 'READ_FAILED') throw err;
+      const file = jobPath(stateDir, id);
+      try {
+        chmodSync(file, 0o600);
+        renameSync(file, `${file}.corrupt-${Date.now()}`);
+      } catch (cause) {
+        if (cause.code === 'ENOENT') continue;
+        throw cause;
+      }
+      onWarning?.(`Arquivo da tarefa ${id} movido para quarentena (${err.code}).`);
+      continue;
+    }
     if (job?.id === id) jobs.push(job);
   }
   const visible = all || !claudeSessionId ? jobs : jobs.filter((j) => j.claudeSessionId === claudeSessionId);

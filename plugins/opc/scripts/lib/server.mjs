@@ -19,6 +19,8 @@ import { readJson, writeFileAtomic } from './state.mjs';
 export const MIN_OPENCODE_VERSION = '2.0.22';
 const MAX_BOOT_ATTEMPTS = 3;
 const HEALTH_REUSE_TIMEOUT_MS = 2000;
+const HEALTH_BUSY_RETRIES = 3;
+const HEALTH_BUSY_TIMEOUT_MS = 5000;
 const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 export const LISTENING_RE = /\bserver listening on (https?:\/\/\S+)/;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -566,7 +568,16 @@ export async function ensureServer(ctx) {
         removeServerRecord(stateDir);
         warnings.push(`Registro de servidor antigo descartado (pid ${record.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
       } else {
-        const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
+        let health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
+        const unresponsive = () => !health.ok && !['AUTH_FAILED', 'NOT_JSON', 'UNSUPPORTED_VERSION'].includes(health.error?.code);
+        if (unresponsive() && hasActiveJobs()) {
+          for (let retry = 0; retry < HEALTH_BUSY_RETRIES && unresponsive(); retry += 1) {
+            health = await probeHealth(record.url, record.password, HEALTH_BUSY_TIMEOUT_MS);
+          }
+          if (unresponsive()) {
+            throw new ConnectionError('SERVER_UNRESPONSIVE', 'O servidor gerenciado não respondeu e há jobs ativos; aguarde (/opc:status), cancele (/opc:cancel) ou pare com opc setup --stop-server --force.');
+          }
+        }
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
         // The identity check above proved this is opc's own process: an old (V1) server answers /api/info with
         // the SPA (NOT_JSON) or an old version, so replace it instead of failing every command.

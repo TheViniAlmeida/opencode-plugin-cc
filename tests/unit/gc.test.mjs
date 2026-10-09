@@ -6,6 +6,7 @@ import { makeTempDir, ORPHAN_SAFE_IDLE, trackTempDir } from '../helpers.mjs';
 import { findStaleStates, run } from '../../plugins/opc/scripts/commands/gc.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
+import { serverMatcher } from '../../plugins/opc/scripts/lib/server.mjs';
 import { spawn } from 'node:child_process';
 
 function makeState(root, name, ageDays, { activeJob = false } = {}) {
@@ -22,6 +23,33 @@ function makeState(root, name, ageDays, { activeJob = false } = {}) {
 function rootFor(t) {
   return trackTempDir(t, makeTempDir('opc-gc-'));
 }
+
+test('gc recognizes a live server with a custom opencode binary from config or env', async (t) => {
+  const binary = '/opt/oc/bin/oc-v2';
+  assert.equal(serverMatcher(4100, binary)([binary, 'serve', '--port', '4100']), true);
+  for (const settings of [
+    { env: {}, config: { server: { opencodeBin: binary } } },
+    { env: { OPC_OPENCODE_BIN: binary }, config: { server: { opencodeBin: '/opt/oc/bin/other' } } },
+  ]) {
+    const root = rootFor(t);
+    const candidate = makeState(root, 'custom-0123456789abcdef', 40);
+    writeFileSync(join(candidate, 'server.json'), JSON.stringify({ schemaVersion: 1, pid: 1234, port: 4100, startTime: 'synthetic-identity' }));
+    const old = new Date(Date.now() - 40 * 86400000);
+    utimesSync(join(candidate, 'server.json'), old, old);
+    let output;
+    let calls = 0;
+    const ctx = { ...settings, dataDir: root, stateDir: null, stdin: { isTTY: false }, json: (value) => { output = value; } };
+    await run(ctx, ['--json'], { identityMatches: (expected, matcher) => {
+      calls += 1;
+      assert.equal(expected.pid, 1234);
+      assert.equal(expected.startTime, 'synthetic-identity');
+      return matcher([binary, 'serve', '--port', '4100']);
+    } });
+    assert.equal(calls, 1);
+    assert.deepEqual(output.candidates, []);
+    assert.equal(existsSync(candidate), true);
+  }
+});
 
 test('findStaleStates: returns only old, inactive, non-excluded state dirs with slug-hash names', (t) => {
   const root = rootFor(t);

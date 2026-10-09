@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
+import { createJob, isActive, listJobs } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { clientFor, ensureServer, serverMatcher, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
@@ -131,6 +132,46 @@ test('hung-server: identity ok but health silent → terminated and replaced', a
   assert.ok(second.warnings.some((w) => /travado/.test(w)));
   await waitFor(() => !processAlive(first.pid), { message: 'hung server gone' });
   assert.ok(readFakeState(env).signals.some((s) => s.signal === 'SIGTERM' && s.pid === first.pid));
+});
+
+test('hung server with active write jobs is not killed after three busy health retries', async (t) => {
+  const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  const job = await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const healthCount = () => readFakeState(env).requests.filter((request) => request.path === '/api/info').length;
+  const before = healthCount();
+  await assert.rejects(ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) }), (err) => {
+    assert.equal(err.name, 'ConnectionError');
+    assert.equal(err.code, 'SERVER_UNRESPONSIVE');
+    assert.match(err.message, /\/opc:status/);
+    assert.match(err.message, /\/opc:cancel/);
+    assert.match(err.message, /opc setup --stop-server --force/);
+    return true;
+  });
+  assert.equal(healthCount() - before, 4);
+  assert.ok(processAlive(first.pid));
+  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+  assert.equal(listJobs(stateDir, { all: true }).find((entry) => entry.id === job.id).status, 'queued');
+  assert.equal(readFakeState(env).bootAttempts, 1);
+  assert.equal(readFakeState(env).signals.length, 0);
+});
+
+test('a busy hung server that recovers during retries is reused with its world checks', async (t) => {
+  const { env, ctx, stateDir, ws } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const timer = setTimeout(() => fs.unlinkSync(`${env.FAKE_OPENCODE_STATE}.hang`), 2500);
+  t.after(() => clearTimeout(timer));
+  const reused = await ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) });
+  assert.equal(reused.pid, first.pid);
+  assert.equal(reused.reused, true);
+  assert.equal(reused.world.shareBlocked, false);
+  const fake = readFakeState(env);
+  assert.equal(fake.bootAttempts, 1);
+  assert.equal(fake.signals.length, 0);
+  assert.equal(fake.requests.filter((request) => request.path === '/api/config').at(-1).directory, ws);
 });
 
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {

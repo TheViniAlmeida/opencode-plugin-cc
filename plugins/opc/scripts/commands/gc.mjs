@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from '../lib/args.mjs';
 import { ConnectionError, ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { identityMatches } from '../lib/process.mjs';
-import { readServerRecord, serverMatcher } from '../lib/server.mjs';
+import { readServerRecord, resolveOpencodeBin, serverMatcher } from '../lib/server.mjs';
 import { createPrompter } from '../lib/tty.mjs';
 import { cleanupJobInputFiles, isActive, isTerminal, listJobs } from '../lib/jobs.mjs';
 import { renderTable } from '../lib/render.mjs';
@@ -51,7 +51,7 @@ function terminalInputFiles(dir, jobs) {
   return files;
 }
 
-function serverStatus(dir, deps) {
+function serverStatus(dir, deps, ctx = {}) {
   let raw;
   try {
     raw = readFileSync(join(dir, 'server.json'), 'utf8');
@@ -73,7 +73,7 @@ function serverStatus(dir, deps) {
   }
   const matches = deps.identityMatches(
     { pid: fallback.pid, startTime: fallback.startTime },
-    serverMatcher(fallback.port),
+    serverMatcher(fallback.port, resolveOpencodeBin({ env: ctx.env, config: ctx.config })),
   );
   return { live: matches };
 }
@@ -84,7 +84,7 @@ function skip(stale, dir, name, reason) {
   stale.skipped.push({ dir, name, reason });
 }
 
-export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Date.now() } = {}, overrides = {}) {
+export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Date.now(), env, config } = {}, overrides = {}) {
   const deps = { ...defaultDeps, ...overrides };
   const root = join(dataDir, 'state');
   let entries = [];
@@ -110,7 +110,7 @@ export function findStaleStates(dataDir, { olderThanMs, exclude = null, now = Da
       const lastUsed = newestMtime(dir);
       if (now - lastUsed <= olderThanMs) continue;
       if (jobs.some(isActive)) continue;
-      const server = serverStatus(dir, deps);
+      const server = serverStatus(dir, deps, { env, config });
       if (server.reason) {
         skip(stale, dir, entry.name, server.reason);
         continue;
@@ -131,7 +131,7 @@ export async function run(ctx, argv, overrides = {}) {
   });
   if (!Number.isInteger(flags.days) || flags.days < 1) throw new UsageError('USAGE', '--days deve ser um inteiro maior ou igual a 1.');
   const days = flags.days;
-  const stale = findStaleStates(ctx.dataDir, { olderThanMs: days * DAY_MS, exclude: ctx.stateDir }, deps);
+  const stale = findStaleStates(ctx.dataDir, { olderThanMs: days * DAY_MS, exclude: ctx.stateDir, env: ctx.env, config: ctx.config }, deps);
   if (stale.length === 0 && stale.inputCleanup.length === 0) {
     if (flags.json) ctx.json({ removed: [], candidates: [], skipped: stale.skipped });
     else if (stale.skipped.length) ctx.out(`# opc gc\n\nNenhum candidato removido. Estados preservados:\n${stale.skipped.map((s) => `- ${s.name}: ${s.reason}`).join('\n')}\n`);
@@ -232,7 +232,7 @@ export async function run(ctx, argv, overrides = {}) {
           skipped.push({ dir: s.dir, name: s.name, reason: 'Estado em uso: há jobs ativos.' });
           continue;
         }
-        const server = serverStatus(s.dir, deps);
+        const server = serverStatus(s.dir, deps, ctx);
         if (server.reason || server.live) {
           skipped.push({ dir: s.dir, name: s.name, reason: server.reason ?? 'Estado em uso: servidor ativo.' });
           continue;
