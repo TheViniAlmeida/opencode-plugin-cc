@@ -78,7 +78,7 @@ Todo turno roda num **worker destacado** (`opc task-worker`), registrado como jo
 | 4 | Negado por política, aprovador ou recursão (`OPC_INSIDE_SERVER=1`) |
 | 5 | Falha de conexão/servidor |
 | 6 | `--wait-timeout` ou `status --timeout-ms` expirou; o job continua e o id é impresso |
-| 7 | Job terminou em `failed` |
+| 7 | Job terminou em `failed`, ou revisão concluída sem saída estruturada válida |
 | 130 | Job terminou em `cancelled` |
 
 ### `/opc:task`
@@ -130,6 +130,11 @@ Aceitam flags de modelo, `--background`, `--resume`/`--fresh`, `--timeout` e `--
 
 `status` sem id lista jobs desta sessão; `--all` inclui todas. Com id, mostra fase, modelo, sessão, filhas, erro, pedidos e log; com `--json`, inclui `attempts[]`. `--wait` retorna 0 (`completed`), 3 (`waiting_permission`), 7 (`failed`), 130 (`cancelled`) ou 6 sem parar o job. `result` mostra texto final, saída estruturada, arquivos tocados, continuação e `## Tentativas (N)` quando houve fallback; `result --json` também inclui `attempts[]`. Job ativo retorna 2. `cancel` aborta sessão principal e filhas, espera idle por até 10 s e encerra worker somente após conferir identidade.
 
+Para jobs `review` (incluindo adversarial), `result` retorna **7** se a revisão concluída
+não tiver JSON válido no schema `review-output`, preservando o texto bruto. `status --wait`
+e o foreground da revisão usam a mesma regra, inclusive com `--json` e via MCP. Qualquer
+veredito válido retorna 0. Jobs concluídos de outros tipos não exigem JSON de revisão.
+
 ### `opc monitor`
 
 ```text
@@ -146,7 +151,12 @@ Leitor puro de `state.json`, jobs e logs do workspace. Mostra fase, modelo, tent
 /opc:permissions answer <id-da-pergunta> <resposta...>
 ```
 
-`list` mostra pedidos pendentes com job dono. `user` exige `--confirmed-by-user` em `once`; `claude` também o exige para destrutivo, `external_directory` ou caminho sensível. `reject` é sempre permitido e rejeita irmãos. `always` retorna 2; veja [Permissões](permissions.md#por-que-nunca-always).
+`list` mostra pedidos pendentes com job dono. `user` exige `--confirmed-by-user` em `once`;
+`claude` também o exige para destrutivo, `external_directory`, caminho sensível (inclusive
+shell), `webfetch`/`websearch` e permissão desconhecida. `reject` é sempre permitido e rejeita
+irmãos. `always` retorna 2; veja [Permissões](permissions.md#por-que-nunca-always).
+Formulários V2 usam IDs `frm_…` (letras, dígitos, `_` e `-`), inclusive no MCP; IDs `que_…`
+não são aceitos pela ferramenta MCP.
 
 ### `opc gc`
 
@@ -180,6 +190,10 @@ Uso: `/opc:review [--wait|--background] [--base <ref>] [--scope auto|working-tre
 - **Modelo:** `--model` → `reviewModel` → `routing.tasks.review` → `defaultModel` → `model` declarado na configuração do OpenCode. O modelo padrão do servidor (`/api/model/default`, em geral um modelo gratuito do provider `opencode`) nunca é usado; sem modelo resolvido, o erro é `NO_MODEL`.
 - **Correções:** o comando somente revisa. Depois dos achados, o Claude pergunta quais corrigir antes de editar.
 - **Exit codes:** 0 (qualquer veredito), 2 (uso ou fora de Git), 4 (modelo negado), 5 (servidor), 6 (espera expirou; job continua), 7 (falha, inclusive saída inválida; texto bruto impresso), 130 (cancelado).
+
+Com `--background`, review e adversarial-review recusam `share: "auto"` ou configuração
+de share indisponível antes de enfileirar (`SHARE_AUTO`, exit 4). No checkout atual, `--wait`
+ainda enfileira e falha no worker (exit 7), sem criar sessão; é pendência da revisão final.
 
 Exemplo ao vivo redigido:
 
@@ -365,6 +379,12 @@ $ opc session summarize ses_<id> --model omniroute-personal/cmd/Qwen/Qwen3.7-Fla
 Cria um grupo `sub-…` e um membro por par agente/modelo. Uma lista de um lado expande sobre a outra; listas com o mesmo tamanho pareiam por posição; o máximo é oito membros. Os agentes aceitos têm modo `subagent` ou `all`, e agentes/modelos passam pela política antes de qualquer sessão.
 
 O mecanismo padrão é `child-session`: cria uma sessão pai e uma filha por membro. Se o servidor recusar o agente de subagente na sessão filha, o membro usa `subtask` numa sessão portadora; o resultado registra `mechanism` e `fellBack`. O worker coordenador executa até `jobs.maxParallel` (4 por padrão); `--write` serializa os membros. O grupo conta como um job para `jobs.maxActive`.
+
+O carrier usa `extraAllow` antes das invariantes; negar a ferramenta/agente retorna
+`SUBAGENT_DENIED` antes de criar o carrier. `--prompt-file` relativo é resolvido a partir
+do `--cwd`. O coordenador e os membros checam cancelamento antes de criar sessão e antes
+do prompt; cancelamento durante a criação interrompe a sessão criada. IDs de sessões
+órfãs ficam no log do grupo, sem incluir o prompt.
 
 ```bash
 opc subagent --agent general --model fast,strong,k3 "Liste os riscos deste módulo em 3 itens"
@@ -555,6 +575,9 @@ opc conclave --pool duo --background "Qual estratégia de cache?"
 
 Saídas reais: [Exemplos executados](conclave.md#exemplos-executados).
 
+Em `--mode review`, a coleta de contexto usa `policy.sensitivePaths` como `excludeGlobs`,
+com a mesma exclusão de conteúdo sensível das revisões individuais.
+
 ## `/opc:transfer`
 
 Converte uma conversa do Claude Code para uma nova sessão OpenCode, retomável no
@@ -590,9 +613,15 @@ opc transfer [--source <arquivo.jsonl>] [--model <provider/model|alias>] [--json
   ao fim da tentativa. O sucesso exige exit 0 e a linha `Imported session: <id>` com
   o mesmo ID exportado. O comando de retomada usa a URL desse servidor e exige
   `OPENCODE_SERVER_PASSWORD` no ambiente do terminal.
+- **Mascaramento:** `maskSecretPatterns` mascara padrões de segredo em todo texto exportado:
+  `user`, `assistant`, `tool_use` e `tool_result`, além do título, antes de truncar. A saída
+  avisa no stderr quantos trechos foram mascarados; não há flag para desligar.
+  `Bearer` só mascara valor com cara de token: ≥16 caracteres e pelo menos um dígito ou
+  símbolo (`.`, `_`, `~`, `+`, `/`, `=`, `-`). Valores curtos ou longos só com letras não são
+  cobertos por esse padrão; outros padrões e segredos conhecidos registrados continuam valendo.
 - **Título e saída:** a sessão tem prefixo `OPC: transfer:`. A saída mostra ID, título,
   modelo, contagem de mensagens/itens ignorados e comando para retomar. O resumo passa
-  por redação; o conteúdo do histórico é preservado no arquivo importado.
+  por redação; o histórico importado contém as máscaras de segredo.
   O caminho da origem não é incluído no resumo público.
 
 Com `--json`, o resumo contém `sessionID`, `title`, `model`, `workspaceRoot`,
@@ -605,7 +634,7 @@ O `resumeCommand` usa o binário configurado (`server.opencodeBin` ou `OPC_OPENC
 |---|---|
 | 0 | Sessão importada |
 | 2 | `NO_TRANSCRIPT`, `NOT_JSONL`, `NOT_FOUND`, `NOT_A_FILE`, `TRANSCRIPT_TOO_LARGE` (> 64 MiB), `EMPTY_TRANSCRIPT`, `NO_MODEL`, `MODEL_NEEDS_FULL_ID` |
-| 4 | `TRANSCRIPT_OUTSIDE_ALLOWED_ROOT` ou `POLICY_DENIED` para provider/modelo |
+| 4 | `TRANSCRIPT_OUTSIDE_ALLOWED_ROOT`, `POLICY_DENIED` para provider/modelo ou `SHARE_AUTO` |
 | 5 | `OPENCODE_NOT_FOUND`, `UNSUPPORTED_VERSION` |
 | 7 | `IMPORT_FAILED` (falha do processo, marcador ausente ou ID divergente), `EXPORT_SHAPE_INVALID` |
 
@@ -636,3 +665,21 @@ Consultas e ações seguem a política e as confirmações do comando equivalent
 review fica no slash command. A [arquitetura](architecture.md#servidor-mcp-f5) contém o
 catálogo completo, os limites e o envelope de resultado. As respostas de
 `opc_permissions_reply` e `opc_permissions_answer` podem entregar `data` como Markdown.
+
+O `cwd` informado a qualquer ferramenta MCP precisa ser absoluto, existir e corresponder
+ao projeto do Claude Code (`defaultCwd`) ou a um descendente, comparados por `realpath`.
+Symlink para fora e diretório irmão com prefixo parecido são recusados com `INVALID_CWD`
+(exit 2) antes do dispatch. Para outro repo, use a CLI no terminal.
+
+`confirmedByUser` é uma declaração, sem prova de resposta humana no processo MCP. O portão
+real é o prompt de permissão do Claude Code para a ferramenta (`destructiveHint`); não
+preencha `true` sem confirmação da ação/alvo. A ponte do opc também aplica `requiresUser`.
+
+O mascaramento de eco da entrada usa substituição literal do valor inteiro (mínimo 8 chars).
+Acima de 4 KB (limiar de 4096 caracteres), também mascara prefixo e sufixo de 64 caracteres;
+um eco parcial do meio que não contenha essas janelas não é mascarado. Valores menores que
+8 chars não recebem máscara de eco; o mascaramento de padrões de segredo continua valendo.
+Prompts de 300 KB não geram expressão regular gigante nem erro interno após criar o job.
+
+HTTP e SSE recusam 3xx com `UNEXPECTED_REDIRECT` (exit 5), usando `redirect: 'manual'`.
+Configure a URL final do servidor; os erros e envelopes também mascaram segredos em texto livre.

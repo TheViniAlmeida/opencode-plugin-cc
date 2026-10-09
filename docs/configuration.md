@@ -160,9 +160,67 @@ O arquivo de workspace serve para preferências permitidas e para restringir pol
 
 Assim, um `.opc.json` que tente ampliar `policy.models.allow` não amplia a configuração efetiva: somente a interseção vale. Nunca coloque credenciais nesse arquivo.
 
+### Limites só de aperto
+
+Estas seis chaves têm valor efetivo `min(global ou default, workspace)`:
+
+| Chave | Padrão global | Workspace |
+|---|---|---|
+| `routing.fallback.maxAttempts` | `3` | Só reduz |
+| `routing.fallback.maxProviderRetries` | `3` | Só reduz |
+| `routing.fallback.maxRetryWaitSec` | `60` | Só reduz |
+| `conclave.rounds` | `1` | Só reduz |
+| `conclave.memberTimeoutSec` | `900` | Só reduz |
+| `orchestrate.maxSubtasks` | `5` | Só reduz |
+
+Valor maior é ignorado no merge, com aviso contendo "o workspace só pode apertar".
+`opc config set --workspace` com valor maior válido **grava** o `.opc.json`, avisa no stderr
+e o valor é ignorado na configuração efetiva. Para ampliar, ajuste o global no terminal.
+Listas de modelos do workspace continuam passando por `allow`/`deny` da política.
+
+O merge ignora propriedades próprias `__proto__` em qualquer nível, inclusive objetos novos
+e objetos dentro de arrays; elas não entram no resultado nem alteram protótipos.
+
+### Caminhos sensíveis padrão
+
+`policy.sensitivePaths` começa com estes padrões:
+
+```text
+*.env
+*.env.*
+**/.ssh/**
+*.pem
+*.key
+**/id_rsa*
+**/id_ed25519*
+**/secrets.env
+**/.npmrc
+**/.netrc
+**/.git-credentials
+**/.aws/credentials
+**/kubeconfig
+**/.kube/config
+```
+
+`**/` aceita zero diretórios; `*` também casa `/`. `.env.example` é sensível por padrão.
+Diretórios como `.gnupg` precisam de padrões adicionais do operador; o workspace pode
+acrescentar restrições, sem remover as globais.
+
 ## Chaves travadas e bootstrap
 
 `policy.*`, `permissionProfiles`, `server.configOverride`, `server.opencodeBin`, `server.allowPrivateHttp` e `server.remoteRoots` são travadas. Durante o bootstrap, apenas o onboarding antes da primeira config global pode gravá-las. Depois, use `opc config init` ou, em um TTY, `opc config set … --tty-confirm`. Uma edição comum cria a configuração global e encerra o bootstrap. A edição manual do arquivo não é tecnicamente bloqueada; use `opc config validate` antes de operar.
+
+`--tty-confirm` exige stdin TTY e recusa (`LOCKED_KEY`, exit 4) com `CLAUDECODE` não vazio
+no ambiente ou processo ancestral do Claude Code. Reconhece `claude`, `…/claude/versions/…`,
+`~/.claude/remote/ccd-cli/…` e `@anthropic-ai/claude-code`, inclusive entrypoints de runtimes
+com flags antes do script. A mensagem indica o sinal: "CLAUDECODE definido" ou "processo
+ancestral do Claude Code". Use um terminal próprio para a alteração.
+
+É uma barreira de conveniência; não prova que um humano respondeu. `setsid`, daemonização,
+`tmux`, `screen`, `systemd-run`, `ssh localhost` e `at/cron` podem escapar da ancestralidade.
+Namespaces de PID também podem ocultar ancestrais. No Windows só `CLAUDECODE` é verificado;
+Windows e macOS são **NÃO VALIDADO** nesta fase. No macOS, `ps` divide o cmdline por espaços:
+`isClaudeCmdline` pode ter falso negativo em caminho com espaço.
 
 Execução local verificada, com o valor substituído pelo placeholder seguro:
 
@@ -230,7 +288,8 @@ opc config set orchestrate.synthesizer omniroute-personal/cmd/<modelo>
 
 ## conclave
 
-Preferências do `/opc:conclave` ([guia](conclave.md)). Podem ser sobrescritas no `.opc.json`;
+Preferências do `/opc:conclave` ([guia](conclave.md)). Podem ser sobrescritas no `.opc.json`,
+respeitando os limites só de aperto para `rounds` e `memberTimeoutSec`;
 todo modelo citado continua passando pela política (`policy.*`).
 
 | Chave | Tipo | Padrão | Descrição |
