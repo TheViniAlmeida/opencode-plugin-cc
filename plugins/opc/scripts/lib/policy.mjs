@@ -436,7 +436,8 @@ function ansiEscape(source, offset) {
   return { value: `\\${next}`, end: offset + 1 };
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'rbash', 'hush', 'mksh', 'yash', 'posh', 'fish', 'csh', 'tcsh']);
+const DYNAMIC_SHELL_COMMANDS = new Set(['eval', 'trap', 'source', '.', 'enable', 'alias']);
 const UNSUPPORTED_SHELL_WORDS = new Set(['.', 'source', 'if', 'then', 'else', 'elif', 'fi', 'for', 'select', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '!', 'coproc']);
 const WRAPPER_OPTIONS = {
   exec: { flags: ['-c', '-l'], values: ['-a'] },
@@ -499,14 +500,14 @@ function unsafeShellSettings(words) {
   if (!words) return false;
   let offset = 0;
   while (ASSIGNMENT.test(words[offset]?.value ?? '')) offset += 1;
-  while (['command', 'builtin'].includes(words[offset]?.value)) {
-    offset += 1;
-    while (words[offset]?.value === '-p') offset += 1;
-    if (words[offset]?.value === '--') offset += 1;
-  }
   const executable = words[offset]?.value.split('/').at(-1);
-  if (!['set', 'shopt'].includes(executable)) return false;
+  if (DYNAMIC_SHELL_COMMANDS.has(executable)) return true;
   const args = words.slice(offset + 1);
+  if (['declare', 'typeset', 'local', 'readonly'].includes(executable)) {
+    const end = args.findIndex((word) => word.value === '--');
+    return args.slice(0, end < 0 ? args.length : end).some((word) => /^[+-].*n/.test(word.value));
+  }
+  if (!['set', 'shopt'].includes(executable)) return false;
   if (args.some((word) => word.dynamic)) return true;
   if (executable === 'shopt') return args.some(({ value }) => !['-s', '-u'].includes(value) && !SAFE_SHOPT_OPTIONS.has(value));
   for (let i = 0; i < args.length; i += 1) {
@@ -519,14 +520,16 @@ function unsafeShellSettings(words) {
   return false;
 }
 
-function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], unsafeShellOptions = false) {
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], unsafeShellOptions = false,
+  shellEffects = { unsafeSettings: false, git: false }, allowDynamicHead = false) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
   const commands = segments.map(shellWords);
   const declared = commands.flatMap(declaredEnvironment);
-  unsafeShellOptions ||= commands.some(unsafeShellSettings);
-  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared], unsafeShellOptions));
+  const required = commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths,
+    [...environment, ...declared], unsafeShellOptions, shellEffects, allowDynamicHead));
+  return required || (shellEffects.unsafeSettings && shellEffects.git);
 }
 
 function shellTouchesSensitive(words, sensitivePaths) {
@@ -699,7 +702,8 @@ function gitOptions(args, subcommand) {
   return { short, long, hasLong, operands };
 }
 
-function inspectWords(words, destructive, depth, sensitivePaths, environment = [], unsafeShellOptions = false) {
+function inspectWords(words, destructive, depth, sensitivePaths, environment = [], unsafeShellOptions = false,
+  shellEffects = { unsafeSettings: false, git: false }, allowDynamicHead = false) {
   if (!words || depth > 32) return true;
   if (shellTouchesSensitive(words, sensitivePaths)) return true;
   // Carry assignments through wrappers/scripts so git configuration cannot hide in env.
@@ -712,15 +716,19 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
   words = words.slice(offset);
   if (!words.length) return false;
   const [head, ...args] = words;
-  if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
+  if (head.dynamic) return !allowDynamicHead;
+  if (!head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
+  // Resolve wrappers through the same inspection path and share effects across all segments.
+  shellEffects.unsafeSettings ||= unsafeShellSettings(words);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
   if (SHELL_DECLARATIONS.has(executable)) {
     if (args.some((word) => word.dynamic && /[$`*?\[\]{}]/.test(word.value.split('=')[0]))) return true;
     if (declaredEnvironment(words).some((name) => name.startsWith('GIT_') || unsafeExecutionEnvironment(name))) return true;
   }
   if (executable === 'git') {
-    if (unsafeShellOptions || environment.some(unsafeGitEnvironment)) return true;
+    shellEffects.git = true;
+    if (unsafeShellOptions || shellEffects.unsafeSettings || environment.some(unsafeGitEnvironment)) return true;
     const normalized = normalizeGitWords(words);
     if (!normalized) return true;
     const [, subcommand, ...rest] = normalized.map((word) => word.value);
@@ -768,9 +776,10 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       if (option.value === '--' || !/^[+-]/.test(option.value)) {
         const script = option.value === '--' ? args[i + 1] : option;
         return !commandMode || !script || script.dynamic
-          || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
+          || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
       }
-      const allowed = allowedShellOption(option, args[i + 1], 'ceuxlf', ['pipefail']);
+      const allowed = ['--norc', '--noprofile', '--posix'].includes(option.value)
+        || allowedShellOption(option, args[i + 1], 'ceuxlf', ['pipefail']);
       unsafeShellOptions ||= !allowed;
       if (/^[+-][a-zA-Z]*o[a-zA-Z]*$/.test(option.value) || ['--rcfile', '--init-file'].includes(option.value)) {
         if (!args[i + 1] || args[i + 1].dynamic) return true;
@@ -781,8 +790,9 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     return true;
   }
   if (executable === 'eval') {
-    return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
+    // Substitutions are already scanned; an expanded eval command alone needs no git gate.
+    return args.length > 0 && bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1,
+      sensitivePaths, environment, unsafeShellOptions, shellEffects, args.some((word) => word.dynamic));
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -790,7 +800,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects)) return true;
         i = end;
       }
     }
@@ -832,13 +842,13 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     if (!args[i] || args[i].dynamic) return true;
     positionals -= 1; i += 1;
   }
-  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
   if (i === args.length) return true;
   if (options.shell) {
     return args.slice(i).some((word) => word.dynamic)
-      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
   }
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions);
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

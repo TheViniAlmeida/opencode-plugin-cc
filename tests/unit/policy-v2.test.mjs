@@ -11,6 +11,94 @@ const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.acti
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
 const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
 
+const fix5Wrappers = ['', 'time', 'time -p', 'command', 'command -p --', 'builtin',
+  'exec -a synthetic', 'nice -n 5', 'env SYNTHETIC=x', 'sudo -u synthetic', 'doas -u synthetic',
+  'nohup', 'timeout 5', 'setsid -f', 'stdbuf -oL', 'ionice -c 3', 'flock synthetic.lock',
+  'busybox', 'taskset -c 0', 'unshare -r', 'chroot /', 'time -p command -- builtin'];
+const fix5Shells = ['ash', 'rbash', 'hush', 'mksh', 'yash', 'posh', 'fish', 'csh', 'tcsh', 'busybox ash', 'busybox hush'];
+const fix5Cases = [
+  ['dynamic shell channels fail closed with git through known wrappers', true,
+    fix5Wrappers.flatMap((wrapper) => ["eval 'set -a'", "trap 'set -a' DEBUG", 'source ./x.sh',
+      '. ./x.sh', 'enable -n export', 'alias export=true']
+      .map((command) => `${wrapper} ${command}; GIT_SSH_COMMAND=x; git ls-remote h:x`.trim()))],
+  ['dynamic shell channels fail closed regardless of action or segment order', true, [
+    'eval set -a; GIT_SSH_COMMAND=x; git ls-remote h:x',
+    'eval "set" "-a"; GIT_SSH_COMMAND=x; git ls-remote h:x',
+    "eval 'shopt -so allexport'; GIT_SSH_COMMAND=x; git ls-remote h:x",
+    "eval 'set -a' && GIT_SSH_COMMAND=x && git ls-remote h:x",
+    'eval ls; git status', 'eval "git status"', 'eval "$COMMAND"; git status',
+    'eval "$(ssh-agent)"; git status',
+    ...['eval ls', "trap '' DEBUG", 'trap - DEBUG', 'trap', 'source ./x.sh', '. ./x.sh',
+      'enable export', 'alias'].flatMap((command) => [`${command}; git status`, `git status; ${command}`]),
+    'bash -c \'eval "set -a"; GIT_SSH_COMMAND=x; git ls-remote h:x\'',
+    'sh -c \'eval "set -a"; GIT_SSH_COMMAND=x; git ls-remote h:x\'',
+    'eval "rm -rf $TARGET"', 'eval "$(git status)"',
+    'watch "eval ls"; git status', 'flock -c "eval ls" synthetic.lock; git status',
+    'su -c "eval ls"; git status', 'ssh synthetic "eval ls"; git status',
+    'bash -c "eval ls"; git status',
+  ]],
+  ['set and shopt allowlists apply after every known wrapper', true,
+    fix5Wrappers.flatMap((wrapper) => ['set -a', 'set "$F"', 'shopt -so allexport', 'shopt -s "$OPTION"']
+      .map((command) => `${wrapper} ${command}; GIT_SSH_COMMAND=x; git ls-remote h:x`.trim()))],
+  ['nameref options fail closed with git', true, [
+    'declare -n r=GIT_SSH_COMMAND; r=x; export r; git ls-remote h:x',
+    'typeset -n r=GIT_SSH_COMMAND; export r; r=x; git ls-remote h:x',
+    ...['declare', 'typeset', 'local', 'readonly'].flatMap((declaration) => ['-n', '-gn', '-nx', '+n']
+      .flatMap((option) => [`${declaration} ${option} r=SYNTHETIC; git status`,
+        `git status; command -- ${declaration} ${option} r=SYNTHETIC`])),
+    'time builtin declare -gn r=SYNTHETIC; git status',
+    'bash -c "declare -n r=SYNTHETIC; git status"',
+  ]],
+  ['additional shells inspect destructive commands and startup options', true,
+    fix5Shells.flatMap((shell) => [`${shell} -c 'git push --force'`,
+      `${shell} -ac 'GIT_SSH_COMMAND=x; git ls-remote h:x'`, `${shell} -c 'eval ls; git status'`,
+      `${shell} -c 'source ./x.sh; git status'`, `timeout 5 ${shell} -c 'git reset --hard'`])],
+  ['long shell options preserve benign git commands', false, [
+    "bash --norc -c 'git status'", "bash --noprofile -c 'git log'", "bash --posix -c 'git status'",
+    "bash --noprofile --norc --posix -ec 'git log'", "env bash --norc -c 'git status'",
+  ]],
+  ['allowed options cannot hide unsafe options', true, [
+    "bash --norc -ac 'git status'", "bash --noprofile -o allexport -c 'git status'",
+    "bash --posix -c 'eval ls; git status'",
+  ]],
+  ['benign wrappers, declarations and eval without git stay free', false, [
+    'time git status', 'command git status', 'eval "$(ssh-agent)"', 'command eval "$(ssh-agent)"',
+    "eval 'set -a'", 'eval "$COMMAND"', 'eval ls', 'eval', 'eval "echo $VALUE"',
+    'declare -n r=SYNTHETIC; r=x; export r; npm test', "trap 'set -a' DEBUG; npm test",
+    'alias export=true; npm test', 'enable -n export; npm test',
+    'declare -- r=-n; git status', 'declare -x r=synthetic; git status',
+    'readonly r=-n; git status', 'local name=synthetic; git status',
+    ...fix5Wrappers.flatMap((wrapper) => ['set -euo pipefail', 'shopt -s globstar']
+      .map((command) => `${wrapper} ${command}; git status`.trim())),
+    ...fix5Shells.map((shell) => `${shell} -c 'git status'`),
+  ]],
+];
+for (const [group, expected, commands] of fix5Cases) {
+  for (const command of commands) {
+    test(`F11 fix5: ${group}: ${command}`, () => {
+      const request = { permission: 'shell', patterns: [command], metadata: { command } };
+      assert.equal(claude(command), expected, command);
+      const reply = checkReply({ approver: 'claude', request, reply: 'once' });
+      if (expected) assert.equal(reply.code, 'NEEDS_USER');
+      else assert.equal(reply.ok, true);
+    });
+  }
+}
+
+test('F11 fix5: every request resource is inspected for dynamic shell channels', () => {
+  assert.equal(requiresUser({ permission: 'shell', metadata: { command: 'echo ok' },
+    patterns: ['echo ok', 'command eval ls; git status'] }), true);
+});
+
+test('F11 fix5: dynamic shell channels still honor custom destructive commands', () => {
+  const policy = { destructiveBash: ['deploy *'] };
+  for (const command of ['eval "deploy synthetic"', 'trap synthetic DEBUG; deploy synthetic',
+    'time set -a; deploy synthetic', 'declare -n r=SYNTHETIC; deploy synthetic',
+    'busybox ash -ac \'deploy synthetic\'']) {
+    assert.equal(claude(command, policy), true, command);
+  }
+});
+
 const fix4Cases = [
   ['set and shopt fail closed outside their literal allowlists with git', true, [
     'F=-a; set $F; GIT_SSH_COMMAND=x git ls-remote h:x',

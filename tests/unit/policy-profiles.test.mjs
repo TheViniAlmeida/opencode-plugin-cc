@@ -185,7 +185,7 @@ for (const command of ['bash -c "unterminated', 'cat <<EOF\ntext\nEOF', '$COMMAN
 
 for (const command of [
   "bash -c 'if true; then rm -rf /tmp/x; fi'",
-  'xargs -I CMD CMD', 'source commands.sh',
+  'xargs -I CMD CMD', 'source commands.sh', 'eval "git status"',
   'echo safe&rm -rf /tmp/x', '/bin/sh -c "/bin/rm -rf /tmp/x"',
 ]) {
   test(`gate 2: indirect or unsupported shell syntax requires user: ${command}`, () => {
@@ -194,7 +194,7 @@ for (const command of [
 }
 for (const command of [
   'bash -c "git status"', "sh -c 'env X=1 nice -n 2 git status'",
-  'eval "git status"', 'exec git status', 'env X=1 git status',
+  'exec git status', 'env X=1 git status',
   'sudo -u root git status', 'doas -u root git status',
   'nohup git status', 'time -p git status', 'nice -n 2 git status',
   'command -- git status', 'builtin printf safe', 'find . -exec printf {} \\;',
