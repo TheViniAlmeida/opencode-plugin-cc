@@ -4,6 +4,45 @@ import { buildPermissionRules, planPermissionSwitch, requiresUser } from '../../
 import { toPermissionRequest } from '../../plugins/opc/scripts/lib/opencode-v2.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 import { createRequestBridge } from '../../plugins/opc/scripts/commands/task-worker.mjs';
+import { globToRegExp } from '../../plugins/opc/scripts/lib/models.mjs';
+
+const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.action === '*' || rule.action === action)
+  && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
+
+test('tools.deny shell beats destructive ask (write profile)', () => {
+  const rules = buildPermissionRules('write', { policy: { tools: { deny: ['shell'] } } });
+  assert.equal(lastMatch(rules, 'shell', 'rm -rf x'), 'deny');
+  assert.equal(lastMatch(rules, 'shell', 'ls'), 'deny');
+});
+
+test('extraAllow sits before invariants', () => {
+  const extraAllow = [{ action: 'subagent', resource: 'general', effect: 'allow' }];
+  const rules = buildPermissionRules('write', { policy: { tools: { deny: ['subagent'] } }, extraAllow });
+  assert.ok(rules.includes(extraAllow[0]));
+  assert.equal(lastMatch(rules, 'subagent', 'general'), 'deny');
+});
+
+test('custom shell permissions and extra allows cannot override explicit tool denies', () => {
+  const rules = buildPermissionRules('custom:test-only', {
+    policy: { tools: { deny: ['shell'] } },
+    permissionProfiles: { 'test-only': [{ action: 'shell', resource: 'npm test', effect: 'allow' }] },
+    extraAllow: [{ action: 'shell', resource: '*', effect: 'allow' }],
+  });
+  assert.equal(lastMatch(rules, 'shell', 'rm -rf x'), 'deny');
+  assert.equal(lastMatch(rules, 'shell', 'npm test'), 'deny');
+});
+
+test('extra allows preserve sensitive paths, denied agents and the browser invariant', () => {
+  const rules = buildPermissionRules('read-only', {
+    deniedAgentGlobs: ['work-*'],
+    extraAllow: ['external_directory', 'grep', 'read', 'glob', 'subagent', 'browser'].map((action) => ({ action, resource: '*', effect: 'allow' })),
+  });
+  assert.equal(lastMatch(rules, 'external_directory', '/outside'), 'deny');
+  assert.equal(lastMatch(rules, 'grep', 'notes.txt'), 'deny');
+  for (const action of ['read', 'grep', 'glob']) assert.equal(lastMatch(rules, action, '.env'), 'deny');
+  assert.equal(lastMatch(rules, 'subagent', 'work-reviewer'), 'deny');
+  assert.equal(lastMatch(rules, 'browser', '*'), 'deny');
+});
 
 test('read-only V2 rules and ordering', () => {
   const rules = buildPermissionRules('read-only', { policy: {} });

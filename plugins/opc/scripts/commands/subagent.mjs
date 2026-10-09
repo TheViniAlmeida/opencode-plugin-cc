@@ -6,7 +6,7 @@ import {
   createGroup, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, listGroupMembers, refreshGroup,
   runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES,
 } from '../lib/jobs.mjs';
-import { dispatchSubagent, SUBAGENT_MECHANISMS } from '../lib/runner.mjs';
+import { DEFAULT_AGENT, dispatchSubagent, SUBAGENT_MECHANISMS } from '../lib/runner.mjs';
 import { renderGroupStatus, renderGroupResult } from '../lib/render.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { exitCodeForJob } from './task.mjs';
@@ -87,6 +87,7 @@ export async function run(ctx, argv) {
   let discovery;
   try { discovery = await loadDiscovery(conn.api); } finally { conn.close(); }
   const policy = ctx.config.policy ?? {};
+  requireAgent(discovery, DEFAULT_AGENT, policy, { implicit: true });
   const profile = flags.write ? 'write' : 'read-only';
   const summary = summaryOf(prompt);
   const specs = pairs.map((pair, i) => {
@@ -143,13 +144,16 @@ export async function runWorker(ctx, groupJob, request, {
   try {
     conn = await makeConnection(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
+    const policy = ctx.config.policy ?? {};
+    requireAgent({ agents: await api.agents() }, DEFAULT_AGENT, policy, { implicit: true });
     const firstModel = req.members[0];
     const parent = await api.createSession({ title: groupJob.title, permissions: req.rules,
       model: { providerID: firstModel.model.providerID, id: firstModel.model.modelID, ...(firstModel.variant ? { variant: firstModel.variant } : {}) } });
     const coordinator = { pid: process.pid, pidStartTime: getProcessIdentity(process.pid)?.startTime ?? null };
     await updateJob(stateDir, groupJob.id, { status: 'running', startedAt: now(), sessionID: parent.id });
     for (const id of memberIds) await updateJob(stateDir, id, { parentSessionID: parent.id, pid: coordinator.pid, pidStartTime: coordinator.pidStartTime });
-    const policy = ctx.config.policy ?? {};
+    const ruleInputs = { profile: req.profile, policy, permissionProfiles: ctx.config.permissionProfiles ?? {},
+      deniedAgentGlobs: policy.agents?.deny ?? [] };
     const outcomes = await runWithConcurrency(memberIds, req.maxParallel ?? 4, async (memberId, index) => {
       const spec = req.members[index];
       const tag = `[#${index + 1} ${spec.agent}]`;
@@ -166,7 +170,7 @@ export async function runWorker(ctx, groupJob, request, {
           log: (line) => appendJobLog(stateDir, groupJob.id, `${tag} ${line}`) });
         let res;
         try {
-          res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
+          res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules, ruleInputs, policy,
             mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
             onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.interrupt(sessionID).catch(() => {}); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },

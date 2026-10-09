@@ -11,8 +11,9 @@ import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
 import { EventHub } from './sse.mjs';
 import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
-import { resolveCandidates, validateSelection } from './routing.mjs';
-import { buildCatalog } from './models.mjs';
+import { resolveCandidates } from './routing.mjs';
+import { DEFAULT_AGENT } from './runner.mjs';
+import { buildCatalog, validateVariant } from './models.mjs';
 import { loadOpencodeConfig } from './opencode-config.mjs';
 import { UsageError } from './opc-error.mjs';
 
@@ -208,12 +209,12 @@ export function resolveModel(ctx, discovery, kind, modelInput, { variant = null 
   const { candidates, warnings } = resolveCandidates({ kind, flags, config: ctx.config, catalog: discovery.catalog, opencodeConfig: discovery.opencodeConfig });
   for (const warning of warnings ?? []) ctx.err(`[opc] ${warning}\n`);
   const candidate = candidates[0];
-  const selection = validateSelection({ candidate, variant, catalog: discovery.catalog, policy: ctx.config.policy ?? {} });
-  return { ...candidate, variant: selection.variant };
+  const entry = discovery.catalog.byFull.get(candidate.full) ?? { full: candidate.full, variants: [] };
+  return { ...candidate, variant: validateVariant(entry, variant) };
 }
 
-export function requireAgent(discovery, name, policy, { modes = null } = {}) {
-  const agent = discovery.agents.find((a) => a.name === name);
+export function requireAgent(discovery, name, policy, { modes = null, implicit = false } = {}) {
+  const agent = discovery.agents.find((a) => a.name === name) ?? (implicit && name === DEFAULT_AGENT ? { name } : null);
   if (!agent) throw new UsageError('UNKNOWN_AGENT', `agente desconhecido: ${name.slice(0, 12)}${name.length > 12 ? '…' : ''} (veja /opc:agents)`);
   if (modes && !modes.includes(agent.mode)) {
     throw new UsageError('AGENT_MODE', `o agente ${name.slice(0, 12)}${name.length > 12 ? '…' : ''} tem modo "${agent.mode}"; aqui só ${modes.join(' ou ')} (para agentes primários use /opc:task --agent)`);
@@ -224,10 +225,10 @@ export function requireAgent(discovery, name, policy, { modes = null } = {}) {
 
 export function profileRules(ctx, profile, extra = []) {
   const policy = ctx.config.policy ?? {};
-  const base = buildPermissionRules(profile, {
+  return buildPermissionRules(profile, {
     policy,
     permissionProfiles: ctx.config.permissionProfiles ?? {},
     deniedAgentGlobs: policy.agents?.deny ?? [],
+    extraAllow: extra,
   });
-  return [...base, ...extra];
 }

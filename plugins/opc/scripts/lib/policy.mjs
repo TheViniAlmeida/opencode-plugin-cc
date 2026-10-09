@@ -159,17 +159,17 @@ export function invariantRules(profile, { policy = {}, deniedAgentGlobs = [], br
   const withDestructive = bridged ?? kind === 'write';
   const rules = [r('external_directory', '*', 'deny')];
   if (kind !== 'write') rules.push(r('grep', '*', 'deny'));
+  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(r('shell', pattern, 'ask'));
   for (const pattern of sensitivePathsOf(policy)) {
     for (const permission of SENSITIVE_PATH_PERMISSIONS) rules.push(r(permission, pattern, 'deny'));
   }
   for (const glob of deniedAgentGlobs) rules.push(r('subagent', glob, 'deny'));
   for (const tool of policy.tools?.deny ?? []) rules.push(r(tool, '*', 'deny'));
-  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(r('shell', pattern, 'ask'));
   rules.push(r('browser', '*', 'deny'));
   return rules;
 }
 
-export function buildPermissionRules(profile, { policy = {}, permissionProfiles = {}, deniedAgentGlobs = [] } = {}) {
+export function buildPermissionRules(profile, { policy = {}, permissionProfiles = {}, deniedAgentGlobs = [], extraAllow = [] } = {}) {
   const { kind, name } = parseProfile(profile);
   const rules = [];
   let bridged = kind === 'write';
@@ -182,7 +182,7 @@ export function buildPermissionRules(profile, { policy = {}, permissionProfiles 
     rules.push(...custom);
     bridged = custom.some((entry) => entry.action === 'shell' && entry.effect !== 'deny');
   }
-  rules.push(...invariantRules(profile, { policy, deniedAgentGlobs, bridged }));
+  rules.push(...extraAllow, ...invariantRules(profile, { policy, deniedAgentGlobs, bridged }));
   return rules;
 }
 

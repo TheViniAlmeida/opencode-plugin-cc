@@ -144,3 +144,23 @@ test('validateSelection: variant (F1 validateVariant), agent existence, policy (
   // pinned model whose provider is denied: F1 assertAgentUsable checks the provider before the model
   assert.throws(() => validateSelection({ candidate, agentName: 'pinned', agents, catalog, policy }), PolicyError);
 });
+
+test('implicit build agent is checked against policy.agents even when absent from the catalog', () => {
+  for (const agents of [[], [{ name: 'build', mode: 'primary' }]]) {
+    for (const agentsPolicy of [{ deny: ['build'] }, { deny: ['bui*'] }, { allow: ['plan'] }]) {
+      assert.throws(() => validateSelection({ candidate: { full: FLASH }, agentName: null, agents, catalog,
+        policy: { agents: agentsPolicy } }), (error) => error instanceof PolicyError);
+    }
+  }
+});
+
+test('implicit build checks its pinned model and mode without requiring catalog presence', () => {
+  const candidate = { full: FLASH };
+  assert.deepEqual(validateSelection({ candidate, agents: [], catalog }), { variant: null, agent: null });
+  for (const policy of [{ providers: { deny: ['blocked'] } }, { models: { deny: ['blocked/model'] } }]) {
+    assert.throws(() => validateSelection({ candidate, catalog, policy,
+      agents: [{ name: 'build', mode: 'primary', model: { providerID: 'blocked', modelID: 'model' } }] }), PolicyError);
+  }
+  assert.throws(() => validateSelection({ candidate, catalog, agents: [{ name: 'build', mode: 'subagent' }] }),
+    (error) => error.code === 'AGENT_MODE');
+});

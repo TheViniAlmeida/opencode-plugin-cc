@@ -45,7 +45,7 @@ test('coordinator bridge setup rejection fails and logs the member lane', async 
   const created = [];
   const rules = [{ action: '*', resource: '*', effect: 'deny' }];
   const code = await runWorker(ctx, group, { prompt: 'p', members: [spec], maxParallel: 1, profile: 'read-only', rules, mechanism: 'child-session' }, {
-    openApi: async () => ({ api: { createSession: async (body) => { created.push(body); return { id: 'ses_parent' }; } }, hub: {}, close() {} }),
+    openApi: async () => ({ api: { agents: async () => [], createSession: async (body) => { created.push(body); return { id: 'ses_parent' }; } }, hub: {}, close() {} }),
     createBridge: () => { throw new Error('bridge setup failed Bearer abcdefghijklmnop'); },
   });
   assert.equal(code, 7);
@@ -67,7 +67,7 @@ test('coordinator records an aborted member with a cancellation request as cance
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'group' }, [{ title: 'member' }]);
   const ctx = { stateDir, config: { policy: {} } };
   const code = await runWorker(ctx, group, { prompt: 'p', members: [spec], maxParallel: 1, profile: 'read-only', rules: [], mechanism: 'child-session' }, {
-    openApi: async () => ({ api: { createSession: async () => ({ id: 'ses_parent' }) }, hub: {}, close() {} }),
+    openApi: async () => ({ api: { agents: async () => [], createSession: async () => ({ id: 'ses_parent' }) }, hub: {}, close() {} }),
     dispatch: async ({ onSession }) => {
       await onSession('ses_member');
       await updateJob(stateDir, members[0].id, { cancelRequestedAt: new Date().toISOString() });

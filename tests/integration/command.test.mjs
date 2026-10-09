@@ -82,6 +82,20 @@ test('command fixado a subagente cria a sessão com o agente fixado', async (t) 
   assert.deepEqual(Object.keys(commandPosts(env)[0].body).sort(), ['name', 'text']);
 });
 
+test('command checks implicit build while allowing explicit and pinned agents', async (t) => {
+  const { cwd, env } = await setup(t, { config: { ...F3_TEST_CONFIG,
+    policy: { ...F3_TEST_CONFIG.policy, agents: { deny: ['build'] } } } });
+  const denied = await runCli(['command', 'echo', '--json'], { env, cwd });
+  assert.equal(denied.code, 4, denied.stdout + denied.stderr);
+  assert.equal(JSON.parse(denied.stdout).error.code, 'POLICY_DENIED');
+  assert.equal(sessionPosts(env).length, 0);
+  for (const args of [['command', 'echo', '--agent', 'plan'], ['command', 'sub-echo']]) {
+    const allowed = await runCli(args, { env, cwd });
+    assert.equal(allowed.code, 0, allowed.stdout + allowed.stderr);
+  }
+  assert.deepEqual(sessionPosts(env).map((request) => request.body.agent), ['plan', 'general']);
+});
+
 test('command com turno maior que requestTimeoutSec conclui: o 204 volta logo e o resultado vem pelo turno', async (t) => {
   const config = { ...F3_TEST_CONFIG, server: { bootTimeoutSec: 60, requestTimeoutSec: 1, configOverride: { share: 'disabled' } } };
   const { cwd, env } = await setup(t, { config, extra: { FAKE_COMMAND_DELAY_MS: '2500' } });

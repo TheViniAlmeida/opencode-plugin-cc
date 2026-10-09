@@ -8,6 +8,7 @@ import { renderSession, renderSessions, renderSessionDiff, renderRevertPreview }
 import { readSessionMessages, readTurnMessages } from '../lib/session-messages.mjs';
 import { maskDeep, safeOutputText } from '../lib/redact.mjs';
 import { loadOpencodeConfig, opencodeConfigUnavailable } from '../lib/opencode-config.mjs';
+import { DEFAULT_AGENT } from '../lib/runner.mjs';
 
 const SPEC = {
   flags: {
@@ -44,7 +45,8 @@ async function actionNew(ctx, api, { flags }) {
   {
     const discovery = await loadDiscovery(api);
     const agentName = flags.agent ?? ctx.config.defaultAgent ?? null;
-    if (agentName) body.agent = requireAgent(discovery, agentName, policy).name;
+    const agent = requireAgent(discovery, agentName ?? DEFAULT_AGENT, policy, { implicit: agentName == null });
+    if (agentName) body.agent = agent.name;
     const model = resolveModel(ctx, discovery, 'task', flags.model ?? null);
     body.model = { id: model.modelID, providerID: model.providerID };
   }

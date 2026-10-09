@@ -44,7 +44,7 @@ test('F2a expected read-only fixtures exactly match the profile builder', () => 
 test('write: invariants and destructive shell asks', () => {
   const rules = buildPermissionRules('write', { policy, deniedAgentGlobs: ['work-*'] });
   const asks = [...BUILTIN_DESTRUCTIVE_BASH, 'make nuke*'].map((p) => r('shell', p, 'ask'));
-  assert.deepEqual(rules, [...INVARIANTS, ...asks, r('browser', '*', 'deny')]);
+  assert.deepEqual(rules, [INVARIANTS[0], ...asks, ...INVARIANTS.slice(1), r('browser', '*', 'deny')]);
   assert.equal(BUILTIN_DESTRUCTIVE_BASH.length, 28);
   assert.ok(!rules.some((x) => x.action === 'grep' && x.resource === '*' && x.effect === 'deny'));
 });

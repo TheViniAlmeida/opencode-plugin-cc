@@ -1,7 +1,9 @@
 // Runs one OpenCode V2 turn until its execution ends.
 import { randomBytes } from 'node:crypto';
 import { classifyError, retryCapError, retryExceedsCap } from './errors.mjs';
-import { ConnectionError, OpcError, UsageError } from './opc-error.mjs';
+import { ConnectionError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
+import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
+import { matchesAny } from './models.mjs';
 import { toPermissionRequest, toQuestion } from './opencode-v2.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
 import { readSessionMessages, readTurnMessages } from './session-messages.mjs';
@@ -13,6 +15,7 @@ const ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_STATUS_POLL_MS = 5000;
 const DEFAULT_IDLE_WAIT_MS = 10000;
+export const DEFAULT_AGENT = 'build';
 const INVESTIGATE_TOOLS = new Set(['read', 'grep', 'glob', 'webfetch', 'websearch']);
 export const EDIT_TOOLS = new Set(['edit', 'write', 'apply_patch', 'patch']);
 const VERIFY_RE = /\b(test|tests|lint|build|typecheck|type-check|check|verify|validate|pytest|jest|vitest|cargo test|npm test|pnpm test|yarn test|go test|mvn test|gradle test|tsc|eslint|ruff)\b/i;
@@ -148,7 +151,7 @@ export async function runTurn({
   let messageID = request.messageID ?? newMessageId();
   const progress = (event) => { try { onProgress(event); } catch { /* Progress is advisory. */ } };
   const model = modelFor(request);
-  const wantedAgent = request.agent ?? request.newSession?.agent ?? 'build';
+  const wantedAgent = request.agent ?? request.newSession?.agent ?? DEFAULT_AGENT;
   let sessionID = request.sessionID ?? null;
   let commandBaseline = null;
   try {
@@ -464,7 +467,7 @@ export function extractTaskOutput(messages) {
 // Runs one subagent member. An agent-mode refusal falls back to a carrier session
 // that invokes the V2 subagent tool with the member's model and permissions.
 export async function dispatchSubagent({
-  api, hub, parentSessionID, member, prompt, rules, mechanism = 'child-session', allowFallback = true,
+  api, hub, parentSessionID, member, prompt, rules, ruleInputs, policy = ruleInputs?.policy ?? {}, mechanism = 'child-session', allowFallback = true,
   timeoutMs, fallbackCfg, onSession = () => {}, onProgress = () => {}, onPermission = async () => {},
   onQuestion = async () => {}, onRequestResolved = async () => {}, signal, runTurnImpl = runTurn,
 }) {
@@ -478,11 +481,20 @@ export async function dispatchSubagent({
   const model = modelFor(baseRequest);
 
   const viaSubagentTool = async (fellBack) => {
+    if (policy.tools?.deny?.includes('subagent') || matchesAny(member.agent, policy.agents?.deny ?? [])) {
+      throw new PolicyError('SUBAGENT_DENIED', 'A política nega a ferramenta subagent ou o agente solicitado.');
+    }
+    if (!ruleInputs) throw new UsageError('MISSING_RULE_INPUTS', 'O carrier exige o perfil e as opções das regras de permissão.');
+    const agents = await api.agents();
+    assertAgentUsable(agents.find((agent) => agent.name === DEFAULT_AGENT) ?? { name: DEFAULT_AGENT }, policy);
+    const carrierAllow = { action: 'subagent', resource: member.agent, effect: 'allow' };
     const carrier = await api.createSession({
       parentID: parentSessionID,
       title: `${member.title} (subagent)`,
       model,
-      permissions: [...rules, { action: 'subagent', resource: member.agent, effect: 'allow' }],
+      permissions: buildPermissionRules(ruleInputs.profile, { ...ruleInputs, policy,
+        deniedAgentGlobs: ruleInputs.deniedAgentGlobs ?? policy.agents?.deny ?? [],
+        extraAllow: [...(ruleInputs.extraAllow ?? []), carrierAllow] }),
     });
     await onSession(carrier.id);
     const result = await runTurnImpl({

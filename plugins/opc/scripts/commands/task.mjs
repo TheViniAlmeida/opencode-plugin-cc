@@ -222,7 +222,7 @@ export async function runKindCommand(ctx, argv, kind) {
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
   const agentName = flags.agent ?? config.defaultAgent ?? null;
-  const agents = agentName ? await api.agents() : [];
+  const agents = await api.agents();
   let variant = flags.variant ?? flags.effort ?? null;
   if (!variant && config.defaultVariant) {
     const available = catalog.byFull.get(candidate.full)?.variants ?? [];

@@ -57,6 +57,18 @@ test('session new validates the configured default model before POST', async (t)
   assert.equal(sessionCreates(env).length, 0);
 });
 
+test('session new checks implicit build and permits an explicit allowed agent', async (t) => {
+  const { cwd, env } = await setup(t);
+  writeGlobalConfig(env, { ...F3_TEST_CONFIG, policy: { ...F3_TEST_CONFIG.policy, agents: { deny: ['build'] } } });
+  const denied = await runCli(['session', 'new', '--json'], { env, cwd });
+  assert.equal(denied.code, 4, denied.stdout + denied.stderr);
+  assert.equal(JSON.parse(denied.stdout).error.code, 'POLICY_DENIED');
+  assert.equal(sessionCreates(env).length, 0);
+  const allowed = await runCli(['session', 'new', '--agent', 'plan', '--json'], { env, cwd });
+  assert.equal(allowed.code, 0, allowed.stdout + allowed.stderr);
+  assert.equal(sessionCreates(env).at(-1).body.agent, 'plan');
+});
+
 test('session show: session, status and flat messages with ids', async (t) => {
   const { cwd, env } = await setup(t);
   const res = await runCli(['session', 'show', SEED.session, '--json'], { env, cwd });

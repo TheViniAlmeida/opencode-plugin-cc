@@ -27,3 +27,15 @@ test('unknown custom profile and --write with --profile are usage errors', async
   assert.equal((await opc(ctx, ['task', '--write', '--profile', 'ghost', 'x'])).code, 2);
   assert.equal(F2A_POLICY.approver, 'user');
 });
+
+test('task checks implicit build before creating a session and permits an explicit allowed agent', async (t) => {
+  const ctx = setupF2a(t, { scenario: 'ok', config: { policy: { ...F2A_POLICY, agents: { deny: ['build'] } } } });
+  const denied = await opc(ctx, ['task', '--json', 'test']);
+  assert.equal(denied.code, 4, denied.stdout + denied.stderr);
+  assert.equal(JSON.parse(denied.stdout).error.code, 'POLICY_DENIED');
+  assert.equal(requestsTo(ctx.env, 'POST', '/api/session').length, 0);
+  assert.ok(requestsTo(ctx.env, 'GET', '/api/agent').length > 0);
+  const allowed = await opc(ctx, ['task', '--agent', 'plan', '--json', 'test']);
+  assert.equal(allowed.code, 0, allowed.stdout + allowed.stderr);
+  assert.equal(requestsTo(ctx.env, 'POST', '/api/session').at(-1).body.agent, 'plan');
+});

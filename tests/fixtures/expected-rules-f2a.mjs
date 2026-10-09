@@ -18,5 +18,5 @@ const READ_ONLY_BASE = [
 const READ_ONLY_INVARIANTS_HEAD = [INVARIANTS_HEAD[0], r('grep', '*', 'deny'), ...INVARIANTS_HEAD.slice(1)];
 
 export const READ_ONLY_RULES = [...READ_ONLY_BASE, ...READ_ONLY_INVARIANTS_HEAD, r('browser', '*', 'deny')];
-export const WRITE_RULES = [...INVARIANTS_HEAD, ...DESTRUCTIVE, r('browser', '*', 'deny')];
-export const NPM_TEST_ONLY_RULES = [...READ_ONLY_BASE, r('shell', 'npm test', 'allow'), ...READ_ONLY_INVARIANTS_HEAD, ...DESTRUCTIVE, r('browser', '*', 'deny')];
+export const WRITE_RULES = [INVARIANTS_HEAD[0], ...DESTRUCTIVE, ...INVARIANTS_HEAD.slice(1), r('browser', '*', 'deny')];
+export const NPM_TEST_ONLY_RULES = [...READ_ONLY_BASE, r('shell', 'npm test', 'allow'), ...READ_ONLY_INVARIANTS_HEAD.slice(0, 2), ...DESTRUCTIVE, ...READ_ONLY_INVARIANTS_HEAD.slice(2), r('browser', '*', 'deny')];

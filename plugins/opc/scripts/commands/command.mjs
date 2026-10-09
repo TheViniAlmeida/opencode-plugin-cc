@@ -13,7 +13,7 @@ import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
 import { parseFullId } from '../lib/models.mjs';
 import { safeOutputText } from '../lib/redact.mjs';
-import { runTurn } from '../lib/runner.mjs';
+import { DEFAULT_AGENT, runTurn } from '../lib/runner.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
 const SPEC = {
@@ -77,7 +77,7 @@ export async function run(ctx, argv) {
   const policy = ctx.config.policy ?? {};
   assertCommandUsable(cmd, policy, new Map(discovery.agents.map((agent) => [agent.name, agent])));
   const agent = flags.agent ?? cmd.agent ?? ctx.config.defaultAgent ?? null;
-  if (agent) requireAgent(discovery, agent, policy);
+  requireAgent(discovery, agent ?? DEFAULT_AGENT, policy, { implicit: agent == null });
   const model = flags.model
     ? resolveModel(ctx, discovery, 'task', flags.model, { variant: flags.variant }).full
     : (cmd.model ?? resolveModel(ctx, discovery, 'task', null, { variant: flags.variant }).full);
@@ -120,6 +120,7 @@ export async function runWorker(ctx, job, request = job.request) {
     conn = await openApi(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
     const selected = parseFullId(request.model);
+    requireAgent({ agents: await api.agents() }, request.agent ?? DEFAULT_AGENT, policy, { implicit: request.agent == null });
     const session = await api.createSession({ title: job.title, permissions: request.rules,
       model: { providerID: selected.providerID, id: selected.modelID }, ...(request.agent ? { agent: request.agent } : {}) });
     release = tryAcquireLock(join(stateDir, `session-${session.id}.lock`), { purpose: `job ${job.id}` });
@@ -132,7 +133,7 @@ export async function runWorker(ctx, job, request = job.request) {
     let failure = null;
     try {
       outcome = await runTurn({ api, hub,
-        request: { sessionID: session.id, model: selected, agent: request.agent ?? 'build',
+        request: { sessionID: session.id, model: selected, agent: request.agent ?? DEFAULT_AGENT,
           command: { name: request.command, text: request.arguments ?? '' },
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000 },
         onPermission: (permission) => bridge.onPermission(permission),

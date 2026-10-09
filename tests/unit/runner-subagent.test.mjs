@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
-import { dispatchSubagent, extractTaskOutput, isAgentModeRefusal, runTurn, SUBAGENT_MECHANISMS } from '../../plugins/opc/scripts/lib/runner.mjs';
+import { DEFAULT_AGENT, dispatchSubagent, extractTaskOutput, isAgentModeRefusal, runTurn, SUBAGENT_MECHANISMS } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { memoryV2 } from './_memory-v2.mjs';
 import refusedScenario from '../fixtures/scenarios/subagent-mode-refused.mjs';
+import { buildPermissionRules } from '../../plugins/opc/scripts/lib/policy.mjs';
+import { globToRegExp } from '../../plugins/opc/scripts/lib/models.mjs';
 
 const RULES = [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: '*', effect: 'allow' }];
+const ruleInputs = { profile: 'read-only' };
+const carrierAllow = { action: 'subagent', resource: 'explore', effect: 'allow' };
 const member = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, title: 'OPC: sub: explore' };
 const taskPart = (text) => ({ type: 'tool', name: 'subagent', state: { status: 'completed', content: [{ type: 'text', text }] } });
 const turn = (text, tool = false) => async ({ request }) => ({ status: 'completed', sessionID: request.sessionID, finalText: text, toolsRan: tool, childSessionIDs: [] });
@@ -21,6 +25,7 @@ function finish(api, emit, sessionID, text, { tool = false } = {}) {
 }
 
 test('mechanisms and refusal detection', () => {
+  assert.equal(DEFAULT_AGENT, 'build');
   assert.deepEqual(SUBAGENT_MECHANISMS, ['child-session', 'subagent-tool']);
   assert.equal(isAgentModeRefusal(new RequestError('BAD_REQUEST', 'agent "explore" is a subagent')), true);
   assert.equal(isAgentModeRefusal({ status: 'failed', errorType: 'BadRequest', errorMessage: 'agent mode primary required' }), true);
@@ -67,9 +72,8 @@ test('failed child session keeps the V2 provider diagnostic for group rendering'
 
 test('subagent-tool allows only the member agent and asks for it by name', async () => {
   const { api, hub, emit } = memoryV2();
-  const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'subagent-tool' });
+  const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, ruleInputs, mechanism: 'subagent-tool' });
   const sessionID = await api.created;
-  assert.deepEqual(api.createdBody.permissions, [...RULES, { action: 'subagent', resource: 'explore', effect: 'allow' }]);
   assert.deepEqual(api.createdBody.model, { providerID: 'p', id: 'm' });
   await api.promptSettled;
   assert.deepEqual(api.promptCalls[0].agents, ['explore']);
@@ -78,18 +82,19 @@ test('subagent-tool allows only the member agent and asks for it by name', async
   assert.deepEqual(await api.getSession('ses_child'), { id: 'ses_child', model: api.createdBody.model, agent: api.createdBody.agent, permissions: api.createdBody.permissions });
   finish(api, emit, sessionID, 'sub answer', { tool: true });
   const result = await pending;
+  assert.deepEqual(api.createdBody.permissions, buildPermissionRules('read-only', { extraAllow: [carrierAllow] }));
   assert.equal(result.mechanism, 'subagent-tool');
   assert.equal(result.finalText, 'sub answer');
 });
 
 test('a refused child agent falls back to the subagent tool', async () => {
   const { api, hub, emit } = memoryV2({ createFailsOnce: new RequestError('BAD_REQUEST', 'agent "explore" is a subagent') });
-  const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'child-session', allowFallback: true });
+  const pending = dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, ruleInputs, mechanism: 'child-session', allowFallback: true });
   const sessionID = await api.created;
-  assert.deepEqual(api.createdBody.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
   await api.promptSettled;
   finish(api, emit, sessionID, 'ok', { tool: true });
   const result = await pending;
+  assert.deepEqual(api.createdBody.permissions, buildPermissionRules('read-only', { extraAllow: [carrierAllow] }));
   assert.equal(result.fellBack, true);
   assert.equal(result.mechanism, 'subagent-tool');
 });
@@ -113,11 +118,11 @@ test('a prompt refusal mentioning agent mode remains available for fallback', as
 
 test('a turn agent refusal falls back and forwards request bridge callbacks', async () => {
   const bodies = [];
-  const api = { async createSession(body) { bodies.push(body); return { id: `ses_${bodies.length}` }; }, async messages() { return [{ type: 'assistant', content: [taskPart('tool result')] }]; } };
+  const api = { async agents() { return [{ name: 'build', mode: 'primary' }]; }, async createSession(body) { bodies.push(body); return { id: `ses_${bodies.length}` }; }, async messages() { return [{ type: 'assistant', content: [taskPart('tool result')] }]; } };
   const seen = [];
   const onRequestResolved = async () => {};
   let calls = 0;
-  const result = await dispatchSubagent({ api, hub: {}, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, onRequestResolved,
+  const result = await dispatchSubagent({ api, hub: {}, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, ruleInputs, onRequestResolved,
     runTurnImpl: async (args) => { seen.push(args); calls++; return calls === 1 ? { status: 'failed', errorType: 'BadRequest', errorMessage: 'agent mode primary required' } : turn('')(args); } });
   assert.equal(result.mechanism, 'subagent-tool');
   assert.equal(result.finalText, 'tool result');
@@ -129,12 +134,70 @@ test('a turn agent refusal falls back and forwards request bridge callbacks', as
 test('subagent tool output is redacted and message errors propagate', async () => {
   const secret = ['reg', 'secret', 'value', '4f9a2c7e'].join('-');
   registerSecret(secret);
-  const api = { async createSession() { return { id: 'ses_1' }; }, async messages() { return [{ type: 'assistant', content: [taskPart(`key ${secret}`)] }]; } };
-  const args = { api, hub: {}, member, prompt: 'p', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'subagent-tool', runTurnImpl: turn('') };
+  const api = { async agents() { return []; }, async createSession() { return { id: 'ses_1' }; }, async messages() { return [{ type: 'assistant', content: [taskPart(`key ${secret}`)] }]; } };
+  const args = { api, hub: {}, member, prompt: 'p', parentSessionID: 'ses_parent', rules: RULES, ruleInputs, mechanism: 'subagent-tool', runTurnImpl: turn('') };
   const result = await dispatchSubagent(args);
   assert.equal(result.finalText.includes(secret), false);
   const listErr = new RequestError('BAD_REQUEST', 'Falha ao listar mensagens.');
   await assert.rejects(dispatchSubagent({ ...args, api: { ...api, async messages() { throw listErr; } } }), (error) => error === listErr);
+});
+
+for (const policy of [{ tools: { deny: ['subagent'] } }, { agents: { deny: ['expl*'] } }]) {
+  test(`subagent-tool refuses policy ${JSON.stringify(policy)} before creating any session`, async () => {
+    const bodies = [];
+    const api = { async createSession(body) { bodies.push(body); return { id: 'ses_denied' }; } };
+    await assert.rejects(dispatchSubagent({ api, hub: {}, member, policy, rules: RULES, ruleInputs,
+      mechanism: 'subagent-tool', runTurnImpl: turn('unused') }), (error) => error.code === 'SUBAGENT_DENIED');
+    assert.equal(bodies.length, 0);
+  });
+}
+
+test('a denied subagent tool also blocks automatic fallback before creating a carrier', async () => {
+  const bodies = [];
+  const api = { async createSession(body) { bodies.push(body); throw new RequestError('BAD_REQUEST', 'agent mode primary required'); } };
+  await assert.rejects(dispatchSubagent({ api, hub: {}, member, rules: RULES, ruleInputs,
+    policy: { tools: { deny: ['subagent'] } }, mechanism: 'child-session', allowFallback: true }),
+  (error) => error.code === 'SUBAGENT_DENIED');
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].agent, 'explore');
+});
+
+test('carrier rules rebuild custom profiles with allows before all invariants', async () => {
+  let body;
+  const policy = { tools: { deny: ['shell'] }, agents: { deny: ['work-*'] } };
+  const inputs = { profile: 'custom:test-only', permissionProfiles: { 'test-only': [{ action: 'shell', resource: 'npm test', effect: 'allow' }] }, deniedAgentGlobs: ['work-*'] };
+  const api = { async agents() { return []; }, async createSession(value) { body = value; return { id: 'ses_carrier' }; } };
+  await dispatchSubagent({ api, hub: {}, member, policy, ruleInputs: inputs, rules: buildPermissionRules(inputs.profile, { ...inputs, policy }),
+    mechanism: 'subagent-tool', runTurnImpl: turn('ok') });
+  const lastMatch = (action, resource) => body.permissions.filter((rule) => (rule.action === '*' || rule.action === action)
+    && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
+  assert.equal(lastMatch('subagent', 'explore'), 'allow');
+  assert.equal(lastMatch('subagent', 'work-reviewer'), 'deny');
+  assert.equal(lastMatch('shell', 'rm -rf x'), 'deny');
+  assert.equal(lastMatch('read', '.env'), 'deny');
+  assert.ok(body.permissions.indexOf(body.permissions.find((rule) => rule.action === 'subagent' && rule.effect === 'allow'))
+    < body.permissions.findIndex((rule) => rule.action === 'external_directory'));
+});
+
+test('carrier checks the implicit build agent and its pinned model before creation', async () => {
+  for (const [agents, policy] of [
+    [[], { agents: { deny: ['build'] } }],
+    [[{ name: 'build', mode: 'primary', model: { providerID: 'blocked', modelID: 'model' } }], { providers: { deny: ['blocked'] } }],
+  ]) {
+    const bodies = [];
+    const api = { async agents() { return agents; }, async createSession(body) { bodies.push(body); return { id: 'ses_denied' }; } };
+    await assert.rejects(dispatchSubagent({ api, hub: {}, member, policy, rules: RULES, ruleInputs,
+      mechanism: 'subagent-tool', runTurnImpl: turn('unused') }), (error) => error.name === 'PolicyError');
+    assert.equal(bodies.length, 0);
+  }
+});
+
+test('carrier refuses missing rule inputs before creating a session', async () => {
+  const bodies = [];
+  const api = { async createSession(body) { bodies.push(body); return { id: 'ses_unsafe' }; } };
+  await assert.rejects(dispatchSubagent({ api, hub: {}, member, rules: RULES, mechanism: 'subagent-tool',
+    runTurnImpl: turn('unused') }), (error) => error.code === 'MISSING_RULE_INPUTS');
+  assert.equal(bodies.length, 0);
 });
 
 test('non-refusal errors propagate, disabled fallback stays off, and bad mechanisms are usage errors', async () => {
