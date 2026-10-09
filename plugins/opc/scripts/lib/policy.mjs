@@ -437,7 +437,8 @@ function ansiEscape(source, offset) {
 }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'rbash', 'hush', 'mksh', 'yash', 'posh', 'fish', 'csh', 'tcsh']);
-const DYNAMIC_SHELL_COMMANDS = new Set(['eval', 'trap', 'source', '.', 'enable', 'alias']);
+const DYNAMIC_SHELL_COMMANDS = new Set(['eval', 'trap', 'source', '.', 'enable', 'alias',
+  'setopt', 'unsetopt', 'emulate', 'setenv', 'unsetenv']);
 const UNSUPPORTED_SHELL_WORDS = new Set(['.', 'source', 'if', 'then', 'else', 'elif', 'fi', 'for', 'select', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '!', 'coproc']);
 const WRAPPER_OPTIONS = {
   exec: { flags: ['-c', '-l'], values: ['-a'] },
@@ -472,7 +473,7 @@ const WRAPPER_OPTIONS = {
 
 const SHELL_DECLARATIONS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
-const GIT_ENVIRONMENT = new Set(['PAGER', 'EDITOR', 'VISUAL', 'SSH_ASKPASS']);
+const GIT_ENVIRONMENT = new Set(['PAGER', 'EDITOR', 'VISUAL', 'SSH_ASKPASS', 'HOME', 'XDG_CONFIG_HOME']);
 const EXECUTION_ENVIRONMENT = new Set(['BASH_ENV', 'ENV', 'PATH', 'PROMPT_COMMAND', 'PS4', 'SHELLOPTS', 'BASHOPTS']);
 const unsafeExecutionEnvironment = (name) => name.startsWith('LD_') || EXECUTION_ENVIRONMENT.has(name);
 const unsafeGitEnvironment = (name) => GIT_ENVIRONMENT.has(name)
@@ -480,7 +481,8 @@ const unsafeGitEnvironment = (name) => GIT_ENVIRONMENT.has(name)
 
 function declaredEnvironment(words) {
   const offset = words?.findIndex((word) => !ASSIGNMENT.test(word.value)) ?? -1;
-  if (offset < 0 || !SHELL_DECLARATIONS.has(words[offset].value)) return [];
+  if (offset < 0) return (words ?? []).map((word) => ASSIGNMENT.exec(word.value)[1]);
+  if (!SHELL_DECLARATIONS.has(words[offset].value)) return [];
   return words.slice(offset + 1).filter((word) => !word.value.startsWith('-'))
     .filter((word) => word.value.includes('=') || !unsafeExecutionEnvironment(word.value))
     .map((word) => word.value.split('=')[0]);
@@ -650,6 +652,7 @@ function normalizeGitWords(words) {
 }
 
 const GIT_VALUE_OPTIONS = {
+  config: ['-f', '--file', '--blob', '-t', '--type', '--default'],
   log: ['--grep', '--author', '--committer', '--format', '--pretty', '--date', '--output', '-n', '--max-count', '--skip'],
   diff: ['--output'],
   push: ['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules'],
@@ -716,7 +719,7 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
   words = words.slice(offset);
   if (!words.length) return false;
   const [head, ...args] = words;
-  if (head.dynamic) return !allowDynamicHead;
+  if (head.dynamic) return !(allowDynamicHead && words.length === 1);
   if (!head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
   // Resolve wrappers through the same inspection path and share effects across all segments.
@@ -736,6 +739,14 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
       && normalized.slice(2).some((word) => word.dynamic)) return true;
     const { short, long, hasLong, operands } = gitOptions(rest, subcommand);
     if (hasLong('--output')) return true;
+    if (subcommand === 'config') {
+      if (short.has('e') || hasLong('--edit')) return true;
+      const query = short.has('l') || hasLong('--list')
+        || long.some((option) => option.startsWith('--get') || option.startsWith('--show-'));
+      const write = hasLong('--add', '--replace-all', '--unset', '--unset-all');
+      const entries = operands[0] === '--' ? operands.slice(1) : operands;
+      if ((write || (!query && entries.length > 1)) && !harmlessGitConfig(`${entries[0]}=`)) return true;
+    }
     const force = short.has('f') || hasLong('--force');
     const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
     if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
@@ -793,6 +804,12 @@ function inspectWords(words, destructive, depth, sensitivePaths, environment = [
     // Substitutions are already scanned; an expanded eval command alone needs no git gate.
     return args.length > 0 && bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1,
       sensitivePaths, environment, unsafeShellOptions, shellEffects, args.some((word) => word.dynamic));
+  }
+  if (executable === 'trap') {
+    const action = args[args[0]?.value === '--' ? 1 : 0];
+    if (!action || action.value === '-' || action.value === '') return false;
+    return action.dynamic || bashRequiresUser(action.value, destructive, depth + 1, sensitivePaths,
+      environment, unsafeShellOptions, shellEffects);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {

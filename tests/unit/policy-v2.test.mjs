@@ -11,6 +11,101 @@ const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.acti
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
 const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
 
+const finalFixCases = [
+  ['eval dynamic heads with arguments require the user', true, [
+    'eval "$R -rf /tmp/x"', 'eval "$R push --force"', 'R=rm; eval "$R -f victim"',
+    'eval "$R" -rf /tmp/x', 'eval "${R} -rf /tmp/x"', 'eval "$(cat x) -rf /"',
+    'eval "$(printf rm) -rf /"', 'command eval "$R -rf /"',
+    'eval "$R -rf /"; echo hi', 'eval "ls; $R -rf /"',
+  ]],
+  ['eval dynamic heads alone remain free', false, [
+    'eval "$(ssh-agent)"', 'eval "$CMD"', 'eval $R', 'eval "x=1 $R"',
+    'eval "$X"; npm test', 'command eval "$(ssh-agent)"',
+  ]],
+  ['additional shell settings fail closed with git', true, [
+    ...['setopt allexport', 'unsetopt noexec', 'emulate sh',
+      'setenv GIT_SSH_COMMAND synthetic', 'unsetenv GIT_SSH_COMMAND']
+      .flatMap((command) => [`${command}; git status`, `git status; ${command}`,
+        `command ${command}; git status`, `time builtin ${command}; git status`]),
+    "zsh -c 'setopt allexport; GIT_SSH_COMMAND=x; git ls-remote h:x'",
+    'zsh -c \'emulate sh -c "set -a"; git status\'',
+    "csh -c 'setenv GIT_SSH_COMMAND synthetic; git status'",
+    "tcsh -c 'unsetenv GIT_PAGER; git log'",
+  ]],
+  ['additional shell settings without git or destructive commands remain free', false, [
+    'setopt allexport; npm test', 'unsetopt noexec; npm test', 'emulate sh; npm test',
+    'setenv SYNTHETIC x; npm test', 'unsetenv SYNTHETIC; npm test',
+  ]],
+  ['git configuration directories cannot be overridden', true,
+    ['HOME', 'XDG_CONFIG_HOME'].flatMap((name) => [
+      `${name}=/synthetic git status`, `env ${name}=/synthetic git log`,
+      `export ${name}=/synthetic; git status`, `${name}=/synthetic; git status`,
+      `git status; ${name}=/synthetic`, `declare -x ${name}=/synthetic; git log`,
+      `timeout 5 env ${name}=/synthetic git status`,
+      `sh -c '${name}=/synthetic; git status'`,
+    ])],
+  ['configuration directories without git remain free', false,
+    ['HOME', 'XDG_CONFIG_HOME'].flatMap((name) => [
+      `${name}=/synthetic npm test`, `env ${name}=/synthetic npm test`,
+      `export ${name}=/synthetic; npm test`, `${name}=/synthetic; npm test`,
+    ])],
+  ['trap actions are inspected recursively', true, [
+    "trap 'git reset --hard' EXIT", "trap 'git status' EXIT", "trap 'rm -f /tmp/lock' EXIT",
+    "trap 'echo ok; git push --force' EXIT", "trap 'docker volume rm synthetic' EXIT",
+    "command trap 'git reset --hard' EXIT", "trap -- 'git reset --hard' EXIT",
+    "sh -c \"trap 'git reset --hard' EXIT\"", 'trap "$ACTION" EXIT',
+    'trap $ACTION EXIT', "trap '$ACTION' EXIT", 'trap "echo $VALUE" EXIT',
+    "trap 'trap \"git reset --hard\" EXIT' EXIT",
+  ]],
+  ['benign and cleared trap actions remain free', false, [
+    "trap 'echo ok' EXIT", "trap 'npm test' EXIT", "trap '' EXIT", 'trap - EXIT',
+    'trap -- - EXIT', 'command trap - EXIT',
+  ]],
+  ['unsafe git config writes require the user', true, [
+    'git config core.sshCommand x', 'git config core.pager x', 'git config core.fsmonitor x',
+    'git config --global core.hooksPath /synthetic', 'git -C /repo config core.pager x',
+    'git config --file synthetic.config core.pager x', 'git config -f synthetic.config core.pager x',
+    'git config --type string core.pager x', 'git config -t string core.pager x',
+    ...['--add', '--replace-all', '--unset', '--unset-all'].map((option) => `git config ${option} core.pager x`),
+    'git config --unset core.pager', 'git config --unset-all core.sshCommand',
+    'git config --edit', 'git config -e', 'git config --global -e',
+    'git config "$KEY" x', 'git config --get --unset core.pager',
+  ]],
+  ['harmless git config writes and queries remain free', false, [
+    'git config user.name "x"', 'git config user.email synthetic', 'git config core.quotePath false',
+    'git config init.defaultBranch main', 'git config color.ui auto', 'git config advice.detachedHead false',
+    'git config --file synthetic.config user.name x', 'git config -f synthetic.config user.name x',
+    'git config --type string user.name x', 'git config -t string user.name x',
+    ...['--add', '--replace-all', '--unset', '--unset-all'].map((option) => `git config ${option} user.name x`),
+    'git config --get core.pager', 'git config --get-all core.pager',
+    'git config --get-regexp core.pager x', 'git config --get-urlmatch core.pager synthetic',
+    'git config --list', 'git config -l', 'git config --show-origin --get core.pager',
+    'git config --show-scope core.pager', 'git config --get-color color.ui x',
+    'git config core.pager', 'git config --file synthetic.config core.pager',
+  ]],
+];
+for (const [group, expected, commands] of finalFixCases) {
+  for (const command of commands) {
+    test(`F11 final fix: ${group}: ${command}`, () => {
+      const request = { permission: 'shell', patterns: [command], metadata: { command } };
+      assert.equal(claude(command), expected, command);
+      const reply = checkReply({ approver: 'claude', request, reply: 'once' });
+      if (expected) assert.equal(reply.code, 'NEEDS_USER');
+      else assert.equal(reply.ok, true);
+    });
+  }
+}
+
+test('F11 final fix: trap actions use the same destructive policy as direct commands', () => {
+  assert.equal(claude("trap 'rm -f /tmp/lock' EXIT"), claude('rm -f /tmp/lock'));
+  const policy = { destructiveBash: ['deploy *'] };
+  assert.equal(claude("trap 'deploy synthetic' EXIT", policy), true);
+  for (const command of ['setopt allexport', 'unsetopt noexec', 'emulate sh',
+    'setenv SYNTHETIC x', 'unsetenv SYNTHETIC']) {
+    assert.equal(claude(`${command}; deploy synthetic`, policy), true, command);
+  }
+});
+
 const fix5Wrappers = ['', 'time', 'time -p', 'command', 'command -p --', 'builtin',
   'exec -a synthetic', 'nice -n 5', 'env SYNTHETIC=x', 'sudo -u synthetic', 'doas -u synthetic',
   'nohup', 'timeout 5', 'setsid -f', 'stdbuf -oL', 'ionice -c 3', 'flock synthetic.lock',
