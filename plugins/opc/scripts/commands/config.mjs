@@ -7,7 +7,7 @@ import { connectApi } from '../lib/context.mjs';
 import {
   loadConfig, configPaths, getPath, schemaFor, coerceValue, applyConfigEdit, isLockedKey, isWorkspaceKey,
   keyNeedsServer, normalizeEditValue, validateConfigShape, mergeConfig, validateAgainstServer, policyViolations,
-  saveGlobalConfig, saveWorkspaceConfig, CONFIG_SCHEMA, isSecretLikeSetting,
+  saveGlobalConfig, saveWorkspaceConfig, CONFIG_SCHEMA, isSecretLikeSetting, WORKSPACE_TIGHTEN_ONLY,
 } from '../lib/config.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
@@ -140,6 +140,7 @@ async function cmdEdit(ctx, flags, op, rest) {
   } else {
     next = applyConfigEdit(base, op, key, value);
     const effective = scope === 'workspace' ? mergeConfig(loaded.global ?? {}, next) : mergeConfig(next, loaded.workspace ?? {});
+    if (scope === 'workspace') warnings.push(...effective.warnings.filter((w) => w.code === 'WORKSPACE_IGNORED' && touches(key)(w)));
     const existingViolations = new Set(policyViolations(before, deps).map((e) => `${e.path}|${e.code}|${e.message}`));
     const denied = policyViolations(effective.config, deps).filter((e) => !existingViolations.has(`${e.path}|${e.code}|${e.message}`));
     if (denied.length) throw new PolicyError('POLICY_DENIED', denied.map((e) => `${e.path}: ${e.message}`).join('; '), { details: { errors: denied } });
@@ -149,6 +150,11 @@ async function cmdEdit(ctx, flags, op, rest) {
   warnings.push(...shape.warnings);
   if (scope === 'workspace') saveWorkspaceConfig(ctx.workspaceRoot, next);
   else saveGlobalConfig(ctx.dataDir, next);
+  for (const warning of warnings) {
+    if (warning.code !== 'WORKSPACE_IGNORED' || !WORKSPACE_TIGHTEN_ONLY.includes(warning.path)) continue;
+    const baseline = getPath(mergeConfig(loaded.global ?? {}, {}).config, warning.path);
+    ctx.err(`${warning.path}: o workspace só pode apertar (global/padrão = ${baseline}); este valor será ignorado.\n`);
+  }
   const paths = configPaths({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
   emit(ctx, flags, { kind: 'edit', op, setting: key, scope, path: scope === 'workspace' ? paths.workspace : paths.global, value: getPath(next, key) ?? null, warnings }, renderConfig);
   return 0;

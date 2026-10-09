@@ -143,6 +143,10 @@ export async function followJob(ctx, id, { waitTimeoutMs, pollMs = 500, json = f
   if (json) ctx.json({ job });
   else if (job.status === 'waiting_permission') ctx.out(renderPermissionRequest(job, { timeoutSec: permissionTimeoutSec }));
   else ctx.out(view === 'status' ? renderJobStatus(job) : renderTurnResult(job));
+  if (job.kind === 'review') {
+    const { reviewExitCode } = await import('./review.mjs');
+    return reviewExitCode(job);
+  }
   return exitCodeForJob(job);
 }
 

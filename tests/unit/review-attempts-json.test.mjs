@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { createJob, readJob, runJobTurn, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { run as resultCommand } from '../../plugins/opc/scripts/commands/result.mjs';
+import { run as statusCommand } from '../../plugins/opc/scripts/commands/status.mjs';
+import { followJob } from '../../plugins/opc/scripts/commands/task.mjs';
 import * as reviewCommand from '../../plugins/opc/scripts/commands/review.mjs';
 import { ExitCode } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 
@@ -38,6 +40,30 @@ for (const variant of ['review', 'adversarial']) {
     });
   }
 }
+
+for (const [label, structured, expected] of [
+  ['missing JSON', null, ExitCode.JOB_FAILED], ['invalid JSON', { verdict: 'approve' }, ExitCode.JOB_FAILED],
+  ['valid JSON', validReview, ExitCode.OK],
+]) {
+  test(`waiting for a review with ${label} exits like result and the foreground`, async (t) => {
+    const stateDir = trackTempDir(t, makeTempDir('opc-review-wait-'));
+    const job = await createJob(stateDir, { kind: 'review' });
+    await updateJob(stateDir, job.id, { status: 'completed', result: { structured, finalText: 'prose' } });
+    const ctx = { stateDir, out: () => {}, err: () => {}, json: () => {} };
+    for (const json of [false, true]) {
+      assert.equal(await statusCommand(ctx, [job.id, '--wait', ...(json ? ['--json'] : [])]), expected);
+      assert.equal(await followJob(ctx, job.id, { json, streamLog: false }), expected);
+    }
+  });
+}
+
+test('waiting for a completed task without review JSON still succeeds', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-task-wait-'));
+  const job = await createJob(stateDir, { kind: 'task' });
+  await updateJob(stateDir, job.id, { status: 'completed', result: { finalText: 'prose' } });
+  const ctx = { stateDir, out: () => {}, json: () => {} };
+  assert.equal(await statusCommand(ctx, [job.id, '--wait', '--json']), ExitCode.OK);
+});
 
 for (const command of ['result', 'review']) {
   test(`F4a I3: ${command} JSON includes masked review fallback attempts`, async (t) => {

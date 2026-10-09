@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   makeWorkspace, testEnv, runCli, writeGlobalConfig, readGlobalConfig, writeWorkspaceConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
+import { DEFAULT_CONFIG, getPath, schemaFor, setPath, WORKSPACE_TIGHTEN_ONLY } from '../../plugins/opc/scripts/lib/config.mjs';
 
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
@@ -249,6 +250,35 @@ test('workspace edits: preference keys go to .opc.json; global-only keys refused
   const jobs = await cli(['config', 'set', 'jobs.maxActive', '64', '--workspace']);
   assert.equal(jobs.code, 2);
 });
+
+for (const key of WORKSPACE_TIGHTEN_ONLY) {
+  for (const source of ['default', 'global']) {
+    test(`workspace set warns on stderr when ${key} exceeds the ${source} limit`, async (t) => {
+      const baseline = source === 'default' ? getPath(DEFAULT_CONFIG, key) : 2;
+      const config = source === 'global' ? setPath({}, key, baseline) : null;
+      const { ws, cli } = setup(t, { config });
+      for (const json of [false, true]) {
+        const value = baseline + 1;
+        const result = await cli(['config', 'set', '--workspace', key, String(value), ...(json ? ['--json'] : [])]);
+        assert.equal(result.code, 0, all(result));
+        assert.equal(getPath(JSON.parse(fs.readFileSync(path.join(ws, '.opc.json'), 'utf8')), key), value);
+        assert.equal(result.stderr, `${key}: o workspace só pode apertar (global/padrão = ${baseline}); este valor será ignorado.\n`);
+        if (json) assert.ok(JSON.parse(result.stdout).warnings.some((w) => w.path === key && w.code === 'WORKSPACE_IGNORED'));
+        const effective = await cli(['config', 'get', key, '--json']);
+        assert.equal(effective.code, 0, all(effective));
+        assert.equal(JSON.parse(effective.stdout).value, baseline);
+      }
+      for (const value of [...new Set([baseline, Math.max(schemaFor(key).min, baseline - 1)])]) {
+        const result = await cli(['config', 'set', '--workspace', key, String(value), '--json']);
+        assert.equal(result.code, 0, all(result));
+        assert.equal(result.stderr, '');
+        assert.deepEqual(JSON.parse(result.stdout).warnings, []);
+        const effective = await cli(['config', 'get', key, '--json']);
+        assert.equal(JSON.parse(effective.stdout).value, value);
+      }
+    });
+  }
+}
 
 test('restrictive merge: .opc.json can only narrow the global policy', async (t) => {
   const { ws, cli } = setup(t, { config: { policy: { models: { allow: [`${MV}/*`] }, providers: { deny: [EQ] } } } });

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { isActive, readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { createJob, isActive, readJob, updateJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { EXIT_STATE } from '../../plugins/opc/scripts/lib/mcp-tools.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ensurePrivateDir, resolveWorkspaceRoot, updateState, workspaceStateDir } from '../../plugins/opc/scripts/lib/state.mjs';
@@ -167,6 +167,27 @@ test('opc_job_result e opc_job_status coincidem com a CLI para o mesmo job', asy
   const statusCli = await cliJson(['status', jobId], { env, cwd: ws });
   assert.equal(statusMcp.envelope.exitCode, statusCli.code);
   assertJobParity(statusMcp.envelope.data, statusCli.data, jobId);
+});
+
+test('MCP review waits and results agree with CLI exit codes for valid and invalid JSON', async (t) => {
+  const { env, ws, c } = setup(t);
+  const stateDir = workspaceStateDir(env.OPC_DATA_DIR, resolveWorkspaceRoot(ws));
+  await c.initialize();
+  for (const [structured, expected] of [
+    [null, 7], [{ verdict: 'approve' }, 7],
+    [{ verdict: 'approve', summary: 'Looks good.', findings: [], next_steps: [] }, 0],
+  ]) {
+    const job = await createJob(stateDir, { kind: 'review' });
+    await updateJob(stateDir, job.id, { status: 'completed', result: { structured, finalText: 'prose' } });
+    const waited = await c.callTool('opc_job_status', { jobId: job.id, wait: true, timeoutSec: 1 });
+    const result = await c.callTool('opc_job_result', { jobId: job.id });
+    const cli = await cliJson(['status', job.id, '--wait'], { env, cwd: ws });
+    assert.equal(waited.envelope.exitCode, expected);
+    assert.equal(result.envelope.exitCode, expected);
+    assert.equal(cli.code, expected, cli.stderr);
+    assert.equal(waited.isError, expected !== 0);
+    assert.equal(waited.envelope.data.job.status, 'completed');
+  }
 });
 
 test('espera de tarefa lenta tem limite e atende outras requisições', async (t) => {
