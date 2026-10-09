@@ -140,6 +140,27 @@ export async function runWorker(ctx, groupJob, request, {
   if (req.mechanism === 'subtask') appendJobLog(stateDir, groupJob.id, '[opc] aviso: mecanismo subtask foi renomeado para subagent-tool');
   const memberIds = groupJob.memberIds ?? [];
   const now = () => new Date().toISOString();
+  const isGroupCancelled = () => {
+    const group = readJob(stateDir, groupJob.id);
+    return Boolean(group?.cancelRequestedAt) || group?.status === 'cancelled';
+  };
+  const markCancelled = async (id) => {
+    if (!ACTIVE_STATUSES.includes(readJob(stateDir, id)?.status)) return;
+    await updateJob(stateDir, id, { status: 'cancelled', phase: 'cancelled', completedAt: now(), attemptInFlight: false,
+      errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' });
+  };
+  const warnOrphan = (sessionID) => appendJobLog(stateDir, groupJob.id, `[opc] aviso: sessão órfã ${sessionID} após falha ou cancelamento.`);
+  let parentSessionID;
+  const finishCancelledGroup = async () => {
+    appendJobLog(stateDir, groupJob.id, '[opc] coordenador cancelado antes de iniciar os membros.');
+    if (parentSessionID) {
+      await updateJob(stateDir, groupJob.id, { sessionID: parentSessionID });
+      try { await conn.api.interrupt(parentSessionID); } catch { /* Best effort: no prompt was sent. */ }
+    }
+    for (const id of memberIds) await markCancelled(id);
+    return exitCodeForJob(await refreshGroup(stateDir, groupJob.id, { final: true,
+      decorate: (group, members) => ({ rendered: renderGroupResult(group, members) }) }));
+  };
   let chain = Promise.resolve();
   const refresh = () => {
     chain = chain.then(() => refreshGroup(stateDir, groupJob.id)).catch((err) => appendJobLog(stateDir, groupJob.id, `[opc] falha ao atualizar grupo: ${safeOutputText(err.message)}`));
@@ -152,8 +173,11 @@ export async function runWorker(ctx, groupJob, request, {
     const policy = ctx.config.policy ?? {};
     requireAgent({ agents: await api.agents() }, DEFAULT_AGENT, policy, { implicit: true });
     const firstModel = req.members[0];
+    if (isGroupCancelled()) return await finishCancelledGroup();
     const parent = await api.createSession({ title: groupJob.title, permissions: req.rules,
       model: { providerID: firstModel.model.providerID, id: firstModel.model.modelID, ...(firstModel.variant ? { variant: firstModel.variant } : {}) } });
+    parentSessionID = parent.id;
+    if (isGroupCancelled()) return await finishCancelledGroup();
     const coordinator = { pid: process.pid, pidStartTime: getProcessIdentity(process.pid)?.startTime ?? null };
     await updateJob(stateDir, groupJob.id, { status: 'running', startedAt: now(), sessionID: parent.id });
     for (const id of memberIds) await updateJob(stateDir, id, { parentSessionID: parent.id, pid: coordinator.pid, pidStartTime: coordinator.pidStartTime });
@@ -170,8 +194,10 @@ export async function runWorker(ctx, groupJob, request, {
       };
       let bridge;
       let updater;
+      const sessionIDs = new Set();
       try {
-        if (readJob(stateDir, groupJob.id)?.status === 'cancelled' || readJob(stateDir, memberId)?.status !== 'queued') return;
+        if (isCancelled()) { await markCancelled(memberId); return; }
+        if (readJob(stateDir, memberId)?.status !== 'queued') return;
         await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now(), attemptInFlight: true });
         appendJobLog(stateDir, groupJob.id, `${tag} iniciando (${spec.full})`);
         await refresh();
@@ -183,7 +209,7 @@ export async function runWorker(ctx, groupJob, request, {
         try {
           res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules, ruleInputs, policy,
             mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg, isCancelled,
-            onSession: async (sessionID) => { await updateJob(stateDir, memberId, { sessionID }); },
+            onSession: async (sessionID) => { sessionIDs.add(sessionID); await updateJob(stateDir, memberId, { sessionID }); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
             onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
             onRequestResolved: (event) => bridge.onResolved(event) });
@@ -194,6 +220,7 @@ export async function runWorker(ctx, groupJob, request, {
         const latest = readJob(stateDir, memberId);
         const wasCancelled = isCancelled();
         const status = wasCancelled ? 'cancelled' : res.status;
+        for (const sessionID of [res.sessionID, res.carrierSessionID, ...(res.childSessionIDs ?? [])]) if (sessionID) sessionIDs.add(sessionID);
         await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), attemptInFlight: false, sessionID: res.sessionID ?? latest?.sessionID ?? null,
           ...(wasCancelled ? { errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' } : {
             errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
@@ -211,7 +238,10 @@ export async function runWorker(ctx, groupJob, request, {
             errorMessage: wasCancelled ? 'Cancelada pelo usuário.' : errorMessage });
         }
         appendJobLog(stateDir, groupJob.id, `${tag} falhou: ${errorMessage}`);
-      } finally { bridge?.dispose(); }
+      } finally {
+        if (readJob(stateDir, memberId)?.status !== 'completed') for (const sessionID of sessionIDs) warnOrphan(sessionID);
+        bridge?.dispose();
+      }
       await refresh();
     });
     for (const [index, outcome] of outcomes.entries()) {
@@ -242,5 +272,8 @@ export async function runWorker(ctx, groupJob, request, {
     const g = readJob(stateDir, groupJob.id);
     if (g && g.status !== 'cancelled') await updateJob(stateDir, groupJob.id, { status: 'failed', errorCode: 'coordinator_error', errorMessage, completedAt: now() });
     return ExitCode.JOB_FAILED;
-  } finally { conn?.close(); }
+  } finally {
+    if (parentSessionID && readJob(stateDir, groupJob.id)?.status !== 'completed') warnOrphan(parentSessionID);
+    conn?.close();
+  }
 }

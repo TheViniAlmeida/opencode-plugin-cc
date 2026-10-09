@@ -15,6 +15,42 @@ const member = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, tit
 const taskPart = (text) => ({ type: 'tool', name: 'subagent', state: { status: 'completed', content: [{ type: 'text', text }] } });
 const turn = (text, tool = false) => async ({ request }) => ({ status: 'completed', sessionID: request.sessionID, finalText: text, toolsRan: tool, childSessionIDs: [] });
 
+for (const mechanism of ['child-session', 'subagent-tool']) {
+  test(`dispatch never creates a session for an already cancelled member (${mechanism})`, async () => {
+    const { api, hub } = memoryV2();
+    let creates = 0;
+    api.createSession = async () => { creates += 1; return { id: 'ses_unexpected' }; };
+    const result = await dispatchSubagent({ api, hub, parentSessionID: 'ses_parent', member, prompt: 'test', rules: RULES,
+      ruleInputs, mechanism, isCancelled: () => true, runTurnImpl: turn('unexpected') });
+    assert.equal(result.status, 'cancelled');
+    assert.equal(creates, 0);
+  });
+}
+
+test('carrier checks cancellation again after asynchronous agent discovery', async () => {
+  const { api, hub } = memoryV2();
+  let cancelled = false; let creates = 0;
+  api.agents = async () => { cancelled = true; return []; };
+  api.createSession = async () => { creates += 1; return { id: 'ses_unexpected' }; };
+  const result = await dispatchSubagent({ api, hub, parentSessionID: 'ses_parent', member, prompt: 'test', rules: RULES,
+    ruleInputs, mechanism: 'subagent-tool', isCancelled: () => cancelled, runTurnImpl: turn('unexpected') });
+  assert.equal(result.status, 'cancelled');
+  assert.equal(creates, 0);
+});
+
+test('cancellation after a child refusal prevents creating a fallback carrier', async () => {
+  const { api, hub } = memoryV2();
+  let cancelled = false; let creates = 0;
+  api.createSession = async () => { creates += 1; return { id: 'ses_child' }; };
+  const result = await dispatchSubagent({ api, hub, parentSessionID: 'ses_parent', member, prompt: 'test', rules: RULES,
+    ruleInputs, isCancelled: () => cancelled, runTurnImpl: async () => {
+      cancelled = true;
+      throw new RequestError('BAD_REQUEST', 'agent mode primary required');
+    } });
+  assert.equal(result.status, 'cancelled');
+  assert.equal(creates, 1);
+});
+
 function finish(api, emit, sessionID, text, { tool = false } = {}) {
   api.messagesFor(sessionID, [
     { id: api.lastPromptId(), type: 'user', text: api.promptCalls.at(-1).text },

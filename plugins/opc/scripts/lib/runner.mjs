@@ -495,14 +495,18 @@ export async function dispatchSubagent({
   const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, isCancelled, signal };
   const baseRequest = { model: member.model, variant: member.variant, timeoutMs, fallbackCfg };
   const model = modelFor(baseRequest);
-  const cancelBeforeTurn = async (sessionID) => {
+  const cancelBeforeTurn = async (sessionID = null) => {
     if (!signal?.aborted && !isCancelled()) return null;
-    try { await api.interrupt(sessionID); } catch { /* Best effort: no prompt was sent. */ }
+    if (sessionID) {
+      try { await api.interrupt(sessionID); } catch { /* Best effort: no prompt was sent. */ }
+    }
     return { sessionID, messageID: newMessageId(), assistantMessageIDs: [], childSessionIDs: [], ...extractTurn([]),
       structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
   };
 
   const viaSubagentTool = async (fellBack) => {
+    const cancelled = await cancelBeforeTurn();
+    if (cancelled) return { ...cancelled, mechanism: 'subagent-tool', fellBack };
     if (policy.tools?.deny?.includes('subagent') || matchesAny(member.agent, policy.agents?.deny ?? [])) {
       throw new PolicyError('SUBAGENT_DENIED', 'A política nega a ferramenta subagent ou o agente solicitado.');
     }
@@ -510,6 +514,8 @@ export async function dispatchSubagent({
     const agents = await api.agents();
     assertAgentUsable(agents.find((agent) => agent.name === DEFAULT_AGENT) ?? { name: DEFAULT_AGENT }, policy);
     const carrierAllow = { action: 'subagent', resource: member.agent, effect: 'allow' };
+    const cancelledAfterDiscovery = await cancelBeforeTurn();
+    if (cancelledAfterDiscovery) return { ...cancelledAfterDiscovery, mechanism: 'subagent-tool', fellBack };
     const carrier = await api.createSession({
       parentID: parentSessionID,
       title: `${member.title} (subagent)`,
@@ -538,6 +544,8 @@ export async function dispatchSubagent({
   if (mechanism === 'subagent-tool') return viaSubagentTool(false);
 
   let child;
+  const cancelled = await cancelBeforeTurn();
+  if (cancelled) return { ...cancelled, mechanism: 'child-session', fellBack: false };
   try {
     child = await api.createSession({ parentID: parentSessionID, title: member.title, agent: member.agent, model, permissions: rules });
   } catch (err) {

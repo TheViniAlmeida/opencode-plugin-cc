@@ -46,6 +46,14 @@ const CLAUDE_CMDLINE_CASES = [
   { cmdline: ['code', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
   { cmdline: ['node', 'opc', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
   { cmdline: ['node'], expected: false },
+  { cmdline: ['node', '--max-old-space-size=4096', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '-r', 'x', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '--inspect', '/home/u/claude-notes/a.js'], expected: false },
+  ...['node', 'nodejs', 'bun', 'deno'].flatMap((runtime) => ['--require', '-r', '--import', '--loader'].map((flag) => (
+    { cmdline: [runtime, flag, 'x', '--inspect', '/x/@anthropic-ai/claude-code/cli.js'], expected: true }
+  ))),
+  { cmdline: ['node', '-r', '/x/@anthropic-ai/claude-code/cli.js', '/home/u/claude-notes/a.js'], expected: false },
+  { cmdline: ['node', '--inspect'], expected: false },
   { cmdline: [], expected: false },
 ];
 

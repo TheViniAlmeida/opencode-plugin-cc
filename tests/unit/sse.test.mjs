@@ -7,6 +7,46 @@ import { loadContractSample } from '../fixtures/contract-shapes.mjs';
 
 const client = { buildUrl: () => 'http://opc.test/api/event', authHeaders: () => ({}) };
 
+test('hub requests manual redirects and rejects 3xx without reading the stream', async () => {
+  for (const status of [300, 301, 302, 307, 308, 399]) {
+    let options;
+    let reads = 0;
+    const hub = new EventHub({ client, fetchImpl: async (_url, init) => {
+      options = init;
+      return { status, ok: false, body: { getReader() { reads += 1; } } };
+    } });
+    try {
+      await assert.rejects(hub.start(), { code: 'UNEXPECTED_REDIRECT', exitCode: 5 });
+      assert.equal(options.redirect, 'manual');
+      assert.equal(options.signal.aborted, true);
+      assert.equal(reads, 0);
+    } finally { hub.stop(); }
+  }
+});
+
+test('hub preserves UNEXPECTED_REDIRECT when reconnection is redirected', async () => {
+  let calls = 0;
+  let down;
+  const disconnected = new Promise((resolve) => { down = resolve; });
+  const hub = new EventHub({ client, backoffMs: [1, 1], fetchImpl: async (_url, options) => {
+    assert.equal(options.redirect, 'manual');
+    if (++calls > 1) return { status: 302, ok: false };
+    let first = true;
+    return { status: 200, ok: true, body: { getReader: () => ({ read: async () => {
+      if (!first) return { done: true };
+      first = false;
+      return { done: false, value: new TextEncoder().encode(': heartbeat\n\n') };
+    } }) } };
+  } });
+  hub.onDown(down);
+  try {
+    await hub.start();
+    assert.equal((await disconnected).code, 'UNEXPECTED_REDIRECT');
+    assert.equal(calls, 2);
+    assert.equal(hub.state, 'down');
+  } finally { hub.stop(); }
+});
+
 function responseWithFrames(...frames) {
   let index = 0;
   return {

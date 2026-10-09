@@ -42,7 +42,11 @@ export function maskSecretPatterns(text, { onMask } = {}) {
   out = maskMatches(out, /\bAIza[A-Za-z0-9_-]{35}\b/g, onMask);
   out = maskMatches(out, /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, onMask);
   out = maskMatches(out, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, onMask);
-  out = maskMatches(out, /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, onMask);
+  out = out.replace(/\bBearer\s+([A-Za-z0-9._~+\/-]+=*)/gi, (match, value) => {
+    if (value.length < 16 || !/[0-9._~+\/=-]/.test(value)) return match;
+    onMask?.();
+    return MASK;
+  });
   const maskAssignment = (match, prefix, key, raw) => {
     const quote = raw.startsWith('"') || raw.startsWith("'") ? raw[0] : '';
     const value = quote ? raw.slice(1, -1) : raw;

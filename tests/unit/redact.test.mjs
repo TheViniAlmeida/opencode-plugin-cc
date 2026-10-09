@@ -89,7 +89,7 @@ for (const status of [400, 401, 404, 500]) {
   for (const asJson of [true, false]) {
     test(`HTTP ${status} masks secret patterns in ${asJson ? 'JSON' : 'plain text'} error details`, async () => {
       const token = `sk-${'A'.repeat(40)}`;
-      const body = asJson ? JSON.stringify({ message: `bad key ${token}`, nested: { note: `Bearer ${'abc'.repeat(12)}` } }) : `bad key ${token}`;
+      const body = asJson ? JSON.stringify({ message: `bad key ${token}`, nested: { note: `Bearer ${'abc0'.repeat(9)}` } }) : `bad key ${token}`;
       const client = createClient({ baseUrl: 'http://opencode.invalid', fetchImpl: async () => new Response(body, { status }) });
       await assert.rejects(client.get('/api/info'), (error) => {
         assert.equal(JSON.stringify(error.details).includes(token), false);

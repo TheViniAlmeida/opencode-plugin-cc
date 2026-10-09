@@ -118,7 +118,7 @@ function allowAfterFailure(ctx, err) {
 
 function noteActiveJobs(ctx, sessionId) {
   for (const job of liveActiveJobs(ctx.stateDir, { claudeSessionId: sessionId, onWarning: jobWarningHandler(ctx) })) {
-    ctx.err(redactText(`[opc] a tarefa ${job.id} (${job.kind}) ainda está em execução. Consulte /opc:status ${job.id} ou cancele com /opc:cancel ${job.id}.\n`));
+    ctx.err(redactText(`[opc] a tarefa ${job.id} (${job.unreadable ? 'ilegível' : job.kind}) ainda está em execução. Consulte /opc:status ${job.id} ou cancele com /opc:cancel ${job.id}.\n`));
   }
 }
 

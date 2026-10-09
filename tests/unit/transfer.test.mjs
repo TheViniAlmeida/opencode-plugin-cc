@@ -253,7 +253,7 @@ test('long texts and tool payloads are truncated with an explicit marker', () =>
 
 test('transfer masks secrets in every exported text block and counts replacements', () => {
   const token = `sk-${'A'.repeat(40)}`;
-  const bearer = `Bearer ${'abc'.repeat(12)}`;
+  const bearer = `Bearer ${'abc0'.repeat(9)}`;
   const records = [
     { type: 'custom-title', customTitle: `Transfer ${token}` },
     { type: 'user', message: { content: bearer } },

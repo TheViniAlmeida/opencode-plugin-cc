@@ -1,10 +1,68 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGroup, createJob, updateJob, readJob, cancelJob, cancelGroup, recordAttempt, runJobTurn } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import fs from 'node:fs';
+import { createGroup, createJob, updateJob, readJob, cancelJob, cancelGroup, recordAttempt, runJobTurn, jobLogPath } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { runWorker as runSubagentWorker } from '../../plugins/opc/scripts/commands/subagent.mjs';
 import { dispatchSubagent } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { memoryV2 } from './_memory-v2.mjs';
+
+for (const timing of ['before-worker', 'during-discovery', 'during-parent-creation', 'before-member']) {
+  test(`subagent worker checks persisted cancellation before creating sessions (${timing})`, async (t) => {
+    const stateDir = trackTempDir(t, makeTempDir('opc-sub-precreate-'));
+    const { group, members: [member] } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: group' }, [{ title: 'OPC: member' }]);
+    const spec = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, full: 'p/m', title: member.title };
+    const request = { members: [spec], prompt: 'PRIVATE_PROMPT_MARKER', mechanism: 'child-session', profile: 'read-only', rules: [], maxParallel: 1 };
+    const cancel = () => updateJob(stateDir, timing === 'before-member' ? member.id : group.id, { cancelRequestedAt: new Date().toISOString() });
+    if (timing === 'before-worker') await cancel();
+    const { api, hub } = memoryV2();
+    const creates = []; const interrupts = [];
+    api.agents = async () => {
+      if (timing === 'during-discovery') await cancel();
+      return [{ name: 'build', mode: 'primary' }];
+    };
+    api.createSession = async (body) => {
+      creates.push(body);
+      if (!body.parentID && ['during-parent-creation', 'before-member'].includes(timing)) await cancel();
+      return { id: body.parentID ? 'ses_child' : 'ses_parent' };
+    };
+    api.interrupt = async (id) => { interrupts.push(id); return true; };
+    await runSubagentWorker({ stateDir, config: {} }, group, request, {
+      openApi: async () => ({ api, hub, close() {} }),
+      dispatch: (args) => dispatchSubagent({ ...args, runTurnImpl: async () => { throw new Error('must not prompt'); } }),
+    });
+    assert.equal(creates.length, ['during-parent-creation', 'before-member'].includes(timing) ? 1 : 0);
+    assert.equal(readJob(stateDir, member.id).status, 'cancelled');
+    assert.equal(readJob(stateDir, group.id).status, 'cancelled');
+    if (timing === 'during-parent-creation') assert.deepEqual(interrupts, ['ses_parent']);
+    const log = fs.readFileSync(jobLogPath(stateDir, group.id), 'utf8');
+    if (creates.length) assert.match(log, /sessão.*ses_parent/);
+    assert.doesNotMatch(log, /PRIVATE_PROMPT_MARKER/);
+  });
+}
+
+for (const outcome of ['failed', 'cancelled']) {
+  test(`subagent worker records orphan parent and child session IDs when ${outcome}`, async (t) => {
+    const stateDir = trackTempDir(t, makeTempDir('opc-sub-orphan-'));
+    const { group, members: [member] } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: group' }, [{ title: 'OPC: member' }]);
+    const spec = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, full: 'p/m', title: member.title };
+    const { api, hub } = memoryV2();
+    api.createSession = async () => ({ id: 'ses_parent' });
+    await runSubagentWorker({ stateDir, config: {} }, group, { members: [spec], prompt: 'PRIVATE_PROMPT_MARKER', rules: [], profile: 'read-only' }, {
+      openApi: async () => ({ api, hub, close() {} }),
+      dispatch: async ({ onSession }) => {
+        await onSession('ses_child');
+        if (outcome === 'cancelled') await updateJob(stateDir, member.id, { cancelRequestedAt: new Date().toISOString() });
+        throw new Error('synthetic turn failure');
+      },
+    });
+    assert.equal(readJob(stateDir, member.id).status, outcome);
+    const log = fs.readFileSync(jobLogPath(stateDir, group.id), 'utf8');
+    assert.match(log, /sessão.*ses_parent/);
+    assert.match(log, /sessão.*ses_child/);
+    assert.doesNotMatch(log, /PRIVATE_PROMPT_MARKER/);
+  });
+}
 
 test('F4b fix2: unpublished orchestration session defers cancellation and preserves attempt publication', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-cancel-preprompt-'));

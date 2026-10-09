@@ -80,8 +80,15 @@ export function isClaudeCmdline(cmdline) {
     || entrypoint.includes('/claude/versions/')
     || entrypoint.includes('/.claude/remote/ccd-cli/')
     || entrypoint.includes('@anthropic-ai/claude-code');
-  return isClaudeEntrypoint(argv0)
-    || (CLAUDE_RUNTIMES.has(path.basename(argv0)) && isClaudeEntrypoint(cmdline[1] ?? ''));
+  if (isClaudeEntrypoint(argv0)) return true;
+  if (!CLAUDE_RUNTIMES.has(path.basename(argv0))) return false;
+  for (let index = 1; index < cmdline.length; index += 1) {
+    const arg = cmdline[index];
+    if (['--require', '-r', '--import', '--loader'].includes(arg)) { index += 1; continue; }
+    if (arg.startsWith('-')) continue;
+    return isClaudeEntrypoint(arg);
+  }
+  return false;
 }
 
 export function hasClaudeAncestor(pid = process.pid, { parentOf = getParentPid, identityOf = getProcessIdentity, maxDepth = 32 } = {}) {

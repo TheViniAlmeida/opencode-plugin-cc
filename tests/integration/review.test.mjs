@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeWorkspace, runCli, testEnv } from '../helpers.mjs';
+import { jobsIn, makeWorkspace, requestsTo, runCli, testEnv } from '../helpers.mjs';
 import { fixtureModelIds, gitIn, makeMainRepo, promptBodies, promptText, sessionCreateBodies, writeFile, writeGlobalConfig } from '../f2b-helpers.mjs';
 import { REVIEW_OK_STRUCTURED } from '../fixtures/scenarios/review-ok.mjs';
 import { DEFAULT_CONFIG } from '../../plugins/opc/scripts/lib/config.mjs';
@@ -15,6 +15,17 @@ function setup(t, { scenario = 'review-ok', config = {}, extra = {} } = {}) {
 }
 function makeDirty(cwd) { writeFile(cwd, 'src/app.js', "export const value = 'REVIEW_DIFF_MARKER';\n"); }
 const JOB_ID = /review-[a-z0-9]+-[a-z0-9]+/;
+
+for (const command of ['review', 'adversarial-review']) {
+  test(`${command} refuses share auto before queuing a background job`, async (t) => {
+    const { cwd, env } = setup(t, { scenario: 'share-auto' }); makeDirty(cwd);
+    const result = await runCli([command, '--background', '--json'], { cwd, env });
+    assert.equal(result.code, 4, result.stdout + result.stderr);
+    assert.match(result.stderr, /SHARE_AUTO/);
+    assert.deepEqual(jobsIn(env, cwd), []);
+    assert.equal(requestsTo(env, 'POST', '/api/session').length, 0);
+  });
+}
 
 test('review --wait renders findings in severity order', async (t) => {
   const { cwd, env } = setup(t); makeDirty(cwd);

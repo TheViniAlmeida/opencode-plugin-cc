@@ -28,7 +28,7 @@ test('--json HTTP error output masks secret patterns in free text', async () => 
 test('--json error serialization independently masks the message and nested details', async () => {
   const token = `sk-${'B'.repeat(40)}`;
   const result = await runMain(['models', '--json'], async () => {
-    throw new RequestError('SERVER_ERROR', `bad key ${token}`, { details: { note: `Bearer ${'abc'.repeat(12)}`, nested: [{ message: token }], apiKey: 'fixture-value' } });
+    throw new RequestError('SERVER_ERROR', `bad key ${token}`, { details: { note: `Bearer ${'abc0'.repeat(9)}`, nested: [{ message: token }], apiKey: 'fixture-value' } });
   });
   assert.equal(result.code, 7);
   assert.equal((result.stdout + result.stderr).includes(token), false);

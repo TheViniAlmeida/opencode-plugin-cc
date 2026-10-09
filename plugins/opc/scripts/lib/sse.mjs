@@ -189,6 +189,7 @@ export class EventHub {
         return this.fetchImpl(this.client.buildUrl('/api/event'), {
           headers: { ...this.client.authHeaders(), ...(this.client.directory ? { 'x-opencode-directory': this.client.directory } : {}), accept: 'text/event-stream' },
           signal: controller.signal,
+          redirect: 'manual',
         });
       });
       res = await Promise.race([fetchPromise, timeoutPromise, stopped]);
@@ -202,6 +203,7 @@ export class EventHub {
       clearTimeout(timeout);
     }
     try {
+      if (res.status >= 300 && res.status < 400) throw new ConnectionError('UNEXPECTED_REDIRECT', 'GET /api/event: o servidor respondeu com redirecionamento; configure a URL final.');
       if (res.status === 401) throw new ConnectionError('AUTH_FAILED', 'Fluxo de eventos recusado (401).');
       if (!res.ok || !res.body) throw new ConnectionError('SERVER_DOWN', `Fluxo de eventos falhou (HTTP ${res.status}).`);
       reader = res.body.getReader();
@@ -272,13 +274,13 @@ export class EventHub {
         } catch (err) {
           lastError = err;
           if (this._state === 'stopped') return;
-          if (err.code === 'AUTH_FAILED') break;
+          if (['AUTH_FAILED', 'UNEXPECTED_REDIRECT'].includes(err.code)) break;
         }
       }
       if (!conn) {
         if (this._state === 'stopped') return;
         this._state = 'down';
-        const err = lastError?.code === 'AUTH_FAILED'
+        const err = ['AUTH_FAILED', 'UNEXPECTED_REDIRECT'].includes(lastError?.code)
           ? lastError
           : new ConnectionError('SERVER_DOWN', `Fluxo de eventos perdido após ${this.backoffMs.length} tentativas de reconexão.`);
         for (const h of this._down) safeCall('onDown', h, err);

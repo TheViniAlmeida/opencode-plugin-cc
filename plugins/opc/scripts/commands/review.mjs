@@ -2,6 +2,7 @@ import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { collectReviewContext, diffSizeEstimate, resolveReviewTarget } from '../lib/git.mjs';
 import { connectApi } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { assertNotInsideServer, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, loadSchema, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
@@ -110,7 +111,8 @@ export async function runReviewCommand(ctx, argv, { variant }) {
     return ExitCode.OK;
   }
   if (context.truncated) writeLog(ctx, `[opc] diff tem ${context.diffBytes} bytes; enviando estatísticas e ${context.includedFiles.length} de ${context.files.length} diffs de arquivos (menores primeiro).`);
-  const { api } = await connectApi(ctx);
+  const { api, server } = await connectApi(ctx);
+  if (flags.background) assertCanCreateSessions(server);
   const resolved = await resolveTurnModel({ api, kind: 'review', flags: { model: flags.model, variant: flags.variant ?? flags.effort }, config: ctx.config });
   for (const warning of resolved.warnings) writeLog(ctx, `[opc] aviso: ${warning}`);
   const title = sessionTitle(variant === 'review' ? 'review' : 'adversarial-review', summarize(focus ? `${target.label} — ${focus}` : target.label));

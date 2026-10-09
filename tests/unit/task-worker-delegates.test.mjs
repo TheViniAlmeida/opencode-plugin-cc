@@ -46,7 +46,7 @@ test('coordinator bridge setup rejection fails and logs the member lane', async 
   const rules = [{ action: '*', resource: '*', effect: 'deny' }];
   const code = await runWorker(ctx, group, { prompt: 'p', members: [spec], maxParallel: 1, profile: 'read-only', rules, mechanism: 'child-session' }, {
     openApi: async () => ({ api: { agents: async () => [], createSession: async (body) => { created.push(body); return { id: 'ses_parent' }; } }, hub: {}, close() {} }),
-    createBridge: () => { throw new Error('bridge setup failed Bearer abcdefghijklmnop'); },
+    createBridge: () => { throw new Error('bridge setup failed Bearer abcdefghijklmno0'); },
   });
   assert.equal(code, 7);
   assert.deepEqual(created[0].model, { providerID: 'provider', id: 'model' });
@@ -57,7 +57,7 @@ test('coordinator bridge setup rejection fails and logs the member lane', async 
   const log = readFileSync(join(stateDir, 'jobs', `${group.id}.log`), 'utf8');
   assert.match(log, /bridge setup failed/);
   assert.match(log, /failed \*\*\*/);
-  assert.doesNotMatch(log, /abcdefghijklmnop/);
+  assert.doesNotMatch(log, /abcdefghijklmno0/);
   assert.match(member.errorMessage, /failed \*\*\*/);
 });
 
