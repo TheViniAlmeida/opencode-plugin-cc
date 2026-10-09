@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, readFakeState, stateDirFor, eventually } from '../helpers.mjs';
 import { F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
@@ -14,6 +14,17 @@ const created = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && 
 const prompts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/prompt$/.test(r.path)).map((r) => r.body);
 const DENY_ALL = { action: '*', resource: '*', effect: 'deny' };
 const CARRIER_RULES = profileRules({ config: F3_TEST_CONFIG }, 'read-only', [{ action: 'subagent', resource: 'explore', effect: 'allow' }]);
+
+test('subagent --prompt-file resolves against --cwd instead of the process directory', async (t) => {
+  const { cwd, env } = await setup(t);
+  const launchCwd = makeWorkspace(t, { git: false, name: 'launcher' });
+  const prompt = 'Review the workspace prompt.\nPreserve this line.';
+  writeFileSync(join(cwd, 'prompt.md'), prompt);
+  writeFileSync(join(launchCwd, 'prompt.md'), 'Wrong process-directory prompt.');
+  const res = await runCli(['subagent', '--cwd', cwd, '--agent', 'general', '--model', 'fast', '--prompt-file', 'prompt.md', '--json'], { env, cwd: launchCwd });
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.deepEqual(readFakeState(env).f3.prompts.map((p) => p.text), [prompt]);
+});
 
 test('três membros: sessão própria, resultado e corpos corretos', async (t) => {
   const { cwd, env } = await setup(t);

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
@@ -64,7 +65,7 @@ export async function run(ctx, argv) {
   if (raw.text && positionals.length) throw new UsageError('CONFLICT', 'use o texto do stdin (--raw-args-stdin) ou argumentos posicionais, não os dois');
   let prompt;
   if (flags['prompt-file']) {
-    try { prompt = readFileSync(flags['prompt-file'], 'utf8'); }
+    try { prompt = readFileSync(resolvePath(ctx.cwd, flags['prompt-file']), 'utf8'); }
     catch (err) {
       const pathPreview = `${String(flags['prompt-file']).slice(0, 12)}…`;
       throw new UsageError('PROMPT_FILE', `não foi possível ler --prompt-file ${pathPreview}: ${err.code ?? 'erro de leitura'}`);

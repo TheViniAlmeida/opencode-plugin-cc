@@ -5,6 +5,7 @@ import { NotFoundError, UsageError } from '../lib/opc-error.mjs';
 import { ACTIVE_STATUSES, GROUP_ROLE, isActive, isTerminal, listGroupMembers, listJobs, reconcileJob, resolveJobRef, topLevelJobs } from '../lib/jobs.mjs';
 import { renderAttempts, renderCommandResult, renderGroupResult, renderReviewJob, renderTurnResult } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
+import { reviewExitCode } from './review.mjs';
 
 const stillRunning = (job) => {
   const status = job.status === 'queued' ? 'na fila' : job.status === 'waiting_permission' ? 'aguardando permissão' : 'em execução';
@@ -36,7 +37,7 @@ export async function run(ctx, argv) {
   if (job.kind === 'review') {
     if (flags.json) ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: job.result?.structured ?? null, rendered: renderReviewJob(job) });
     else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
-    return exitCodeForJob(job);
+    return reviewExitCode(job);
   }
   if (flags.json) ctx.json({ job });
   else ctx.out(renderTurnResult(job));

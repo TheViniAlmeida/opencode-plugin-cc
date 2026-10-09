@@ -129,6 +129,11 @@ const MAP_ENTRY = Object.freeze({ 'model-map': schemaField('model'), 'modelref-l
 const GROUPS = new Set(Object.keys(CONFIG_SCHEMA).flatMap((k) => k.split('.').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('.'))));
 const WORKSPACE_PREFERENCE_KEYS = ['defaultProvider', 'defaultModel', 'defaultVariant', 'defaultAgent', 'aliases', 'reviewModel', 'review', 'stopGate.model', 'project', 'routing', 'conclave', 'orchestrate'];
 const WORKSPACE_POLICY_LISTS = ['policy.providers.allow', 'policy.providers.deny', 'policy.models.allow', 'policy.models.deny', 'policy.agents.allow', 'policy.agents.deny', 'policy.tools.deny', 'policy.sensitivePaths', 'policy.destructiveBash'];
+export const WORKSPACE_TIGHTEN_ONLY = Object.freeze([
+  'routing.fallback.maxAttempts', 'routing.fallback.maxProviderRetries', 'routing.fallback.maxRetryWaitSec',
+  'conclave.rounds', 'conclave.memberTimeoutSec', 'orchestrate.maxSubtasks',
+]);
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MODEL_TYPES = new Set(['model', 'modelref', 'modelref-or-claude', 'model-map', 'modelref-list-map', 'modelref-list']);
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -220,19 +225,30 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
   const warnings = [];
   if (obj === null || obj === undefined) return { errors, warnings };
   if (!isObj(obj)) return { errors: [{ path: '', code: 'INVALID_VALUE', message: `a configuração ${source} deve ser um objeto JSON` }], warnings };
+  const unknown = (p) => warnings.push({ path: p, code: 'UNKNOWN_KEY', message: `chave desconhecida (ignorada) na configuração ${source}` });
+  const warnUnsafeKeys = (node, prefix) => {
+    if (!isObj(node) && !Array.isArray(node)) return;
+    for (const [key, value] of Object.entries(node)) {
+      const p = `${prefix}.${key}`;
+      if (UNSAFE_KEYS.has(key)) unknown(p);
+      else warnUnsafeKeys(value, p);
+    }
+  };
   const walk = (node, prefix) => {
     for (const [key, value] of Object.entries(node)) {
       const p = prefix ? `${prefix}.${key}` : key;
-      const desc = CONFIG_SCHEMA[p];
+      if (UNSAFE_KEYS.has(key)) { unknown(p); continue; }
+      const desc = Object.hasOwn(CONFIG_SCHEMA, p) ? CONFIG_SCHEMA[p] : null;
       if (desc) {
         if (STRUCTURED_OUTPUT_KEYS.includes(p) && value === 'tool') continue;
-        const problem = checkValue(desc, value);
+        const problem = checkValue(desc, mergeDeep(undefined, value));
         if (problem) errors.push({ path: p, code: 'INVALID_VALUE', message: problem });
+        warnUnsafeKeys(value, p);
       } else if (GROUPS.has(p)) {
         if (isObj(value)) walk(value, p);
         else errors.push({ path: p, code: 'INVALID_VALUE', message: 'deve ser um objeto' });
       } else {
-        warnings.push({ path: p, code: 'UNKNOWN_KEY', message: `chave desconhecida (ignorada) na configuração ${source}` });
+        unknown(p);
       }
     }
   };
@@ -249,9 +265,13 @@ export function validateConfigShape(obj, { source = 'global' } = {}) {
 }
 
 function mergeDeep(base, over) {
-  if (!isObj(base) || !isObj(over)) return cloneJson(over);
-  const out = cloneJson(base);
-  for (const [k, v] of Object.entries(over)) out[k] = isObj(v) && isObj(out[k]) ? mergeDeep(out[k], v) : cloneJson(v);
+  if (Array.isArray(over)) return over.map((v) => mergeDeep(undefined, v));
+  if (!isObj(over)) return cloneJson(over);
+  const out = isObj(base) ? cloneJson(base) : {};
+  for (const [k, v] of Object.entries(over)) {
+    if (UNSAFE_KEYS.has(k)) continue;
+    out[k] = mergeDeep(out[k], v);
+  }
   return out;
 }
 
@@ -270,13 +290,22 @@ export function mergeConfig(globalCfg, workspaceCfg) {
   const warnings = [];
   const config = mergeDeep(cloneJson(DEFAULT_CONFIG), isObj(globalCfg) ? globalCfg : {});
   let ws = isObj(workspaceCfg) ? cloneJson(workspaceCfg) : {};
-  const { errors: wsErrors } = validateConfigShape(ws, { source: 'workspace' });
+  const { errors: wsErrors, warnings: wsWarnings } = validateConfigShape(ws, { source: 'workspace' });
+  warnings.push(...wsWarnings.filter((w) => w.code === 'UNKNOWN_KEY' && UNSAFE_KEYS.has(w.path.split('.').at(-1))));
   for (const error of wsErrors) {
     warnings.push({ path: error.path, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${error.message}; ignorado` });
     if (error.path) ws = unsetConfigPath(ws, error.path);
   }
+  ws = mergeDeep({}, ws);
   const ignore = (p, why) => warnings.push({ path: p, code: 'WORKSPACE_IGNORED', message: `.opc.json: ${why}; ignorado` });
   ws = dropUnknownConfigKeys(ws, '', (p) => ignore(p, 'chave desconhecida'));
+  for (const key of WORKSPACE_TIGHTEN_ONLY) {
+    const value = getPath(ws, key);
+    if (value === undefined) continue;
+    const baseline = getPath(config, key);
+    if (value > baseline) warnings.push({ path: key, code: 'WORKSPACE_IGNORED', message: `"${key}": o workspace só pode apertar (global/padrão = ${baseline}); valor do workspace ignorado.` });
+    ws = setPath(ws, key, Math.min(baseline, value));
+  }
   for (const [key, value] of Object.entries(ws)) {
     if (key === 'policy') {
       if (!isObj(value)) { ignore('policy', 'deve ser um objeto'); continue; }
