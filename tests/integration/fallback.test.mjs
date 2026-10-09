@@ -23,6 +23,52 @@ function setup(t, scenario, { extra = {}, cfg = config() } = {}) {
 const sessionCreates = (env) => requestsTo(env, 'POST', /^\/api\/session$/).length;
 const output = (r) => `${r.stdout}\n${r.stderr}`;
 
+for (const failure of ['retry-cap', 'session-error', 'idle-error']) {
+  for (const childBusy of [false, true]) {
+    test(`write fallback confirms the parent and child after ${failure} (child busy: ${childBusy})`, async () => {
+      const { api, hub, emit } = memoryV2();
+      const stopped = new Set();
+      let turns = 0;
+      api.sessionStatus = async () => Object.fromEntries(['ses_mem1', 'ses_child']
+        .filter((id) => !stopped.has(id)).map((id) => [id, { type: 'busy' }]));
+      api.interrupt = async (id) => {
+        api.calls.push(['interrupt', id]);
+        if (id !== 'ses_child' || !childBusy) stopped.add(id);
+        return false;
+      };
+      const result = await runWithFallback({
+        candidates: [{ providerID: 'p', modelID: 'first', full: 'p/first' }, { providerID: 'p', modelID: 'second', full: 'p/second' }],
+        fallbackEligible: true, fallbackCfg: { enabled: true, maxAttempts: 2 }, write: true, backoffMs: 0,
+        runAttempt: async (model) => {
+          turns++;
+          if (turns > 1) return { status: 'completed', sessionID: 'ses_second', toolsRan: false };
+          const pending = runTurn({ api, hub, request: { model, newSession: { permissions: [{ action: '*', resource: '*', effect: 'deny' }] },
+            parts: [{ type: 'text', text: 'hi' }], timeoutMs: 2000, idleWaitMs: 50, fallbackCfg: { maxProviderRetries: 1 } } });
+          await api.promptSettled;
+          emit({ type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_mem1' } });
+          const error = { type: 'provider.transport', message: 'synthetic transport error' };
+          api.messagesFor('ses_mem1', [{ id: api.lastPromptId(), type: 'user' },
+            ...(failure === 'idle-error' ? [{ id: 'msg_error', type: 'assistant', error }] : [])]);
+          if (failure === 'retry-cap') emit({ type: 'session.retry.scheduled', data: { sessionID: 'ses_mem1', attempt: 2, at: Date.now() + 1000, error } });
+          else emit({ type: failure === 'idle-error' ? 'session.execution.succeeded' : 'session.execution.failed', data: { sessionID: 'ses_mem1', error } });
+          return pending;
+        },
+      });
+      assert.deepEqual(api.calls.filter(([name]) => name === 'interrupt').map(([, id]) => id), ['ses_mem1', 'ses_child']);
+      assert.equal(turns, childBusy ? 1 : 2);
+      assert.equal(result.attempts.length, childBusy ? 1 : 2);
+      if (childBusy) {
+        assert.equal(result.stopReason, 'fatal');
+        assert.equal(result.result.errorCode, 'ABORT_UNCONFIRMED');
+        assert.equal(result.result.errorClass, 'fatal');
+        assert.equal(result.result.abortConfirmed, false);
+      } else {
+        assert.equal(result.result.status, 'completed');
+      }
+    });
+  }
+}
+
 test('model-429 faz fallback e registra tentativas', async (t) => {
   const { env, ws } = setup(t, 'model-429', { extra: { FAKE_FAIL_MODELS: M.fast } });
   const r = await runCli(['ask', 'Qual arquivo define o ponto de entrada?'], { env, cwd: ws });

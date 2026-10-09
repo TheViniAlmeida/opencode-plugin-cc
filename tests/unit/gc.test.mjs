@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir, ORPHAN_SAFE_IDLE, trackTempDir } from '../helpers.mjs';
 import { findStaleStates, run } from '../../plugins/opc/scripts/commands/gc.mjs';
@@ -67,13 +67,19 @@ test('confirmed gc surfaces only one warning when rescanning a corrupt job for i
   const dir = makeState(root, 'recent-0123456789abcdef', 0);
   const id = 'task-abc123-abcdef';
   const healthyId = 'task-def456-abcdef';
-  writeFileSync(join(dir, 'jobs', `${id}.json`), '{');
+  const corrupt = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(corrupt, '{');
+  const before = statSync(corrupt);
   writeFileSync(join(dir, 'jobs', `${healthyId}.json`), JSON.stringify({ id: healthyId, status: 'completed' }));
   writeFileSync(join(dir, 'jobs', `${healthyId}.input.json`), '{}');
   let stderr = '';
   const ctx = { dataDir: root, stdin: { isTTY: false }, err: (w) => { stderr += w; }, json() {} };
   await run(ctx, ['--json', '--confirmed-by-user']);
   assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+  assert.equal(readFileSync(corrupt, 'utf8'), '{');
+  assert.equal(statSync(corrupt).mtimeMs, before.mtimeMs);
+  assert.equal(readdirSync(join(dir, 'jobs')).some((name) => name.includes('.corrupt-')), false);
+  assert.equal(existsSync(join(dir, 'jobs', `${healthyId}.input.json`)), false);
 });
 
 for (const ageDays of [0, 40]) {

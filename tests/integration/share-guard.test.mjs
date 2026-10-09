@@ -21,6 +21,40 @@ const SESSION_BODY = {
 };
 const isShareError = (err) => err.code === 'SHARE_AUTO' && err.exitCode === ExitCode.POLICY;
 
+for (const recoveredConfig of ['auto', 'unavailable']) {
+  test(`server recovery refreshes the session guard when config becomes ${recoveredConfig}`, async (t) => {
+    const external = await startExternalFake(t);
+    const { ctx } = makeServerCtx(t, { extraEnv: {
+      OPC_SERVER_URL: external.url, OPC_SERVER_PASSWORD: external.password,
+    } });
+    const fetchImpl = globalThis.fetch;
+    let recover = false;
+    let failedGet = false;
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      const route = new URL(url).pathname;
+      if (recover && route === '/api/session' && init.method === 'GET' && !failedGet) {
+        failedGet = true;
+        throw Object.assign(new Error('synthetic disconnect'), { code: 'ECONNRESET' });
+      }
+      if (recover && route === '/api/config' && recoveredConfig === 'unavailable') {
+        return new Response('[]', { headers: { 'content-type': 'application/json' } });
+      }
+      return fetchImpl(url, init);
+    });
+    const { api, server } = await connectApi(ctx);
+    assert.equal(server.world.shareBlocked, false);
+    recover = true;
+    if (recoveredConfig === 'auto') external.fake.configOverride = { share: 'auto' };
+    await api.listSessions();
+    assert.equal(failedGet, true);
+    await assert.rejects(() => api.createSession(SESSION_BODY), isShareError);
+    await assert.rejects(() => api.fork(SEED.session), isShareError);
+    assert.equal(server.world.shareBlocked, true);
+    assert.equal(server.world.shareReason, recoveredConfig === 'auto' ? 'share-auto' : 'config-unavailable');
+    assert.equal(readJsonFile(external.stateFile).requests.filter((r) => r.method === 'POST').length, 0);
+  });
+}
+
 for (const [scenario, reason, message] of [
   ['share-auto', 'share-auto', /share "auto"/],
   ['config-unavailable-recover', 'config-unavailable', /configuração de compartilhamento/],

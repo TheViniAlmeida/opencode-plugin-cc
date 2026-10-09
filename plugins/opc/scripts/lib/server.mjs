@@ -685,6 +685,9 @@ export function clientFor(ctx, server) {
     password: server.password,
     directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
     requestTimeoutMs: settings.requestTimeoutSec * 1000,
-    onServerDown: () => ensureServer(ctx).then((s) => ({ url: s.url, password: s.password })),
+    onServerDown: () => ensureServer(ctx).then((s) => {
+      server.world = s.world;
+      return s;
+    }),
   });
 }

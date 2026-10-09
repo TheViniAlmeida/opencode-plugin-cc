@@ -147,8 +147,9 @@ test('integration refusal scenario rejects only direct explore session creation'
 test('a prompt refusal mentioning agent mode remains available for fallback', async () => {
   const { api, hub } = memoryV2();
   api.prompt = async () => { throw new RequestError('BAD_REQUEST', 'agent mode primary required'); };
+  api.interrupt = async () => { api.sessionStatus = async () => ({}); return false; };
   await assert.rejects(runTurn({ api, hub, request: { model: member.model, agent: member.agent,
-    newSession: { title: member.title, permissions: RULES }, parts: [{ type: 'text', text: 'find x' }], agentModeFallback: true } }),
+    newSession: { title: member.title, permissions: RULES }, parts: [{ type: 'text', text: 'find x' }], agentModeFallback: true, idleWaitMs: 50 } }),
   (error) => error.code === 'BAD_REQUEST');
 });
 

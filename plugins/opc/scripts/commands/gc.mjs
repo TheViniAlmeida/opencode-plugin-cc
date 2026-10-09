@@ -195,7 +195,7 @@ export async function run(ctx, argv, overrides = {}) {
         skipped.push({ dir: input.dir, name: input.dir.split(/[\\/]/).at(-1), reason: 'Identidade do diretório mudou; entradas preservadas.' });
         continue;
       }
-      const job = listJobs(input.dir, { all: true, onWarning }).find((entry) => entry.id === input.id);
+      const job = listJobs(input.dir, { all: true, quarantine: false, onWarning }).find((entry) => entry.id === input.id);
       if (!job || !isTerminal(job)) continue;
       const existing = terminalInputFiles(input.dir, [job]).find((entry) => entry.id === input.id)?.files ?? [];
       if (!existing.length) continue;

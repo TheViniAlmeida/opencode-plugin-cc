@@ -203,11 +203,14 @@ export function validateSelection({ candidate, variant = null, agentName = null,
 import { buildCatalog } from './models.mjs';
 
 export async function resolveTurnModel({ api, kind, flags = {}, config }) {
-  const [providers, models, defaultModel, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api)]);
+  const [providers, models, defaultModel, opencodeConfig, agents] = await Promise.all([
+    api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api),
+    typeof api.agents === 'function' ? api.agents() : [],
+  ]);
   const catalog = buildCatalog({ providers, models, defaultModel });
   const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
   const chosen = resolution.candidates[0];
-  const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, catalog, policy: config?.policy ?? {} });
+  const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, agents: agents ?? [], catalog, policy: config?.policy ?? {} });
   return {
     model: { providerID: chosen.providerID, modelID: chosen.modelID },
     full: chosen.full,

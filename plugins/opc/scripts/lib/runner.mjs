@@ -185,6 +185,23 @@ export async function runTurn({
   let toolsRanLive = false;
   let promptAccepted = false;
   let forcedError = null;
+  const unconfirmedAbortError = () => ({ name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } });
+  const abortTracked = async () => {
+    const sessionAborts = [];
+    let serverDown = false;
+    for (const id of tracked) {
+      let aborted = false;
+      try { await api.interrupt(id); aborted = true; }
+      catch (err) { if (isServerDown(err)) serverDown = true; }
+      sessionAborts.push({ sessionID: id, aborted, idle: false });
+    }
+    await Promise.all(sessionAborts.map(async (entry) => {
+      if (!entry.aborted) return;
+      try { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs); }
+      catch (err) { if (isServerDown(err)) serverDown = true; }
+    }));
+    return { sessionAborts, abortConfirmed: sessionAborts.every((entry) => entry.aborted && entry.idle), serverDown };
+  };
   let lastPhase = 'starting';
   let settled = false;
   let resolveDone;
@@ -233,11 +250,7 @@ export async function runTurn({
   const handleRetryStatus = async (status) => {
     setPhase('retrying', `Nova tentativa (${shown(status.attempt)}): ${shown(status.message ?? '')}`);
     if (forcedError || !retryExceedsCap(status, request.fallbackCfg ?? {})) return;
-    forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
-    try {
-      await api.interrupt(sessionID); // V2: interrupted:false only means the session was already idle
-      if (await waitIdle(api, sessionID, idleWaitMs)) forcedError = retryCapError(status);
-    } catch { /* Keep fail-closed error. */ }
+    forcedError = retryCapError(status);
     finish('forced-error');
   };
   const resync = async () => {
@@ -354,7 +367,9 @@ export async function runTurn({
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
-      else if (request.agentModeFallback && err?.code === 'BAD_REQUEST' && isAgentModeRefusal(err)) throw err;
+      else if (request.agentModeFallback && err?.code === 'BAD_REQUEST' && isAgentModeRefusal(err)) {
+        finish('agent-mode-refusal', { detail: err });
+      }
       else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada.' } } });
       else throw err;
     }
@@ -369,6 +384,12 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, assistantMessageIDs: [...assistantIDs], childSessionIDs: [...children] };
+    const confirmAbort = async () => {
+      const { serverDown, ...aborted } = await abortTracked();
+      Object.assign(base, aborted);
+      if (!base.abortConfirmed) forcedError = unconfirmedAbortError();
+      return serverDown;
+    };
     if (outcome.reason === 'cancelled' && !promptAccepted) {
       try { await api.interrupt(sessionID); } catch { /* Best effort. */ }
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
@@ -391,22 +412,10 @@ export async function runTurn({
       const message = `Falha ao sincronizar o turno: ${safeOutputText(outcome.detail?.message).replace(/[\r\n]+/g, ' ').slice(0, 500)}`;
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'ResyncError', errorCode: outcome.detail?.code ?? 'RESYNC_FAILED', errorMessage: message, error: { name: 'ResyncError', data: { message } } };
     }
-    if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
-      const sessionAborts = [];
-      for (const id of [sessionID, ...children]) {
-        let aborted = false;
-        try { await api.interrupt(id); aborted = true; }
-        catch (err) { if (isServerDown(err)) return serverLost(); }
-        sessionAborts.push({ sessionID: id, aborted, idle: false });
-      }
-      try {
-        await Promise.all(sessionAborts.map(async (entry) => {
-          if (entry.aborted) entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs);
-        }));
-      } catch (err) { if (isServerDown(err)) return serverLost(); throw err; }
-      base.sessionAborts = sessionAborts;
-      base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
-      if (!base.abortConfirmed) forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
+    if (['timeout', 'cancelled', 'forced-error', 'agent-mode-refusal'].includes(outcome.reason)) {
+      const serverDown = await confirmAbort();
+      if (serverDown && outcome.reason === 'timeout') return serverLost();
+      if (outcome.reason === 'agent-mode-refusal' && base.abortConfirmed) throw outcome.detail;
     }
     let collected;
     try {
@@ -429,16 +438,26 @@ export async function runTurn({
       collected = extractTurn(turn, { childMessages, diffs });
       for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     } catch (err) {
-      if (!safetyFailure) { if (isServerDown(err)) return serverLost(); throw err; }
+      if (!safetyFailure && forcedError?.name !== 'AbortUnconfirmed') {
+        if (isServerDown(err)) return serverLost();
+        throw err;
+      }
       collected = extractTurn([]);
     }
+    const executionError = outcome.reason === 'session-error' ? outcome.error : collected.error;
+    if (executionError && base.abortConfirmed === undefined && (classifyError(executionError).errorClass === 'recoverable'
+      || (executionError.type ?? executionError.name) === 'ContextOverflowError'
+      || (request.agentModeFallback && isAgentModeRefusal(executionError)))) await confirmAbort();
     const textJson = request.format?.type === 'json_schema' ? schemaValidator(request.format.schema)
       : request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : request.kind === 'task' ? () => null : null);
     if (outcome.reason === 'idle' && !collected.error && !forcedError && typeof textJson === 'function') collected.structured = extractTextJson(collected.finalText, textJson);
     collected = redactOutput({ ...collected, structuredSource: collected.structured === null ? null : 'text' });
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };
-    if (forcedError?.name === 'AbortUnconfirmed') return { ...result, status: 'failed', error: forcedError, errorClass: 'fatal', errorType: 'AbortUnconfirmed', errorCode: 'ABORT_UNCONFIRMED', errorMessage: forcedError.data.message };
+    if (forcedError?.name === 'AbortUnconfirmed') {
+      if (outcome.reason === 'cancelled') return { ...result, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: `Turno cancelado. Aviso: ${forcedError.data.message}` };
+      return { ...result, status: 'failed', error: forcedError, errorClass: 'fatal', errorType: 'AbortUnconfirmed', errorCode: 'ABORT_UNCONFIRMED', errorMessage: forcedError.data.message };
+    }
     if (outcome.reason === 'callback-failed') return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'CallbackFailed', errorCode: 'CALLBACK_FAILED', errorMessage: `O callback do turno falhou: ${shown(outcome.detail?.message)}` };
     if (outcome.reason === 'forced-error' && forcedError) {
       const classified = classifyError(forcedError, { toolsRan });

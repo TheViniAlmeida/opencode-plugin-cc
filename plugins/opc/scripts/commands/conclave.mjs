@@ -12,7 +12,7 @@ import { composeMembers, validateConclaveOptions, runConclave, buildKnownNames, 
 import { renderConclave } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { redactOutput, redactText, safeOutputText } from '../lib/redact.mjs';
-import { collectReviewPrompt } from './review.mjs';
+import { collectReviewPrompt, REVIEW_FOCUS_BYTES } from './review.mjs';
 
 const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode: { type: 'string', default: 'opinion' }, rounds: { type: 'number' }, judge: { type: 'string' }, quorum: { type: 'number' }, 'allow-judge-member': { type: 'boolean', default: false }, background: { type: 'boolean', default: false }, 'wait-timeout': { type: 'number' }, base: { type: 'string' }, scope: { type: 'string' }, json: { type: 'boolean', default: false }, 'raw-args-stdin': { type: 'boolean' } }, allowPositionals: true };
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
@@ -41,6 +41,7 @@ export async function run(ctx, argv) {
   if (raw.text != null && positionals.length) throw usage('CONFLICT', 'informe a pergunta em --raw-args-stdin ou nos argumentos, não nos dois');
   const question = (raw.text ?? positionals.join(' ')).trim();
   const mode = flags.mode;
+  if (mode === 'review' && Buffer.byteLength(question) > REVIEW_FOCUS_BYTES) throw usage('USAGE', 'A pergunta da revisão deve ter no máximo 16 KB.');
   const models = flags.models.length ? flags.models : null;
   validateConclaveOptions({ mode, models, pool: flags.pool ?? null, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, config: ctx.config });
   if (mode !== 'review' && !question) throw usage('CONCLAVE_NO_QUESTION', 'o conclave precisa de uma pergunta: opc conclave "<pergunta>" [--models a,b | --pool nome]');

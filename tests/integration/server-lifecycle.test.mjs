@@ -9,7 +9,7 @@ import { createJob, isActive, listJobs, serverContext } from '../../plugins/opc/
 import { clientFor, ensureServer, serverMatcher, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
-  deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, spawnSleeper, waitFor,
+  deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, runCli, spawnSleeper, waitFor,
 } from '../helpers.mjs';
 
 test('ensureServer spawns a detached server, records it (600) and reuses it; stopServer identity-stops without dispose', async (t) => {
@@ -158,6 +158,27 @@ test('hung server with active write jobs is not killed after three busy health r
   assert.equal(readFakeState(env).bootAttempts, 1);
   assert.equal(readFakeState(env).signals.length, 0);
   assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
+});
+
+test('setup preserves a hung server when a job is unreadable even without an active index entry', async (t) => {
+  const { env, ctx, stateDir, ws } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  const id = 'task-unreadable-abcdef';
+  fs.mkdirSync(path.join(stateDir, 'jobs'), { recursive: true });
+  const file = path.join(stateDir, 'jobs', `${id}.json`);
+  fs.writeFileSync(file, '{}');
+  fs.chmodSync(file, 0o000);
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const result = await runCli(['setup', '--json'], { env, cwd: ws, timeoutMs: 30000 });
+  assert.equal(result.code, 5, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.server.error.code, 'SERVER_UNRESPONSIVE');
+  assert.match(report.server.error.message, /há 1 job\(s\) ilegível\(is\)/);
+  assert.ok(processAlive(first.pid));
+  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+  assert.equal(readFakeState(env).bootAttempts, 1);
+  assert.equal(readFakeState(env).signals.length, 0);
+  assert.equal(fs.existsSync(file), true);
 });
 
 test('a busy hung server that recovers during retries is reused with its world checks', async (t) => {

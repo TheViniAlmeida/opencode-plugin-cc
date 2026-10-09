@@ -17,14 +17,16 @@ function makeDirty(cwd) { writeFile(cwd, 'src/app.js', "export const value = 'RE
 const JOB_ID = /review-[a-z0-9]+-[a-z0-9]+/;
 
 for (const command of ['review', 'adversarial-review']) {
-  test(`${command} refuses share auto before queuing a background job`, async (t) => {
-    const { cwd, env } = setup(t, { scenario: 'share-auto' }); makeDirty(cwd);
-    const result = await runCli([command, '--background', '--json'], { cwd, env });
-    assert.equal(result.code, 4, result.stdout + result.stderr);
-    assert.match(result.stderr, /SHARE_AUTO/);
-    assert.deepEqual(jobsIn(env, cwd), []);
-    assert.equal(requestsTo(env, 'POST', '/api/session').length, 0);
-  });
+  for (const flags of [[], ['--wait'], ['--background']]) {
+    test(`${command} refuses share auto before queuing (${flags[0] ?? 'foreground'})`, async (t) => {
+      const { cwd, env } = setup(t, { scenario: 'share-auto' }); makeDirty(cwd);
+      const result = await runCli([command, ...flags, '--json'], { cwd, env });
+      assert.equal(result.code, 4, result.stdout + result.stderr);
+      assert.match(result.stderr, /SHARE_AUTO/);
+      assert.deepEqual(jobsIn(env, cwd), []);
+      assert.equal(requestsTo(env, 'POST', '/api/session').length, 0);
+    });
+  }
 }
 
 test('review --wait renders findings in severity order', async (t) => {

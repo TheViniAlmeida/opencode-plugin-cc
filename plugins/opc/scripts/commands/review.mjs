@@ -112,7 +112,7 @@ export async function runReviewCommand(ctx, argv, { variant }) {
   }
   if (context.truncated) writeLog(ctx, `[opc] diff tem ${context.diffBytes} bytes; enviando estatísticas e ${context.includedFiles.length} de ${context.files.length} diffs de arquivos (menores primeiro).`);
   const { api, server } = await connectApi(ctx);
-  if (flags.background) assertCanCreateSessions(server);
+  assertCanCreateSessions(server);
   const resolved = await resolveTurnModel({ api, kind: 'review', flags: { model: flags.model, variant: flags.variant ?? flags.effort }, config: ctx.config });
   for (const warning of resolved.warnings) writeLog(ctx, `[opc] aviso: ${warning}`);
   const title = sessionTitle(variant === 'review' ? 'review' : 'adversarial-review', summarize(focus ? `${target.label} — ${focus}` : target.label));
