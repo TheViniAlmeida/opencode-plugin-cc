@@ -465,6 +465,7 @@ export function assertNotInsideServer(env) {
   }
 }
 
+// Cancellation and permission handling never create sessions, so this API needs no share guard.
 export function existingServerApi(ctx) {
   const env = ctx.env ?? {};
   let baseUrl = env.OPC_SERVER_URL || null;

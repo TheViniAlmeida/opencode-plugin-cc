@@ -84,6 +84,18 @@ test('transfer imports a valid export in private files and returns only a resuma
   assert.equal(readFakeState(env).bootAttempts, 1, 'import uses the managed V2 server');
 });
 
+for (const scenario of ['share-auto', 'config-unavailable-recover']) {
+  test(`transfer refuses import when session creation is blocked by ${scenario}`, async (t) => {
+    const { env, ws, source } = setup(t, { FAKE_OPENCODE_SCENARIO: scenario });
+    const result = await runCli(transferArgs(source), { env, cwd: ws });
+    assert.equal(result.code, 4, result.stderr);
+    assert.match(result.stderr, /SHARE_AUTO/);
+    assert.equal(imports(env).length, 0, 'OpenCode import was never invoked');
+    assert.equal(readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session').length, 0);
+    assertTemporaryRemoved(env, ws);
+  });
+}
+
 test('transfer keeps the imported sessionID and degrades the resume line when the attach secret cannot be persisted', async (t) => {
   const { env, ws, source } = setup(t);
   // The fake import changes the managed server record, so persistManagedAttachSecret throws SERVER_CHANGED afterwards.

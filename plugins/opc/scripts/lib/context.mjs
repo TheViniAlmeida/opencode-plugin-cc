@@ -5,7 +5,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { redact, redactText } from './redact.mjs';
 import { defaultDataDir, ensurePrivateDir, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
-import { ensureServer } from './server.mjs';
+import { ensureServer, guardSessionCreation } from './server.mjs';
 import { serverDirectory } from './remote.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
@@ -125,7 +125,7 @@ export async function connectApi(ctx) {
   const server = await ensureServer(serverCtx);
   surfaceServerWarnings(ctx, server.warnings);
   const client = clientFor(serverCtx, server);
-  return { api: createApi(client), server, client };
+  return { api: guardSessionCreation(createApi(client), server), server, client };
 }
 // ---- end F1 ----
 
@@ -185,7 +185,7 @@ export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
       directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
       requestTimeoutMs: (ctx.config?.server?.requestTimeoutSec ?? 30) * 1000,
     });
-    api = createApi(client);
+    api = guardSessionCreation(createApi(client), server);
   }
   let hub = null;
   if (withHub) {

@@ -272,6 +272,20 @@ export function assertCanCreateSessions(server) {
   }
 }
 
+export function guardSessionCreation(api, server) {
+  return {
+    ...api,
+    async createSession(...args) {
+      assertCanCreateSessions(server);
+      return api.createSession(...args);
+    },
+    async fork(...args) {
+      assertCanCreateSessions(server);
+      return api.fork(...args);
+    },
+  };
+}
+
 // V2 loads providers while the instance bootstraps: until the first `model.updated` event, /api/model may list
 // only built-in providers (gateway providers arrived ~11 s after boot on the operator's machine). Resolves true on
 // that event and false when the event stream fails, so the caller never waits on a broken stream.
@@ -380,7 +394,9 @@ async function attachServer(env, settings, config, workspaceRoot) {
   const url = parsed.origin;
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
-  const client = createClient({ baseUrl: url, password, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
+  const client = createClient({ baseUrl: url, password,
+    directory: serverDirectory({ workspaceRoot, env, config, attached: true }),
+    requestTimeoutMs: settings.requestTimeoutSec * 1000 });
   const api = createApi(client);
   const health = await api.info();
   assertSupportedVersion(health);
@@ -563,7 +579,9 @@ export async function ensureServer(ctx) {
           warnings.push(`Servidor gerenciado anterior ao OpenCode ${MIN_OPENCODE_VERSION} encerrado; um servidor V2 será iniciado.`);
         } else {
           if (health.ok && health.version === record.version) {
-            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password,
+              directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env, config, attached: false }),
+              requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
             record.world = checked.world;
             writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
             return {
@@ -573,7 +591,9 @@ export async function ensureServer(ctx) {
           }
           if (health.ok && hasActiveJobs()) {
             warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
-            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password,
+              directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env, config, attached: false }),
+              requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
             record.world = checked.world;
             writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
             return {

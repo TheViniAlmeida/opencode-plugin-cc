@@ -10,10 +10,10 @@ import {
 const SAMPLE = path.join(REPO_ROOT, 'tests', 'fixtures', 'data', 'claude-transcript-sample.jsonl');
 const SHARE_AUTO_WARNING = /^\[opc\] aviso: O OpenCode está com share "auto"/m;
 
-// Attach-mode environment against a fake whose GET /api/config reports share "auto" (a world-check warning).
-async function attachEnv(t) {
+// Attach-mode environment; the default fake config reports share "auto" (a world-check warning).
+async function attachEnv(t, scenario = 'share-auto') {
   const env = testEnv(t);
-  const external = await startExternalFake(t, { scenario: 'share-auto' });
+  const external = await startExternalFake(t, { scenario });
   env.OPC_SERVER_URL = external.url;
   env.OPC_SERVER_PASSWORD = external.password;
   return { env, ws: makeWorkspace(t, { git: false }) };
@@ -30,7 +30,8 @@ test('a discovery command in attach mode shows the server warning on stderr and 
 });
 
 test('transfer carries the server warnings in its result, in JSON and Markdown, without the attach info line', async (t) => {
-  const { env, ws } = await attachEnv(t);
+  const { env, ws } = await attachEnv(t, 'ok');
+  env.OPC_REMOTE_ROOT = '/srv/warn-transfer';
   const root = trackTempDir(t, makeTempDir('opc-warn-transfer-'));
   const project = path.join(root, '-tmp-ws');
   fs.mkdirSync(project);
@@ -42,11 +43,11 @@ test('transfer carries the server warnings in its result, in JSON and Markdown, 
 
   const json = await cliJson(args, { env, cwd: ws });
   assert.equal(json.code, 0, json.stderr);
-  assert.ok(json.data.warnings.some((w) => /share "auto"/.test(w)), JSON.stringify(json.data.warnings));
+  assert.ok(json.data.warnings.some((w) => /As ferramentas rodam em \/srv\/warn-transfer/.test(w)), JSON.stringify(json.data.warnings));
   assert.equal(json.data.warnings.some((w) => w.startsWith('Modo attach:')), false);
 
   const md = await runCli(args, { env, cwd: ws });
   assert.equal(md.code, 0, md.stderr);
-  assert.match(md.stdout, /share "auto"/);
+  assert.match(md.stdout, /As ferramentas rodam em \/srv\/warn-transfer/);
   assert.doesNotMatch(md.stdout, /Modo attach:/);
 });
