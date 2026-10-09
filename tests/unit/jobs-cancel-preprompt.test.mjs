@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGroup, createJob, updateJob, readJob, cancelJob, cancelGroup, recordAttempt, runJobTurn } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
+import { runWorker as runSubagentWorker } from '../../plugins/opc/scripts/commands/subagent.mjs';
+import { dispatchSubagent } from '../../plugins/opc/scripts/lib/runner.mjs';
+import { memoryV2 } from './_memory-v2.mjs';
 
 test('F4b fix2: unpublished orchestration session defers cancellation and preserves attempt publication', async (t) => {
   const stateDir = trackTempDir(t, makeTempDir('opc-cancel-preprompt-'));
@@ -153,3 +156,44 @@ test('runJobTurn hands the turn an isCancelled that sees intent persisted after 
   });
   assert.deepEqual(seen, [false, true]);
 });
+
+for (const target of ['member', 'group']) {
+  for (const mechanism of ['child-session', 'subagent-tool']) {
+    test(`subagent worker honours ${target} cancellation during session creation (${mechanism})`, async (t) => {
+      const stateDir = trackTempDir(t, makeTempDir('opc-sub-cancel-'));
+      const { group, members: [member] } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: group' }, [{ title: 'OPC: member' }]);
+      const spec = { agent: 'explore', model: { providerID: 'p', modelID: 'm' }, full: 'p/m', title: member.title };
+      const request = { members: [spec], prompt: 'find x', mechanism, profile: 'read-only',
+        rules: [{ action: '*', resource: '*', effect: 'deny' }], maxParallel: 1 };
+      const { api, hub } = memoryV2();
+      const create = api.createSession.bind(api);
+      const interrupted = [];
+      const inFlightDuringCleanup = [];
+      api.createSession = async (body) => {
+        if (!body.parentID) return { id: 'ses_parent' };
+        await updateJob(stateDir, target === 'member' ? member.id : group.id, { cancelRequestedAt: new Date().toISOString() });
+        return create(body);
+      };
+      api.interrupt = async (id) => {
+        interrupted.push(id);
+        inFlightDuringCleanup.push(readJob(stateDir, member.id).attemptInFlight);
+        return true;
+      };
+      await runSubagentWorker({ stateDir, config: {} }, group, request, {
+        openApi: async () => ({ api, hub, close() {} }),
+        dispatch: (args) => dispatchSubagent({ ...args, runTurnImpl: async ({ request }) => {
+          await api.prompt(request.sessionID, { text: 'must not be sent' });
+          return { status: 'completed', sessionID: request.sessionID, finalText: 'unexpected' };
+        } }),
+      });
+      assert.equal(api.promptCalls.length, 0);
+      assert.deepEqual(interrupted, ['ses_mem1']);
+      assert.deepEqual(inFlightDuringCleanup, [true]);
+      const final = readJob(stateDir, member.id);
+      assert.equal(final.status, 'cancelled');
+      assert.equal(final.sessionID, 'ses_mem1');
+      assert.equal(final.attemptInFlight, false);
+      assert.equal(final.result.errorType, 'Cancelled');
+    });
+  }
+}

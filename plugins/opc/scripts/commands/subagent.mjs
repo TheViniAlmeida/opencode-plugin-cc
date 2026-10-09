@@ -161,11 +161,17 @@ export async function runWorker(ctx, groupJob, request, {
     const outcomes = await runWithConcurrency(memberIds, req.maxParallel ?? 4, async (memberId, index) => {
       const spec = req.members[index];
       const tag = `[#${index + 1} ${spec.agent}]`;
+      const isCancelled = () => {
+        const member = readJob(stateDir, memberId);
+        const group = readJob(stateDir, groupJob.id);
+        return Boolean(member?.cancelRequestedAt) || member?.status === 'cancelled'
+          || Boolean(group?.cancelRequestedAt) || group?.status === 'cancelled';
+      };
       let bridge;
       let updater;
       try {
         if (readJob(stateDir, groupJob.id)?.status === 'cancelled' || readJob(stateDir, memberId)?.status !== 'queued') return;
-        await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now() });
+        await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now(), attemptInFlight: true });
         appendJobLog(stateDir, groupJob.id, `${tag} iniciando (${spec.full})`);
         await refresh();
         updater = createSerialUpdater(stateDir, memberId);
@@ -175,8 +181,8 @@ export async function runWorker(ctx, groupJob, request, {
         let res;
         try {
           res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules, ruleInputs, policy,
-            mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
-            onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.interrupt(sessionID).catch(() => {}); },
+            mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg, isCancelled,
+            onSession: async (sessionID) => { await updateJob(stateDir, memberId, { sessionID }); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
             onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
             onRequestResolved: (event) => bridge.onResolved(event) });
@@ -185,9 +191,9 @@ export async function runWorker(ctx, groupJob, request, {
         }
         await updater.flush();
         const latest = readJob(stateDir, memberId);
-        const wasCancelled = Boolean(latest?.cancelRequestedAt) || latest?.status === 'cancelled';
+        const wasCancelled = isCancelled();
         const status = wasCancelled ? 'cancelled' : res.status;
-        await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), sessionID: res.sessionID ?? latest?.sessionID ?? null,
+        await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), attemptInFlight: false, sessionID: res.sessionID ?? latest?.sessionID ?? null,
           ...(wasCancelled ? { errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' } : {
             errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
           }),
@@ -197,8 +203,8 @@ export async function runWorker(ctx, groupJob, request, {
         const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
         const latest = readJob(stateDir, memberId);
         if (latest && ['queued', 'running', 'waiting_permission'].includes(latest.status)) {
-          const wasCancelled = Boolean(latest.cancelRequestedAt);
-          await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(),
+          const wasCancelled = isCancelled();
+          await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(), attemptInFlight: false,
             errorCode: wasCancelled ? 'cancelled' : err.code ?? 'member_setup_failed', errorClass: 'fatal',
             errorType: wasCancelled ? 'Cancelled' : err.code ?? err.name ?? 'Error',
             errorMessage: wasCancelled ? 'Cancelada pelo usuário.' : errorMessage });

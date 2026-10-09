@@ -207,3 +207,51 @@ test('non-refusal errors propagate, disabled fallback stays off, and bad mechani
   await assert.rejects(dispatchSubagent({ api: refused, hub: {}, member, prompt: 'p', parentSessionID: 'ses_parent', rules: RULES, allowFallback: false }), (error) => error.code === 'BAD_REQUEST');
   await assert.rejects(dispatchSubagent({ api, hub: {}, member, prompt: 'p', parentSessionID: 'ses_parent', rules: RULES, mechanism: 'magic-value-beyond-preview' }), (error) => error.code === 'INVALID_MECHANISM' && error.exitCode === 2 && error.message.includes('magic-value-…') && !error.message.includes('beyond'));
 });
+
+for (const mechanism of SUBAGENT_MECHANISMS) {
+  for (const trigger of ['isCancelled', 'signal']) {
+    test(`member cancelled during createSession never prompts (${mechanism}, ${trigger})`, async () => {
+      const { api, hub } = memoryV2();
+      const create = api.createSession.bind(api);
+      const controller = new AbortController();
+      let cancelled = false;
+      let turnCalls = 0;
+      const published = [];
+      const interrupted = [];
+      api.createSession = async (body) => {
+        const session = await create(body);
+        if (trigger === 'signal') controller.abort(); else cancelled = true;
+        return session;
+      };
+      api.interrupt = async (id) => { interrupted.push(id); return true; };
+      const result = await dispatchSubagent({ api, hub, member, prompt: 'find x', parentSessionID: 'ses_parent', rules: RULES, ruleInputs,
+        mechanism, isCancelled: () => cancelled, signal: controller.signal, onSession: async (id) => { published.push(id); },
+        runTurnImpl: async ({ request }) => {
+          turnCalls++;
+          await api.prompt(request.sessionID, { text: 'must not be sent' });
+          return { status: 'completed', sessionID: request.sessionID, finalText: 'unexpected' };
+        } });
+      assert.equal(api.promptCalls.length, 0);
+      assert.equal(turnCalls, 0);
+      assert.deepEqual(published, ['ses_mem1']);
+      assert.deepEqual(interrupted, ['ses_mem1']);
+      assert.equal(result.status, 'cancelled');
+      assert.equal(result.errorType, 'Cancelled');
+      assert.equal(result.sessionID, 'ses_mem1');
+      assert.equal(result.mechanism, mechanism);
+      assert.equal(result.toolsRan, false);
+    });
+  }
+
+  test(`dispatch forwards cancellation checks and signal to the turn (${mechanism})`, async () => {
+    const { api, hub } = memoryV2();
+    const controller = new AbortController();
+    const isCancelled = () => false;
+    await dispatchSubagent({ api, hub, member, rules: RULES, ruleInputs, mechanism, isCancelled, signal: controller.signal,
+      runTurnImpl: async (args) => {
+        assert.equal(args.isCancelled, isCancelled);
+        assert.equal(args.signal, controller.signal);
+        return turn('ok')(args);
+      } });
+  });
+}

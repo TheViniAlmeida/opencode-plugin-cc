@@ -130,7 +130,7 @@ async function waitIdle(api, sessionID, maxMs) {
   const deadline = performance.now() + maxMs;
   while (performance.now() < deadline) {
     try { if (!((await api.sessionStatus())?.[sessionID])) return true; }
-    catch { return false; }
+    catch (err) { if (isServerDown(err)) throw err; return false; }
     await sleep(250);
   }
   return false;
@@ -344,9 +344,13 @@ export async function runTurn({
         const promptText = instruction && !text.includes(instruction) ? `${text}\n\n${instruction}` : text;
         if (request.command) {
           commandBaseline = new Set((await readSessionMessages(api, sessionID)).map((message) => message.id));
-          await api.runCommand(sessionID, request.command);
-        } else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
-        promptAccepted = true;
+        }
+        if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
+        if (!settled) {
+          if (request.command) await api.runCommand(sessionID, request.command);
+          else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
+          promptAccepted = true;
+        }
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
@@ -377,7 +381,7 @@ export async function runTurn({
         try { await api.interrupt(id); aborted = true; } catch { /* Unconfirmed. */ }
         sessionAborts.push({ sessionID: id, aborted, idle: false });
       }
-      await Promise.all(sessionAborts.map(async (entry) => { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs); }));
+      await Promise.all(sessionAborts.map(async (entry) => { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs).catch(() => false); }));
       base.sessionAborts = sessionAborts;
       base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
     }
@@ -388,9 +392,21 @@ export async function runTurn({
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'ResyncError', errorCode: outcome.detail?.code ?? 'RESYNC_FAILED', errorMessage: message, error: { name: 'ResyncError', data: { message } } };
     }
     if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
-      try { await api.interrupt(sessionID); }
-      catch (err) { if (isServerDown(err)) return serverLost(); }
-      await waitIdle(api, sessionID, idleWaitMs);
+      const sessionAborts = [];
+      for (const id of [sessionID, ...children]) {
+        let aborted = false;
+        try { await api.interrupt(id); aborted = true; }
+        catch (err) { if (isServerDown(err)) return serverLost(); }
+        sessionAborts.push({ sessionID: id, aborted, idle: false });
+      }
+      try {
+        await Promise.all(sessionAborts.map(async (entry) => {
+          if (entry.aborted) entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs);
+        }));
+      } catch (err) { if (isServerDown(err)) return serverLost(); throw err; }
+      base.sessionAborts = sessionAborts;
+      base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
+      if (!base.abortConfirmed) forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
     }
     let collected;
     try {
@@ -469,16 +485,22 @@ export function extractTaskOutput(messages) {
 export async function dispatchSubagent({
   api, hub, parentSessionID, member, prompt, rules, ruleInputs, policy = ruleInputs?.policy ?? {}, mechanism = 'child-session', allowFallback = true,
   timeoutMs, fallbackCfg, onSession = () => {}, onProgress = () => {}, onPermission = async () => {},
-  onQuestion = async () => {}, onRequestResolved = async () => {}, signal, runTurnImpl = runTurn,
+  onQuestion = async () => {}, onRequestResolved = async () => {}, isCancelled = () => false, signal, runTurnImpl = runTurn,
 }) {
   if (mechanism === 'subtask') mechanism = 'subagent-tool';
   if (!SUBAGENT_MECHANISMS.includes(mechanism)) {
     throw new UsageError('INVALID_MECHANISM', `Mecanismo inválido: ${String(mechanism ?? '').slice(0, 12)}… (use ${SUBAGENT_MECHANISMS.join(' ou ')})`);
   }
   // onRequestResolved is forwarded to runTurn so the F2a request bridge (bridge.onResolved) releases pending requests.
-  const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, signal };
+  const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, isCancelled, signal };
   const baseRequest = { model: member.model, variant: member.variant, timeoutMs, fallbackCfg };
   const model = modelFor(baseRequest);
+  const cancelBeforeTurn = async (sessionID) => {
+    if (!signal?.aborted && !isCancelled()) return null;
+    try { await api.interrupt(sessionID); } catch { /* Best effort: no prompt was sent. */ }
+    return { sessionID, messageID: newMessageId(), assistantMessageIDs: [], childSessionIDs: [], ...extractTurn([]),
+      structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
+  };
 
   const viaSubagentTool = async (fellBack) => {
     if (policy.tools?.deny?.includes('subagent') || matchesAny(member.agent, policy.agents?.deny ?? [])) {
@@ -497,7 +519,7 @@ export async function dispatchSubagent({
         extraAllow: [...(ruleInputs.extraAllow ?? []), carrierAllow] }),
     });
     await onSession(carrier.id);
-    const result = await runTurnImpl({
+    const result = await cancelBeforeTurn(carrier.id) ?? await runTurnImpl({
       ...common,
       request: {
         ...baseRequest,
@@ -525,7 +547,7 @@ export async function dispatchSubagent({
   await onSession(child.id);
   let result;
   try {
-    result = await runTurnImpl({
+    result = await cancelBeforeTurn(child.id) ?? await runTurnImpl({
       ...common,
       request: { ...baseRequest, sessionID: child.id, messageID: newMessageId(), agent: member.agent, agentModeFallback: allowFallback, parts: [{ type: 'text', text: prompt }] },
     });
