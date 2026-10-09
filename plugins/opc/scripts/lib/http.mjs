@@ -1,5 +1,5 @@
 // HTTP client for the OpenCode 2.0.22 API: Basic auth, workspace header, typed errors and timeouts.
-import { resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
 import { ConnectionError, NotFoundError, RequestError } from './opc-error.mjs';
 import { redact, registerSecret } from './redact.mjs';
 
@@ -41,7 +41,9 @@ export function createClient({
 }) {
   let currentBase = String(baseUrl).replace(/\/+$/, '');
   let currentPassword = password ?? null;
-  const workspaceDirectory = directory ? resolve(directory) : null;
+  // Caminho POSIX absoluto (local no Linux/macOS ou raiz remota em attach) não passa pelo cwd local:
+  // posix.resolve só normaliza. Outros caminhos (Windows) seguem o resolve da plataforma.
+  const workspaceDirectory = !directory ? null : String(directory).startsWith('/') ? posix.resolve(String(directory)) : resolve(directory);
 
   function registerAuthSecrets() {
     registerSecret(currentPassword);

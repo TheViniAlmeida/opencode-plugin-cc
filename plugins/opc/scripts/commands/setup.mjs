@@ -113,7 +113,8 @@ const NEXT_STEP_BY_CODE = {
   BOOT_FAILED: 'O servidor não subiu. Veja o server.log no diretório de estado e docs/troubleshooting.md.',
   UNSUPPORTED_VERSION: `Instale o OpenCode V2 ${MIN_OPENCODE_VERSION} ou configure server.opencodeBin (ou OPC_OPENCODE_BIN) para o binário V2.`,
   TIMEOUT: 'Tempo esgotado. Tente de novo; se persistir, veja docs/troubleshooting.md (locks e boot lento).',
-  INSECURE_SERVER_URL: 'Corrija OPC_SERVER_URL (http://127.0.0.1, http://localhost ou https://) ou remova a variável.',
+  INSECURE_SERVER_URL: 'Corrija OPC_SERVER_URL (https://, http://127.0.0.1, http://localhost ou http://<IP privado> com `opc config set server.allowPrivateHttp true --tty-confirm`) ou remova a variável.',
+  INVALID_REMOTE_ROOT: 'Corrija OPC_REMOTE_ROOT: caminho absoluto POSIX (começando com /) do repositório na máquina do servidor.',
   SERVER_DOWN: 'Servidor inacessível. Rode `/opc:setup` de novo.',
 };
 
@@ -147,6 +148,7 @@ async function diagnose(ctx, flags) {
         version: s.version,
         reused: s.reused,
         attached: s.attached,
+        remoteRoot: s.remoteRoot ?? null,
         sessionsBlocked: s.world?.shareBlocked ? (s.world.shareReason ?? 'share-auto') : null,
         warnings: s.warnings,
       };

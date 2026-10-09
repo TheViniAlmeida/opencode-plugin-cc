@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { redact, redactText } from './redact.mjs';
 import { defaultDataDir, ensurePrivateDir, resolveDataDir, resolveWorkspaceRoot, workspaceStateDir } from './state.mjs';
 import { ensureServer } from './server.mjs';
+import { serverDirectory } from './remote.mjs';
 import { createClient } from './http.mjs';
 import { createApi } from './api.mjs';
 import { EventHub } from './sse.mjs';
@@ -181,7 +182,7 @@ export async function openApi(ctx, { withHub = false, respawn = true } = {}) {
     client = createClient({
       baseUrl: server.url,
       password: server.password,
-      directory: ctx.workspaceRoot,
+      directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
       requestTimeoutMs: (ctx.config?.server?.requestTimeoutSec ?? 30) * 1000,
     });
     api = createApi(client);

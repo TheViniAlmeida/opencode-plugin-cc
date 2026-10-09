@@ -100,7 +100,7 @@ test('setup.md: install guidance without a package manager, heredoc payloads, co
   assert.match(body, /workspace[\s\S]*\/opc:setup --reconfigure/i);
   assert.doesNotMatch(body, /On first configuration, ask the scope choice/);
   assert.match(body, /--query '[^']*<typed text>[^']*'/);
-  for (const step of ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']) {
+  for (const step of ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'privateHttp', 'behaviour', 'project', 'aliases']) {
     const row = step === 'scope' ? '\\| `scope` \\(somente quando' : '\\| `' + step + '` \\|';
     assert.match(body, new RegExp(row), `step ${step} documented`);
   }

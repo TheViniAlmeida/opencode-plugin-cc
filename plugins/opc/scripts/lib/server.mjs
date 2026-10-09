@@ -12,6 +12,7 @@ import { withLock } from './locks.mjs';
 import { ConnectionError, PolicyError, UsageError } from './opc-error.mjs';
 import { getProcessIdentity, isPidAlive, spawnDetached, terminateProcessGroup } from './process.mjs';
 import { registerSecret, redactText } from './redact.mjs';
+import { isPrivateIpLiteral, resolveRemoteRoot, serverDirectory } from './remote.mjs';
 import { EventHub } from './sse.mjs';
 import { readJson, writeFileAtomic } from './state.mjs';
 
@@ -92,7 +93,7 @@ function removeServerRecord(stateDir) {
   removeAttachSecret(stateDir);
 }
 
-function serverSettings(config) {
+export function serverSettings(config) {
   return { ...DEFAULT_CONFIG.server, ...(config?.server ?? {}) };
 }
 
@@ -345,7 +346,26 @@ export async function waitForModelCatalog(api, { timeoutMs = 20_000, pollMs = 20
 
 const missingProvidersWarning = (missing) => `Providers declarados ainda sem modelos no catálogo: ${missing.join(', ')}. Confira credenciais e o gateway, ou se estão desligados por disabled_providers/enabled_providers (o GET /api/config do OpenCode V2 não expõe essas listas).`;
 
-async function attachServer(env, settings, config) {
+export const INSECURE_URL_MESSAGE = 'OPC_SERVER_URL precisa ser https://, http://127.0.0.1, http://localhost ou http://<IP privado> com server.allowPrivateHttp ligado.';
+
+export const remoteRootWarning = (remoteRoot) => `As ferramentas rodam em ${remoteRoot} na máquina do servidor. Sincronize via git: push aqui e pull lá antes da tarefa; depois de tarefas com escrita, commit/push lá e pull aqui.`;
+export const REMOTE_ROOT_IGNORED_WARNING = 'OPC_REMOTE_ROOT ignorada: a raiz remota só vale no modo attach (OPC_SERVER_URL); o servidor gerenciado roda nesta máquina.';
+
+// Transporte do attach: https sempre; http só em loopback ou, com server.allowPrivateHttp, em IP literal privado
+// (este caso devolve o aviso de conexão sem TLS).
+export function attachTransport(parsed, settings) {
+  if (parsed.protocol === 'https:') return { tls: true, warning: null };
+  if (parsed.protocol !== 'http:') throw new UsageError('INSECURE_SERVER_URL', INSECURE_URL_MESSAGE);
+  if (LOOPBACK_HOSTS.has(parsed.hostname)) return { tls: false, warning: null };
+  if (!isPrivateIpLiteral(parsed.hostname)) throw new UsageError('INSECURE_SERVER_URL', INSECURE_URL_MESSAGE);
+  if (settings.allowPrivateHttp !== true) {
+    throw new UsageError('INSECURE_SERVER_URL', `OPC_SERVER_URL usa http:// sem TLS no IP privado ${parsed.hostname}: a senha e o conteúdo trafegariam em claro na rede. `
+      + 'Prefira https:// ou um túnel SSH para 127.0.0.1; para aceitar o risco, rode no seu terminal: opc config set server.allowPrivateHttp true --tty-confirm');
+  }
+  return { tls: false, warning: `Conexão sem TLS com ${parsed.hostname}: a senha e o conteúdo trafegam em claro na rede privada.` };
+}
+
+async function attachServer(env, settings, config, workspaceRoot) {
   let parsed;
   try {
     parsed = new URL(env.OPC_SERVER_URL);
@@ -355,10 +375,8 @@ async function attachServer(env, settings, config) {
   if (parsed.username || parsed.password) {
     throw new UsageError('INSECURE_SERVER_URL', 'OPC_SERVER_URL não pode conter credenciais; use OPC_SERVER_PASSWORD.');
   }
-  const secure = parsed.protocol === 'https:' || (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
-  if (!secure) {
-    throw new UsageError('INSECURE_SERVER_URL', 'OPC_SERVER_URL precisa ser http://127.0.0.1, http://localhost ou https://.');
-  }
+  const transport = attachTransport(parsed, settings);
+  const remote = resolveRemoteRoot({ workspaceRoot, env, config, attached: true });
   const url = parsed.origin;
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
@@ -369,8 +387,13 @@ async function attachServer(env, settings, config) {
   const { missing } = await waitForModelCatalog(api, { timeoutMs: 15_000, settleMs: 2_000, expected: expectedProviders(await loadOpencodeConfig(api)) });
   const { world, warnings } = await worldCheck(client, config);
   warnings.unshift('Modo attach: o opc não sobe nem encerra este servidor, e o server.configOverride não se aplica.');
+  if (transport.warning) warnings.push(transport.warning);
+  if (remote) warnings.push(remoteRootWarning(remote.remoteRoot));
   if (missing.length) warnings.push(missingProvidersWarning(missing));
-  return { url, password, version: health.version, pid: null, port: Number(parsed.port) || null, attached: true, reused: true, world, warnings };
+  return {
+    url, password, version: health.version, pid: null, port: Number(parsed.port) || null, attached: true, reused: true,
+    remoteRoot: remote?.remoteRoot ?? null, world, warnings,
+  };
 }
 
 async function spawnOnce({ stateDir, workspaceRoot, env, opencodeBin, settings, password }) {
@@ -505,8 +528,8 @@ export async function ensureServer(ctx) {
   const full = { ...ctx, opencodeBin: ctx.opencodeBin ?? resolveOpencodeBin({ env, config }), env, hasActiveJobs };
   const settings = serverSettings(config);
   const lockTimeout = 4 * settings.bootTimeoutSec * 1000;
-  return withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
-    if (env.OPC_SERVER_URL) return attachServer(env, settings, config);
+  const server = await withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
+    if (env.OPC_SERVER_URL) return attachServer(env, settings, config, ctx.workspaceRoot);
     let record = readServerRecord(stateDir);
     const warnings = [];
     if (!record) {
@@ -567,6 +590,8 @@ export async function ensureServer(ctx) {
     const booted = await bootServer(full, settings);
     return { ...booted, warnings: [...warnings, ...booted.warnings] };
   });
+  if (!server.attached && env.OPC_REMOTE_ROOT) return { ...server, warnings: [...server.warnings, REMOTE_ROOT_IGNORED_WARNING] };
+  return server;
 }
 
 async function stopServerUnlocked(ctx, { force = false, confirmedByUser = false } = {}) {
@@ -612,7 +637,7 @@ export function clientFor(ctx, server) {
   return createClient({
     baseUrl: server.url,
     password: server.password,
-    directory: ctx.workspaceRoot,
+    directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
     requestTimeoutMs: settings.requestTimeoutSec * 1000,
     onServerDown: () => ensureServer(ctx).then((s) => ({ url: s.url, password: s.password })),
   });

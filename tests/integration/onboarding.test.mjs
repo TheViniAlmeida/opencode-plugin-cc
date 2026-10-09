@@ -21,7 +21,7 @@ function setup(t, { config = null, env: extra = {} } = {}) {
 const completeBootstrap = {
   defaultProvider: MV, defaultModel: `${MV}/opencode-go/kimi-k3`, reviewModel: null, defaultVariant: null,
   stopGate: { model: null, enabled: false }, project: { goal: null }, aliases: {},
-  policy: { models: { allow: [] }, agents: { allow: [] }, approver: 'user' },
+  policy: { models: { allow: [] }, agents: { allow: [] }, approver: 'user' }, server: { allowPrivateHttp: false },
 };
 const all = (r) => `${r.stdout}${r.stderr}`;
 
@@ -88,7 +88,8 @@ test('guided flow: apply every step, commit atomically, effective config shown',
     [{ defaultVariant: 'high' }, 'allowedModels'],
     [{ policy: { models: { allow: [`${MV}/*`] }, providers: { deny: [EQ] } } }, 'allowedAgents'],
     [{ policy: { agents: { allow: [], deny: ['work-*'] } } }, 'approver'],
-    [{ policy: { approver: 'user' } }, 'behaviour'],
+    [{ policy: { approver: 'user' } }, 'privateHttp'],
+    [{ server: { allowPrivateHttp: false } }, 'behaviour'],
     [{ stopGate: { enabled: false }, delegation: { auto: false } }, 'project'],
     [{ project: { goal: "it's $(touch pwned) plugin", scope: ['plugins/'], taskTypes: ['review', 'ask'] } }, 'aliases'],
     [{ aliases: { fast: 'opencode-go/qwen3.8-flash', strong: 'opencode-go/qwen3.8-max' } }, null],

@@ -102,7 +102,7 @@ test('wizard summary and config init JSON mask fake secret-like settings from th
   const catalog = buildCatalog({ providers: fixtureData('provider.json'), models: fixtureData('model.json') });
   const provider = catalog.providers.find(p => p.modelCount === 7).id;
   const output = captureStream();
-  const answers = ['1', '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', '', '', 'n', 'n'];
+  const answers = ['1', '1', 'kimi-k3', '1', '1', '1', '1', '1', '', '1', '', '1', 'n', 'n', 'n', '', '', 'n', 'n'];
   const prompter = createPrompter({ input: scriptedTTY([...answers, 'n']), output });
   t.after(() => prompter.close());
   let summary = '';

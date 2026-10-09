@@ -57,6 +57,7 @@ function renderServer(server) {
     lines.push(`- versão: ${server.version}`);
     if (server.status === 'attached') {
       lines.push('- reaproveitado: externo (attach)');
+      if (server.remoteRoot) lines.push(`- raiz remota: ${server.remoteRoot}`);
     } else {
       lines.push(`- reaproveitado: ${server.reused ? 'sim' : 'não (subiu agora)'}`);
     }

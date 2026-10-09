@@ -62,6 +62,8 @@ A configuração global é `config.json` no diretório de dados, criada com perm
 | `server.bootTimeoutSec` / `.requestTimeoutSec` | inteiros 1–600 | `60` / `30` | só global | Timeouts do servidor |
 | `server.opencodeBin` | string | `opencode` | travada, só global | Caminho do binário OpenCode V2; `OPC_OPENCODE_BIN` tem prioridade |
 | `server.configOverride` | object | `{"share":"disabled"}` | travada, só global | Conteúdo de config do servidor |
+| `server.allowPrivateHttp` | boolean | `false` | travada, só global | Aceita `OPC_SERVER_URL` com `http://` em IP literal privado (sem TLS; ver `server`) |
+| `server.remoteRoots` | mapa caminho local → caminho remoto | `{}` | travada, só global | Raiz remota do workspace no modo attach; `OPC_REMOTE_ROOT` tem prioridade |
 
 Exemplo mínimo global:
 
@@ -138,6 +140,20 @@ Fallback não cria jobs: as tentativas pertencem ao mesmo job, em `attempts[]`.
 opc config set jobs.maxActive 4
 ```
 
+## `server`
+
+Além dos timeouts e do binário, duas chaves globais e travadas servem ao modo attach (`OPC_SERVER_URL`) com o servidor em outra máquina (passo a passo em `docs/installation.md` §6):
+
+- `server.allowPrivateHttp` (padrão `false`): com `true`, o attach aceita `http://` quando o host é um IP literal privado (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, IPv6 `fc00::/7`). Nomes DNS continuam recusados. Sem TLS, a senha e o conteúdo trafegam em claro na rede privada; cada conexão gera o aviso "Conexão sem TLS com <host>". Prefira `https://` ou um túnel SSH para `127.0.0.1`.
+- `server.remoteRoots` (padrão `{}`): objeto que associa um caminho local absoluto a um caminho remoto absoluto POSIX (começando com `/`). O diretório enviado ao servidor passa a ser o remoto: a raiz exata ou, se a chave for um diretório pai do workspace, o remoto com o subdiretório anexado por `/` (vence a chave mais longa). A variável `OPC_REMOTE_ROOT` sobrepõe o mapa para o workspace atual. Ambos só valem em attach.
+
+```sh
+opc config set server.allowPrivateHttp true --tty-confirm
+opc config set server.remoteRoots '{"/home/usuario/dev":"/srv/dev"}' --tty-confirm
+```
+
+Como as chaves contêm pontos e barras, `server.remoteRoots` é gravado inteiro como JSON (não por entrada).
+
 ## Merge restritivo do `.opc.json`
 
 O arquivo de workspace serve para preferências permitidas e para restringir política. `deny` é unido; `allow` é intersectado por `allowWorkspace`; `sensitivePaths` e `destructiveBash` são unidos. Preferências como `defaultModel`, `project` e rotas podem ser sobrescritas no workspace. Chaves globais, travadas ou desconhecidas são ignoradas com aviso em `opc config show --effective`.
@@ -146,7 +162,7 @@ Assim, um `.opc.json` que tente ampliar `policy.models.allow` não amplia a conf
 
 ## Chaves travadas e bootstrap
 
-`policy.*`, `permissionProfiles` e `server.configOverride` são travadas. Durante o bootstrap, apenas o onboarding antes da primeira config global pode gravá-las. Depois, use `opc config init` ou, em um TTY, `opc config set … --tty-confirm`. Uma edição comum cria a configuração global e encerra o bootstrap. A edição manual do arquivo não é tecnicamente bloqueada; use `opc config validate` antes de operar.
+`policy.*`, `permissionProfiles`, `server.configOverride`, `server.opencodeBin`, `server.allowPrivateHttp` e `server.remoteRoots` são travadas. Durante o bootstrap, apenas o onboarding antes da primeira config global pode gravá-las. Depois, use `opc config init` ou, em um TTY, `opc config set … --tty-confirm`. Uma edição comum cria a configuração global e encerra o bootstrap. A edição manual do arquivo não é tecnicamente bloqueada; use `opc config validate` antes de operar.
 
 Execução local verificada, com o valor substituído pelo placeholder seguro:
 

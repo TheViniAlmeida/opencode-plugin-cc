@@ -23,7 +23,7 @@ const NONE = { global: null, workspace: null };
 const deps = (extra = {}) => ({ catalog, agents, existing: NONE, allowLocked: true, now: NOW, ...extra });
 
 test('steps are the spec §3.3 list in order', () => {
-  assert.deepEqual(ONBOARDING_STEPS.map((s) => s.id), ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'behaviour', 'project', 'aliases']);
+  assert.deepEqual(ONBOARDING_STEPS.map((s) => s.id), ['scope', 'defaultProvider', 'defaultModel', 'reviewModels', 'defaultVariant', 'allowedModels', 'allowedAgents', 'approver', 'privateHttp', 'behaviour', 'project', 'aliases']);
 });
 
 test('buildDraft: bootstrap is global-first; only reconfigure offers scope selection', () => {
@@ -131,7 +131,7 @@ test('commitDraft: writes atomically, removes draft, returns effective config', 
   ({ draft } = applyDraftStep(draft, { defaultProvider: MV, defaultModel: 'opencode-go/kimi-k3', policy: { providers: { deny: [EQ] }, agents: { deny: ['work-*'] } } }, deps()));
   ({ draft } = applyDraftStep(draft, {
     reviewModel: null, stopGate: { model: null, enabled: false }, defaultVariant: null,
-    policy: { approver: 'user' }, project: { goal: null }, aliases: {},
+    policy: { approver: 'user' }, server: { allowPrivateHttp: false }, project: { goal: null }, aliases: {},
   }, deps()));
   saveDraft(dataDir, draft);
   const r = commitDraft({ dataDir, workspaceRoot: ws, draft, catalog, agents, existing: NONE, allowLocked: true });
