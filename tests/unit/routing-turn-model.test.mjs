@@ -28,6 +28,16 @@ function configWith(patch) {
   return { ...structuredClone(DEFAULT_CONFIG), ...patch };
 }
 
+for (const kind of ['review', 'stop-gate']) {
+  test(`resolveTurnModel refuses the implicit build agent for ${kind} when denied`, async () => {
+    const [first] = fixtureModelIds();
+    await assert.rejects(
+      resolveTurnModel({ api, kind, config: configWith({ defaultModel: first, policy: { agents: { deny: ['build'] } } }) }),
+      (err) => err.code === 'POLICY_DENIED' && err.exitCode === 4 && err.details?.value === 'build',
+    );
+  });
+}
+
 test('resolveTurnModel prefers reviewModel for kind review', async (t) => {
   const ids = fixtureModelIds();
   if (ids.length < 2) return t.skip('fixture has a single model');

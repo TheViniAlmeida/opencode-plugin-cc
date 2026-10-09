@@ -2,6 +2,8 @@
 import { PolicyError, UsageError } from './opc-error.mjs';
 import { matchesAny, parseFullId } from './models.mjs';
 
+export const DEFAULT_AGENT = 'build';
+
 const SECTION = { provider: 'providers', model: 'models', agent: 'agents', tool: 'tools' };
 const LABEL = { provider: 'provider', model: 'modelo', agent: 'agente', tool: 'ferramenta' };
 

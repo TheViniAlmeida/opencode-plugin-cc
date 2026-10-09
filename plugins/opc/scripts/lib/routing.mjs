@@ -2,8 +2,7 @@
 // compute the candidate list and whether it is eligible for fallback.
 import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { configModelLabel, expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
-import { assertAgentUsable, evaluate } from './policy.mjs';
-import { DEFAULT_AGENT } from './runner.mjs';
+import { DEFAULT_AGENT, assertAgentUsable, evaluate } from './policy.mjs';
 import { safeOutputText } from './redact.mjs';
 import { loadOpencodeConfig, opencodeConfigUnavailable } from './opencode-config.mjs';
 

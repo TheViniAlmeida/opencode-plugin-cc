@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { classifyError, retryCapError, retryExceedsCap } from './errors.mjs';
 import { ConnectionError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
-import { assertAgentUsable, buildPermissionRules } from './policy.mjs';
+import { DEFAULT_AGENT, assertAgentUsable, buildPermissionRules } from './policy.mjs';
 import { matchesAny } from './models.mjs';
 import { toPermissionRequest, toQuestion } from './opencode-v2.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
@@ -15,7 +15,7 @@ const ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_STATUS_POLL_MS = 5000;
 const DEFAULT_IDLE_WAIT_MS = 10000;
-export const DEFAULT_AGENT = 'build';
+export { DEFAULT_AGENT } from './policy.mjs';
 const INVESTIGATE_TOOLS = new Set(['read', 'grep', 'glob', 'webfetch', 'websearch']);
 export const EDIT_TOOLS = new Set(['edit', 'write', 'apply_patch', 'patch']);
 const VERIFY_RE = /\b(test|tests|lint|build|typecheck|type-check|check|verify|validate|pytest|jest|vitest|cargo test|npm test|pnpm test|yarn test|go test|mvn test|gradle test|tsc|eslint|ruff)\b/i;

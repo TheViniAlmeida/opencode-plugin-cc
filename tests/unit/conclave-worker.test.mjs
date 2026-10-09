@@ -98,6 +98,7 @@ async function workerFixture(t, { structuredOutput = 'text', wrapped = false } =
   const api = createApi({ get: (route, options) => handle('GET', route, undefined, options), post: (route, body) => handle('POST', route, body), patch: (route, body) => handle('PATCH', route, body) });
   api.providers = async () => fixtureData('provider.json');
   api.models = async () => fixtureData('model.json');
+  api.agents = async () => [];
   api.defaultModel = async () => ({ id: 'opencode-go/deepseek-v4.1-flash', providerID: 'omniroute-personal' });
   const hub = { track(_id, fn) { listeners.add(fn); return () => listeners.delete(fn); }, onReconnect() { return () => {}; } };
   const ctx = { stateDir: dir, workspaceRoot: dir, cwd: dir, config: { conclave: { structuredOutput, memberTimeoutSec: 2 }, jobs: { maxParallel: 2 } } };
@@ -106,6 +107,16 @@ async function workerFixture(t, { structuredOutput = 'text', wrapped = false } =
   const options = { openApiImpl: async () => ({ api, hub, close() { closed = true; } }) };
   return { ctx, group, members, request, options, fake, prompts, closed: () => closed };
 }
+
+test('worker refuses the implicit build agent even when it is absent from discovery', async (t) => {
+  const f = await workerFixture(t);
+  f.ctx.config.policy = { agents: { deny: ['build'] } };
+  assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 7);
+  assert.equal(readJob(f.ctx.stateDir, f.group.id).errorCode, 'POLICY_DENIED');
+  assert.equal(Object.keys(f.fake.state.sessions).length, 0);
+  assert.deepEqual(f.prompts, []);
+  assert.equal(f.closed(), true);
+});
 
 for (const mode of ['text', 'tool']) {
   test(`${mode} worker recovers wrapped schema-shaped values from the real runner`, async (t) => {

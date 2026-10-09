@@ -1,7 +1,8 @@
 // `opc conclave`: parallel consultation through one coordinator worker.
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, OpcError, toExitCode } from '../lib/opc-error.mjs';
-import { openApi, profileRules } from '../lib/context.mjs';
+import { openApi, profileRules, requireAgent } from '../lib/context.mjs';
+import { DEFAULT_AGENT } from '../lib/policy.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
 import { createGroup, updateJob, readJob, spawnWorker, waitForJob, assertNotInsideServer, withServerLock, refreshGroup, appendJobLog, ACTIVE_STATUSES, listGroupMembers, recordAttempt } from '../lib/jobs.mjs';
@@ -46,6 +47,7 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   try {
+    requireAgent({ agents: await conn.api.agents() }, DEFAULT_AGENT, ctx.config.policy, { implicit: true });
     const composition = await composeFromDiscovery(conn.api, models, { pool: flags.pool ?? null, config: ctx.config, policy: ctx.config.policy, quorum: flags.quorum ?? null, rounds: flags.rounds ?? null, mode, judge: flags.judge ?? null, allowJudgeMember: flags['allow-judge-member'] });
     for (const warning of composition.warnings) ctx.err(`[opc] aviso: ${warning}\n`);
     const common = { summary: (question || `review ${target?.label ?? ''}`).trim().slice(0, 120), permissionProfile: 'read-only' };
@@ -88,13 +90,15 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     request = { ...request, members: request.members.map((m) => ({ ...m, jobId: idsByRole.get(`member:${m.label}`) })), judge: { ...request.judge, jobId: idsByRole.get('judge') ?? null } };
     await persisted(() => updateJobImpl(ctx.stateDir, job.id, { status: 'running', phase: 'starting', startedAt: now() }));
     conn = await openApiImpl(ctx, { withHub: true, respawn: false });
-    const [providers, models, defaultModel] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel()]);
+    const [providers, models, defaultModel, agents] = await Promise.all([conn.api.providers(), conn.api.models(), conn.api.defaultModel(), conn.api.agents()]);
+    requireAgent({ agents }, DEFAULT_AGENT, ctx.config.policy, { implicit: true });
     const catalog = buildCatalog({ providers, models, defaultModel });
     const knownNames = buildKnownNames(catalog, { extraModels: [...request.members, ...(request.judge.type === 'model' ? [request.judge] : [])] });
     const rules = profileRules(ctx, 'read-only');
     const ids = new Map(request.members.map((m) => [m.label, m.jobId]));
     const isCancelled = (id) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (id && readJob(ctx.stateDir, id)?.cancelRequestedAt));
     const turn = async (spec) => {
+      requireAgent({ agents }, spec.agent ?? DEFAULT_AGENT, ctx.config.policy, { implicit: spec.agent == null });
       const id = spec.role === 'judge' ? request.judge.jobId : ids.get(spec.label);
       let persistenceError;
       const persist = async (write) => {
@@ -108,7 +112,7 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
       let result;
       try {
         result = await turnRunner({ api: conn.api, hub: conn.hub,
-          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, format: { type: 'json_schema', schema: spec.schema }, messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
+          request: { ...(spec.sessionID ? { sessionID: spec.sessionID } : { newSession: { title: spec.title, permission: rules } }), parts: [{ type: 'text', text: spec.prompt }], agent: spec.agent ?? DEFAULT_AGENT, model: { providerID: spec.member.providerID, modelID: spec.member.modelID }, format: { type: 'json_schema', schema: spec.schema }, messageID: newMessageId(), timeoutMs: (ctx.config.conclave?.memberTimeoutSec ?? 900) * 1000, fallbackCfg: ctx.config.routing?.fallback ?? {} },
           isCancelled: () => isCancelled(id),
           onSession: ({ sessionID, childSessionIDs = [] }) => persist(() => updateJobImpl(ctx.stateDir, id, { sessionID, childSessionIDs })).then(async (updated) => { if (updated?.cancelRequestedAt || readJob(ctx.stateDir, job.id)?.cancelRequestedAt) await conn.api.interrupt(sessionID); }),
           onPermission: (p) => conn.api.replyPermission(p.sessionID, p.id, { reply: 'reject', message: 'opc: sessões do conclave são somente leitura' }),
