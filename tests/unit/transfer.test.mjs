@@ -251,6 +251,52 @@ test('long texts and tool payloads are truncated with an explicit marker', () =>
   assert.match(conversion.turns[1].texts[0], /…\[\d+ caracteres truncados\]$/);
 });
 
+test('transfer masks secrets in every exported text block and counts replacements', () => {
+  const token = `sk-${'A'.repeat(40)}`;
+  const bearer = `Bearer ${'abc'.repeat(12)}`;
+  const records = [
+    { type: 'custom-title', customTitle: `Transfer ${token}` },
+    { type: 'user', message: { content: bearer } },
+    { type: 'user', message: { content: [{ type: 'text', text: token }, { type: 'image' }] } },
+    { type: 'assistant', message: { content: 'password=fixture-value' } },
+    { type: 'assistant', message: { content: [
+      { type: 'text', text: `already *** ${token}` },
+      { type: 'tool_use', name: 'Bash', input: { command: bearer, nested: { apiKey: token } } },
+      { type: 'thinking', thinking: token },
+      { type: 'redacted_thinking', data: token },
+    ] } },
+    { type: 'user', message: { content: [
+      { type: 'tool_result', content: token },
+      { type: 'tool_result', content: [{ type: 'text', text: bearer }, { type: 'image' }] },
+      { type: 'tool_result', content: { message: token } },
+    ] } },
+  ];
+  const out = convertClaudeRecords(records);
+  const exported = buildExport(out, { model: MODEL, directory: '/w' });
+  assert.equal(JSON.stringify(out).includes(token), false);
+  assert.equal(JSON.stringify(exported).includes(token), false);
+  assert.doesNotMatch(JSON.stringify(out), /Bearer abc|fixture-value/);
+  assert.doesNotMatch(JSON.stringify(exported), /Bearer abc|fixture-value/);
+  assert.equal(out.maskedCount, 10);
+  assert.equal(out.stats.skipped.thinking, 2);
+  assert.equal(out.title, 'Transfer ***');
+  assert.equal(records[1].message.content, bearer);
+  assert.equal(records[4].message.content[1].input.nested.apiKey, token);
+});
+
+test('transfer masks before truncation so partial credentials never reach the export', () => {
+  const token = `sk-${'B'.repeat(40)}`;
+  const out = convertClaudeRecords([{ type: 'user', message: { content: token } }], { maxTextChars: 4 });
+  assert.deepEqual(out.turns[0].texts, ['***']);
+  assert.equal(out.maskedCount, 1);
+});
+
+test('transfer reports zero replacements for plain text and existing masks', () => {
+  const out = convertClaudeRecords([{ type: 'user', message: { content: 'already *** password=***' } }]);
+  assert.equal(out.maskedCount, 0);
+  assert.deepEqual(out.turns[0].texts, ['already *** password=***']);
+});
+
 test('createIdGenerator follows the OpenCode identifier format and ordering', () => {
   let clock = 1_790_000_000_000;
   const nextId = createIdGenerator({ now: () => clock });

@@ -33,6 +33,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   // Revalidate and read the source before invoking OpenCode, including --version.
   const { records, invalid } = await readTranscript(transcript, options);
   const conversion = convertClaudeRecords(records);
+  if (conversion.maskedCount > 0) ctx.err(`[opc] aviso: ${conversion.maskedCount} trecho(s) com aparência de segredo mascarado(s) no histórico exportado.\n`);
   if (conversion.turns.length === 0) {
     throw new OpcError('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.', { exitCode: ExitCode.USAGE });
   }

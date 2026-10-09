@@ -1,7 +1,7 @@
 // HTTP client for the OpenCode 2.0.22 API: Basic auth, workspace header, typed errors and timeouts.
 import { posix, resolve } from 'node:path';
 import { ConnectionError, NotFoundError, RequestError } from './opc-error.mjs';
-import { redact, registerSecret } from './redact.mjs';
+import { redactOutput, registerSecret } from './redact.mjs';
 
 const DOWN_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTFOUND', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
 
@@ -82,6 +82,7 @@ export function createClient({
         headers: { ...authHeaders(), accept: 'application/json', ...(workspaceDirectory ? { 'x-opencode-directory': workspaceDirectory } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
+        redirect: 'manual',
       });
     } catch (err) {
       clearTimeout(timer);
@@ -90,6 +91,11 @@ export function createClient({
       }
       if (isServerDown(err)) throw new ConnectionError('SERVER_DOWN', `${label}: servidor OpenCode inacessível.`);
       throw new RequestError('CLIENT_ERROR', `${label}: falha interna ao preparar ou executar a requisição.`, { cause: err });
+    }
+    if (res.status >= 300 && res.status < 400) {
+      clearTimeout(timer);
+      controller.abort();
+      throw new ConnectionError('UNEXPECTED_REDIRECT', `${label}: o servidor respondeu com redirecionamento; configure a URL final.`);
     }
     let text;
     try {
@@ -107,7 +113,7 @@ export function createClient({
       if (envelope) return parsed;
       return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'data') ? parsed.data : parsed;
     }
-    const details = { status: res.status, body: redact(parsed) };
+    const details = { status: res.status, body: redactOutput(parsed) };
     if (res.status === 401) throw new ConnectionError('AUTH_FAILED', `${label}: autenticação recusada (401).`, { details });
     if (res.status === 404) throw new NotFoundError('NOT_FOUND', `${label}: não encontrado (404).`, { details });
     if (res.status >= 500) {

@@ -11,6 +11,7 @@ import { composeMembers, validateConclaveOptions, runConclave, buildKnownNames, 
 import { renderConclave } from '../lib/render.mjs';
 import { exitCodeForJob } from './task.mjs';
 import { redactOutput, redactText, safeOutputText } from '../lib/redact.mjs';
+import { collectReviewPrompt } from './review.mjs';
 
 const SPEC = { flags: { models: { type: 'list' }, pool: { type: 'string' }, mode: { type: 'string', default: 'opinion' }, rounds: { type: 'number' }, judge: { type: 'string' }, quorum: { type: 'number' }, 'allow-judge-member': { type: 'boolean', default: false }, background: { type: 'boolean', default: false }, 'wait-timeout': { type: 'number' }, base: { type: 'string' }, scope: { type: 'string' }, json: { type: 'boolean', default: false }, 'raw-args-stdin': { type: 'boolean' } }, allowPositionals: true };
 const usage = (code, message) => new OpcError(code, message, { exitCode: ExitCode.USAGE });
@@ -76,7 +77,7 @@ export async function run(ctx, argv) {
   } finally { conn.close(); }
 }
 
-export async function runWorker(ctx, job, request, { openApiImpl = openApi, turnRunner = runTurn, updateJobImpl = updateJob, recordAttemptImpl = recordAttempt } = {}) {
+export async function runWorker(ctx, job, request, { openApiImpl = openApi, turnRunner = runTurn, updateJobImpl = updateJob, recordAttemptImpl = recordAttempt, collectReviewContextImpl = collectReviewContext } = {}) {
   const now = () => new Date().toISOString();
   let conn;
   // Every coordinator write outside a turn also finalizes as coordinator_error when it fails.
@@ -128,7 +129,10 @@ export async function runWorker(ctx, job, request, { openApiImpl = openApi, turn
     };
     const pkg = await runConclave({ ctx: { config: ctx.config, workspaceRoot: ctx.workspaceRoot }, question: request.question,
       flags: { mode: request.mode, rounds: request.rounds, quorum: request.quorum, members: request.members, judge: request.judge, warnings: request.warnings ?? [], maxParallel: ctx.config.jobs?.maxParallel ?? 4 },
-      deps: { turn, knownNames, assets: loadConclaveAssets(), collectReview: request.mode === 'review' ? () => ({ ...collectReviewContext(request.reviewCwd ?? ctx.cwd, request.target), label: request.target?.label ?? null }) : null,
+      deps: { turn, knownNames, assets: loadConclaveAssets(), collectReview: request.mode === 'review' ? () => ({
+        ...collectReviewPrompt(request.reviewCwd ?? ctx.cwd, { variant: 'review', target: request.target, focus: request.question ?? '', project: ctx.config?.project ?? null }, { excludeGlobs: ctx.config?.policy?.sensitivePaths ?? [], collectContext: collectReviewContextImpl }).context,
+        label: request.target?.label ?? null,
+      }) : null,
         onEvent: async (event) => {
           if (event.type === 'member-failed') { const id = ids.get(event.label); if (id) await persisted(() => updateJobImpl(ctx.stateDir, id, { status: 'failed', errorCode: event.errorType, errorMessage: safeOutputText(event.message), attemptInFlight: false, completedAt: now() })); }
           if (event.type === 'member-done') { const id = ids.get(event.label); if (id) await persisted(() => updateJobImpl(ctx.stateDir, id, { attemptInFlight: false })); }

@@ -47,6 +47,7 @@ test('transfer imports a valid export in private files and returns only a resuma
   const { env, ws, source } = setup(t);
   const r = await cliJson(transferArgs(source), { env, cwd: ws });
   assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /histórico exportado/);
   const [imp] = imports(env);
   assert.deepEqual(imp.errors, []);
   assert.equal(imp.mode, '600');
@@ -163,16 +164,22 @@ test('transfer resolves relative source and --cwd using ctx.env and ctx.cwd', as
   assertTemporaryRemoved(env, cwd);
 });
 
-test('transfer preserves private history during import while masking credentials in the public title', async (t) => {
-  const { env, ws, source } = setup(t);
-  const privateText = 'password=fixture-private-history';
-  fs.writeFileSync(source, JSON.stringify({ type: 'user', message: { content: privateText } }) + '\n');
-  const r = await cliJson(transferArgs(source), { env, cwd: ws });
-  assert.equal(r.code, 0, r.stderr);
-  assert.ok(imports(env)[0].texts.includes(privateText));
-  assert.doesNotMatch(r.stdout + r.stderr, /fixture-private-history/);
-  assert.match(r.data.title, /password=\*\*\*/);
-});
+for (const asJson of [true, false]) {
+  test(`transfer masks the imported history and reports the count in ${asJson ? 'JSON' : 'text'} mode`, async (t) => {
+    const { env, ws, source } = setup(t);
+    const token = `sk-${'A'.repeat(40)}`;
+    fs.writeFileSync(source, JSON.stringify({ type: 'user', message: { content: `password=fixture-private-history ${token}` } }) + '\n');
+    const r = asJson ? await cliJson(transferArgs(source), { env, cwd: ws }) : await runCli(transferArgs(source), { env, cwd: ws });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(imports(env)[0].texts.includes('password=*** ***'));
+    assert.equal(JSON.stringify(imports(env)).includes(token), false);
+    assert.doesNotMatch(JSON.stringify(imports(env)), /fixture-private-history/);
+    assert.doesNotMatch(r.stdout + r.stderr, /fixture-private-history/);
+    assert.match(r.stderr, /\[opc\] aviso: 2 trecho\(s\) com aparência de segredo mascarado\(s\) no histórico exportado\./);
+    if (asJson) assert.match(r.data.title, /password=\*\*\*/);
+    assertTemporaryRemoved(env, ws);
+  });
+}
 
 for (const origin of ['outside', 'symlink-outside', 'parent-escape', 'symlink-non-jsonl']) {
   test(`transfer refuses ${origin} before executing OpenCode`, async (t) => {
