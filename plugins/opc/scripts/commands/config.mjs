@@ -12,6 +12,7 @@ import {
 import { buildCatalog } from '../lib/models.mjs';
 import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 import { createPrompter } from '../lib/tty.mjs';
+import { hasClaudeAncestor } from '../lib/process.mjs';
 import { runInitWizard } from '../lib/onboarding.mjs';
 import { renderConfig, renderOnboarding } from '../lib/render.mjs';
 
@@ -33,13 +34,13 @@ export function contextOptions(argv) {
   return argv[0] === 'validate' ? { allowInvalidConfig: true } : {};
 }
 
-async function runCommand(ctx, argv) {
+async function runCommand(ctx, argv, deps = {}) {
   const { flags, positionals } = parseArgs(argv, SPEC);
   const [sub, ...rest] = positionals;
   switch (sub) {
     case 'path': return cmdPath(ctx, flags);
     case 'get': return cmdGet(ctx, flags, rest);
-    case 'set': case 'unset': case 'add': case 'remove': return cmdEdit(ctx, flags, sub, rest);
+    case 'set': case 'unset': case 'add': case 'remove': return cmdEdit(ctx, flags, sub, rest, deps);
     case 'show': return cmdShow(ctx, flags);
     case 'validate': return cmdValidate(ctx, flags);
     case 'init': return cmdInit(ctx, flags);
@@ -70,7 +71,9 @@ function terminalCommand(op, key, raw, scope) {
   return `opc config ${op} ${key}${safeRaw !== undefined ? ` ${shellQuote(safeRaw)}` : ''}${scope === 'workspace' ? ' --workspace' : ''} --tty-confirm`;
 }
 
-async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
+export async function confirmLocked(ctx, flags, { op, key, raw, scope }, {
+  hasClaudeAncestor: hasClaudeAncestorImpl = hasClaudeAncestor, createPrompter: createPrompterImpl = createPrompter,
+} = {}) {
   const command = terminalCommand(op, key, raw, scope);
   if (!flags['tty-confirm']) {
     throw new PolicyError('LOCKED_KEY', `"${key}" é uma chave travada; altere-a no seu terminal: ${command} (ou execute: opc config init)`, { details: { setting: key, command } });
@@ -78,7 +81,10 @@ async function confirmLocked(ctx, flags, { op, key, raw, scope }) {
   if (!ctx.stdin || !ctx.stdin.isTTY) {
     throw new PolicyError('LOCKED_KEY', `--tty-confirm exige um terminal interativo (stdin não é TTY); execute no seu terminal: ${command}`, { details: { setting: key, command } });
   }
-  const prompter = createPrompter({ input: ctx.stdin, output: ctx.stderr });
+  if (ctx.env?.CLAUDECODE || hasClaudeAncestorImpl()) {
+    throw new PolicyError('LOCKED_KEY', `--tty-confirm não é aceito dentro de uma sessão do Claude Code; rode em um terminal próprio: ${command}`, { details: { setting: key, command } });
+  }
+  const prompter = createPrompterImpl({ input: ctx.stdin, output: ctx.stderr });
   try {
     ctx.err(`[opc] "${key}" é uma chave travada (política/mundo).\n`);
     const typed = await prompter.text(`Digite "${key}" para confirmar a alteração: `);
@@ -94,7 +100,7 @@ async function serverDeps(ctx) {
   return { catalog: buildCatalog({ providers, models, defaultModel }), agents, opencodeConfig };
 }
 
-async function cmdEdit(ctx, flags, op, rest) {
+async function cmdEdit(ctx, flags, op, rest, confirmDeps) {
   const [key, ...valueParts] = rest;
   if (!key) throw new UsageError('USAGE', USAGE);
   if (!schemaFor(key)) throw new UsageError('UNKNOWN_KEY', `chave de configuração desconhecida: "${key}"`);
@@ -109,7 +115,7 @@ async function cmdEdit(ctx, flags, op, rest) {
   if (scope === 'workspace' && !isWorkspaceKey(key) && !workspaceDelegationOff) {
     throw new UsageError('GLOBAL_ONLY_KEY', `"${key}" não pode ser definida em .opc.json (o arquivo do workspace só pode restringir); use a configuração global`);
   }
-  if (isLockedKey(key)) await confirmLocked(ctx, flags, { op, key, raw, scope });
+  if (isLockedKey(key)) await confirmLocked(ctx, flags, { op, key, raw, scope }, confirmDeps);
   let value = raw === undefined ? undefined : coerceValue(key, raw);
   const loaded = loadConfig({ dataDir: ctx.dataDir, workspaceRoot: ctx.workspaceRoot });
   const base = (scope === 'workspace' ? loaded.workspace : loaded.global) ?? {};

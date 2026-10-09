@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import * as processLib from '../../plugins/opc/scripts/lib/process.mjs';
 
 import {
   getParentPid, getProcessIdentity, identityMatches, isPidAlive, resolveHookOwner, spawnDetached, terminateProcessGroup,
@@ -12,6 +13,60 @@ import { deadPid, makeTempDir, removeTempDir, waitFor } from '../helpers.mjs';
 const linuxOnly = { skip: process.platform !== 'linux' && 'process groups and /proc are validated on Linux only' };
 const IDLE = 'setInterval(() => {}, 1000)';
 const IGNORE_TERM = "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
+
+test('hasClaudeAncestor walks through node, script and shell parents', () => {
+  const tree = {
+    50: { ppid: 40, cmdline: ['node', 'opc'] },
+    40: { ppid: 30, cmdline: ['script', '-qec'] },
+    30: { ppid: 20, cmdline: ['bash'] },
+    20: { ppid: 1, cmdline: ['claude'] },
+  };
+  const deps = { parentOf: (pid) => tree[pid]?.ppid, identityOf: (pid) => tree[pid] };
+  assert.equal(processLib.hasClaudeAncestor(50, deps), true);
+  delete tree[20];
+  tree[30].ppid = 1;
+  assert.equal(processLib.hasClaudeAncestor(50, deps), false);
+});
+
+test('hasClaudeAncestor recognizes the executable and Claude Code entrypoints', () => {
+  for (const cmdline of [
+    ['/usr/local/bin/claude'],
+    ['node', '/opt/tools/claude/cli.js'],
+    ['node', '/opt/node_modules/@anthropic-ai/claude-code/cli.js'],
+  ]) {
+    assert.equal(processLib.hasClaudeAncestor(50, {
+      parentOf: (pid) => pid === 50 ? 20 : 1, identityOf: () => ({ cmdline }),
+    }), true, JSON.stringify(cmdline));
+  }
+  assert.equal(processLib.hasClaudeAncestor(50, {
+    parentOf: (pid) => pid === 50 ? 20 : 1, identityOf: () => ({ cmdline: ['claude-helper'] }),
+  }), false);
+});
+
+test('hasClaudeAncestor stops at init, missing parents, cycles and the depth limit', () => {
+  for (const parent of [1, 0, -1, undefined, null, NaN]) {
+    assert.equal(processLib.hasClaudeAncestor(50, {
+      parentOf: () => parent, identityOf: () => assert.fail('invalid parent must not be inspected'),
+    }), false);
+  }
+  assert.equal(processLib.hasClaudeAncestor(50, {
+    parentOf: (pid) => pid === 50 ? 40 : 1, identityOf: () => null,
+  }), false);
+  let reads = 0;
+  assert.equal(processLib.hasClaudeAncestor(50, {
+    parentOf: (pid) => pid === 50 ? 40 : 50,
+    identityOf: () => { reads += 1; return null; },
+  }), false);
+  assert.ok(reads <= 2, 'a cycle must stop without repeated traversal');
+  const deps = { parentOf: (pid) => pid - 1, identityOf: (pid) => ({ cmdline: [pid === 18 ? 'claude' : 'bash'] }) };
+  assert.equal(processLib.hasClaudeAncestor(50, deps), true, 'the 32nd ancestor is inspected');
+  assert.equal(processLib.hasClaudeAncestor(51, deps), false, 'the default limit is 32 ancestors');
+  assert.equal(processLib.hasClaudeAncestor(50, { ...deps, maxDepth: 1 }), false);
+  assert.equal(processLib.hasClaudeAncestor(50, { ...deps, maxDepth: 0 }), false);
+  assert.equal(processLib.hasClaudeAncestor(1, {
+    parentOf: () => assert.fail('init has no ancestor to inspect'),
+  }), false);
+});
 
 function killHard(pid) {
   try {

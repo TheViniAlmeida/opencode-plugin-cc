@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
-import { main } from '../../plugins/opc/scripts/opc-companion.mjs';
+import { main, loadCommand } from '../../plugins/opc/scripts/opc-companion.mjs';
 import { createJob, consumeJobInput, readJob, updateJob, appendJobLog, readJobProgress } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { run as status } from '../../plugins/opc/scripts/commands/status.mjs';
 import { run as result } from '../../plugins/opc/scripts/commands/result.mjs';
@@ -218,7 +218,13 @@ for (const [name, args, expectedCode, expectedText, answers] of [
     const cwd = temp(t);
     const dataDir = path.join(cwd, 'data');
     let stdout = '', stderr = '';
-    const code = await main(['config', ...args], { cwd, env: { ...process.env, OPC_DATA_DIR: dataDir },
+    const env = { ...process.env, OPC_DATA_DIR: dataDir };
+    delete env.CLAUDECODE;
+    const code = await main(['config', ...args], { cwd, env,
+      commandLoader: async (sub) => {
+        const mod = await loadCommand(sub);
+        return { ...mod, run: (ctx, argv) => mod.run(ctx, argv, { hasClaudeAncestor: () => false }) };
+      },
       stdin: answers ? scriptedTTY(answers) : Readable.from([]),
       stdout: { write: (text) => { stdout += text; } }, stderr: { write: (text) => { stderr += text; } } });
     assert.equal(code, expectedCode);

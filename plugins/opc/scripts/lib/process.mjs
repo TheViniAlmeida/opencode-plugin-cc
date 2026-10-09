@@ -72,6 +72,19 @@ export function getParentPid(pid) {
   return Number(psField(pid, 'ppid')) || null;
 }
 
+export function hasClaudeAncestor(pid = process.pid, { parentOf = getParentPid, identityOf = getProcessIdentity, maxDepth = 32 } = {}) {
+  const seen = new Set([pid]);
+  for (let depth = 0; Number.isInteger(pid) && pid > 1 && depth < maxDepth; depth += 1) {
+    pid = parentOf(pid);
+    if (!Number.isInteger(pid) || pid <= 1 || seen.has(pid)) return false;
+    seen.add(pid);
+    const cmdline = identityOf(pid)?.cmdline ?? [];
+    if (path.basename(cmdline[0] ?? '') === 'claude'
+      || cmdline.some((arg) => arg.includes('/claude') || arg.includes('@anthropic-ai/claude-code'))) return true;
+  }
+  return false;
+}
+
 const HOOK_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ash', 'ksh']);
 
 // Claude Code runs hook commands through a transient `sh -c`, so a hook's ppid dies right after the hook
