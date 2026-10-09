@@ -6,7 +6,8 @@ const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
 
 export function globToRegExp(glob) {
   const directoryMarker = '\u0000';
-  const body = String(glob).replaceAll('**/', directoryMarker).split('*')
+  const body = String(glob).replace(/\*\*\//g, (match, offset, source) =>
+    offset === 0 || source[offset - 1] === '/' ? directoryMarker : match).split('*')
     .map((part) => part.replace(REGEX_SPECIALS, '\\$&')).join('.*').replaceAll(directoryMarker, '(?:.*/)?');
   return new RegExp(`^${body}$`);
 }

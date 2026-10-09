@@ -42,6 +42,18 @@ test('matchesAny: empty list never matches', () => {
   assert.equal(matchesAny('work-reviewer', ['build', 'work-*']), true);
 });
 
+test('globToRegExp: optional **/ directories require a path boundary', () => {
+  for (const value of ['b', 'a/b', 'a/nested/b']) assert.ok(globToRegExp('**/b').test(value), value);
+  for (const value of ['a/b', 'a/nested/b']) assert.ok(globToRegExp('a/**/b').test(value), value);
+  assert.ok(!globToRegExp('a**/b').test('ab'));
+  assert.ok(!globToRegExp('a**/b').test('aXYZb'));
+  assert.ok(globToRegExp('a**/b').test('a/b'));
+  assert.ok(globToRegExp('a**/b').test('aXYZ/b'));
+  assert.ok(!globToRegExp('a**/b**/c').test('abc'));
+  assert.ok(globToRegExp('**/**/b').test('b'));
+  assert.ok(globToRegExp('a/**/**/b').test('a/b'));
+});
+
 test('parseFullId: first segment is provider, rest (with slashes) is model', () => {
   assert.deepEqual(parseFullId(`${MV}/opencode-go/deepseek-v4.1-flash`), { providerID: MV, modelID: 'opencode-go/deepseek-v4.1-flash' });
   assert.deepEqual(parseFullId('kimi-k3'), { providerID: null, modelID: 'kimi-k3' });

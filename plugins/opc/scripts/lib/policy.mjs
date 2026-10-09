@@ -397,6 +397,15 @@ const WRAPPER_OPTIONS = {
   nice: { flags: [], values: ['-n', '--adjustment'] },
   command: { flags: ['-p', '-v', '-V'], values: [] },
   builtin: { flags: [], values: [] },
+  timeout: { flags: ['--preserve-status', '--foreground', '-v', '--verbose'], values: ['-s', '--signal', '-k', '--kill-after'], positionals: 1 },
+  setsid: { flags: ['-f', '--fork', '-w', '--wait', '-c', '--ctty'], values: [] },
+  stdbuf: { flags: [], values: ['-i', '--input', '-o', '--output', '-e', '--error'] },
+  ionice: { flags: ['-t', '--ignore'], values: ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'] },
+  flock: { flags: ['-s', '--shared', '-x', '--exclusive', '-u', '--unlock', '-n', '--nonblock', '-o', '--close', '-F', '--no-fork', '--verbose', '--fcntl'],
+    values: ['-w', '--wait', '--timeout', '-E', '--conflict-exit-code', '--start', '--length', '-c', '--command'], positionals: 1, scripts: ['-c', '--command'] },
+  watch: { flags: ['-b', '--beep', '-c', '--color', '-C', '--no-color', '-d', '--differences', '-e', '--errexit', '-g', '--chgexit', '-p', '--precise', '-t', '--no-title', '-w', '--no-wrap', '-x', '--exec'],
+    values: ['-n', '--interval', '-q', '--equexit'], shell: true },
+  busybox: { flags: [], values: [] },
 };
 
 function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = []) {
@@ -407,13 +416,52 @@ function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = []) {
 }
 
 function shellTouchesSensitive(words, sensitivePaths) {
-  return words.some(({ value }) => !value.startsWith('-')
-    && (matchesAny(value, sensitivePaths) || matchesAny(value.split('/').at(-1), sensitivePaths)));
+  const samples = [
+    '.env', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc', '.git-credentials', 'secrets.env',
+    '.aws/credentials', 'x.pem', 'x.key', ...sensitivePaths.filter((path) => !/[*?\[]/.test(path)),
+  ].filter((path) => matchesAny(path, sensitivePaths));
+  return words.some(({ value }) => {
+    const candidates = value.startsWith('-') ? [] : [value];
+    if (value.startsWith('-') && value.includes('=')) candidates.push(value.slice(value.indexOf('=') + 1));
+    if (/^-[^-]/.test(value) && value.length > 2) candidates.push(value.slice(2));
+    return candidates.some((candidate) => {
+      const basename = candidate.split('/').at(-1);
+      if (matchesAny(candidate, sensitivePaths) || matchesAny(basename, sensitivePaths)) return true;
+      if (!/[*?\[]/.test(candidate)) return false;
+      const glob = shellGlobToRegExp(candidate);
+      const baseGlob = shellGlobToRegExp(basename);
+      return samples.some((sample) => glob.test(sample) || baseGlob.test(sample.split('/').at(-1)));
+    });
+  });
+}
+
+function shellGlobToRegExp(glob) {
+  let body = '';
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char === '*') body += '.*';
+    else if (char === '?') body += '.';
+    else if (char === '[' && glob.indexOf(']', i + 1) > i + 1) {
+      const end = glob.indexOf(']', i + 1);
+      const content = glob.slice(i + 1, end).replace(/^!/, '^');
+      body += `[${content.replaceAll('\\', '\\\\')}]`;
+      i = end;
+    } else body += char.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  try { return new RegExp(`^${body}$`); }
+  catch { return /(?:)/; } // Uninspectable bracket expressions fail closed against the samples.
+}
+
+function harmlessGitConfig(value) {
+  const key = value.slice(0, value.indexOf('=')).toLowerCase();
+  return value.includes('=') && (/^(color|advice)\.[a-z0-9.-]+$/.test(key)
+    || ['user.name', 'user.email', 'core.quotepath', 'init.defaultbranch'].includes(key));
 }
 
 function normalizeGitWords(words) {
-  const flags = ['--no-pager', '-p', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs', '--exec-path'];
-  const values = ['-C', '-c', '--git-dir', '--work-tree', '--namespace'];
+  const flags = ['--no-pager', '-p', '-P', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs', '--exec-path',
+    '--no-optional-locks', '--version', '--help', '--no-lazy-fetch', '--no-advice'];
+  const values = ['-C', '-c', '--config-env', '--git-dir', '--work-tree', '--namespace'];
   let i = 1;
   while (i < words.length) {
     const word = words[i];
@@ -422,14 +470,33 @@ function normalizeGitWords(words) {
     if (flags.includes(word.value)) { i += 1; continue; }
     if (values.includes(word.value)) {
       if (!words[i + 1] || words[i + 1].dynamic) return null;
+      if (['-c', '--config-env'].includes(word.value) && !harmlessGitConfig(words[i + 1].value)) return null;
       i += 2; continue;
     }
+    if (word.value.startsWith('-c') && !word.value.startsWith('--')) {
+      if (!harmlessGitConfig(word.value.slice(2))) return null;
+      i += 1; continue;
+    }
     if ([...values.filter((option) => option.startsWith('--')), '--exec-path'].some((option) => word.value.startsWith(`${option}=`))) {
+      if (word.value.startsWith('--config-env=') && !harmlessGitConfig(word.value.slice('--config-env='.length))) return null;
       i += 1; continue;
     }
     return null;
   }
   return [words[0], ...words.slice(i)];
+}
+
+function gitOptions(args) {
+  const short = new Set();
+  const long = [];
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (arg.startsWith('--')) long.push(arg.split('=')[0]);
+    else if (arg.startsWith('-')) for (const letter of arg.slice(1)) short.add(letter);
+  }
+  // A prefix that could select a destructive option also needs the user when ambiguous.
+  const hasLong = (...names) => long.some((option) => names.some((name) => name.startsWith(option)));
+  return { short, long, hasLong };
 }
 
 function inspectWords(words, destructive, depth, sensitivePaths) {
@@ -444,22 +511,39 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
   if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
-  if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
   if (executable === 'git') {
     const normalized = normalizeGitWords(words);
     if (!normalized) return true;
     const [, subcommand, ...rest] = normalized.map((word) => word.value);
-    if (subcommand === 'push' && rest.some((arg) => ['--force', '-f', '--delete', '-d', '--mirror', '--prune'].includes(arg)
-      || arg.startsWith('--force-with-lease') || arg.startsWith('+') || arg.startsWith(':'))) return true;
-    if (subcommand === 'reset' && rest.some((arg) => ['--hard', '--merge', '--keep'].includes(arg))) return true;
-    if (subcommand === 'clean' && rest.some((arg) => arg === '--force' || /^-[^-]*[fx]/.test(arg))) return true;
-    if (subcommand === 'branch' && (rest.includes('-D') || (rest.includes('--delete') && rest.some((arg) => ['--force', '-f'].includes(arg))))) return true;
-    if (subcommand === 'tag' && rest.some((arg) => ['-d', '--delete'].includes(arg))) return true;
-    if (['checkout', 'restore'].includes(subcommand) && (rest.includes('.') || (rest.includes('--') && rest.indexOf('--') < rest.length - 1))) return true;
+    if (['push', 'reset', 'clean', 'branch', 'tag', 'checkout', 'switch', 'restore', 'stash', 'update-ref', 'rm'].includes(subcommand)
+      && normalized.slice(2).some((word) => word.dynamic)) return true;
+    const { short, long, hasLong } = gitOptions(rest);
+    const force = short.has('f') || hasLong('--force');
+    const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
+    if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
+      || rest.some((arg) => arg.startsWith('+') || arg.startsWith(':')))) return true;
+    if (subcommand === 'reset' && hasLong('--hard', '--merge', '--keep')) return true;
+    if (subcommand === 'clean' && !dryRun && (force || short.has('x') || short.has('X'))) return true;
+    if (subcommand === 'branch' && (short.has('D') || force)) return true;
+    if (subcommand === 'tag' && (short.has('d') || hasLong('--delete') || force)) return true;
+    if (subcommand === 'checkout' && (force || rest.includes('.') || (rest.includes('--') && rest.indexOf('--') < rest.length - 1))) return true;
+    if (subcommand === 'switch' && (force || hasLong('--discard-changes'))) return true;
+    if (subcommand === 'restore') {
+      const staged = short.has('S') || long.some((option) => '--staged'.startsWith(option) && !'--source'.startsWith(option));
+      if (!hasLong('--help') && !short.has('h') && (short.has('W') || hasLong('--worktree') || !staged)) return true;
+    }
     if (subcommand === 'stash' && rest.some((arg) => ['drop', 'clear'].includes(arg))) return true;
-    if (subcommand === 'filter-branch' || (subcommand === 'update-ref' && rest.includes('-d'))) return true;
-    return matchesAny(['git', subcommand, ...rest].join(' '), destructive);
+    if (subcommand === 'filter-branch' || (subcommand === 'update-ref' && (short.has('d') || hasLong('--delete')))) return true;
+    if (subcommand === 'rm' && (force || ((short.has('r') || hasLong('--recursive')) && rest.includes('.')))) return true;
+    if (subcommand === 'reflog' && ['expire', 'delete'].includes(rest[0])) return true;
+    if (subcommand === 'gc' && rest.some((arg) => /^--prune=(now|all)$/.test(arg))) return true;
+    if (subcommand === 'worktree' && rest[0] === 'remove' && force) return true;
+    if (subcommand === 'submodule' && rest[0] === 'deinit' && force) return true;
+    const patterns = dryRun ? destructive.filter((pattern, i) => i >= BUILTIN_DESTRUCTIVE_BASH.length || !pattern.startsWith('git clean ')) : destructive;
+    return matchesAny(['git', subcommand, ...rest].join(' '), patterns)
+      || matchesAny(['git', ...args.map((word) => word.value)].join(' '), patterns);
   }
+  if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
   if (SHELLS.has(executable)) {
     // A shell script, stdin shell, or expansion in the script cannot be inspected here.
     for (let i = 0; i < args.length; i += 1) {
@@ -492,24 +576,42 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
   if (!Object.hasOwn(WRAPPER_OPTIONS, executable)) return false;
   const options = WRAPPER_OPTIONS[executable];
   let i = 0;
+  let positionals = options.positionals ?? 0;
+  let script = null;
   while (i < args.length) {
     const word = args[i];
     if (word.dynamic) return true;
     const option = word.value;
     if (option === '--') { i += 1; break; }
     if (executable === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(option)) { i += 1; continue; }
-    if (!option.startsWith('-')) break;
+    if (!option.startsWith('-')) {
+      if (positionals > 0) { positionals -= 1; i += 1; continue; }
+      break;
+    }
     if (options.flags.includes(option)) { i += 1; continue; }
     if (options.values.includes(option)) {
       if (!args[i + 1] || args[i + 1].dynamic) return true;
+      if (options.scripts?.includes(option)) script = args[i + 1].value;
       i += 2; continue;
     }
     if (options.values.some((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name) && option.length > name.length)) {
+      const scriptOption = options.scripts?.find((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name));
+      if (scriptOption) script = option.slice(scriptOption.length + (scriptOption.startsWith('--') ? 1 : 0));
       i += 1; continue;
     }
     return true;
   }
+  // -- ends wrapper options but still leaves its required duration/lock positional.
+  while (positionals > 0) {
+    if (!args[i] || args[i].dynamic) return true;
+    positionals -= 1; i += 1;
+  }
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths);
   if (i === args.length) return true;
+  if (options.shell) {
+    return args.slice(i).some((word) => word.dynamic)
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths);
+  }
   const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
