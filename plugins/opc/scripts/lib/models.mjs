@@ -5,10 +5,28 @@ import { safeOutputText } from './redact.mjs';
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
 
 export function globToRegExp(glob) {
-  const directoryMarker = '\u0000';
-  const body = String(glob).replace(/\*\*\//g, (match, offset, source) =>
-    offset === 0 || source[offset - 1] === '/' ? directoryMarker : match).split('*')
-    .map((part) => part.replace(REGEX_SPECIALS, '\\$&')).join('.*').replaceAll(directoryMarker, '(?:.*/)?');
+  const source = String(glob);
+  const parts = [{ wildcard: null, literal: '' }];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] !== '*') { parts.at(-1).literal += source[i]; continue; }
+    const directory = source.startsWith('**/', i) && (i === 0 || source[i - 1] === '/');
+    const wildcard = directory ? 'directory' : 'star';
+    if (directory) i += 2;
+    const last = parts.at(-1);
+    if (last.wildcard && !last.literal) {
+      if (wildcard === 'star') last.wildcard = 'star';
+    } else parts.push({ wildcard, literal: '' });
+  }
+  let body = parts[0].literal.replace(REGEX_SPECIALS, '\\$&');
+  for (let i = 1; i < parts.length; i += 1) {
+    const { wildcard, literal } = parts[i];
+    const fixed = literal.replace(REGEX_SPECIALS, '\\$&');
+    const last = i === parts.length - 1;
+    const prefix = wildcard === 'directory' ? (last ? '(?:.*/)?' : '(?:.*?/)??') : (last ? '.*' : '.*?');
+    // Lookahead captures are atomic in JS: an interior star commits to the earliest
+    // fixed chunk. Later wildcards absorb any extra text without exponential retries.
+    body += last ? `${prefix}${fixed}` : `(?=(${prefix}${fixed}))\\${i}`;
+  }
   return new RegExp(`^${body}$`);
 }
 

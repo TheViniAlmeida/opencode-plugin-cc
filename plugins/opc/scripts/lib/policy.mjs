@@ -221,6 +221,11 @@ function bashSegments(command) {
     for (let i = 0; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") {
         if (source[i + 1] === '`') {
           const end = source.indexOf('\\`', i + 2);
@@ -253,6 +258,7 @@ function bashSegments(command) {
         }
         continue;
       }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === '`') {
         const end = findBacktick(source, i + 1);
@@ -276,6 +282,10 @@ function bashSegments(command) {
         const close = char === '(' ? ')' : '}';
         const end = findGroup(source, i, char, close);
         if (end < 0) return null;
+        // A brace inside a word (or a comma expression) is expansion, not a script group.
+        if (char === '{' && ((i > start && !/[\s;|&]/.test(source[i - 1])) || source.slice(i + 1, end).includes(','))) {
+          i = end; continue;
+        }
         const nested = scan(source.slice(i + 1, end), depth + 1);
         if (nested === null) return null;
         parts.push(...nested);
@@ -316,9 +326,15 @@ function bashSegments(command) {
     for (let i = open; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") { escaped = true; continue; }
       if (quote === "'") { if (char === "'") quote = null; continue; }
       if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === '$' && source[i + 1] === '(') { depth += 1; i += 1; continue; }
       if (char === '(') depth += 1;
@@ -334,9 +350,15 @@ function bashSegments(command) {
     for (let i = open; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") { escaped = true; continue; }
       if (quote === "'") { if (char === "'") quote = null; continue; }
       if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === opening) depth += 1;
       else if (char === closing && --depth === 0) return i;
@@ -358,7 +380,14 @@ function shellWords(source) {
   };
   for (let i = 0; i < source.length; i += 1) {
     const char = source[i];
-    if (char === '\\' && quote !== "'") {
+    if (quote === 'ansi') {
+      if (char === "'") quote = null;
+      else if (char === '\\') {
+        const escape = ansiEscape(source, i);
+        if (!escape) return null;
+        value += escape.value; i = escape.end;
+      } else value += char;
+    } else if (char === '\\' && quote !== "'") {
       if (++i >= source.length) return null;
       const next = source[i];
       // In double quotes, only these escapes are interpreted by the shell.
@@ -371,17 +400,40 @@ function shellWords(source) {
         value += char;
         if (quote === '"' && (char === '$' || char === '`')) dynamic = true;
       }
+    } else if (char === '$' && source[i + 1] === "'") {
+      quote = 'ansi'; active = true; i += 1;
     } else if (char === "'" || char === '"') {
       quote = char; active = true;
     } else if (/\s/.test(char)) push();
     else {
       value += char; active = true;
-      if ('$`*?[]'.includes(char)) dynamic = true;
+      if ('$`*?[]{}'.includes(char)) dynamic = true;
     }
   }
   if (quote) return null;
   push();
   return words;
+}
+
+function ansiEscape(source, offset) {
+  const next = source[offset + 1];
+  if (next === undefined) return null;
+  const escapes = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+  if (Object.hasOwn(escapes, next)) return { value: escapes[next], end: offset + 1 };
+  const numeric = /^(?:x[\da-fA-F]{1,2}|u[\da-fA-F]{1,4}|U[\da-fA-F]{1,8}|[0-7]{1,3})/.exec(source.slice(offset + 1))?.[0];
+  if (numeric) {
+    const code = /^[0-7]/.test(numeric) ? parseInt(numeric, 8) & 0xff : parseInt(numeric.slice(1), 16);
+    if (code === 0 || code > 0x10ffff) return null;
+    return { value: String.fromCodePoint(code), end: offset + numeric.length };
+  }
+  if (next === 'c') {
+    const control = source[offset + 2];
+    if (!control) return null;
+    const code = control === '?' ? 127 : control.toUpperCase().charCodeAt(0) & 31;
+    if (code === 0) return null;
+    return { value: String.fromCharCode(code), end: offset + 2 };
+  }
+  return { value: `\\${next}`, end: offset + 1 };
 }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
@@ -406,13 +458,37 @@ const WRAPPER_OPTIONS = {
   watch: { flags: ['-b', '--beep', '-c', '--color', '-C', '--no-color', '-d', '--differences', '-e', '--errexit', '-g', '--chgexit', '-p', '--precise', '-t', '--no-title', '-w', '--no-wrap', '-x', '--exec'],
     values: ['-n', '--interval', '-q', '--equexit'], shell: true },
   busybox: { flags: [], values: [] },
+  taskset: { flags: ['-a', '--all-tasks', '-p', '--pid'], values: ['-c', '--cpu-list'], positionals: 1, replacesPositional: ['-c', '--cpu-list'] },
+  unshare: { flags: ['-m', '--mount', '-u', '--uts', '-i', '--ipc', '-n', '--net', '-p', '--pid', '-U', '--user', '-C', '--cgroup', '-T', '--time',
+    '-f', '--fork', '-r', '--map-root-user', '-c', '--map-current-user', '--map-auto', '--mount-proc', '--kill-child'],
+    values: ['-R', '--root', '-w', '--wd', '-S', '--setuid', '-G', '--setgid', '--map-user', '--map-group', '--map-users', '--map-groups', '--propagation', '--setgroups', '--monotonic', '--boottime'] },
+  chroot: { flags: ['--skip-chdir'], values: ['--userspec', '--groups'], positionals: 1 },
+  su: { flags: ['-', '-l', '--login', '-m', '-p', '--preserve-environment'], values: ['-c', '--command', '-s', '--shell', '-g', '--group', '-G', '--supp-group'],
+    scripts: ['-c', '--command'], positionals: 1, optionalPositional: true },
+  ssh: { flags: ['-4', '-6', '-A', '-a', '-C', '-f', '-G', '-g', '-K', '-k', '-M', '-N', '-n', '-q', '-s', '-T', '-t', '-V', '-v', '-X', '-x', '-Y', '-y'],
+    values: ['-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w'], positionals: 1, shell: true },
 };
 
-function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = []) {
+const SHELL_DECLARATIONS = new Set(['export', 'declare', 'typeset']);
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const GIT_ENVIRONMENT = new Set(['PAGER', 'EDITOR', 'VISUAL', 'SSH_ASKPASS']);
+const unsafeGitEnvironment = (name) => GIT_ENVIRONMENT.has(name)
+  || (name.startsWith('GIT_') && name !== 'GIT_TERMINAL_PROMPT' && !name.startsWith('GIT_TRACE'));
+
+function declaredEnvironment(words) {
+  const offset = words?.findIndex((word) => !ASSIGNMENT.test(word.value)) ?? -1;
+  if (offset < 0 || !SHELL_DECLARATIONS.has(words[offset].value)) return [];
+  return words.slice(offset + 1).filter((word) => !word.value.startsWith('-'))
+    .map((word) => word.value.split('=')[0]);
+}
+
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = []) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
-  return segments.some((segment) => inspectWords(shellWords(segment), destructive, depth, sensitivePaths));
+  const commands = segments.map(shellWords);
+  const declared = commands.flatMap(declaredEnvironment);
+  return commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths, [...environment, ...declared]));
 }
 
 function shellTouchesSensitive(words, sensitivePaths) {
@@ -420,36 +496,76 @@ function shellTouchesSensitive(words, sensitivePaths) {
     '.env', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc', '.git-credentials', 'secrets.env',
     '.aws/credentials', 'x.pem', 'x.key', ...sensitivePaths.filter((path) => !/[*?\[]/.test(path)),
   ].filter((path) => matchesAny(path, sensitivePaths));
-  return words.some(({ value }) => {
+  return words.some(({ value, dynamic }) => {
     const candidates = value.startsWith('-') ? [] : [value];
     if (value.startsWith('-') && value.includes('=')) candidates.push(value.slice(value.indexOf('=') + 1));
     if (/^-[^-]/.test(value) && value.length > 2) candidates.push(value.slice(2));
     return candidates.some((candidate) => {
-      const basename = candidate.split('/').at(-1);
-      if (matchesAny(candidate, sensitivePaths) || matchesAny(basename, sensitivePaths)) return true;
-      if (!/[*?\[]/.test(candidate)) return false;
-      const glob = shellGlobToRegExp(candidate);
-      const baseGlob = shellGlobToRegExp(basename);
-      return samples.some((sample) => glob.test(sample) || baseGlob.test(sample.split('/').at(-1)));
+      const expanded = expandShellBraces(candidate);
+      if (!expanded) return true;
+      return expanded.some((path) => {
+        const basename = path.split('/').at(-1);
+        if (matchesAny(path, sensitivePaths) || matchesAny(basename, sensitivePaths)) return true;
+        const expansion = dynamic ? path.search(/[$`]/) : -1;
+        const prefix = expansion < 0 ? null : path.slice(0, expansion);
+        const patterns = /[*?\[]/.test(path) ? [path, basename] : [];
+        if (prefix) {
+          patterns.push(`${prefix}*`);
+          const basePrefix = prefix.split('/').at(-1);
+          if (basePrefix) patterns.push(`${basePrefix}*`);
+        }
+        return patterns.some((pattern) => {
+          const match = shellGlobMatcher(pattern);
+          return samples.some((sample) => match(sample) || match(sample.split('/').at(-1)));
+        });
+      });
     });
   });
 }
 
-function shellGlobToRegExp(glob) {
-  let body = '';
+function expandShellBraces(word) {
+  const pending = [word], result = [];
+  while (pending.length) {
+    const path = pending.pop();
+    const braces = [...path.matchAll(/\{([^{}]*,[^{}]*)\}/g)].find((match) => path[match.index - 1] !== '$');
+    if (!braces) { result.push(path); continue; }
+    const alternatives = braces[1].split(',');
+    if (result.length + pending.length + alternatives.length > 64) return null;
+    for (const alternative of alternatives) {
+      pending.push(path.slice(0, braces.index) + alternative + path.slice(braces.index + braces[0].length));
+    }
+  }
+  return result;
+}
+
+function shellGlobMatcher(glob) {
+  const tokens = [];
   for (let i = 0; i < glob.length; i += 1) {
     const char = glob[i];
-    if (char === '*') body += '.*';
-    else if (char === '?') body += '.';
+    if (char === '*') { if (tokens.at(-1) !== '*') tokens.push('*'); }
+    else if (char === '?') tokens.push(() => true);
     else if (char === '[' && glob.indexOf(']', i + 1) > i + 1) {
       const end = glob.indexOf(']', i + 1);
       const content = glob.slice(i + 1, end).replace(/^!/, '^');
-      body += `[${content.replaceAll('\\', '\\\\')}]`;
+      let expression;
+      try { expression = new RegExp(`^[${content.replaceAll('\\', '\\\\')}]$`); }
+      catch { return () => true; } // Uninspectable classes fail closed; each valid class matches one character.
+      tokens.push((value) => expression.test(value));
       i = end;
-    } else body += char.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    } else tokens.push((value) => value === char);
   }
-  try { return new RegExp(`^${body}$`); }
-  catch { return /(?:)/; } // Uninspectable bracket expressions fail closed against the samples.
+  // Greedy two-pointer matching retries only the latest star, never a tree of alternatives.
+  return (value) => {
+    let token = 0, offset = 0, star = -1, retry = 0;
+    while (offset < value.length) {
+      if (tokens[token] === '*') { star = token++; retry = offset; }
+      else if (tokens[token]?.(value[offset])) { token += 1; offset += 1; }
+      else if (star >= 0) { token = star + 1; offset = ++retry; }
+      else return false;
+    }
+    while (tokens[token] === '*') token += 1;
+    return token === tokens.length;
+  };
 }
 
 function harmlessGitConfig(value) {
@@ -486,59 +602,107 @@ function normalizeGitWords(words) {
   return [words[0], ...words.slice(i)];
 }
 
-function gitOptions(args) {
+const GIT_VALUE_OPTIONS = {
+  push: ['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules'],
+  reset: ['--pathspec-from-file'],
+  clean: ['-e', '--exclude'],
+  branch: ['-u', '--set-upstream-to', '--format', '--sort'],
+  tag: ['-m', '--message', '-F', '--file', '-u', '--local-user', '--cleanup', '--format', '--sort'],
+  checkout: ['-b', '-B', '--orphan', '--conflict', '--pathspec-from-file'],
+  switch: ['-c', '-C', '--create', '--force-create', '--orphan', '--conflict'],
+  restore: ['-s', '--source', '--conflict', '--pathspec-from-file'],
+  stash: ['-m', '--message', '--pathspec-from-file'],
+  'update-ref': ['-m', '--message'],
+  rm: ['--pathspec-from-file'],
+  rebase: ['-x', '--exec', '--onto', '--strategy', '-s', '--strategy-option', '-X'],
+  fetch: ['--upload-pack', '-u', '--receive-pack', '--depth', '--shallow-since', '--shallow-exclude', '--refmap', '-j', '--jobs'],
+  pull: ['--upload-pack', '-u', '--receive-pack', '--depth', '--strategy', '-s', '--strategy-option', '-X'],
+  clone: ['--upload-pack', '-u', '--receive-pack', '--template', '-o', '--origin', '-b', '--branch', '--depth', '--reference', '--separate-git-dir', '-j', '--jobs'],
+  'ls-remote': ['--upload-pack', '-u', '--receive-pack'],
+  archive: ['--upload-pack', '-u', '--receive-pack', '--format', '--prefix', '-o', '--output', '--remote', '--exec'],
+  difftool: ['-x', '--extcmd', '-t', '--tool'],
+  worktree: ['-b', '-B', '--reason', '--expire'],
+  submodule: ['-b', '--branch', '--name', '--reference', '--depth', '-j', '--jobs'],
+};
+
+function gitOptions(args, subcommand) {
   const short = new Set();
   const long = [];
-  for (const arg of args) {
-    if (arg === '--') break;
-    if (arg.startsWith('--')) long.push(arg.split('=')[0]);
-    else if (arg.startsWith('-')) for (const letter of arg.slice(1)) short.add(letter);
+  const operands = [];
+  const values = GIT_VALUE_OPTIONS[subcommand] ?? [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') { operands.push(...args.slice(i)); break; }
+    if (arg.startsWith('--')) {
+      const option = arg.split('=')[0];
+      long.push(option);
+      if (!arg.includes('=') && values.some((name) => name.startsWith('--') && name.startsWith(option))) i += 1;
+    } else if (arg.startsWith('-')) {
+      for (let j = 1; j < arg.length; j += 1) {
+        const letter = arg[j];
+        short.add(letter);
+        if (values.includes(`-${letter}`)) {
+          if (j === arg.length - 1) i += 1;
+          break;
+        }
+      }
+    } else operands.push(arg);
   }
   // A prefix that could select a destructive option also needs the user when ambiguous.
   const hasLong = (...names) => long.some((option) => names.some((name) => name.startsWith(option)));
-  return { short, long, hasLong };
+  return { short, long, hasLong, operands };
 }
 
-function inspectWords(words, destructive, depth, sensitivePaths) {
+function inspectWords(words, destructive, depth, sensitivePaths, environment = []) {
   if (!words || depth > 32) return true;
   if (shellTouchesSensitive(words, sensitivePaths)) return true;
-  // Literal environment assignments do not change the executable, but a later $CMD does.
+  // Carry assignments through wrappers/scripts so git configuration cannot hide in env.
   let offset = 0;
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[offset]?.value ?? '')) offset += 1;
+  environment = [...environment];
+  while (ASSIGNMENT.test(words[offset]?.value ?? '')) {
+    environment.push(ASSIGNMENT.exec(words[offset].value)[1]); offset += 1;
+  }
   words = words.slice(offset);
   if (!words.length) return false;
   const [head, ...args] = words;
   if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
+  if (SHELL_DECLARATIONS.has(executable) && declaredEnvironment(words).some((name) => name.startsWith('GIT_'))) return true;
   if (executable === 'git') {
+    if (environment.some(unsafeGitEnvironment)) return true;
     const normalized = normalizeGitWords(words);
     if (!normalized) return true;
     const [, subcommand, ...rest] = normalized.map((word) => word.value);
     if (['push', 'reset', 'clean', 'branch', 'tag', 'checkout', 'switch', 'restore', 'stash', 'update-ref', 'rm'].includes(subcommand)
       && normalized.slice(2).some((word) => word.dynamic)) return true;
-    const { short, long, hasLong } = gitOptions(rest);
+    const { short, long, hasLong, operands } = gitOptions(rest, subcommand);
     const force = short.has('f') || hasLong('--force');
     const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
     if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
-      || rest.some((arg) => arg.startsWith('+') || arg.startsWith(':')))) return true;
+      || operands.some((arg) => arg.startsWith('+') || arg.startsWith(':')))) return true;
     if (subcommand === 'reset' && hasLong('--hard', '--merge', '--keep')) return true;
     if (subcommand === 'clean' && !dryRun && (force || short.has('x') || short.has('X'))) return true;
     if (subcommand === 'branch' && (short.has('D') || force)) return true;
     if (subcommand === 'tag' && (short.has('d') || hasLong('--delete') || force)) return true;
-    if (subcommand === 'checkout' && (force || rest.includes('.') || (rest.includes('--') && rest.indexOf('--') < rest.length - 1))) return true;
-    if (subcommand === 'switch' && (force || hasLong('--discard-changes'))) return true;
+    if (subcommand === 'checkout' && (force || short.has('B') || operands.includes('.') || (operands.includes('--') && operands.indexOf('--') < operands.length - 1))) return true;
+    if (subcommand === 'switch' && (force || short.has('C') || hasLong('--discard-changes', '--force-create'))) return true;
     if (subcommand === 'restore') {
       const staged = short.has('S') || long.some((option) => '--staged'.startsWith(option) && !'--source'.startsWith(option));
       if (!hasLong('--help') && !short.has('h') && (short.has('W') || hasLong('--worktree') || !staged)) return true;
     }
-    if (subcommand === 'stash' && rest.some((arg) => ['drop', 'clear'].includes(arg))) return true;
-    if (subcommand === 'filter-branch' || (subcommand === 'update-ref' && (short.has('d') || hasLong('--delete')))) return true;
-    if (subcommand === 'rm' && (force || ((short.has('r') || hasLong('--recursive')) && rest.includes('.')))) return true;
-    if (subcommand === 'reflog' && ['expire', 'delete'].includes(rest[0])) return true;
+    if (subcommand === 'stash' && operands.some((arg) => ['drop', 'clear'].includes(arg))) return true;
+    if (['filter-branch', 'filter-repo'].includes(subcommand) || (subcommand === 'update-ref' && (short.has('d') || hasLong('--delete')))) return true;
+    if (subcommand === 'rm' && (force || ((short.has('r') || hasLong('--recursive')) && operands.includes('.')))) return true;
+    if (subcommand === 'reflog' && ['expire', 'delete'].includes(operands[0])) return true;
     if (subcommand === 'gc' && rest.some((arg) => /^--prune=(now|all)$/.test(arg))) return true;
-    if (subcommand === 'worktree' && rest[0] === 'remove' && force) return true;
-    if (subcommand === 'submodule' && rest[0] === 'deinit' && force) return true;
+    if (subcommand === 'worktree' && operands[0] === 'remove' && force) return true;
+    if (subcommand === 'submodule' && ((operands[0] === 'deinit' && force) || operands[0] === 'foreach')) return true;
+    if (subcommand === 'bisect' && operands[0] === 'run') return true;
+    if (subcommand === 'rebase' && (short.has('x') || hasLong('--exec'))) return true;
+    if (subcommand === 'difftool' && (short.has('x') || hasLong('--extcmd'))) return true;
+    if (['push', 'fetch', 'pull', 'clone', 'ls-remote', 'archive'].includes(subcommand)
+      && (hasLong('--upload-pack', '--receive-pack', '--exec') || (subcommand !== 'push' && short.has('u')))) return true;
     const patterns = dryRun ? destructive.filter((pattern, i) => i >= BUILTIN_DESTRUCTIVE_BASH.length || !pattern.startsWith('git clean ')) : destructive;
     return matchesAny(['git', subcommand, ...rest].join(' '), patterns)
       || matchesAny(['git', ...args.map((word) => word.value)].join(' '), patterns);
@@ -551,7 +715,7 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
       if (option.dynamic) return true;
       if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
         const script = args[i + 1];
-        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths);
+        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment);
       }
       if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
     }
@@ -559,7 +723,7 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
   }
   if (executable === 'eval') {
     return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths);
+      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -567,7 +731,7 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment)) return true;
         i = end;
       }
     }
@@ -583,7 +747,7 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
     if (word.dynamic) return true;
     const option = word.value;
     if (option === '--') { i += 1; break; }
-    if (executable === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(option)) { i += 1; continue; }
+    if (executable === 'env' && ASSIGNMENT.test(option)) { environment.push(ASSIGNMENT.exec(option)[1]); i += 1; continue; }
     if (!option.startsWith('-')) {
       if (positionals > 0) { positionals -= 1; i += 1; continue; }
       break;
@@ -592,27 +756,30 @@ function inspectWords(words, destructive, depth, sensitivePaths) {
     if (options.values.includes(option)) {
       if (!args[i + 1] || args[i + 1].dynamic) return true;
       if (options.scripts?.includes(option)) script = args[i + 1].value;
+      if (options.replacesPositional?.includes(option)) positionals = 0;
       i += 2; continue;
     }
     if (options.values.some((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name) && option.length > name.length)) {
       const scriptOption = options.scripts?.find((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name));
       if (scriptOption) script = option.slice(scriptOption.length + (scriptOption.startsWith('--') ? 1 : 0));
+      if (options.replacesPositional?.some((name) => option.startsWith(name))) positionals = 0;
       i += 1; continue;
     }
     return true;
   }
   // -- ends wrapper options but still leaves its required duration/lock positional.
   while (positionals > 0) {
+    if (options.optionalPositional && !args[i]) break;
     if (!args[i] || args[i].dynamic) return true;
     positionals -= 1; i += 1;
   }
-  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths);
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment);
   if (i === args.length) return true;
   if (options.shell) {
     return args.slice(i).some((word) => word.dynamic)
-      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths);
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment);
   }
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths);
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

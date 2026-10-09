@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +35,35 @@ test('globToRegExp: * matches any sequence including slashes', () => {
   assert.ok(globToRegExp('a.b').test('a.b'));
   assert.ok(!globToRegExp('a.b').test('axb'), 'dots are literal');
   assert.ok(globToRegExp('work-*').test('work-deploy'));
+});
+
+test('globToRegExp: adversarial stars and directory globs finish within 50 ms', () => {
+  const script = `
+    import { globToRegExp, matchesAny } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/models.mjs', import.meta.url).href)};
+    const start = performance.now();
+    const results = [
+      globToRegExp('*'.repeat(64) + 'x').test('.env'),
+      globToRegExp('*a'.repeat(64) + 'x').test('a'.repeat(128)),
+      globToRegExp('**/a/'.repeat(64) + 'x').test('a/'.repeat(128)),
+      matchesAny('.env', ['*'.repeat(64) + 'env']),
+    ];
+    console.log(JSON.stringify({ results, elapsed: performance.now() - start }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 }));
+  assert.deepEqual(result.results, [false, false, false, true]);
+  assert.ok(result.elapsed < 50, `${result.elapsed} ms`);
+});
+
+test('globToRegExp: interior stars preserve suffix and optional directory matching', () => {
+  for (const [glob, value, expected] of [
+    ['*a*b', 'aab', true], ['*a*a', 'aa', true], ['*a*a', 'ab', false],
+    ['**/a/**/b', 'a/a/b', true], ['**/a/**/b', 'a/x/b', true],
+    ['**/a*b', 'dir/aab', true], ['**/a*b', 'xaaab', false],
+    ['**/b*/*', 'b?/b??aa?', true], ['**/a*/*', 'a/a', true],
+    ['**/*a', 'xa', true], ['a/**/**/b', 'a/b', true], ['a/**/**/b', 'a/x/y/b', true],
+    ['*?[]', 'x?[]', true], ['*?[]', 'xab', false],
+  ]) assert.equal(globToRegExp(glob).test(value), expected, `${glob}: ${value}`);
+  assert.ok(globToRegExp('*a*b') instanceof RegExp);
 });
 
 test('matchesAny: empty list never matches', () => {

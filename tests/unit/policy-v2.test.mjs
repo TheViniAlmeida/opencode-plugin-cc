@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { buildPermissionRules, checkReply, planPermissionSwitch, requiresUser } from '../../plugins/opc/scripts/lib/policy.mjs';
 import { toPermissionRequest } from '../../plugins/opc/scripts/lib/opencode-v2.mjs';
 import { loadContractSample } from '../fixtures/contract-shapes.mjs';
@@ -9,6 +10,119 @@ import { globToRegExp } from '../../plugins/opc/scripts/lib/models.mjs';
 const lastMatch = (rules, action, resource) => rules.filter((rule) => (rule.action === '*' || rule.action === action)
   && globToRegExp(rule.resource).test(resource)).at(-1)?.effect;
 const claude = (command, policy = {}) => requiresUser({ permission: 'shell', patterns: [command], metadata: { command } }, policy);
+
+test('F11 fix2: shell globs with repeated or separated stars finish within 50 ms', () => {
+  const script = `
+    import { requiresUser } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/policy.mjs', import.meta.url).href)};
+    const check = (command, policy) => requiresUser({ permission: 'shell', patterns: [command] }, policy);
+    const start = performance.now();
+    const results = [
+      check('cat ' + '*'.repeat(64) + 'x'), check('cat ' + '*a'.repeat(64) + 'x'),
+      check('cat ' + '*a'.repeat(64) + 'x', { sensitivePaths: ['a'.repeat(128)] }),
+    ];
+    console.log(JSON.stringify({ results, elapsed: performance.now() - start }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 }));
+  assert.deepEqual(result.results, [claude('cat *x'), false, false]);
+  assert.ok(result.elapsed < 50, `${result.elapsed} ms`);
+});
+
+const fix2Cases = [
+  ['option values cannot suppress destructive flags', true, [
+    'git clean -f -e -n', 'git clean -fd -e -n', 'git clean -f --exclude -n', 'git clean -f -e-n',
+    'git clean -f --exclude=-n', 'git clean -fe-n', 'git clean -ef -f', 'git clean -f --excl -n',
+    'git restore -s -S src/a', 'git restore --source -S src/a',
+    'git push -o -n --force origin main', 'git branch -u -n -f main',
+    'git switch -C synthetic main', 'git switch --force-create synthetic main', 'git checkout -B synthetic main',
+    'git branch --contains -f main', 'git tag --contains -f release',
+  ]],
+  ['option values do not become destructive flags or operands', false, [
+    'git clean -n', 'git clean -fn', 'git clean --dry-run -f', 'git clean -nfd',
+    'git clean -e-n', 'git clean --exclude=-x',
+    'git push -o --force origin main', 'git push -o-f origin main', 'git push --push-option --force origin main',
+    'git push --push-option=--force origin main', 'git push -o +main origin main',
+    'git branch -u -f feature', 'git branch -u-f feature', 'git branch --set-upstream-to --force feature',
+    'git tag -m -d release', 'git tag -m-d release', 'git tag --message --delete release', 'git tag --message=--delete release',
+    'git checkout -b -f', 'git checkout -b-f', 'git checkout -b .', 'git checkout --orphan .',
+    'git rm --pathspec-from-file -f', 'git rm --pathspec-from-file=--force',
+    'git stash push -m drop', 'git update-ref -m -d refs/heads/feature HEAD',
+    'git status', 'git log', 'git diff', 'git push origin main', 'git branch -d feature',
+    'git checkout main', 'git stash', 'ls', 'cat README.md', 'npm test', 'git commit -m "$MSG"',
+  ]],
+  ['git environment assignments require the user', true, [
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!rm -rf .' git x",
+    "GIT_SSH_COMMAND='synthetic-helper' git push origin main", "GIT_PAGER='rm -rf x' git log",
+    'GIT_EXTERNAL_DIFF=synthetic git diff', 'env GIT_SSH_COMMAND=synthetic git push origin main',
+    'GIT_PAGER=cat git log', 'GIT_DIR=x git reset --hard', 'GIT_WORK_TREE=x git clean -f',
+    'GIT_DIR=x git status', 'GIT_AUTHOR_NAME=Synthetic git status',
+    'GIT_SSH_COMMAND=synthetic timeout 5 git push origin main',
+    'timeout 5 env GIT_EDITOR=synthetic git commit -m safe',
+    'env -i GIT_PAGER=synthetic sh -c "git log"', 'PAGER=synthetic sh -c "git log"',
+    'export GIT_CONFIG_COUNT=1; echo safe', 'declare -x GIT_CONFIG_KEY_0=alias.x; git x',
+    'typeset -x GIT_CONFIG_VALUE_0=synthetic; git x', 'export GIT_PAGER; ls',
+    'export PAGER=synthetic; git log', 'declare -x EDITOR=synthetic; git commit -m safe',
+    'typeset -x VISUAL=synthetic; git commit -m safe',
+    ...['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_SSH', 'GIT_EDITOR',
+      'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_EXEC_PATH', 'GIT_TEMPLATE_DIR', 'GIT_PROXY_COMMAND', 'PAGER', 'EDITOR', 'VISUAL']
+      .flatMap((name) => [`${name}=synthetic git status`, `env ${name}=synthetic git status`]),
+  ]],
+  ['harmless assignments keep benign commands free', false, [
+    'GIT_TERMINAL_PROMPT=0 git status', 'GIT_TRACE=1 git status', 'GIT_TRACE_SETUP=1 env git status',
+    'SYNTHETIC=value git status', 'env SYNTHETIC=value git log', 'PAGER=synthetic cat README.md',
+    'EDITOR=synthetic npm test', 'export SYNTHETIC=value; git status',
+  ]],
+  ['git command execution options require the user', true, [
+    'git rebase -x "rm -rf ." main', 'git rebase --exec "rm -rf ." main',
+    'git rebase -i --exec=synthetic main', 'git rebase -ixsynthetic main',
+    'git submodule foreach "rm -rf ."', 'git submodule --quiet foreach "rm -rf ."',
+    'git bisect run rm -rf x', 'git difftool -x synthetic', 'git difftool --extcmd=synthetic', 'git filter-repo',
+    ...['fetch', 'pull', 'clone', 'ls-remote', 'archive'].flatMap((command) => [
+      `git ${command} --upload-pack synthetic origin`, `git ${command} --upload-pack=synthetic origin`,
+      `git ${command} -u synthetic origin`, `git ${command} -usynthetic origin`,
+      `git ${command} --receive-pack synthetic origin`, `git ${command} --receive-pack=synthetic origin`,
+    ]),
+    'git push --receive-pack=synthetic origin main',
+  ]],
+  ['additional wrappers inspect commands and scripts', true, [
+    'taskset 1 git reset --hard', 'taskset -c 0 git reset --hard', 'taskset --cpu-list=0 git reset --hard',
+    'unshare --mount --pid --fork git reset --hard', 'unshare -r git reset --hard',
+    'unshare --map-users 0,0,1 --map-groups 0,0,1 git reset --hard',
+    'chroot / git reset --hard', 'chroot --userspec=synthetic / git reset --hard',
+    'su -c "git reset --hard"', 'su root -c "git reset --hard"', 'su --command="git reset --hard"',
+    'ssh h git reset --hard', 'ssh -p 22 h "echo safe; git reset --hard"',
+    'ssh h "su -c \'git reset --hard\'"',
+  ]],
+  ['benign additional wrappers', false, [
+    'taskset 1 git status', 'taskset -c 0 git log', 'taskset --cpu-list=0 git status',
+    'unshare --mount --pid --fork git status', 'unshare -r git status', 'chroot / git status',
+    'unshare --map-users 0,0,1 --map-groups 0,0,1 git status',
+    'su -c "git status"', 'su root -c "git status"', 'ssh h git status', 'ssh -p 22 h "cat README.md"',
+  ]],
+  ['sensitive brace, ANSI-C and dynamic paths', true, [
+    'cat .e{nv,x}', 'cat .en{v,}', String.raw`cat $'\x2eenv'`, String.raw`cat $'\056env'`,
+    String.raw`cat $'\u002eenv'`, String.raw`cat $'\U0000002eenv'`, 'cat .env$IFS',
+    String.raw`cat $'\456env'`, String.raw`cat $'.env\c@x'`, 'cat src/${X:-a,b}/.e{nv,x}',
+    'cat ".env$IFS"', 'cat .e${SUFFIX}', 'cat --file=.e{nv,x}',
+    'cat ' + '{a,b}'.repeat(7), 'cat .e{nv,{x,y}}', 'cat nested/.env$IFS',
+  ]],
+  ['benign brace, ANSI-C and dynamic paths', false, [
+    'cat $FILE', 'cat src/$X', 'cat README.md', 'cat src/{a,b}.mjs',
+    'cat ' + '{a,b}'.repeat(6), String.raw`cat $'README\x2emd'`,
+    String.raw`cat $'it\'s-safe.txt'`, 'cat src/${FILE}', 'cat src/"$X"',
+    'cat src/${X:-a,b}/README.{md,txt}',
+  ]],
+];
+for (const [group, expected, commands] of fix2Cases) {
+  for (const command of commands) {
+    test(`F11 fix2: ${group}: ${command}`, () => {
+      assert.equal(claude(command), expected, command);
+      if (expected) {
+        const request = { permission: 'shell', patterns: [command], metadata: { command } };
+        assert.equal(checkReply({ approver: 'claude', request, reply: 'once' }).code, 'NEEDS_USER');
+      }
+    });
+  }
+}
 
 test('git global options and argument order do not hide destructive subcommands', () => {
   for (const command of [
