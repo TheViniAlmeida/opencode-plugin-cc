@@ -10,20 +10,20 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 Números da [tabela de origem](docs/superpowers/plans/2026-10-09-opc-F11-review-fixes.md) e
 evidências no [relatório F11](docs/phases/F11-report.md). As rodadas 2–5 do classificador
-ainda aguardam integração no checkout documentado; os itens abaixo descrevem o código presente.
+e os ajustes finais estão integrados em `7bb52b5`; a validação descrita é local, sem OpenCode real.
 
 - #1 — Regras seguem perfil → `extraAllow` → invariantes; `tools.deny` vence `ask` destrutivo e permissões do carrier.
 - #2 — O agente implícito `build` passa pela política, inclusive em review, gate, conclave e orquestração.
-- #3 — Git normaliza opções globais, ordem de argumentos, flags agrupadas e abreviações; endurecimentos posteriores continuam pendentes de integração.
+- #3 — Git normaliza opções globais, ordem de argumentos, flags agrupadas e abreviações; env de execução, configurações git, canais dinâmicos e opções de shell recebem inspeção adicional, com cache LRU de globs.
 - #4 — `requiresUser` inspeciona `metadata.command` e todos os recursos shell em `patterns`.
 - #5 — Shell com caminho sensível, webfetch/websearch e permissões desconhecidas exigem o usuário com aprovador `claude`.
 - #6 — `**/` aceita zero diretórios; defaults incluem `.npmrc`, `.netrc`, `.git-credentials`, `.aws/credentials` e kubeconfig.
-- #7 — Criação/fork bloqueiam `SHARE_AUTO`; checagem de mundo inclui diretório; review em background recusa antes de enfileirar.
+- #7 — Criação/fork bloqueiam `SHARE_AUTO`; checagem de mundo inclui diretório e é refeita após recuperação do servidor; review foreground/background recusa antes de enfileirar.
 - #8 — Conclave review exclui conteúdo de `policy.sensitivePaths` ao coletar contexto.
 - #9 — Erros HTTP/CLI e envelopes mascaram segredos também em texto livre; Bearer exige ≥16 caracteres e dígito/símbolo.
 - #10 — Transfer mascara padrões de segredo em usuário, assistente, chamadas/resultados de ferramentas e título, com contagem de máscaras.
 - #11 — HTTP e SSE recusam redirects com `UNEXPECTED_REDIRECT` (endurecimento; vazamento original não demonstrado).
-- #12 — Timeout com interrupção não confirmada falha fatalmente com `ABORT_UNCONFIRMED`, sem fallback concorrente.
+- #12 — Timeout e fallback de agente confirmam interrupção de todas as sessões rastreadas; interrupção não confirmada falha fatalmente com `ABORT_UNCONFIRMED`, sem fallback concorrente.
 - #13 — Subagentes checam cancelamento antes da criação e do prompt, interrompem sessões recém-criadas e registram IDs órfãos.
 - #14 — Servidor sem resposta com jobs ativos/ilegíveis é preservado; três health checks precedem `SERVER_UNRESPONSIVE`.
 - #15 — Jobs com JSON inválido ficam em `*.json.corrupt-<ms>` por até 30 dias; `READ_FAILED` preserva o arquivo e bloqueia operações que exigem ociosidade; hook-stop mostra `(ilegível)`.

@@ -1,10 +1,10 @@
 # F11 — correções da revisão dupla · relatório de fase
 
-- **Data:** 09/10/2026 (America/Belem).
+- **Data original:** 09/10/2026; retomada local em 07/11/2026 (America/Belem).
 - **Branch:** `feat/opc-f11-review-fixes`.
 - **Recorte:** Tarefa 10, documentação, teste de docs e relatório; código de `plugins/` preservado.
-- **Base documentada:** `e22343c` (Tarefas 1–9 e polimento integrados; T2 apenas até fix1).
-- **Situação:** fechamento documental com preocupações; não declara a F11 inteira encerrada.
+- **Base documentada:** `7bb52b5` (Tarefas 1–9, rodadas 2–5 da T2 e ajustes finais integrados).
+- **Situação:** fechamento local APROVADO na revisão independente, com nota documental corrigida e verificada abaixo. Não certifica OpenCode real nem autoriza operações Git.
 
 ## Fontes e alcance
 
@@ -14,12 +14,15 @@ O ledger local `.superpowers/sdd/2026-10-09-opc-F11-review-fixes/` contém `prog
 artefatos públicos. As afirmações de comportamento foram conferidas no código atual em
 `plugins/opc/scripts/` e nos testes citados. Resultado de worktree não é aprovação deste checkout.
 
-As rodadas 2–4 da T2 foram implementadas em worktree, e a rodada 5 estava em andamento
-no despacho desta tarefa. Não estão integradas nesta base. A normalização aqui é T2 + fix1;
-proteções de env, allowlists, cache LRU e shells adicionais não recebem PASSOU local por
-inferência. Os limites consolidados estão abaixo e em [Permissões](../permissions.md).
+O relatório original foi produzido antes da integração das rodadas finais. A base atual
+inclui os ajustes de núcleo em `0d1b966` e de política em `7bb52b5`. A retomada atualiza
+somente documentação; as suítes locais usam fixtures, sem inferência de compatibilidade ao vivo.
+Os limites consolidados estão abaixo e em [Permissões](../permissions.md).
 
 ## Portão da Tarefa 10
+
+As linhas desta tabela preservam a execução original de 09/10. A execução da retomada
+está em seção própria ao fim do relatório e substitui os totais como evidência da base atual.
 
 | Item | Evidência | Resultado |
 |---|---|---|
@@ -50,7 +53,7 @@ A coluna de origem preserva os 24 itens do plano.
 |---|---|---|---|---|---|---|
 | 1 | X-SEC-3 — `policy.tools.deny` vem antes dos `shell … ask` destrutivos; carrier do subagente adiciona `allow` depois das invariantes | Alta | `lib/policy.mjs:166-167`, `lib/runner.mjs:485` | 1 | PASSOU | `tests/unit/policy-v2.test.mjs`: última regra vence, deny shell e extraAllow; `tests/unit/runner-subagent.test.mjs`: carrier negado. |
 | 2 | X-SEC-5 — agente implícito `build` escapa de `policy.agents` | Alta | `commands/task.mjs:224`, `lib/runner.mjs:151` | 1 | PASSOU | `tests/unit/routing-turn-model.test.mjs`, `tests/unit/conclave-worker.test.mjs`, `tests/unit/orchestrate-command.test.mjs`: build implícito negado; `tests/integration/f2a-profiles.test.mjs`: zero criação. |
-| 3 | X-SEC-4 / S-SEC-2 — opções globais e ordem de argumentos do git (`git -C x reset --hard`, `git push origin main --force`, `git clean -df`) escapam do classificador | Alta | `lib/policy.mjs:108-115`, `405-466` | 2 | PASSOU | `tests/unit/policy-v2.test.mjs`: opções globais, flags agrupadas, abreviações, refspecs e comandos benignos. PASSOU vale para T2 + fix1 presentes; rodadas 2–5 pendentes de integração. |
+| 3 | X-SEC-4 / S-SEC-2 — opções globais e ordem de argumentos do git (`git -C x reset --hard`, `git push origin main --force`, `git clean -df`) escapam do classificador | Alta | `lib/policy.mjs:108-115`, `405-466` | 2 | PASSOU | `tests/unit/policy-v2.test.mjs`: opções globais, flags agrupadas, abreviações, refspecs, env, allowlists, canais dinâmicos, shells adicionais e comandos benignos; inclui fix5 e final fix. |
 | 4 | S-SEC-1 — `requiresUser` só olha `metadata.command ?? patterns[0]` | Média | `lib/policy.mjs:197-200` | 2 | PASSOU | `tests/unit/policy-v2.test.mjs`: every shell resource is inspected, incluindo metadata e patterns compostos. |
 | 5 | S-SEC-2 (c, d) — `shell` que lê caminho sensível (`cat .env`) e `webfetch`/`websearch` não exigem o usuário com aprovador `claude` | Média | `lib/policy.mjs:193-206` | 2 | PASSOU | `tests/unit/policy-v2.test.mjs`: shell sensível, webfetch/websearch, desconhecida e checkReply. |
 | 6 | S-LOG-1 — `**/id_rsa*` não casa `id_rsa` na raiz; defaults não cobrem `.npmrc`, `.git-credentials`, `.netrc`, `.aws/credentials`, `kubeconfig` | Baixa | `lib/models.mjs:7-10`, `lib/policy.mjs:118`, `lib/config.mjs:55` | 2 | PASSOU | `tests/unit/models.test.mjs`, `tests/unit/config.test.mjs`, `tests/unit/policy-v2.test.mjs`: **/ opcional, defaults e caminhos na raiz. |
@@ -84,7 +87,7 @@ Mantidas as 14 decisões do plano, com diferenças do código registradas:
 4. Com approver=claude, webfetch/websearch, desconhecidas e shell sensível exigem o usuário.
 5. `**/` aceita zero diretórios; `*` segue casando `/`.
 6. Guarda única bloqueia create/fork com share auto/config indisponível; CLI recusa cedo,
-   exceto resume existente. Review background foi incluído no polimento; --wait ainda falha no worker.
+    exceto resume existente. Review foreground, --wait e background recusam antes da fila.
 7. Timeout sem interrupt e idle confirmados vira `ABORT_UNCONFIRMED` fatal, sem fallback.
 8. Servidor sem resposta com jobs ativos/ilegíveis é preservado; três health checks de 5 s.
 9. `cwd` MCP restrito por realpath ao projeto/descendente; outro repo fica acessível pela CLI.
@@ -126,16 +129,18 @@ flags antes do entrypoint Claude e hook-stop com `(ilegível)`. Evidências nas 
   `.env.example` permanece sensível pelo padrão `*.env.*`.
 - `export LD_PRELOAD`/`export PATH` sem valor não exige usuário. `git format-patch`
   `--output-directory`/`-o` e outras opções de escrita fora de `--output` também não.
-- Canais sem análise completa: nameref (`declare -n`), trap, enable, funções/alias,
-  time/eval com set e shells fora de SHELLS (ash, rbash, mksh, hush, fish, busybox ash).
-  Rodada 5 busca fechar eval/trap/source/nameref/time+set com git e ampliar shells;
-  resultado final continua pendente de integração/revisão, sem garantia antecipada.
-- Na allowlist da rodada 4, opções longas --norc/--noprofile/--posix/--login exigem usuário
-  quando há git/destrutivo; a base atual ainda não contém essa proteção.
-- Cache LRU de 4096 globs é da rodada 4 pendente: acima de 4096 padrões distintos perde
-  desempenho, mantendo correção. Ledger mede 600 padrões × 2000 palavras em 0,3–0,9 s;
-  NÃO VALIDADO neste checkout, que ainda não tem cache.
-- Endurecimento de GIT_* (exceto GIT_TERMINAL_PROMPT/GIT_TRACE*) também pendente;
+- Nameref, trap/source/eval, enable/alias e configurações inseguras de shell associadas
+  a git recebem falha fechada. Ações de trap/eval são inspecionadas recursivamente;
+  cabeçalho dinâmico de eval com argumentos exige o usuário. Eval dinâmico isolado
+  continua permitido, e não há análise completa de shell nem garantia contra adversário.
+- Shells adicionais incluem ash/rbash/mksh/hush/fish/csh/tcsh e wrappers conhecidos.
+  --norc/--noprofile/--posix preservam git benigno; --login não está na allowlist longa.
+- Cache LRU de 4096 globs integrado: acima de 4096 padrões distintos perde desempenho,
+  mantendo correção. Ledger histórico mede 600 padrões × 2000 palavras em 0,23–0,76 s.
+  O teste-benchmark integra a suíte unitária (gate <1 s) e passou na retomada;
+  a reexecução focada mediu 214,74 ms.
+- Endurecimento de GIT_* integrado (exceto GIT_TERMINAL_PROMPT/GIT_TRACE*), com overrides
+  HOME/XDG_CONFIG_HOME e escritas git config fora da allowlist;
   inclui ruído como GIT_AUTHOR_NAME=x git commit. `set -a` sem git/destrutivo e env
   repassado por comando não-git para um git filho ficam fora da garantia.
 - confirmedByUser é declarativo; prompt de permissão do Claude Code é o portão real.
@@ -160,8 +165,8 @@ flags antes do entrypoint Claude e hook-stop com `(ilegível)`. Evidências nas 
   espaço, gerando falso negativo. Windows e macOS reais: NÃO VALIDADO.
 - Detector de entrypoint de runtime pode interpretar texto de `node -e/-p/--eval/--print`
   como caminho, gerando falso positivo raro (polish-review, item 2); não corrigido nesta tarefa.
-- Review --wait ainda enfileira antes de falhar por SHARE_AUTO no worker (exit 7); background
-  recusa com 4 antes da fila. Guarda antecipada do foreground fica para revisão final.
+- Review foreground/--wait/background recusam SHARE_AUTO antes da fila (exit 4),
+  cobertos por `tests/integration/review.test.mjs` para review e adversarial-review.
 - Registro terminal cancelado é congelado: sessão criada numa corrida pode não entrar no
   sessionID do membro, mas é interrompida e seu ID fica no log do grupo após o polimento.
   attemptInFlight residual terminal não bloqueia leitores (task-5-review).
@@ -175,5 +180,62 @@ commit, push, PR ou merge. As duas suítes por tipo substituem a invocação agr
 `node scripts/run-tests.mjs`, com os mesmos arquivos unit/integration, uma vez cada.
 O harness `tests/integration/f5-live-harness.test.mjs` é permitido e usa fixtures.
 A revisão final da branch e as operações Git do brief pertencem ao orquestrador; este
-implementador não amplia a tarefa para código, dependências ou política gerenciada.
+  implementador não amplia a tarefa para código, dependências ou política gerenciada.
 O registro em memória também fica com o orquestrador, conforme a instrução da sessão.
+
+## Retomada local — 07/11/2026
+
+Base revisada: `7bb52b5`, incluindo o ajuste de núcleo `0d1b966`. Escopo autorizado:
+atualizar documentação, executar testes locais e revisar a F11, sem commit, push, PR ou merge.
+Não houve alteração em código executável nesta retomada.
+
+| Verificação | Resultado observado | Estado |
+|---|---|---|
+| `node scripts/run-tests.mjs unit` | 3416 testes: 3415 pass, 0 fail, 1 skip (cross-UID exige chown) | PASSOU |
+| `node scripts/run-tests.mjs integration` | 575 pass, 0 fail, 0 skip; fixtures locais | PASSOU |
+| `node --test tests/unit/docs-f11.test.mjs` após atualizar docs | 9 pass, 0 fail; rodada inicial 8/1 por caixa do termo nameref, corrigida sem mudar o teste | PASSOU |
+| `node --test tests/unit/models.test.mjs` | 24 pass, 0 fail; benchmark 600 globs × 2000 palavras: 214,74 ms, gate <1 s | PASSOU |
+| `npm run scan-secrets` | Nenhum achado | PASSOU |
+| `git diff --check` | Exit 0, saída vazia | PASSOU |
+| Inspeção limitada de processos do projeto | Zero candidatos a fixtures/workers/reapers remanescentes; não é inventário do host | PASSOU |
+| OpenCode real, inferência, API externa, Windows/macOS e semântica real dos shells adicionais | Fora da execução local autorizada | NÃO VALIDADO |
+| Commit, push, PR e merge | Não executados; proibidos pelo escopo | N/A |
+
+As suítes completas precederam a edição documental; testes focados de documentação e modelos
+foram executados depois. As evidências locais e caminhos dos logs do harness ficam na memória
+local do projeto, fora deste relatório público.
+
+### Parecer independente
+
+**Veredito recebido: APROVADO**, com uma nota Menor não bloqueante, corrigida nesta retomada.
+Revisor independente: subagente `revisor` no OpenCode, sessão
+`ses_e479c735cffeejGAL9JeSFcxdW`. Modelo configurado: combo pessoal `role/reviewer`;
+backend efetivo não confirmado pelo revisor. Não se atribui o parecer a um modelo real
+deduzido do nome do combo.
+
+O revisor conferiu o diff não commitado de `docs/permissions.md`, `CHANGELOG.md` e deste
+relatório contra o código, e os ajustes finais `0d1b966`/`7bb52b5`. Não apontou falha
+material de segurança ou correção no recorte revisado. Evidências principais:
+
+- Guardas de criação atualizadas após recuperação: `lib/server.mjs:688-691`, com o mesmo
+  objeto capturado por `guardSessionCreation` (`284-296`).
+- Review foreground/--wait/background recusa antes da fila: `commands/review.mjs:115,128`
+  e `tests/integration/review.test.mjs:19-30`.
+- Interrupção de todas as sessões rastreadas antes de fallback: `lib/runner.mjs:189-204,415-419`
+  e `tests/integration/fallback.test.mjs` (filho ocupado impede fallback concorrente).
+- Env, canais dinâmicos, allowlists e shells adicionais: `lib/policy.mjs:439,476-489,722,734,742-748,792-813`.
+- Cache LRU: `lib/models.mjs:6-15,39-40`.
+
+As referências `lib/` e `commands/` acima são relativas a `plugins/opc/scripts/`.
+O revisor declarou reexecuções próprias: `policy-v2.test.mjs` 1580 pass/0 fail,
+`docs-f11.test.mjs` 9/9, `models.test.mjs` 24/24 e diff check limpo. Não reexecutou as
+suítes completas: os totais completos são da execução do orquestrador, não do revisor.
+
+**Nota Menor corrigida:** a documentação dizia que o benchmark não fora reexecutado,
+mas ele integra `tests/unit/models.test.mjs:100-112` e rodou na suíte unitária. O texto foi
+alinhado ao teste e a uma nova execução focada (24/24; 214,74 ms), sem alteração de código.
+Essa correção textual foi conferida pelo orquestrador; não houve segunda revisão independente
+do delta textual pós-parecer. Permanecem as limitações de validação ao vivo e de plataformas.
+
+O parecer encerra o recorte local de documentação/testes/revisão. Publicação, integração Git
+e qualquer validação ao vivo continuam fora do escopo e dependem de nova autorização.
