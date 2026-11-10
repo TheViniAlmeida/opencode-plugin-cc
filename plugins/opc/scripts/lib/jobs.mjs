@@ -1,15 +1,15 @@
 // Job records, worker lifecycle, limits and cancel (spec §9.1–§9.2).
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, chmodSync, closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExitCode, NotFoundError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { redact, redactOutput, redactTurnOutput, redactText, safeOutputText } from './redact.mjs';
 import { ACTIVE_JOB_STATUSES, ensurePrivateDir, readJson, updateState, writeFileAtomic } from './state.mjs';
 import { tryAcquireLock } from './locks.mjs';
 import { identityMatches, isPidAlive, spawnDetached, terminateProcessGroup, exitingWithoutCmdline } from './process.mjs';
-import { attachTransport, readServerRecord, resolveOpencodeBin, serverSettings } from './server.mjs';
+import { attachTransport, readServerRecord, resolveOpencodeBin, serverLockTimeoutMs, serverSettings } from './server.mjs';
 import { createClient } from './http.mjs';
 import { serverDirectory } from './remote.mjs';
 import { createApi } from './api.mjs';
@@ -189,7 +189,22 @@ export function readJob(stateDir, id) {
   return safeJob(readJson(jobPath(stateDir, id), null));
 }
 
-export function listJobs(stateDir, { claudeSessionId = null, all = false } = {}) {
+const jobWarningHandlers = new WeakMap();
+
+// Contexts belong to one command; deduplicate across health checks and job creation.
+export function jobWarningHandler(ctx) {
+  if (!jobWarningHandlers.has(ctx)) {
+    const seen = new Set();
+    jobWarningHandlers.set(ctx, (warning, { path = warning } = {}) => {
+      if (typeof ctx.err !== 'function' || ctx.hookEnteredAt !== undefined || seen.has(path)) return;
+      seen.add(path);
+      ctx.err(`[opc] aviso: ${warning}\n`);
+    });
+  }
+  return jobWarningHandlers.get(ctx);
+}
+
+export function listJobs(stateDir, { claudeSessionId = null, all = false, quarantine = true, onWarning } = {}) {
   let names;
   try {
     names = readdirSync(jobsDir(stateDir));
@@ -202,7 +217,33 @@ export function listJobs(stateDir, { claudeSessionId = null, all = false } = {})
     if (!name.endsWith('.json')) continue;
     const id = name.slice(0, -'.json'.length);
     if (!JOB_ID_RE.test(id)) continue;
-    const job = readJob(stateDir, id);
+    let job;
+    try {
+      job = readJob(stateDir, id);
+    } catch (err) {
+      if (err.code !== 'INVALID_JSON' && err.code !== 'READ_FAILED') throw err;
+      const file = jobPath(stateDir, id);
+      const ignored = (code) => onWarning?.(`job ${id} ilegível (${code}); ignorado nesta listagem`, { path: file, code: err.code });
+      // Reading failed: the content may be healthy and the failure transient.
+      if (err.code === 'READ_FAILED' || !quarantine) {
+        ignored(err.cause?.code ?? err.code);
+        continue;
+      }
+      const target = `${file}.corrupt-${Date.now()}`;
+      try {
+        chmodSync(file, 0o600);
+        renameSync(file, target);
+      } catch (cause) {
+        if (cause.code === 'ENOENT') continue;
+        if (cause.code === 'EPERM' || cause.code === 'EACCES') {
+          ignored(cause.code);
+          continue;
+        }
+        throw cause;
+      }
+      onWarning?.(`job ${id} ilegível (${err.code}); movido para ${target}`, { path: file, code: err.code });
+      continue;
+    }
     if (job?.id === id) jobs.push(job);
   }
   const visible = all || !claudeSessionId ? jobs : jobs.filter((j) => j.claudeSessionId === claudeSessionId);
@@ -228,6 +269,15 @@ const lostPatch = () => ({
 });
 
 function pruneTerminal(stateDir, state, jobs) {
+  const now = Date.now();
+  for (const name of readdirSync(jobsDir(stateDir))) {
+    const match = /^(.*)\.json\.corrupt-(\d+)$/.exec(name);
+    if (!match || !JOB_ID_RE.test(match[1]) || now - Number(match[2]) <= 30 * 86400000) continue;
+    const file = join(jobsDir(stateDir), name);
+    try {
+      if (statSync(file).isFile()) unlinkSync(file);
+    } catch { /* quarantine cleanup is best effort; keep creating jobs */ }
+  }
   const ids = new Set(selectJobsToPrune(jobs, MAX_TERMINAL_JOBS));
   if (ids.size === 0) return;
   for (const id of ids) {
@@ -237,13 +287,13 @@ function pruneTerminal(stateDir, state, jobs) {
   state.jobs = (state.jobs ?? []).filter((entry) => !ids.has(entry.id));
 }
 
-export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn = updateState, writeInputFn = writeFileAtomic } = {}) {
+export async function createJob(stateDir, fields, { maxActive = 8, updateStateFn = updateState, writeInputFn = writeFileAtomic, onWarning } = {}) {
   ensurePrivateDir(jobsDir(stateDir));
   let created = null;
   let inputWritten = false;
   try {
     await updateStateFn(stateDir, (state) => {
-      const jobs = listJobs(stateDir, { all: true });
+      const jobs = listJobs(stateDir, { all: true, onWarning });
       const lostGroups = new Set();
       for (const job of jobs) {
         if (!workerLost(job)) continue;
@@ -344,8 +394,8 @@ export async function reconcileJob(stateDir, job) {
   return lost;
 }
 
-export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnly = false } = {}) {
-  const pool = listJobs(stateDir, { all: true }).filter((j) => !activeOnly || isActive(j));
+export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnly = false, onWarning } = {}) {
+  const pool = listJobs(stateDir, { all: true, onWarning }).filter((j) => !activeOnly || isActive(j));
   if (ref) {
     if (!JOB_REF_RE.test(ref)) throw new UsageError('INVALID_JOB_ID', `identificador de tarefa inválido "${short(ref)}"`);
     const exact = pool.find((j) => j.id === ref);
@@ -365,9 +415,9 @@ export function resolveJobRef(stateDir, ref, { claudeSessionId = null, activeOnl
   throw new NotFoundError('NO_ACTIVE_JOB', claudeSessionId ? 'nenhuma tarefa opc ativa nesta sessão do Claude' : 'nenhuma tarefa opc ativa');
 }
 
-export function findResumeCandidate(stateDir, { kind, claudeSessionId }) {
+export function findResumeCandidate(stateDir, { kind, claudeSessionId, onWarning }) {
   if (!claudeSessionId) return null;
-  return listJobs(stateDir, { claudeSessionId })
+  return listJobs(stateDir, { claudeSessionId, onWarning })
     .filter((j) => j.kind === kind && j.sessionID && isTerminal(j))
     .sort((a, b) => String(b.completedAt ?? '').localeCompare(String(a.completedAt ?? ''))
       || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))[0] ?? null;
@@ -448,13 +498,22 @@ export function acquireSessionLock(stateDir, sessionID) {
 }
 
 export function serverContext(ctx) {
+  let unreadableJobCount = 0;
   return {
     stateDir: ctx.stateDir,
     workspaceRoot: ctx.workspaceRoot,
     config: ctx.config,
     env: ctx.env,
     opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
-    hasActiveJobs: () => listJobs(ctx.stateDir, { all: true }).some(isActive),
+    getUnreadableJobCount: () => unreadableJobCount,
+    hasActiveJobs: () => {
+      unreadableJobCount = 0;
+      const jobs = listJobs(ctx.stateDir, { all: true, onWarning: (warning, details) => {
+        if (details.code === 'READ_FAILED') unreadableJobCount += 1;
+        jobWarningHandler(ctx)(warning, details);
+      } });
+      return unreadableJobCount > 0 || jobs.some(isActive);
+    },
   };
 }
 
@@ -465,6 +524,7 @@ export function assertNotInsideServer(env) {
   }
 }
 
+// Cancellation and permission handling never create sessions, so this API needs no share guard.
 export function existingServerApi(ctx) {
   const env = ctx.env ?? {};
   let baseUrl = env.OPC_SERVER_URL || null;
@@ -566,9 +626,7 @@ export function serverLockPath(stateDir) {
   return join(stateDir, 'server.lock');
 }
 
-export function serverLockTimeoutMs(config) {
-  return 4 * (config?.server?.bootTimeoutSec ?? 60) * 1000;
-}
+export { serverLockTimeoutMs };
 
 export async function withServerLock(ctx, fn, { purpose = 'server-coordination' } = {}) {
   return withLock(serverLockPath(ctx.stateDir), { timeoutMs: serverLockTimeoutMs(ctx.config), purpose }, fn);
@@ -607,7 +665,7 @@ export async function submitTurnJob(ctx, { kind, title, summary, request, claude
     sessionID: request.sessionID ?? null,
     model: request.modelFull ?? null, agent: request.agent ?? null, variant: request.variant ?? null,
     permissionProfile: request.profile ?? null, request,
-  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: `register-job:${kind}` });
+  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: `register-job:${kind}` });
   if (queuedLog) appendJobLog(ctx.stateDir, job.id, queuedLog);
   await spawnWorker(ctx, job.id);
   return requirePersistedJob(ctx.stateDir, job.id);
@@ -623,10 +681,16 @@ export function isJobLive(job, { now = Date.now() } = {}) {
   return isActive(job) && !workerLost(job, now);
 }
 
-export function liveActiveJobs(stateDir, { claudeSessionId = null, now = Date.now() } = {}) {
-  return listJobs(stateDir, { all: true }).filter(
+export function liveActiveJobs(stateDir, { claudeSessionId = null, now = Date.now(), onWarning } = {}) {
+  const unreadable = [];
+  const jobs = listJobs(stateDir, { all: true, onWarning: (warning, details) => {
+    if (details.code === 'READ_FAILED') unreadable.push({ id: basename(details.path, '.json'), status: 'unknown', unreadable: true });
+    onWarning?.(warning, details);
+  } });
+  // An unreadable record cannot prove its worker is lost or which session owns it.
+  return [...jobs.filter(
     (job) => (claudeSessionId ? job.claudeSessionId === claudeSessionId : true) && isJobLive(job, { now }),
-  );
+  ), ...unreadable];
 }
 
 async function waitSessionIdle(api, sessionID, maxMs) {
@@ -758,7 +822,7 @@ export function selectJobsToPrune(jobs, keep = 50) {
   return [...ids];
 }
 
-export async function addGroupMember(stateDir, groupId, fields = {}) {
+export async function addGroupMember(stateDir, groupId, fields = {}, { onWarning } = {}) {
   const group = readJob(stateDir, groupId);
   if (!group || group.role !== GROUP_ROLE) throw new NotFoundError('NOT_FOUND', `grupo ${groupId} não encontrado`);
   let member = await createJob(stateDir, {
@@ -768,7 +832,7 @@ export async function addGroupMember(stateDir, groupId, fields = {}) {
     kind: fields.kind ?? group.kind,
     groupId,
     role: fields.role ?? `member:${(group.memberIds ?? []).length + 1}`,
-  });
+  }, { onWarning });
   if (fields.status && fields.status !== member.status) {
     member = await updateJob(stateDir, member.id, { status: fields.status, phase: fields.phase ?? fields.status });
   }
@@ -776,11 +840,11 @@ export async function addGroupMember(stateDir, groupId, fields = {}) {
   return member;
 }
 
-export async function createGroup(stateDir, groupFields, memberFieldsList, { maxActive = 8 } = {}) {
-  const group = await createJob(stateDir, { ...groupFields, role: GROUP_ROLE, groupId: null, memberIds: [] }, { maxActive });
+export async function createGroup(stateDir, groupFields, memberFieldsList, { maxActive = 8, onWarning } = {}) {
+  const group = await createJob(stateDir, { ...groupFields, role: GROUP_ROLE, groupId: null, memberIds: [] }, { maxActive, onWarning });
   const members = [];
   try {
-    for (const fields of memberFieldsList) members.push(await addGroupMember(stateDir, group.id, fields));
+    for (const fields of memberFieldsList) members.push(await addGroupMember(stateDir, group.id, fields, { onWarning }));
   } catch (err) {
     const failed = { status: 'failed', errorCode: 'group_create_failed', errorMessage: 'Não foi possível criar o grupo de tarefas.', completedAt: new Date().toISOString() };
     for (const m of members) await updateJob(stateDir, m.id, failed);

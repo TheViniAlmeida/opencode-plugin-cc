@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 
 import { maskSecretPatterns } from '../../plugins/opc/scripts/lib/redact.mjs';
 
+test('Bearer masking requires at least 16 token characters and a digit or token symbol', () => {
+  for (const value of ['abcdefghij0123456789', 'abcdefghijklmno0', 'abcdefghijklmno.', 'abcdefghijklmno_',
+    'abcdefghijklmno~', 'abcdefghijklmno+', 'abcdefghijklmno/', 'abcdefghijklmno-', 'abcdefghijklmno=']) {
+    let count = 0;
+    assert.equal(maskSecretPatterns(`Bearer ${value}`, { onMask: () => { count += 1; } }), '***');
+    assert.equal(count, 1);
+  }
+  for (const text of ['Bearer of bad news', 'bearer token', 'Bearer abcdefghijklmnop', 'Bearer abcdefghijklmn0']) {
+    assert.equal(maskSecretPatterns(text), text);
+  }
+});
+
 test('maskSecretPatterns masks common credential formats', () => {
   const tail = 'a'.repeat(24);
   const values = [

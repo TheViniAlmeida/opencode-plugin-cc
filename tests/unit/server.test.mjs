@@ -79,3 +79,15 @@ test('assertCanCreateSessions refuses when share is auto (PolicyError, exit 4)',
   assert.doesNotThrow(() => assertCanCreateSessions({ world: { shareBlocked: false } }));
   assert.throws(() => assertCanCreateSessions({ world: { shareBlocked: true } }), (e) => e.code === 'SHARE_AUTO' && e.exitCode === 4);
 });
+
+test('assertCanCreateSessions fails closed when the server world is unavailable', () => {
+  for (const server of [undefined, null, {}, { world: null }]) {
+    assert.throws(() => assertCanCreateSessions(server), (err) => {
+      assert.equal(err.name, 'PolicyError');
+      assert.equal(err.code, 'SHARE_AUTO');
+      assert.equal(err.exitCode, 4);
+      assert.match(err.message, /não foi possível confirmar a configuração de compartilhamento/);
+      return true;
+    });
+  }
+});

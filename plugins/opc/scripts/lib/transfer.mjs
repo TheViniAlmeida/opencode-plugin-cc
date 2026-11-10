@@ -177,6 +177,9 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
   let claudeSessionId = null;
   let lastTime = now;
   let current = null;
+  let maskedCount = 0;
+  const maskText = (text) => maskSecretPatterns(text, { onMask: () => { maskedCount += 1; } });
+  const exportText = (text, max) => truncateText(maskText(text), max);
 
   const pushUser = (texts, createdAt) => {
     turns.push({ role: 'user', createdAt, texts });
@@ -217,7 +220,7 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
       if (typeof content === 'string') {
         if (LOCAL_COMMAND_RE.test(content.trim())) stats.skipped.command += 1;
         else if (!content.trim()) stats.skipped.other += 1;
-        else pushUser([truncateText(content, maxTextChars)], createdAt);
+        else pushUser([exportText(content, maxTextChars)], createdAt);
         continue;
       }
       if (!Array.isArray(content)) {
@@ -228,13 +231,13 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
       if (results.length > 0) {
         const turn = assistant(createdAt);
         for (const block of results) {
-          turn.texts.push(truncateText(`[resultado da ferramenta: ${block.is_error ? 'erro' : 'sucesso'}] ${toolResultText(block.content)}`, maxToolChars));
+          turn.texts.push(exportText(`[resultado da ferramenta: ${block.is_error ? 'erro' : 'sucesso'}] ${toolResultText(block.content)}`, maxToolChars));
         }
       }
       const texts = [];
       for (const block of content) {
         if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() && !LOCAL_COMMAND_RE.test(block.text.trim())) {
-          texts.push(truncateText(block.text, maxTextChars));
+          texts.push(exportText(block.text, maxTextChars));
         } else if (block?.type === 'image') texts.push('[imagem omitida]');
         else if (block?.type === 'document') texts.push('[documento omitido]');
       }
@@ -244,7 +247,7 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
     }
 
     if (typeof content === 'string') {
-      if (content.trim()) assistant(createdAt).texts.push(truncateText(content, maxTextChars));
+      if (content.trim()) assistant(createdAt).texts.push(exportText(content, maxTextChars));
       continue;
     }
     if (!Array.isArray(content)) {
@@ -253,9 +256,9 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
     }
     for (const block of content) {
       if (block?.type === 'text' && typeof block.text === 'string') {
-        if (block.text.trim()) assistant(createdAt).texts.push(truncateText(block.text, maxTextChars));
+        if (block.text.trim()) assistant(createdAt).texts.push(exportText(block.text, maxTextChars));
       } else if (block?.type === 'tool_use') {
-        assistant(createdAt).texts.push(truncateText(`[chamada de ferramenta: ${block.name ?? 'desconhecida'}] ${compactJson(block.input ?? {})}`, maxToolChars));
+        assistant(createdAt).texts.push(exportText(`[chamada de ferramenta: ${block.name ?? 'desconhecida'}] ${compactJson(block.input ?? {})}`, maxToolChars));
       } else if (block?.type === 'thinking' || block?.type === 'redacted_thinking') {
         stats.skipped.thinking += 1;
       } else if (block?.type) {
@@ -263,7 +266,7 @@ export function convertClaudeRecords(records, { maxTextChars = MAX_TEXT_CHARS, m
       }
     }
   }
-  return { turns: turns.filter((turn) => turn.texts.length > 0), title, claudeSessionId, stats };
+  return { turns: turns.filter((turn) => turn.texts.length > 0), title: maskText(title), claudeSessionId, stats, maskedCount };
 }
 
 export function createIdGenerator({ now = () => Date.now(), randomBytes = crypto.randomBytes } = {}) {

@@ -13,8 +13,8 @@ import { ExitCode, UsageError, toExitCode } from '../lib/opc-error.mjs';
 import { renderSetup, renderReviewGate } from '../lib/render.mjs';
 import { MIN_OPENCODE_VERSION, compareVersions, ensureServer, resolveOpencodeBin, stopServer } from '../lib/server.mjs';
 import { mergeOpencodeConfigSources } from '../lib/opencode-config.mjs';
-import { listActiveJobs, ensurePrivateDir } from '../lib/state.mjs';
-import { liveActiveJobs } from '../lib/jobs.mjs';
+import { ensurePrivateDir } from '../lib/state.mjs';
+import { jobWarningHandler, liveActiveJobs, serverContext } from '../lib/jobs.mjs';
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -72,17 +72,6 @@ export function contextOptions(argv) {
   return argv.some((arg) => ['--stop-server', '--enable-review-gate', '--disable-review-gate'].includes(arg))
     ? { allowInvalidConfig: true }
     : {};
-}
-
-function serverContext(ctx) {
-  return {
-    stateDir: ctx.stateDir,
-    workspaceRoot: ctx.workspaceRoot,
-    config: ctx.config,
-    env: ctx.env,
-    opencodeBin: resolveOpencodeBin({ env: ctx.env, config: ctx.config }),
-    hasActiveJobs: () => listActiveJobs(ctx.stateDir).length > 0,
-  };
 }
 
 function baseReport(ctx) {
@@ -176,7 +165,7 @@ async function stop(ctx, flags) {
   const result = await stopServer({
     ...serverContext(ctx),
     hasActiveJobs: () => {
-      activeJobs = liveActiveJobs(ctx.stateDir);
+      activeJobs = liveActiveJobs(ctx.stateDir, { onWarning: jobWarningHandler(ctx) });
       return activeJobs.length > 0;
     },
   }, { force: flags.force, confirmedByUser: flags['confirmed-by-user'] });

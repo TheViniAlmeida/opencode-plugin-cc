@@ -87,6 +87,24 @@ test('CLI: --stop-server rechecks jobs created while waiting for server.lock', a
   assert.equal(forced.code, 0, forced.stdout + forced.stderr);
 });
 
+test('CLI: --stop-server preserves a server with an unreadable job and surfaces quarantine warnings', async (t) => {
+  const env = testEnv(t);
+  const ws = makeWorkspace(t);
+  const first = await setupJson(env, ws);
+  assert.equal(first.code, 0, first.stderr);
+  const job = await createJob(first.report.stateDir, { kind: 'task' });
+  const file = path.join(first.report.stateDir, 'jobs', `${job.id}.json`);
+  fs.chmodSync(file, 0o000);
+  fs.writeFileSync(path.join(first.report.stateDir, 'jobs', 'task-abc123-abcdef.json'), '');
+  const refused = await setupJson(env, ws, ['--stop-server']);
+  assert.equal(refused.code, 2);
+  assert.equal(refused.report.stop.reason, 'active-jobs');
+  assert.deepEqual(refused.report.activeJobs.map((entry) => entry.id), [job.id]);
+  assert.equal((refused.stderr.match(/\[opc\] aviso:/g) ?? []).length, 2);
+  assert.ok(processAlive(first.report.server.pid));
+  assert.equal(fs.statSync(file).mode & 0o777, 0);
+});
+
 test('workspace-with-spaces: git (from a subdir) and non-git dirs with spaces/accents keep exact directory and hash', async (t) => {
   const env = testEnv(t);
   const gitWs = makeWorkspace(t, { name: 'meu projeto ação' });

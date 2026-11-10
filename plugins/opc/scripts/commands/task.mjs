@@ -5,12 +5,13 @@ import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs, readStdin } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
 import { connectApi } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { resolveCandidates, routingFields, validateSelection } from '../lib/routing.mjs';
 import { buildCatalog } from '../lib/models.mjs';
 import { loadOpencodeConfig } from '../lib/opencode-config.mjs';
 import { buildPermissionRules, parseProfile } from '../lib/policy.mjs';
 import { newMessageId } from '../lib/runner.mjs';
-import { assertNotInsideServer, findResumeCandidate, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
+import { assertNotInsideServer, findResumeCandidate, jobWarningHandler, readJob, resolveJobRef, submitTurnJob, waitForJob } from '../lib/jobs.mjs';
 import { renderJobStatus, renderPermissionRequest, renderQueuedJob, renderTurnResult } from '../lib/render.mjs';
 import { loadPrompt, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
 import { PENDING_REVERT_NOTICE } from './session.mjs';
@@ -142,6 +143,10 @@ export async function followJob(ctx, id, { waitTimeoutMs, pollMs = 500, json = f
   if (json) ctx.json({ job });
   else if (job.status === 'waiting_permission') ctx.out(renderPermissionRequest(job, { timeoutSec: permissionTimeoutSec }));
   else ctx.out(view === 'status' ? renderJobStatus(job) : renderTurnResult(job));
+  if (job.kind === 'review') {
+    const { reviewExitCode } = await import('./review.mjs');
+    return reviewExitCode(job);
+  }
   return exitCodeForJob(job);
 }
 
@@ -174,7 +179,7 @@ function resolveResumeSession(ctx, flags, kind) {
   if (flags['resume-id']) {
     const ref = flags['resume-id'];
     if (SESSION_REF_RE.test(ref)) return ref;
-    const job = resolveJobRef(ctx.stateDir, ref);
+    const job = resolveJobRef(ctx.stateDir, ref, { onWarning: jobWarningHandler(ctx) });
     if (!job.sessionID) throw new UsageError('NO_SESSION', `a tarefa ${job.id} não tem uma sessão OpenCode para retomar`);
     return job.sessionID;
   }
@@ -182,7 +187,7 @@ function resolveResumeSession(ctx, flags, kind) {
     if (!ctx.claudeSessionId) {
       throw new UsageError('RESUME_NEEDS_ID', '--resume sem id exige uma sessão Claude (OPC_COMPANION_SESSION_ID); informe --resume <job-id|session-id>');
     }
-    const candidate = findResumeCandidate(ctx.stateDir, { kind, claudeSessionId: ctx.claudeSessionId });
+    const candidate = findResumeCandidate(ctx.stateDir, { kind, claudeSessionId: ctx.claudeSessionId, onWarning: jobWarningHandler(ctx) });
     if (!candidate) throw new UsageError('NOTHING_TO_RESUME', `não há tarefa ${kind} concluída com sessão nesta sessão Claude`);
     return candidate.sessionID;
   }
@@ -216,13 +221,15 @@ export async function runKindCommand(ctx, argv, kind) {
   const config = ctx.config ?? {};
   const policy = config.policy ?? {};
 
+  const sessionID = resolveResumeSession(ctx, flags, kind);
   const { api, server } = await connectApi(ctx);
+  if (!sessionID) assertCanCreateSessions(server);
   const { catalog, resolution } = await resolveTaskCandidates({ api, kind, flags: { model: flags.model, tier: flags.tier }, config });
   const { candidates, warnings } = resolution;
   for (const warning of warnings) ctx.err(`[opc] aviso: ${warning}\n`);
   const candidate = candidates[0];
   const agentName = flags.agent ?? config.defaultAgent ?? null;
-  const agents = agentName ? await api.agents() : [];
+  const agents = await api.agents();
   let variant = flags.variant ?? flags.effort ?? null;
   if (!variant && config.defaultVariant) {
     const available = catalog.byFull.get(candidate.full)?.variants ?? [];
@@ -231,7 +238,6 @@ export async function runKindCommand(ctx, argv, kind) {
   }
   const selection = validateSelection({ candidate, variant, agentName, agents, catalog, policy });
   const rules = buildPermissionRules(profile, { policy, permissionProfiles: config.permissionProfiles ?? {}, deniedAgentGlobs: policy.agents?.deny ?? [] });
-  const sessionID = resolveResumeSession(ctx, flags, kind);
   let patchPermission = null;
   if (sessionID) {
     const session = await api.getSession(sessionID);

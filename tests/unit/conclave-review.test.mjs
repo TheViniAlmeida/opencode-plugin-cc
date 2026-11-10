@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { runConclave, buildKnownNames, loadConclaveAssets } from '../../plugins/opc/scripts/lib/conclave.mjs';
 import { fillTemplate } from '../../plugins/opc/scripts/lib/prompts.mjs';
 import { renderConclave } from '../../plugins/opc/scripts/lib/render.mjs';
+import { runWorker } from '../../plugins/opc/scripts/commands/conclave.mjs';
+import { createGroup, readJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { ensurePrivateDir } from '../../plugins/opc/scripts/lib/state.mjs';
+import { fixtureData, makeTempDir, trackTempDir } from '../helpers.mjs';
 import { makeCatalog, MEMBERS, KM, synthesis, ok, failed } from './_conclave-fixtures.mjs';
 
 const realAssets = loadConclaveAssets();
@@ -32,6 +36,46 @@ function harness(respond, { judge = { type: 'claude' }, quorum = 2, collectRevie
   const flags = { mode: 'review', rounds: 1, quorum, members: MEMBERS, judge, maxParallel: 4, warnings: [] };
   return { calls, deps, collected: () => collected, run: (q = '') => runConclave({ ctx: { config: structuredOutput ? { conclave: { structuredOutput } } : {} }, question: q, flags, deps }) };
 }
+
+async function reviewWorkerHarness(t, policy) {
+  const dir = trackTempDir(t, makeTempDir('opc-conclave-review-'));
+  ensurePrivateDir(dir);
+  const { group } = await createGroup(dir, { kind: 'conclave' }, MEMBERS.map((member) => ({ kind: 'conclave-member', role: `member:${member.label}` })));
+  const ctx = { stateDir: dir, workspaceRoot: dir, cwd: dir, config: { policy, jobs: { maxParallel: 3 } } };
+  const request = { mode: 'review', question: '', rounds: 1, quorum: 2, members: MEMBERS, judge: { type: 'claude' }, target: { mode: 'working-tree', label: CONTEXT.label }, reviewCwd: `${dir}/review` };
+  const api = { providers: async () => fixtureData('provider.json'), models: async () => fixtureData('model.json'), defaultModel: async () => null, agents: async () => [] };
+  const options = {
+    openApiImpl: async () => ({ api, close() {} }),
+    turnRunner: async ({ request: turn }) => {
+      const label = turn.newSession.title.match(/review ([A-C])$/)[1];
+      return ok(REVIEWS[label], `ses_${label}`);
+    },
+  };
+  return { ctx, group, request, options };
+}
+
+for (const sensitivePaths of [['*.env', '**/.ssh/**'], undefined]) {
+  test(`conclave review collects context with ${sensitivePaths ? 'configured sensitive globs' : 'empty default globs'}`, async (t) => {
+    const f = await reviewWorkerHarness(t, sensitivePaths ? { sensitivePaths } : undefined);
+    let seen;
+    f.options.collectReviewContextImpl = (cwd, target, options) => { seen = { cwd, target, ...options }; return CONTEXT; };
+    assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 0);
+    assert.deepEqual(seen.excludeGlobs, sensitivePaths ?? []);
+    assert.equal(seen.cwd, f.request.reviewCwd);
+    assert.equal(seen.target, f.request.target);
+    assert.equal(readJob(f.ctx.stateDir, f.group.id).status, 'completed');
+  });
+}
+
+test('conclave review reuses the common focus limit before collecting context', async (t) => {
+  const f = await reviewWorkerHarness(t, {});
+  f.request.question = 'x'.repeat(16 * 1024 + 1);
+  let collected = false;
+  f.options.collectReviewContextImpl = () => { collected = true; return CONTEXT; };
+  assert.equal(await runWorker(f.ctx, f.group, f.request, f.options), 7);
+  assert.equal(collected, false);
+  assert.match(readJob(f.ctx.stateDir, f.group.id).result.failure.message, /foco da revisão deve ter no máximo 16 KB/);
+});
 
 test('review mode collects the diff once and sends the same review prompt and schema to every member', async () => {
   const h = harness((spec) => ok(REVIEWS[spec.label], `ses_${spec.label}`));

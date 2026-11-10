@@ -8,6 +8,17 @@ import {
   setPath, validateConfigShape,
 } from '../../plugins/opc/scripts/lib/config.mjs';
 import { makeTempDir, removeTempDir } from '../helpers.mjs';
+import { DEFAULT_SENSITIVE_PATHS } from '../../plugins/opc/scripts/lib/policy.mjs';
+
+test('config and policy share the complete sensitive path defaults', () => {
+  const expected = [
+    '*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env',
+    '**/.npmrc', '**/.netrc', '**/.git-credentials', '**/.aws/credentials', '**/kubeconfig', '**/.kube/config',
+  ];
+  assert.deepEqual(DEFAULT_SENSITIVE_PATHS, expected);
+  assert.deepEqual(DEFAULT_CONFIG.policy.sensitivePaths, expected);
+  assert.deepEqual(mergeConfig({}, null).config.policy.sensitivePaths, expected);
+});
 
 function temp(t) {
   const dir = makeTempDir('opc-cfg-');
@@ -16,6 +27,51 @@ function temp(t) {
 }
 
 const paths = (warnings) => warnings.map((w) => w.path);
+
+for (const key of ['__proto__', 'constructor', 'prototype']) {
+  test(`mergeConfig ignores ${key} at the root, in groups and in maps`, () => {
+    const dangerous = JSON.parse(`{"${key}":{},"routing":{"${key}":{},"tasks":{"${key}":["x/y"],"ask":["p/m"]}},"aliases":{"${key}":"x/y","safe":"p/m"}}`);
+    for (const source of ['global', 'workspace']) {
+      const { warnings: shapeWarnings, errors } = validateConfigShape(dangerous, { source });
+      assert.deepEqual(errors, []);
+      for (const p of [key, `routing.${key}`, `routing.tasks.${key}`, `aliases.${key}`]) {
+        assert.ok(shapeWarnings.some((w) => w.path === p && w.code === 'UNKNOWN_KEY'), p);
+      }
+      const { config, warnings } = source === 'global' ? mergeConfig(dangerous, {}) : mergeConfig({}, dangerous);
+      for (const node of [config, config.routing, config.routing.tasks, config.aliases]) {
+        assert.equal(Object.getPrototypeOf(node), Object.prototype);
+        assert.equal(Object.hasOwn(node, key), false);
+      }
+      assert.deepEqual(config.routing.tasks.ask, ['p/m']);
+      assert.equal(config.aliases.safe, 'p/m');
+      if (source === 'workspace') assert.ok(warnings.some((w) => w.path.includes(key)));
+    }
+  });
+}
+
+test('mergeConfig filters dangerous keys from newly introduced nested objects', () => {
+  const global = JSON.parse('{"server":{"configOverride":{"nested":{"__proto__":{"unsafe":true},"constructor":{},"prototype":{},"safe":true}}}}');
+  const { config } = mergeConfig(global, {});
+  assert.deepEqual(config.server.configOverride.nested, { safe: true });
+  assert.equal(Object.getPrototypeOf(config.server.configOverride.nested), Object.prototype);
+  assert.equal(Object.prototype.unsafe, undefined);
+});
+
+test('dangerous map entries are ignored even when their values do not match the schema', () => {
+  const cfg = JSON.parse('{"routing":{"tasks":{"__proto__":null,"constructor":{},"prototype":42,"ask":["p/m"]}},"aliases":{"__proto__":null,"constructor":{},"prototype":42,"safe":"p/m"}}');
+  assert.deepEqual(validateConfigShape(cfg).errors, []);
+  const { config, warnings } = mergeConfig({}, cfg);
+  assert.deepEqual(config.routing.tasks, { ask: ['p/m'] });
+  assert.deepEqual(config.aliases, { safe: 'p/m' });
+  assert.equal(warnings.filter((w) => w.code === 'UNKNOWN_KEY').length, 6);
+});
+
+test('mergeConfig filters dangerous keys inside JSON arrays', () => {
+  const cfg = JSON.parse('{"server":{"configOverride":{"entries":[{"__proto__":{},"constructor":{},"prototype":{},"safe":true}]}}}');
+  const { config } = mergeConfig(cfg, {});
+  assert.deepEqual(config.server.configOverride.entries, [{ safe: true }]);
+  assert.equal(validateConfigShape(cfg).warnings.filter((w) => w.code === 'UNKNOWN_KEY').length, 3);
+});
 
 test('DEFAULT_CONFIG is neutral and LOCKED_KEYS match spec §3.3', () => {
   assert.deepEqual(DEFAULT_CONFIG.policy.models, { allow: [], deny: [] });

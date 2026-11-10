@@ -12,6 +12,14 @@ function orchestrateConfig(extra = {}) {
 function setup(t, scenario, config = orchestrateConfig()) { const ws = makeWorkspace(t); const env = testEnv(t, { scenario }); writeGlobalConfig(env, config); return { ws, env }; }
 const sessionPosts = (env) => readFakeState(env).requests.filter((r) => r.method === 'POST' && r.path === '/api/session');
 
+test('policy denies the implicit build agent before any orchestration session is created', async (t) => {
+  const { ws, env } = setup(t, 'decompose-ok', orchestrateConfig({ policy: { agents: { deny: ['build'] } } }));
+  const res = await runCli(['orchestrate', '--json', 'Audit the error handling'], { env, cwd: ws });
+  assert.equal(res.code, 4, res.stderr || res.stdout);
+  assert.match(res.stderr, /POLICY_DENIED.*build/);
+  assert.equal(sessionPosts(env).length, 0);
+});
+
 test('orchestrate sem tarefa é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); const { code, stdout, stderr } = await runCli(['orchestrate'], { env, cwd: ws }); assert.equal(code, 2); assert.match(stdout + stderr, /tarefa ausente/); });
 test('--max fora de 2..10 é erro de uso', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); for (const max of ['1', '11']) { const { code } = await runCli(['orchestrate', '--max', max, 'tarefa'], { env, cwd: ws }); assert.equal(code, 2); } });
 test('OPC_INSIDE_SERVER=1 recusa antes de criar sessão', async (t) => { const { ws, env } = setup(t, 'decompose-ok'); const { code, stdout, stderr } = await runCli(['orchestrate', 'tarefa'], { env: { ...env, OPC_INSIDE_SERVER: '1' }, cwd: ws }); assert.equal(code, 4); assert.match(stdout + stderr, /OPC_INSIDE_SERVER=1/); assert.equal(sessionPosts(env).length, 0); });

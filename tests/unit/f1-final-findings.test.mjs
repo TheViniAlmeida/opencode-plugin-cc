@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { main } from '../../plugins/opc/scripts/opc-companion.mjs';
+import { main, loadCommand } from '../../plugins/opc/scripts/opc-companion.mjs';
 import { redact } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { isSecretLikeSetting } from '../../plugins/opc/scripts/lib/config.mjs';
 import { buildDraft, loadDraft, saveDraft, ONBOARDING_STEPS, runInitWizard, onboardingSummary } from '../../plugins/opc/scripts/lib/onboarding.mjs';
@@ -34,7 +34,12 @@ function harness(t) {
   const env = { OPC_DATA_DIR: dataDir, OPC_SERVER_URL: 'http://127.0.0.1:1', PATH: `${FAKE_BIN_DIR}${path.delimiter}${process.env.PATH}` };
   const cli = async (argv, stdin = pipedStdin()) => {
     const stdout = captureStream(), stderr = captureStream();
-    const code = await main(argv, { env, cwd, stdin, stdout, stderr });
+    const code = await main(argv, { env, cwd, stdin, stdout, stderr,
+      commandLoader: async (sub) => {
+        const mod = await loadCommand(sub);
+        return { ...mod, run: (ctx, args) => mod.run(ctx, args, { hasClaudeAncestor: () => false }) };
+      },
+    });
     return { code, output: stdout.text() + stderr.text(), stdout: stdout.text() };
   };
   return { dataDir, cwd, cli, env };

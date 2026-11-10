@@ -29,25 +29,30 @@ export function maskDeep(value) {
   return value;
 }
 
-function maskMatches(text, pattern) {
-  return text.replace(pattern, '***');
+function maskMatches(text, pattern, onMask) {
+  return text.replace(pattern, () => { onMask?.(); return MASK; });
 }
 
-export function maskSecretPatterns(text) {
+export function maskSecretPatterns(text, { onMask } = {}) {
   if (typeof text !== 'string' || text.length === 0) return text;
   let out = text;
   // Provider tokens, GitHub/GitLab tokens, and common cloud credentials.
-  out = maskMatches(out, /\b(?:sk-(?:proj-|ant-)?|gh[pso]_|github_pat_|glpat-|xox[abpr]-)[A-Za-z0-9_-]{8,}/g);
-  out = maskMatches(out, /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g);
-  out = maskMatches(out, /\bAIza[A-Za-z0-9_-]{35}\b/g);
-  out = maskMatches(out, /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g);
-  out = maskMatches(out, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g);
-  out = maskMatches(out, /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi);
+  out = maskMatches(out, /\b(?:sk-(?:proj-|ant-)?|gh[pso]_|github_pat_|glpat-|xox[abpr]-)[A-Za-z0-9_-]{8,}/g, onMask);
+  out = maskMatches(out, /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, onMask);
+  out = maskMatches(out, /\bAIza[A-Za-z0-9_-]{35}\b/g, onMask);
+  out = maskMatches(out, /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, onMask);
+  out = maskMatches(out, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, onMask);
+  out = out.replace(/\bBearer\s+([A-Za-z0-9._~+\/-]+=*)/gi, (match, value) => {
+    if (value.length < 16 || !/[0-9._~+\/=-]/.test(value)) return match;
+    onMask?.();
+    return MASK;
+  });
   const maskAssignment = (match, prefix, key, raw) => {
     const quote = raw.startsWith('"') || raw.startsWith("'") ? raw[0] : '';
     const value = quote ? raw.slice(1, -1) : raw;
-    return isSecretLikeSetting(key) && value.length >= MIN_SECRET_LENGTH && !/\s/.test(value) && !value.startsWith('-')
-      ? `${prefix}${quote}${MASK}${quote}` : match;
+    if (!isSecretLikeSetting(key) || value.length < MIN_SECRET_LENGTH || /\s/.test(value) || value.startsWith('-')) return match;
+    onMask?.();
+    return `${prefix}${quote}${MASK}${quote}`;
   };
   // A colon is an assignment only for a quoted JSON-like key and value, never prose.
   out = out.replace(/(?<![A-Za-z0-9_.-])("([A-Za-z0-9_.-]+)"\s*:\s*)("(?:\\.|[^"\\])*")/g, maskAssignment);

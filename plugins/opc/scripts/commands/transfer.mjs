@@ -6,7 +6,7 @@ import { ExitCode, OpcError } from '../lib/opc-error.mjs';
 import { redactOutput } from '../lib/redact.mjs';
 import { renderTransfer, safeResumeCommand } from '../lib/render.mjs';
 import { ensurePrivateDir } from '../lib/state.mjs';
-import { attachSecretPath, ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
+import { assertCanCreateSessions, attachSecretPath, ensureServer, resolveOpencodeBin } from '../lib/server.mjs';
 import { serverContext } from '../lib/jobs.mjs';
 import { serverDirectory } from '../lib/remote.mjs';
 import { actionableServerWarnings } from '../lib/context.mjs';
@@ -33,6 +33,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   // Revalidate and read the source before invoking OpenCode, including --version.
   const { records, invalid } = await readTranscript(transcript, options);
   const conversion = convertClaudeRecords(records);
+  if (conversion.maskedCount > 0) ctx.err(`[opc] aviso: ${conversion.maskedCount} trecho(s) com aparência de segredo mascarado(s) no histórico exportado.\n`);
   if (conversion.turns.length === 0) {
     throw new OpcError('EMPTY_TRANSCRIPT', 'A transcrição do Claude não contém texto do usuário nem do assistente para transferir.', { exitCode: ExitCode.USAGE });
   }
@@ -50,6 +51,7 @@ export async function execute(ctx, { source = null, model = null } = {}) {
   let server;
   try {
     server = await ensureServer(serverContext(ctx));
+    assertCanCreateSessions(server);
     imported = await runImport({ file, cwd: ctx.workspaceRoot, directory,
       env: ctx.env, password: server.password, serverUrl: server.url, opencodeBin });
     if (imported.sessionID !== exported.info.id) {

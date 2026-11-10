@@ -19,6 +19,8 @@ import { readJson, writeFileAtomic } from './state.mjs';
 export const MIN_OPENCODE_VERSION = '2.0.22';
 const MAX_BOOT_ATTEMPTS = 3;
 const HEALTH_REUSE_TIMEOUT_MS = 2000;
+const HEALTH_BUSY_RETRIES = 3;
+const HEALTH_BUSY_TIMEOUT_MS = 5000;
 const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 export const LISTENING_RE = /\bserver listening on (https?:\/\/\S+)/;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -95,6 +97,12 @@ function removeServerRecord(stateDir) {
 
 export function serverSettings(config) {
   return { ...DEFAULT_CONFIG.server, ...(config?.server ?? {}) };
+}
+
+// Leave 3 s of slack beyond the initial probe and all busy retries, even with a small boot timeout.
+export function serverLockTimeoutMs(config) {
+  return Math.max(4 * serverSettings(config).bootTimeoutSec * 1000,
+    HEALTH_REUSE_TIMEOUT_MS + HEALTH_BUSY_RETRIES * HEALTH_BUSY_TIMEOUT_MS + 3000);
 }
 
 function recordIdentityOk(record, opencodeBin = 'opencode') {
@@ -264,12 +272,27 @@ async function worldCheck(client, config) {
 }
 
 export function assertCanCreateSessions(server) {
-  if (server?.world?.shareBlocked) {
-    if (server.world.shareReason === 'config-unavailable') {
+  const world = server?.world ?? { shareBlocked: true, shareReason: 'config-unavailable' };
+  if (world.shareBlocked) {
+    if (world.shareReason === 'config-unavailable') {
       throw new PolicyError('SHARE_AUTO', 'Criação de sessões bloqueada: não foi possível confirmar a configuração de compartilhamento. Tente novamente e verifique o servidor OpenCode.');
     }
     throw new PolicyError('SHARE_AUTO', 'Criação de sessões recusada: o OpenCode está com share "auto". Rode /opc:setup para ver como desligar.');
   }
+}
+
+export function guardSessionCreation(api, server) {
+  return {
+    ...api,
+    async createSession(...args) {
+      assertCanCreateSessions(server);
+      return api.createSession(...args);
+    },
+    async fork(...args) {
+      assertCanCreateSessions(server);
+      return api.fork(...args);
+    },
+  };
 }
 
 // V2 loads providers while the instance bootstraps: until the first `model.updated` event, /api/model may list
@@ -380,7 +403,9 @@ async function attachServer(env, settings, config, workspaceRoot) {
   const url = parsed.origin;
   const password = env.OPC_SERVER_PASSWORD || null;
   registerSecret(password);
-  const client = createClient({ baseUrl: url, password, requestTimeoutMs: settings.requestTimeoutSec * 1000 });
+  const client = createClient({ baseUrl: url, password,
+    directory: serverDirectory({ workspaceRoot, env, config, attached: true }),
+    requestTimeoutMs: settings.requestTimeoutSec * 1000 });
   const api = createApi(client);
   const health = await api.info();
   assertSupportedVersion(health);
@@ -523,11 +548,19 @@ async function bootServer(ctx, settings) {
   });
 }
 
-export async function ensureServer(ctx) {
+export async function ensureServer(ctx, { healthReuseTimeoutMs = HEALTH_REUSE_TIMEOUT_MS, healthBusyTimeoutMs = HEALTH_BUSY_TIMEOUT_MS } = {}) {
   const { stateDir, config, env = process.env, hasActiveJobs = () => false } = ctx;
   const full = { ...ctx, opencodeBin: ctx.opencodeBin ?? resolveOpencodeBin({ env, config }), env, hasActiveJobs };
   const settings = serverSettings(config);
-  const lockTimeout = 4 * settings.bootTimeoutSec * 1000;
+  const lockTimeout = Math.max(serverLockTimeoutMs(config), healthReuseTimeoutMs + HEALTH_BUSY_RETRIES * healthBusyTimeoutMs + 3000);
+  const activeJobsError = (ErrorType, code, message) => {
+    const unreadableJobCount = ctx.getUnreadableJobCount?.() ?? 0;
+    if (!unreadableJobCount) return new ErrorType(code, message);
+    const jobsDir = path.join(stateDir, 'jobs');
+    return new ErrorType(code, `${message} há ${unreadableJobCount} job(s) ilegível(is) em ${jobsDir}; corrija as permissões ou use /opc:setup --stop-server --force.`, {
+      details: { unreadableJobCount, jobsDir },
+    });
+  };
   const server = await withLock(path.join(stateDir, 'server.lock'), { timeoutMs: lockTimeout, purpose: 'ensure-server' }, async () => {
     if (env.OPC_SERVER_URL) return attachServer(env, settings, config, ctx.workspaceRoot);
     let record = readServerRecord(stateDir);
@@ -549,7 +582,16 @@ export async function ensureServer(ctx) {
         removeServerRecord(stateDir);
         warnings.push(`Registro de servidor antigo descartado (pid ${record.pid} não é mais o servidor do opc); nenhum sinal enviado.`);
       } else {
-        const health = await probeHealth(record.url, record.password, HEALTH_REUSE_TIMEOUT_MS);
+        let health = await probeHealth(record.url, record.password, healthReuseTimeoutMs);
+        const unresponsive = () => !health.ok && !['AUTH_FAILED', 'NOT_JSON', 'UNSUPPORTED_VERSION'].includes(health.error?.code);
+        if (unresponsive() && hasActiveJobs()) {
+          for (let retry = 0; retry < HEALTH_BUSY_RETRIES && unresponsive(); retry += 1) {
+            health = await probeHealth(record.url, record.password, healthBusyTimeoutMs);
+          }
+          if (unresponsive()) {
+            throw activeJobsError(ConnectionError, 'SERVER_UNRESPONSIVE', 'O servidor gerenciado não respondeu e há jobs ativos; aguarde (/opc:status), cancele (/opc:cancel) ou pare com opc setup --stop-server --force.');
+          }
+        }
         if (health.error?.code === 'AUTH_FAILED') throw health.error;
         // The identity check above proved this is opc's own process: an old (V1) server answers /api/info with
         // the SPA (NOT_JSON) or an old version, so replace it instead of failing every command.
@@ -557,13 +599,15 @@ export async function ensureServer(ctx) {
           || (health.ok && compareVersions(health.version, MIN_OPENCODE_VERSION) < 0);
         if (incompatible) {
           if (hasActiveJobs()) {
-            throw new UsageError('V1_SERVER_ACTIVE', `O servidor gerenciado registrado é anterior ao OpenCode ${MIN_OPENCODE_VERSION} e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.`);
+            throw activeJobsError(UsageError, 'V1_SERVER_ACTIVE', `O servidor gerenciado registrado é anterior ao OpenCode ${MIN_OPENCODE_VERSION} e há jobs ativos nele; aguarde (/opc:status) ou cancele (/opc:cancel) e rode o comando de novo.`);
           }
           await shutdownRecorded(stateDir, record, full.opencodeBin);
           warnings.push(`Servidor gerenciado anterior ao OpenCode ${MIN_OPENCODE_VERSION} encerrado; um servidor V2 será iniciado.`);
         } else {
           if (health.ok && health.version === record.version) {
-            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password,
+              directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env, config, attached: false }),
+              requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
             record.world = checked.world;
             writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
             return {
@@ -573,7 +617,9 @@ export async function ensureServer(ctx) {
           }
           if (health.ok && hasActiveJobs()) {
             warnings.push(`O OpenCode mudou de versão (${record.version} → ${health.version}), mas há jobs ativos: servidor reaproveitado.`);
-            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password, requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
+            const checked = await worldCheck(createClient({ baseUrl: record.url, password: record.password,
+              directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env, config, attached: false }),
+              requestTimeoutMs: settings.requestTimeoutSec * 1000 }), config);
             record.world = checked.world;
             writeFileAtomic(serverFile(stateDir), record, { mode: 0o600 });
             return {
@@ -627,7 +673,7 @@ export async function stopServer(ctx, { force = false, confirmedByUser = false, 
   if (lockHeld) return run();
   return withLock(
     path.join(ctx.stateDir, 'server.lock'),
-    { timeoutMs: 4 * serverSettings(ctx.config).bootTimeoutSec * 1000, purpose: 'stop-server' },
+    { timeoutMs: serverLockTimeoutMs(ctx.config), purpose: 'stop-server' },
     run,
   );
 }
@@ -639,6 +685,9 @@ export function clientFor(ctx, server) {
     password: server.password,
     directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
     requestTimeoutMs: settings.requestTimeoutSec * 1000,
-    onServerDown: () => ensureServer(ctx).then((s) => ({ url: s.url, password: s.password })),
+    onServerDown: () => ensureServer(ctx).then((s) => {
+      server.world = s.world;
+      return s;
+    }),
   });
 }

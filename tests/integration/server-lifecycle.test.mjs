@@ -5,10 +5,11 @@ import test from 'node:test';
 
 import { mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
+import { createJob, isActive, listJobs, serverContext } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { clientFor, ensureServer, serverMatcher, stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { writeFileAtomic } from '../../plugins/opc/scripts/lib/state.mjs';
 import {
-  deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, spawnSleeper, waitFor,
+  deadPid, makeServerCtx, processAlive, readFakeState, readJsonFile, runCli, spawnSleeper, waitFor,
 } from '../helpers.mjs';
 
 test('ensureServer spawns a detached server, records it (600) and reuses it; stopServer identity-stops without dispose', async (t) => {
@@ -132,6 +133,104 @@ test('hung-server: identity ok but health silent → terminated and replaced', a
   await waitFor(() => !processAlive(first.pid), { message: 'hung server gone' });
   assert.ok(readFakeState(env).signals.some((s) => s.signal === 'SIGTERM' && s.pid === first.pid));
 });
+
+test('hung server with active write jobs is not killed after three busy health retries', async (t) => {
+  const started = performance.now();
+  const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  const job = await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const healthCount = () => readFakeState(env).requests.filter((request) => request.path === '/api/info').length;
+  const before = healthCount();
+  await assert.rejects(ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) },
+    { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 }), (err) => {
+    assert.equal(err.name, 'ConnectionError');
+    assert.equal(err.code, 'SERVER_UNRESPONSIVE');
+    assert.match(err.message, /\/opc:status/);
+    assert.match(err.message, /\/opc:cancel/);
+    assert.match(err.message, /opc setup --stop-server --force/);
+    return true;
+  });
+  assert.equal(healthCount() - before, 4);
+  assert.ok(processAlive(first.pid));
+  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+  assert.equal(listJobs(stateDir, { all: true }).find((entry) => entry.id === job.id).status, 'queued');
+  assert.equal(readFakeState(env).bootAttempts, 1);
+  assert.equal(readFakeState(env).signals.length, 0);
+  assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
+});
+
+test('setup preserves a hung server when a job is unreadable even without an active index entry', async (t) => {
+  const { env, ctx, stateDir, ws } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  const id = 'task-unreadable-abcdef';
+  fs.mkdirSync(path.join(stateDir, 'jobs'), { recursive: true });
+  const file = path.join(stateDir, 'jobs', `${id}.json`);
+  fs.writeFileSync(file, '{}');
+  fs.chmodSync(file, 0o000);
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const result = await runCli(['setup', '--json'], { env, cwd: ws, timeoutMs: 30000 });
+  assert.equal(result.code, 5, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.server.error.code, 'SERVER_UNRESPONSIVE');
+  assert.match(report.server.error.message, /há 1 job\(s\) ilegível\(is\)/);
+  assert.ok(processAlive(first.pid));
+  assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+  assert.equal(readFakeState(env).bootAttempts, 1);
+  assert.equal(readFakeState(env).signals.length, 0);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test('a busy hung server that recovers during retries is reused with its world checks', async (t) => {
+  const started = performance.now();
+  const { env, ctx, stateDir, ws } = makeServerCtx(t, { scenario: 'hung-server' });
+  const first = await ensureServer(ctx);
+  await createJob(stateDir, { kind: 'task', permissionProfile: 'write' });
+  fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+  const healthCount = () => readFakeState(env).requests.filter((request) => request.path === '/api/info').length;
+  const before = healthCount();
+  const recovering = ensureServer({ ...ctx, hasActiveJobs: () => listJobs(stateDir, { all: true }).some(isActive) },
+    { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 });
+  await waitFor(() => healthCount() >= before + 2, { timeoutMs: 10000, intervalMs: 10, message: 'first busy retry' });
+  fs.unlinkSync(`${env.FAKE_OPENCODE_STATE}.hang`);
+  const reused = await recovering;
+  assert.equal(reused.pid, first.pid);
+  assert.equal(reused.reused, true);
+  assert.equal(reused.world.shareBlocked, false);
+  const fake = readFakeState(env);
+  assert.equal(fake.bootAttempts, 1);
+  assert.equal(fake.signals.length, 0);
+  assert.equal(fake.requests.filter((request) => request.path === '/api/config').at(-1).directory, ws);
+  assert.equal(healthCount() - before, 3);
+  assert.ok(performance.now() - started < 3000, 'injected retry timeouts must keep the test below 3 s');
+});
+
+for (const code of ['SERVER_UNRESPONSIVE', 'V1_SERVER_ACTIVE']) {
+  test(`${code} explains the unreadable job count and recovery without stopping the server`, async (t) => {
+    const { env, ctx, stateDir } = makeServerCtx(t, { scenario: code === 'SERVER_UNRESPONSIVE' ? 'hung-server' : 'version-changed' });
+    const first = await ensureServer(ctx);
+    for (let index = 0; index < 2; index += 1) {
+      const job = await createJob(stateDir, { kind: 'task' });
+      fs.chmodSync(path.join(stateDir, 'jobs', `${job.id}.json`), 0o000);
+    }
+    if (code === 'SERVER_UNRESPONSIVE') fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.hang`, String(first.pid));
+    else fs.writeFileSync(`${env.FAKE_OPENCODE_STATE}.version`, '1.18.34');
+    let stderr = '';
+    const jobsDirectory = path.join(stateDir, 'jobs');
+    const busyCtx = serverContext({ ...ctx, err: (warning) => { stderr += warning; } });
+    await assert.rejects(ensureServer(busyCtx, { healthReuseTimeoutMs: 200, healthBusyTimeoutMs: 200 }), (error) => {
+      assert.equal(error.code, code);
+      assert.ok(error.message.includes(`há 2 job(s) ilegível(is) em ${jobsDirectory}; corrija as permissões ou use /opc:setup --stop-server --force`));
+      assert.deepEqual(error.details, { unreadableJobCount: 2, jobsDir: jobsDirectory });
+      return true;
+    });
+    assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 2);
+    assert.ok(processAlive(first.pid));
+    assert.equal(readJsonFile(path.join(stateDir, 'server.json')).pid, first.pid);
+    assert.equal(readFakeState(env).bootAttempts, 1);
+    assert.equal(readFakeState(env).signals.length, 0);
+  });
+}
 
 test('version-changed: reused with a warning while jobs are active, replaced when idle', async (t) => {
   const { env, ctx, stateDir } = makeServerCtx(t, { scenario: 'version-changed' });

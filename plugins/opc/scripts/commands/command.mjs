@@ -2,9 +2,10 @@ import { join } from 'node:path';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { assertCommandUsable } from '../lib/policy.mjs';
 import {
-  createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock,
+  createJob, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, assertNotInsideServer, withServerLock, jobWarningHandler,
 } from '../lib/jobs.mjs';
 import { classifyError } from '../lib/errors.mjs';
 import { tryAcquireLock } from '../lib/locks.mjs';
@@ -13,7 +14,7 @@ import { exitCodeForJob } from './task.mjs';
 import { createRequestBridge, createSerialUpdater } from './task-worker.mjs';
 import { parseFullId } from '../lib/models.mjs';
 import { safeOutputText } from '../lib/redact.mjs';
-import { runTurn } from '../lib/runner.mjs';
+import { DEFAULT_AGENT, runTurn } from '../lib/runner.mjs';
 
 const DEFAULT_COMMAND_TIMEOUT_SEC = 1800;
 const SPEC = {
@@ -67,7 +68,10 @@ export async function run(ctx, argv) {
   const conn = await openApi(ctx);
   let commands;
   let discovery;
-  try { [commands, discovery] = await Promise.all([conn.api.commands(), loadDiscovery(conn.api)]); }
+  try {
+    assertCanCreateSessions(conn.server);
+    [commands, discovery] = await Promise.all([conn.api.commands(), loadDiscovery(conn.api)]);
+  }
   finally { conn.close(); }
   const cmd = (commands ?? []).find((entry) => entry.name === name);
   if (!cmd) {
@@ -77,7 +81,7 @@ export async function run(ctx, argv) {
   const policy = ctx.config.policy ?? {};
   assertCommandUsable(cmd, policy, new Map(discovery.agents.map((agent) => [agent.name, agent])));
   const agent = flags.agent ?? cmd.agent ?? ctx.config.defaultAgent ?? null;
-  if (agent) requireAgent(discovery, agent, policy);
+  requireAgent(discovery, agent ?? DEFAULT_AGENT, policy, { implicit: agent == null });
   const model = flags.model
     ? resolveModel(ctx, discovery, 'task', flags.model, { variant: flags.variant }).full
     : (cmd.model ?? resolveModel(ctx, discovery, 'task', null, { variant: flags.variant }).full);
@@ -91,7 +95,7 @@ export async function run(ctx, argv) {
     permissionProfile: profile,
     request: { command: name, arguments: args, argumentsPreview, argumentsBytes, agent, model, variant: flags.variant ?? null,
       timeoutMs: timeoutSec * 1000, profile, rules: profileRules(ctx, profile), subtask: Boolean(cmd.subtask) },
-  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:cmd' });
+  }, { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: 'register-job:cmd' });
   await spawnWorker(ctx, job.id);
   if (flags.background) {
     if (flags.json) ctx.json({ job: readJob(ctx.stateDir, job.id) ?? job });
@@ -120,6 +124,7 @@ export async function runWorker(ctx, job, request = job.request) {
     conn = await openApi(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
     const selected = parseFullId(request.model);
+    requireAgent({ agents: await api.agents() }, request.agent ?? DEFAULT_AGENT, policy, { implicit: request.agent == null });
     const session = await api.createSession({ title: job.title, permissions: request.rules,
       model: { providerID: selected.providerID, id: selected.modelID }, ...(request.agent ? { agent: request.agent } : {}) });
     release = tryAcquireLock(join(stateDir, `session-${session.id}.lock`), { purpose: `job ${job.id}` });
@@ -132,7 +137,7 @@ export async function runWorker(ctx, job, request = job.request) {
     let failure = null;
     try {
       outcome = await runTurn({ api, hub,
-        request: { sessionID: session.id, model: selected, agent: request.agent ?? 'build',
+        request: { sessionID: session.id, model: selected, agent: request.agent ?? DEFAULT_AGENT,
           command: { name: request.command, text: request.arguments ?? '' },
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_SEC * 1000 },
         onPermission: (permission) => bridge.onPermission(permission),

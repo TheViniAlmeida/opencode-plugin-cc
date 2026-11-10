@@ -3,15 +3,48 @@ import { UsageError } from './opc-error.mjs';
 import { safeOutputText } from './redact.mjs';
 
 const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
+const GLOB_CACHE = new Map();
+const GLOB_CACHE_LIMIT = 4096;
 
 export function globToRegExp(glob) {
-  const body = String(glob).split('*').map((part) => part.replace(REGEX_SPECIALS, '\\$&')).join('.*');
-  return new RegExp(`^${body}$`);
+  const source = String(glob);
+  if (GLOB_CACHE.has(source)) {
+    const expression = GLOB_CACHE.get(source);
+    GLOB_CACHE.delete(source);
+    GLOB_CACHE.set(source, expression);
+    return expression;
+  }
+  const parts = [{ wildcard: null, literal: '' }];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] !== '*') { parts.at(-1).literal += source[i]; continue; }
+    const directory = source.startsWith('**/', i) && (i === 0 || source[i - 1] === '/');
+    const wildcard = directory ? 'directory' : 'star';
+    if (directory) i += 2;
+    const last = parts.at(-1);
+    if (last.wildcard && !last.literal) {
+      if (wildcard === 'star') last.wildcard = 'star';
+    } else parts.push({ wildcard, literal: '' });
+  }
+  let body = parts[0].literal.replace(REGEX_SPECIALS, '\\$&');
+  for (let i = 1; i < parts.length; i += 1) {
+    const { wildcard, literal } = parts[i];
+    const fixed = literal.replace(REGEX_SPECIALS, '\\$&');
+    const last = i === parts.length - 1;
+    const prefix = wildcard === 'directory' ? (last ? '(?:.*/)?' : '(?:.*?/)??') : (last ? '.*' : '.*?');
+    // Lookahead captures are atomic in JS: an interior star commits to the earliest
+    // fixed chunk. Later wildcards absorb any extra text without exponential retries.
+    body += last ? `${prefix}${fixed}` : `(?=(${prefix}${fixed}))\\${i}`;
+  }
+  const expression = new RegExp(`^${body}$`);
+  if (GLOB_CACHE.size >= GLOB_CACHE_LIMIT) GLOB_CACHE.delete(GLOB_CACHE.keys().next().value);
+  GLOB_CACHE.set(source, expression);
+  return expression;
 }
 
 export function matchesAny(value, globs) {
   if (!Array.isArray(globs) || globs.length === 0) return false;
-  return globs.some((glob) => globToRegExp(glob).test(String(value)));
+  const text = String(value);
+  return globs.some((glob) => globToRegExp(glob).test(text));
 }
 
 export function parseFullId(full) {

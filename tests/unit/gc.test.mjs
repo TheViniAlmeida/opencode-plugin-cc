@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir, ORPHAN_SAFE_IDLE, trackTempDir } from '../helpers.mjs';
 import { findStaleStates, run } from '../../plugins/opc/scripts/commands/gc.mjs';
 import { tryAcquireLock } from '../../plugins/opc/scripts/lib/locks.mjs';
 import { getProcessIdentity } from '../../plugins/opc/scripts/lib/process.mjs';
+import { serverMatcher } from '../../plugins/opc/scripts/lib/server.mjs';
 import { spawn } from 'node:child_process';
 
 function makeState(root, name, ageDays, { activeJob = false } = {}) {
@@ -22,6 +23,119 @@ function makeState(root, name, ageDays, { activeJob = false } = {}) {
 function rootFor(t) {
   return trackTempDir(t, makeTempDir('opc-gc-'));
 }
+
+test('gc preview preserves corrupt files and reports skipped jobs on stderr', async (t) => {
+  const root = rootFor(t);
+  const dir = makeState(root, 'old-0123456789abcdef', 40);
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(file, '');
+  const old = new Date(Date.now() - 40 * 86400000);
+  for (const target of [file, join(dir, 'jobs'), dir]) utimesSync(target, old, old);
+  const before = statSync(file);
+  let stderr = '';
+  let output;
+  const ctx = { dataDir: root, stdin: { isTTY: false }, err: (w) => { stderr += w; }, json: (value) => { output = value; } };
+  assert.equal(await run(ctx, ['--json']), 2);
+  assert.equal(existsSync(file), true);
+  assert.equal(statSync(file).mtimeMs, before.mtimeMs);
+  assert.equal(output.candidates.length, 1);
+  assert.equal(stderr, `[opc] aviso: job ${id} ilegível (INVALID_JSON); ignorado nesta listagem\n`);
+});
+
+test('confirmed gc preserves unreadable jobs and does not duplicate warnings across scans', async (t) => {
+  const root = rootFor(t);
+  const dir = makeState(root, 'old-0123456789abcdef', 40);
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(file, '{}');
+  chmodSync(file, 0o000);
+  const old = new Date(Date.now() - 40 * 86400000);
+  for (const target of [file, join(dir, 'jobs'), dir]) utimesSync(target, old, old);
+  let stderr = '';
+  let output;
+  const ctx = { dataDir: root, stdin: { isTTY: false }, err: (w) => { stderr += w; }, json: (value) => { output = value; } };
+  assert.equal(await run(ctx, ['--json', '--confirmed-by-user']), 0);
+  assert.equal(existsSync(file), true);
+  assert.deepEqual(output.removed, []);
+  assert.equal(stderr, `[opc] aviso: job ${id} ilegível (EACCES); ignorado nesta listagem\n`);
+  assert.match(output.skipped[0].reason, /ilegível/);
+});
+
+test('confirmed gc surfaces only one warning when rescanning a corrupt job for input cleanup', async (t) => {
+  const root = rootFor(t);
+  const dir = makeState(root, 'recent-0123456789abcdef', 0);
+  const id = 'task-abc123-abcdef';
+  const healthyId = 'task-def456-abcdef';
+  const corrupt = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(corrupt, '{');
+  const before = statSync(corrupt);
+  writeFileSync(join(dir, 'jobs', `${healthyId}.json`), JSON.stringify({ id: healthyId, status: 'completed' }));
+  writeFileSync(join(dir, 'jobs', `${healthyId}.input.json`), '{}');
+  let stderr = '';
+  const ctx = { dataDir: root, stdin: { isTTY: false }, err: (w) => { stderr += w; }, json() {} };
+  await run(ctx, ['--json', '--confirmed-by-user']);
+  assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+  assert.equal(readFileSync(corrupt, 'utf8'), '{');
+  assert.equal(statSync(corrupt).mtimeMs, before.mtimeMs);
+  assert.equal(readdirSync(join(dir, 'jobs')).some((name) => name.includes('.corrupt-')), false);
+  assert.equal(existsSync(join(dir, 'jobs', `${healthyId}.input.json`)), false);
+});
+
+for (const ageDays of [0, 40]) {
+  test(`gc cleans readable terminal inputs despite an unreadable job in a ${ageDays}-day-old workspace`, async (t) => {
+    const root = rootFor(t);
+    const dir = makeState(root, 'mixed-0123456789abcdef', ageDays);
+    const unreadable = join(dir, 'jobs', 'task-abc123-abcdef.json');
+    const id = 'task-def456-abcdef';
+    const input = join(dir, 'jobs', `${id}.input.json`);
+    writeFileSync(unreadable, '{}');
+    chmodSync(unreadable, 0o000);
+    writeFileSync(join(dir, 'jobs', `${id}.json`), JSON.stringify({ id, status: 'completed' }));
+    writeFileSync(input, '{"synthetic":"private input"}');
+    const when = new Date(Date.now() - ageDays * 86400000);
+    for (const file of [unreadable, input, join(dir, 'jobs', `${id}.json`), join(dir, 'jobs'), dir]) utimesSync(file, when, when);
+    const stale = findStaleStates(root, { olderThanMs: 30 * 86400000 });
+    assert.equal(stale.length, 0);
+    assert.deepEqual(stale.inputCleanup.map(({ id, files }) => ({ id, files })), [{ id, files: [`${id}.input.json`] }]);
+    assert.match(stale.skipped[0].reason, /ilegível/);
+    let output;
+    const ctx = { dataDir: root, stdin: { isTTY: false }, err() {}, json: (value) => { output = value; } };
+    assert.equal(await run(ctx, ['--json', '--confirmed-by-user']), 0);
+    assert.deepEqual(output.removedInputs, [id]);
+    assert.deepEqual(output.removed, []);
+    assert.equal(existsSync(input), false);
+    assert.equal(existsSync(unreadable), true);
+    assert.equal(statSync(unreadable).mode & 0o777, 0);
+  });
+}
+
+test('gc recognizes a live server with a custom opencode binary from config or env', async (t) => {
+  const binary = '/opt/oc/bin/oc-v2';
+  assert.equal(serverMatcher(4100, binary)([binary, 'serve', '--port', '4100']), true);
+  for (const settings of [
+    { env: {}, config: { server: { opencodeBin: binary } } },
+    { env: { OPC_OPENCODE_BIN: binary }, config: { server: { opencodeBin: '/opt/oc/bin/other' } } },
+  ]) {
+    const root = rootFor(t);
+    const candidate = makeState(root, 'custom-0123456789abcdef', 40);
+    writeFileSync(join(candidate, 'server.json'), JSON.stringify({ schemaVersion: 1, pid: 1234, port: 4100, startTime: 'synthetic-identity' }));
+    const old = new Date(Date.now() - 40 * 86400000);
+    utimesSync(join(candidate, 'server.json'), old, old);
+    let output;
+    let calls = 0;
+    const ctx = { ...settings, dataDir: root, stateDir: null, stdin: { isTTY: false }, json: (value) => { output = value; } };
+    await run(ctx, ['--json'], { identityMatches: (expected, matcher) => {
+      calls += 1;
+      assert.equal(expected.pid, 1234);
+      assert.equal(expected.startTime, 'synthetic-identity');
+      return matcher([binary, 'serve', '--port', '4100']);
+    } });
+    assert.equal(calls, 1);
+    assert.deepEqual(output.candidates, []);
+    assert.equal(existsSync(candidate), true);
+  }
+});
 
 test('findStaleStates: returns only old, inactive, non-excluded state dirs with slug-hash names', (t) => {
   const root = rootFor(t);

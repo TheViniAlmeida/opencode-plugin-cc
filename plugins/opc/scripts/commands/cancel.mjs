@@ -2,13 +2,13 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
-import { cancelGroup, cancelJob, GROUP_ROLE, resolveJobRef } from '../lib/jobs.mjs';
+import { cancelGroup, cancelJob, GROUP_ROLE, jobWarningHandler, resolveJobRef } from '../lib/jobs.mjs';
 import { renderCancel } from '../lib/render.mjs';
 
 export async function run(ctx, argv) {
   const { flags, positionals } = parseArgs(argv, { flags: { json: { type: 'boolean' }, cwd: { type: 'string' } }, allowPositionals: true });
   if (positionals.length > 1) throw new UsageError('USAGE', `Argumento inesperado: ${preview(positionals[1])}`);
-  const target = resolveJobRef(ctx.stateDir, positionals[0] ?? null, { claudeSessionId: ctx.claudeSessionId ?? null, activeOnly: true });
+  const target = resolveJobRef(ctx.stateDir, positionals[0] ?? null, { claudeSessionId: ctx.claudeSessionId ?? null, activeOnly: true, onWarning: jobWarningHandler(ctx) });
   const groupExit = await cancelForGroup(ctx, target, flags);
   if (groupExit !== null) return groupExit;
   const result = await cancelJob(ctx, target.id);

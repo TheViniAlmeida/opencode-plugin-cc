@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { runTurn } from '../../plugins/opc/scripts/lib/runner.mjs';
 import { createApi } from '../../plugins/opc/scripts/lib/api.mjs';
 import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
-import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+import { ConnectionError, RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 import { memoryV2 } from './_memory-v2.mjs';
 
 const DENY_ALL = [{ action: '*', resource: '*', effect: 'deny' }];
@@ -102,13 +102,17 @@ test('already aborted signal cancels before sending the prompt', async () => {
   assert.deepEqual(interrupts(api), ['ses_mem1']);
 });
 
-for (const mode of ['false', 'throws', 'busy', 'delayed-idle', 'false-idle']) {
+for (const mode of ['false', 'throws', 'busy', 'delayed-idle', 'false-idle', 'server-down']) {
   test(`F4a C1: retry cap requires a confirmed interrupt (${mode})`, async () => {
     const { api, hub, emit } = memoryV2();
     let idleObserved = false;
     api.interrupt = async (id) => {
       api.calls.push(['interrupt', id]);
       if (mode === 'throws') throw new Error('interrupt unavailable');
+      if (mode === 'server-down') {
+        api.messages = async () => { throw new ConnectionError('SERVER_DOWN', 'synthetic disconnect'); };
+        throw new ConnectionError('SERVER_DOWN', 'synthetic disconnect');
+      }
       if (mode === 'delayed-idle') setTimeout(() => { api.sessionStatus = async () => ({}); idleObserved = true; }, 10);
       if (mode === 'false-idle') { api.sessionStatus = async () => ({}); idleObserved = true; return false; }
       return mode !== 'false';
@@ -182,3 +186,131 @@ test('turn timeout interrupts the session and is recoverable', async () => {
   assert.equal(result.errorClass, 'recoverable');
   assert.deepEqual(interrupts(api), ['ses_mem1']);
 });
+
+for (const reason of ['timeout', 'cancelled']) {
+  for (const mode of ['interrupt-failed', 'busy', 'status-failed', ...(reason === 'cancelled' ? ['server-down'] : [])]) {
+    test(`${reason} with an unconfirmed interrupt is fatal (${mode})`, async () => {
+      const { api, hub, emit } = memoryV2();
+      api.interrupt = async (id) => {
+        api.calls.push(['interrupt', id]);
+        if (mode === 'interrupt-failed') throw new RequestError('SERVER_ERROR', 'interrupt failed');
+        if (mode === 'server-down') throw new ConnectionError('SERVER_DOWN', 'synthetic disconnect');
+        if (mode === 'status-failed') api.sessionStatus = async () => { throw new RequestError('SERVER_ERROR', 'status failed'); };
+        return true;
+      };
+      const controller = new AbortController();
+      const pending = runTurn({ api, hub, request: request({ timeoutMs: 50, idleWaitMs: 100 }), signal: controller.signal });
+      await api.promptSettled;
+      api.messagesFor('ses_mem1', [
+        { id: api.lastPromptId(), type: 'user' },
+        { id: 'msg_tool', type: 'assistant', content: [{ type: 'tool', name: 'read', state: { status: 'completed' } }] },
+      ]);
+      emit({ type: 'session.tool.success', data: { sessionID: 'ses_mem1', id: 'tool_read', name: 'read' } });
+      await new Promise(setImmediate);
+      if (reason === 'cancelled') controller.abort();
+      if (mode === 'server-down') api.messages = async () => { throw new ConnectionError('SERVER_DOWN', 'synthetic disconnect'); };
+      const result = await pending;
+      assert.equal(result.errorType, reason === 'cancelled' ? 'Cancelled' : 'AbortUnconfirmed');
+      assert.equal(result.errorClass, 'fatal');
+      assert.equal(result.errorCode, reason === 'cancelled' ? 'cancelled' : 'ABORT_UNCONFIRMED');
+      assert.equal(result.status, reason === 'cancelled' ? 'cancelled' : 'failed');
+      assert.equal(result.abortConfirmed, false);
+      assert.match(result.errorMessage, /Não foi possível confirmar a interrupção/);
+      assert.equal(result.toolsRan, true);
+      assert.deepEqual(interrupts(api), ['ses_mem1']);
+    });
+  }
+}
+
+for (const childBusy of [false, true]) {
+  test(`agent mode fallback confirms all tracked interrupts (child busy: ${childBusy})`, async () => {
+    const { api, hub, emit } = memoryV2();
+    const stopped = new Set();
+    api.sessionStatus = async () => Object.fromEntries(['ses_mem1', 'ses_child'].filter((id) => !stopped.has(id)).map((id) => [id, { type: 'busy' }]));
+    api.interrupt = async (id) => {
+      api.calls.push(['interrupt', id]);
+      if (id !== 'ses_child' || !childBusy) stopped.add(id);
+      if (id === 'ses_mem1') emit({ type: 'session.execution.interrupted', data: { sessionID: id } });
+      return false;
+    };
+    api.prompt = async () => {
+      emit({ type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_mem1' } });
+      await new Promise(setImmediate);
+      throw new RequestError('BAD_REQUEST', 'agent mode primary required');
+    };
+    const pending = runTurn({ api, hub, request: request({ agentModeFallback: true, idleWaitMs: 50 }) });
+    if (childBusy) {
+      const result = await pending;
+      assert.equal(result.errorCode, 'ABORT_UNCONFIRMED');
+      assert.equal(result.errorClass, 'fatal');
+      assert.equal(result.abortConfirmed, false);
+    } else await assert.rejects(pending, (err) => err.code === 'BAD_REQUEST');
+    assert.deepEqual(interrupts(api), ['ses_mem1', 'ses_child']);
+  });
+}
+
+for (const childBusy of [false, true]) {
+  test(`timeout confirms interrupts for the parent and its children (child busy: ${childBusy})`, async () => {
+    const { api, hub, emit } = memoryV2();
+    const stopped = new Set();
+    api.sessionStatus = async () => Object.fromEntries(['ses_mem1', 'ses_child'].filter((id) => !stopped.has(id)).map((id) => [id, { type: 'busy' }]));
+    api.interrupt = async (id) => {
+      api.calls.push(['interrupt', id]);
+      if (id !== 'ses_child' || !childBusy) stopped.add(id);
+      return false;
+    };
+    const pending = runTurn({ api, hub, request: request({ timeoutMs: 50, idleWaitMs: 100 }) });
+    await api.promptSettled;
+    emit({ type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_mem1' } });
+    const result = await pending;
+    assert.deepEqual(interrupts(api), ['ses_mem1', 'ses_child']);
+    assert.equal(result.errorType, childBusy ? 'AbortUnconfirmed' : 'Timeout');
+    assert.equal(result.errorClass, childBusy ? 'fatal' : 'recoverable');
+  });
+}
+
+for (const stage of ['interrupt', 'waitIdle']) {
+  test(`timeout reports server loss during ${stage}`, async () => {
+    const { api, hub } = memoryV2();
+    const down = () => { throw new ConnectionError('SERVER_DOWN', 'connection refused'); };
+    api.interrupt = async () => {
+      if (stage === 'interrupt') down();
+      api.sessionStatus = async () => down();
+      return true;
+    };
+    const result = await runTurn({ api, hub, request: request({ timeoutMs: 50, idleWaitMs: 100 }) });
+    assert.equal(result.errorType, 'ServerLost');
+    assert.equal(result.errorClass, 'fatal');
+    assert.equal(result.errorCode, 'server_lost');
+  });
+}
+
+test('cancelled before the prompt: no prompt is sent', async () => {
+  const { api, hub } = memoryV2();
+  stubInterrupt(api);
+  const result = await runTurn({ api, hub, request: request(), isCancelled: () => true });
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(api.promptCalls, []);
+  assert.deepEqual(interrupts(api), ['ses_mem1']);
+});
+
+for (const trigger of ['isCancelled', 'signal']) {
+  test(`cancellation during command baseline prevents running the command (${trigger})`, async () => {
+    const { api, hub } = memoryV2();
+    stubInterrupt(api);
+    const controller = new AbortController();
+    let cancelled = false;
+    let commandCalls = 0;
+    api.messages = async () => {
+      if (trigger === 'signal') controller.abort(); else cancelled = true;
+      return [];
+    };
+    api.runCommand = async () => { commandCalls++; };
+    const result = await runTurn({ api, hub, request: request({ command: { name: 'test' }, timeoutMs: 50, idleWaitMs: 100 }),
+      isCancelled: () => cancelled, signal: controller.signal });
+    assert.equal(commandCalls, 0);
+    assert.equal(result.status, 'cancelled');
+    assert.deepEqual(api.promptCalls, []);
+    assert.deepEqual(interrupts(api), ['ses_mem1']);
+  });
+}

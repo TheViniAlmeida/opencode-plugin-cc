@@ -2,7 +2,7 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ConnectionError, NotFoundError, OpcError, UsageError } from '../lib/opc-error.mjs';
-import { ensureServer } from '../lib/server.mjs';
+import { ensureServer, guardSessionCreation } from '../lib/server.mjs';
 import { createClient } from '../lib/http.mjs';
 import { serverDirectory } from '../lib/remote.mjs';
 import { createApi } from '../lib/api.mjs';
@@ -210,7 +210,7 @@ export async function run(ctx, argv, {
       directory: serverDirectory({ workspaceRoot: ctx.workspaceRoot, env: ctx.env, config: ctx.config, attached: Boolean(server.attached) }),
       requestTimeoutMs: (ctx.config?.server?.requestTimeoutSec ?? 30) * 1000,
     });
-    const api = makeApi(client);
+    const api = guardSessionCreation(makeApi(client), server);
     hub = createHub(client);
     await hub.start();
     bridge = createRequestBridge({

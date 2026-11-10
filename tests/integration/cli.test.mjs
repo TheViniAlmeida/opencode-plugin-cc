@@ -4,7 +4,37 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { PLUGIN_BIN_DIR, makeWorkspace, parseJsonOutput, runCli, runProcess, testEnv } from '../helpers.mjs';
+import { PLUGIN_BIN_DIR, captureStream, makeWorkspace, parseJsonOutput, pipedStdin, runCli, runProcess, testEnv } from '../helpers.mjs';
+import { main } from '../../plugins/opc/scripts/opc-companion.mjs';
+import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
+import { RequestError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
+
+async function runMain(argv, run) {
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const code = await main(argv, { env: {}, stdin: pipedStdin(), stdout, stderr, commandLoader: async () => ({ run }), contextFactory: async () => ({}) });
+  return { code, stdout: stdout.text(), stderr: stderr.text() };
+}
+
+test('--json HTTP error output masks secret patterns in free text', async () => {
+  const token = `sk-${'A'.repeat(40)}`;
+  const client = createClient({ baseUrl: 'http://opencode.invalid', fetchImpl: async () => new Response(JSON.stringify({ message: `bad key ${token}` }), { status: 500 }) });
+  const result = await runMain(['models', '--json'], () => client.get('/api/models'));
+  assert.equal(result.code, 7);
+  assert.equal(result.stdout.includes(token), false);
+  assert.equal(parseJsonOutput(result.stdout).error.details.body.message, 'bad key ***');
+});
+
+test('--json error serialization independently masks the message and nested details', async () => {
+  const token = `sk-${'B'.repeat(40)}`;
+  const result = await runMain(['models', '--json'], async () => {
+    throw new RequestError('SERVER_ERROR', `bad key ${token}`, { details: { note: `Bearer ${'abc0'.repeat(9)}`, nested: [{ message: token }], apiKey: 'fixture-value' } });
+  });
+  assert.equal(result.code, 7);
+  assert.equal((result.stdout + result.stderr).includes(token), false);
+  assert.doesNotMatch(result.stdout, /Bearer abc/);
+  assert.deepEqual(parseJsonOutput(result.stdout).error, { code: 'SERVER_ERROR', message: 'bad key ***', details: { note: '***', nested: [{ message: '***' }], apiKey: '***' } });
+});
 
 test('no subcommand and unknown subcommands exit 2 with a rendered error', async (t) => {
   const env = testEnv(t);

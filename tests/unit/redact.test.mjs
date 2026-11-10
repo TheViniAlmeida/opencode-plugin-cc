@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SECRET_KEYS, maskDeep, redact, redactText, registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { SECRET_KEYS, maskDeep, maskSecretPatterns, redact, redactText, registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { createClient } from '../../plugins/opc/scripts/lib/http.mjs';
+import { ConnectionError } from '../../plugins/opc/scripts/lib/opc-error.mjs';
 
 test('SECRET_KEYS lists the keys of spec §3.1', () => {
   for (const k of ['key', 'apiKey', 'apikey', 'password', 'authorization', 'headers', 'responseHeaders', 'token', 'secret']) {
@@ -73,3 +75,52 @@ test('maskDeep pattern-masks nested strings, leaves keys untouched, and does not
   assert.deepEqual(out, { [token]: [`before ***`, { value: '***' }], unchanged: null });
   assert.equal(input[token][0], `before ${token}`);
 });
+
+test('pattern masking reports replacements without counting existing masks or overlapping patterns twice', () => {
+  const token = `sk-${'A'.repeat(40)}`;
+  const key = ['-----BEGIN PRIVATE KEY-----', 'already ***', '-----END PRIVATE KEY-----'].join('\n');
+  let count = 0;
+  const out = maskSecretPatterns(`already *** password=*** ${token} Bearer ${token} password=fixture-value ${key}`, { onMask: () => { count += 1; } });
+  assert.equal(out, 'already *** password=*** *** Bearer *** password=*** ***');
+  assert.equal(count, 4);
+});
+
+for (const status of [400, 401, 404, 500]) {
+  for (const asJson of [true, false]) {
+    test(`HTTP ${status} masks secret patterns in ${asJson ? 'JSON' : 'plain text'} error details`, async () => {
+      const token = `sk-${'A'.repeat(40)}`;
+      const body = asJson ? JSON.stringify({ message: `bad key ${token}`, nested: { note: `Bearer ${'abc0'.repeat(9)}` } }) : `bad key ${token}`;
+      const client = createClient({ baseUrl: 'http://opencode.invalid', fetchImpl: async () => new Response(body, { status }) });
+      await assert.rejects(client.get('/api/info'), (error) => {
+        assert.equal(JSON.stringify(error.details).includes(token), false);
+        assert.doesNotMatch(JSON.stringify(error.details), /Bearer abc/);
+        assert.equal(error.details.status, status);
+        assert.match(JSON.stringify(error.details.body), /bad key \*\*\*/);
+        return true;
+      });
+    });
+  }
+}
+
+for (const status of [300, 301, 302, 303, 304, 307, 308, 399]) {
+  test(`HTTP client refuses redirect status ${status} without retrying or reading the body`, async () => {
+    let options;
+    let calls = 0;
+    let retries = 0;
+    const client = createClient({
+      baseUrl: 'http://opencode.invalid',
+      fetchImpl: async (_url, init) => { options = init; calls += 1; return { status, text() { throw new Error('redirect body must not be read'); } }; },
+      onServerDown: async () => { retries += 1; },
+    });
+    await assert.rejects(client.get('/api/info'), (error) => {
+      assert.ok(error instanceof ConnectionError);
+      assert.equal(error.code, 'UNEXPECTED_REDIRECT');
+      assert.equal(error.exitCode, 5);
+      assert.equal(error.message, 'GET /api/info: o servidor respondeu com redirecionamento; configure a URL final.');
+      return true;
+    });
+    assert.equal(options.redirect, 'manual');
+    assert.equal(calls, 1);
+    assert.equal(retries, 0);
+  });
+}

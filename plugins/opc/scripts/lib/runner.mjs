@@ -1,7 +1,9 @@
 // Runs one OpenCode V2 turn until its execution ends.
 import { randomBytes } from 'node:crypto';
 import { classifyError, retryCapError, retryExceedsCap } from './errors.mjs';
-import { ConnectionError, OpcError, UsageError } from './opc-error.mjs';
+import { ConnectionError, OpcError, PolicyError, UsageError } from './opc-error.mjs';
+import { DEFAULT_AGENT, assertAgentUsable, buildPermissionRules } from './policy.mjs';
+import { matchesAny } from './models.mjs';
 import { toPermissionRequest, toQuestion } from './opencode-v2.mjs';
 import { redactText, safeOutputText, redactOutput } from './redact.mjs';
 import { readSessionMessages, readTurnMessages } from './session-messages.mjs';
@@ -13,6 +15,7 @@ const ID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_STATUS_POLL_MS = 5000;
 const DEFAULT_IDLE_WAIT_MS = 10000;
+export { DEFAULT_AGENT } from './policy.mjs';
 const INVESTIGATE_TOOLS = new Set(['read', 'grep', 'glob', 'webfetch', 'websearch']);
 export const EDIT_TOOLS = new Set(['edit', 'write', 'apply_patch', 'patch']);
 const VERIFY_RE = /\b(test|tests|lint|build|typecheck|type-check|check|verify|validate|pytest|jest|vitest|cargo test|npm test|pnpm test|yarn test|go test|mvn test|gradle test|tsc|eslint|ruff)\b/i;
@@ -127,7 +130,7 @@ async function waitIdle(api, sessionID, maxMs) {
   const deadline = performance.now() + maxMs;
   while (performance.now() < deadline) {
     try { if (!((await api.sessionStatus())?.[sessionID])) return true; }
-    catch { return false; }
+    catch (err) { if (isServerDown(err)) throw err; return false; }
     await sleep(250);
   }
   return false;
@@ -148,7 +151,7 @@ export async function runTurn({
   let messageID = request.messageID ?? newMessageId();
   const progress = (event) => { try { onProgress(event); } catch { /* Progress is advisory. */ } };
   const model = modelFor(request);
-  const wantedAgent = request.agent ?? request.newSession?.agent ?? 'build';
+  const wantedAgent = request.agent ?? request.newSession?.agent ?? DEFAULT_AGENT;
   let sessionID = request.sessionID ?? null;
   let commandBaseline = null;
   try {
@@ -182,6 +185,23 @@ export async function runTurn({
   let toolsRanLive = false;
   let promptAccepted = false;
   let forcedError = null;
+  const unconfirmedAbortError = () => ({ name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } });
+  const abortTracked = async () => {
+    const sessionAborts = [];
+    let serverDown = false;
+    for (const id of tracked) {
+      let aborted = false;
+      try { await api.interrupt(id); aborted = true; }
+      catch (err) { if (isServerDown(err)) serverDown = true; }
+      sessionAborts.push({ sessionID: id, aborted, idle: false });
+    }
+    await Promise.all(sessionAborts.map(async (entry) => {
+      if (!entry.aborted) return;
+      try { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs); }
+      catch (err) { if (isServerDown(err)) serverDown = true; }
+    }));
+    return { sessionAborts, abortConfirmed: sessionAborts.every((entry) => entry.aborted && entry.idle), serverDown };
+  };
   let lastPhase = 'starting';
   let settled = false;
   let resolveDone;
@@ -230,11 +250,7 @@ export async function runTurn({
   const handleRetryStatus = async (status) => {
     setPhase('retrying', `Nova tentativa (${shown(status.attempt)}): ${shown(status.message ?? '')}`);
     if (forcedError || !retryExceedsCap(status, request.fallbackCfg ?? {})) return;
-    forcedError = { name: 'AbortUnconfirmed', data: { message: 'Não foi possível confirmar a interrupção da sessão; fallback bloqueado.' } };
-    try {
-      await api.interrupt(sessionID); // V2: interrupted:false only means the session was already idle
-      if (await waitIdle(api, sessionID, idleWaitMs)) forcedError = retryCapError(status);
-    } catch { /* Keep fail-closed error. */ }
+    forcedError = retryCapError(status);
     finish('forced-error');
   };
   const resync = async () => {
@@ -341,13 +357,19 @@ export async function runTurn({
         const promptText = instruction && !text.includes(instruction) ? `${text}\n\n${instruction}` : text;
         if (request.command) {
           commandBaseline = new Set((await readSessionMessages(api, sessionID)).map((message) => message.id));
-          await api.runCommand(sessionID, request.command);
-        } else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
-        promptAccepted = true;
+        }
+        if (!settled && (signal?.aborted || isCancelled())) finish('cancelled');
+        if (!settled) {
+          if (request.command) await api.runCommand(sessionID, request.command);
+          else await sendPrompt(api, sessionID, { id: messageID, text: promptText, ...(request.agents ? { agents: request.agents } : {}) });
+          promptAccepted = true;
+        }
       }
     } catch (err) {
       if (isServerDown(err)) finish('server-lost');
-      else if (request.agentModeFallback && err?.code === 'BAD_REQUEST' && isAgentModeRefusal(err)) throw err;
+      else if (request.agentModeFallback && err?.code === 'BAD_REQUEST' && isAgentModeRefusal(err)) {
+        finish('agent-mode-refusal', { detail: err });
+      }
       else if (err instanceof OpcError && err.code === 'BAD_REQUEST') finish('prompt-failed', { error: { name: 'BadRequest', data: { message: 'A requisição do turno foi rejeitada.' } } });
       else throw err;
     }
@@ -362,6 +384,12 @@ export async function runTurn({
 
   async function buildResult(outcome) {
     const base = { sessionID, messageID, assistantMessageIDs: [...assistantIDs], childSessionIDs: [...children] };
+    const confirmAbort = async () => {
+      const { serverDown, ...aborted } = await abortTracked();
+      Object.assign(base, aborted);
+      if (!base.abortConfirmed) forcedError = unconfirmedAbortError();
+      return serverDown;
+    };
     if (outcome.reason === 'cancelled' && !promptAccepted) {
       try { await api.interrupt(sessionID); } catch { /* Best effort. */ }
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
@@ -374,7 +402,7 @@ export async function runTurn({
         try { await api.interrupt(id); aborted = true; } catch { /* Unconfirmed. */ }
         sessionAborts.push({ sessionID: id, aborted, idle: false });
       }
-      await Promise.all(sessionAborts.map(async (entry) => { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs); }));
+      await Promise.all(sessionAborts.map(async (entry) => { entry.idle = await waitIdle(api, entry.sessionID, idleWaitMs).catch(() => false); }));
       base.sessionAborts = sessionAborts;
       base.abortConfirmed = sessionAborts.every((entry) => entry.aborted && entry.idle);
     }
@@ -384,10 +412,10 @@ export async function runTurn({
       const message = `Falha ao sincronizar o turno: ${safeOutputText(outcome.detail?.message).replace(/[\r\n]+/g, ' ').slice(0, 500)}`;
       return { ...base, ...extractTurn([]), structuredSource: null, status: 'failed', errorClass: 'fatal', errorType: 'ResyncError', errorCode: outcome.detail?.code ?? 'RESYNC_FAILED', errorMessage: message, error: { name: 'ResyncError', data: { message } } };
     }
-    if (outcome.reason === 'timeout' || outcome.reason === 'cancelled') {
-      try { await api.interrupt(sessionID); }
-      catch (err) { if (isServerDown(err)) return serverLost(); }
-      await waitIdle(api, sessionID, idleWaitMs);
+    if (['timeout', 'cancelled', 'forced-error', 'agent-mode-refusal'].includes(outcome.reason)) {
+      const serverDown = await confirmAbort();
+      if (serverDown && outcome.reason === 'timeout') return serverLost();
+      if (outcome.reason === 'agent-mode-refusal' && base.abortConfirmed) throw outcome.detail;
     }
     let collected;
     try {
@@ -410,16 +438,26 @@ export async function runTurn({
       collected = extractTurn(turn, { childMessages, diffs });
       for (const message of turn) if (message.type === 'assistant') rememberAssistant(message.id);
     } catch (err) {
-      if (!safetyFailure) { if (isServerDown(err)) return serverLost(); throw err; }
+      if (!safetyFailure && forcedError?.name !== 'AbortUnconfirmed') {
+        if (isServerDown(err)) return serverLost();
+        throw err;
+      }
       collected = extractTurn([]);
     }
+    const executionError = outcome.reason === 'session-error' ? outcome.error : collected.error;
+    if (executionError && base.abortConfirmed === undefined && (classifyError(executionError).errorClass === 'recoverable'
+      || (executionError.type ?? executionError.name) === 'ContextOverflowError'
+      || (request.agentModeFallback && isAgentModeRefusal(executionError)))) await confirmAbort();
     const textJson = request.format?.type === 'json_schema' ? schemaValidator(request.format.schema)
       : request.textJson ?? (['review', 'adversarial-review'].includes(request.kind) ? validateReviewOutput : request.kind === 'task' ? () => null : null);
     if (outcome.reason === 'idle' && !collected.error && !forcedError && typeof textJson === 'function') collected.structured = extractTextJson(collected.finalText, textJson);
     collected = redactOutput({ ...collected, structuredSource: collected.structured === null ? null : 'text' });
     const toolsRan = collected.toolsRan || toolsRanLive;
     const result = { ...base, ...collected, toolsRan };
-    if (forcedError?.name === 'AbortUnconfirmed') return { ...result, status: 'failed', error: forcedError, errorClass: 'fatal', errorType: 'AbortUnconfirmed', errorCode: 'ABORT_UNCONFIRMED', errorMessage: forcedError.data.message };
+    if (forcedError?.name === 'AbortUnconfirmed') {
+      if (outcome.reason === 'cancelled') return { ...result, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: `Turno cancelado. Aviso: ${forcedError.data.message}` };
+      return { ...result, status: 'failed', error: forcedError, errorClass: 'fatal', errorType: 'AbortUnconfirmed', errorCode: 'ABORT_UNCONFIRMED', errorMessage: forcedError.data.message };
+    }
     if (outcome.reason === 'callback-failed') return { ...result, status: 'failed', errorClass: 'fatal', errorType: 'CallbackFailed', errorCode: 'CALLBACK_FAILED', errorMessage: `O callback do turno falhou: ${shown(outcome.detail?.message)}` };
     if (outcome.reason === 'forced-error' && forcedError) {
       const classified = classifyError(forcedError, { toolsRan });
@@ -464,28 +502,49 @@ export function extractTaskOutput(messages) {
 // Runs one subagent member. An agent-mode refusal falls back to a carrier session
 // that invokes the V2 subagent tool with the member's model and permissions.
 export async function dispatchSubagent({
-  api, hub, parentSessionID, member, prompt, rules, mechanism = 'child-session', allowFallback = true,
+  api, hub, parentSessionID, member, prompt, rules, ruleInputs, policy = ruleInputs?.policy ?? {}, mechanism = 'child-session', allowFallback = true,
   timeoutMs, fallbackCfg, onSession = () => {}, onProgress = () => {}, onPermission = async () => {},
-  onQuestion = async () => {}, onRequestResolved = async () => {}, signal, runTurnImpl = runTurn,
+  onQuestion = async () => {}, onRequestResolved = async () => {}, isCancelled = () => false, signal, runTurnImpl = runTurn,
 }) {
   if (mechanism === 'subtask') mechanism = 'subagent-tool';
   if (!SUBAGENT_MECHANISMS.includes(mechanism)) {
     throw new UsageError('INVALID_MECHANISM', `Mecanismo inválido: ${String(mechanism ?? '').slice(0, 12)}… (use ${SUBAGENT_MECHANISMS.join(' ou ')})`);
   }
   // onRequestResolved is forwarded to runTurn so the F2a request bridge (bridge.onResolved) releases pending requests.
-  const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, signal };
+  const common = { api, hub, onProgress, onPermission, onQuestion, onRequestResolved, isCancelled, signal };
   const baseRequest = { model: member.model, variant: member.variant, timeoutMs, fallbackCfg };
   const model = modelFor(baseRequest);
+  const cancelBeforeTurn = async (sessionID = null) => {
+    if (!signal?.aborted && !isCancelled()) return null;
+    if (sessionID) {
+      try { await api.interrupt(sessionID); } catch { /* Best effort: no prompt was sent. */ }
+    }
+    return { sessionID, messageID: newMessageId(), assistantMessageIDs: [], childSessionIDs: [], ...extractTurn([]),
+      structuredSource: null, status: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorCode: 'cancelled', errorMessage: 'Turno cancelado' };
+  };
 
   const viaSubagentTool = async (fellBack) => {
+    const cancelled = await cancelBeforeTurn();
+    if (cancelled) return { ...cancelled, mechanism: 'subagent-tool', fellBack };
+    if (policy.tools?.deny?.includes('subagent') || matchesAny(member.agent, policy.agents?.deny ?? [])) {
+      throw new PolicyError('SUBAGENT_DENIED', 'A política nega a ferramenta subagent ou o agente solicitado.');
+    }
+    if (!ruleInputs) throw new UsageError('MISSING_RULE_INPUTS', 'O carrier exige o perfil e as opções das regras de permissão.');
+    const agents = await api.agents();
+    assertAgentUsable(agents.find((agent) => agent.name === DEFAULT_AGENT) ?? { name: DEFAULT_AGENT }, policy);
+    const carrierAllow = { action: 'subagent', resource: member.agent, effect: 'allow' };
+    const cancelledAfterDiscovery = await cancelBeforeTurn();
+    if (cancelledAfterDiscovery) return { ...cancelledAfterDiscovery, mechanism: 'subagent-tool', fellBack };
     const carrier = await api.createSession({
       parentID: parentSessionID,
       title: `${member.title} (subagent)`,
       model,
-      permissions: [...rules, { action: 'subagent', resource: member.agent, effect: 'allow' }],
+      permissions: buildPermissionRules(ruleInputs.profile, { ...ruleInputs, policy,
+        deniedAgentGlobs: ruleInputs.deniedAgentGlobs ?? policy.agents?.deny ?? [],
+        extraAllow: [...(ruleInputs.extraAllow ?? []), carrierAllow] }),
     });
     await onSession(carrier.id);
-    const result = await runTurnImpl({
+    const result = await cancelBeforeTurn(carrier.id) ?? await runTurnImpl({
       ...common,
       request: {
         ...baseRequest,
@@ -504,6 +563,8 @@ export async function dispatchSubagent({
   if (mechanism === 'subagent-tool') return viaSubagentTool(false);
 
   let child;
+  const cancelled = await cancelBeforeTurn();
+  if (cancelled) return { ...cancelled, mechanism: 'child-session', fellBack: false };
   try {
     child = await api.createSession({ parentID: parentSessionID, title: member.title, agent: member.agent, model, permissions: rules });
   } catch (err) {
@@ -513,7 +574,7 @@ export async function dispatchSubagent({
   await onSession(child.id);
   let result;
   try {
-    result = await runTurnImpl({
+    result = await cancelBeforeTurn(child.id) ?? await runTurnImpl({
       ...common,
       request: { ...baseRequest, sessionID: child.id, messageID: newMessageId(), agent: member.agent, agentModeFallback: allowFallback, parts: [{ type: 'text', text: prompt }] },
     });

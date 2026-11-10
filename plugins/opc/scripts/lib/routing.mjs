@@ -2,7 +2,7 @@
 // compute the candidate list and whether it is eligible for fallback.
 import { OpcError, PolicyError, UsageError } from './opc-error.mjs';
 import { configModelLabel, expandAlias, normalizeModelId, parseFullId, validateVariant } from './models.mjs';
-import { assertAgentUsable, evaluate } from './policy.mjs';
+import { DEFAULT_AGENT, assertAgentUsable, evaluate } from './policy.mjs';
 import { safeOutputText } from './redact.mjs';
 import { loadOpencodeConfig, opencodeConfigUnavailable } from './opencode-config.mjs';
 
@@ -189,13 +189,12 @@ export function abortableSleep(ms, signal, isCancelled = () => false) {
 export function validateSelection({ candidate, variant = null, agentName = null, agents = [], catalog, policy = {} }) {
   const entry = catalog.byFull.get(candidate.full) ?? { full: candidate.full, variants: [] };
   const checkedVariant = validateVariant(entry, variant);
-  if (agentName) {
-    const agent = agents.find((a) => a.name === agentName);
-    if (!agent) throw new UsageError('UNKNOWN_AGENT', `agente desconhecido "${echo(agentName)}" (consulte /opc:agents)`);
-    assertAgentUsable(agent, policy);
-    if (agent.mode === 'subagent') {
-      throw new UsageError('AGENT_MODE', `o agente "${echo(agentName)}" é exclusivo para subagentes e não pode conduzir uma sessão`);
-    }
+  const effective = agentName ?? DEFAULT_AGENT;
+  const agent = agents.find((a) => a.name === effective);
+  if (!agent && agentName != null) throw new UsageError('UNKNOWN_AGENT', `agente desconhecido "${echo(agentName)}" (consulte /opc:agents)`);
+  assertAgentUsable(agent ?? { name: effective }, policy);
+  if (agent?.mode === 'subagent') {
+    throw new UsageError('AGENT_MODE', `o agente "${echo(effective)}" é exclusivo para subagentes e não pode conduzir uma sessão`);
   }
   return { variant: checkedVariant, agent: agentName || null };
 }
@@ -204,11 +203,14 @@ export function validateSelection({ candidate, variant = null, agentName = null,
 import { buildCatalog } from './models.mjs';
 
 export async function resolveTurnModel({ api, kind, flags = {}, config }) {
-  const [providers, models, defaultModel, opencodeConfig] = await Promise.all([api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api)]);
+  const [providers, models, defaultModel, opencodeConfig, agents] = await Promise.all([
+    api.providers(), api.models(), api.defaultModel(), loadOpencodeConfig(api),
+    typeof api.agents === 'function' ? api.agents() : [],
+  ]);
   const catalog = buildCatalog({ providers, models, defaultModel });
   const resolution = resolveCandidates({ kind, flags: { model: flags.model, tier: flags.tier }, config, catalog, opencodeConfig });
   const chosen = resolution.candidates[0];
-  const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, catalog, policy: config?.policy ?? {} });
+  const selection = validateSelection({ candidate: chosen, variant: flags.variant ?? null, agents: agents ?? [], catalog, policy: config?.policy ?? {} });
   return {
     model: { providerID: chosen.providerID, modelID: chosen.modelID },
     full: chosen.full,

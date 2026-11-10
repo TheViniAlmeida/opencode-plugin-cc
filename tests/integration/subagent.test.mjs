@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeWorkspace, testEnv, runCli, writeGlobalConfig, fakeRequests, readFakeState, stateDirFor, eventually } from '../helpers.mjs';
 import { F3_TEST_CONFIG, F3_MODELS } from '../fixtures/f3-fake.mjs';
 import { readJob, listGroupMembers } from '../../plugins/opc/scripts/lib/jobs.mjs';
+import { profileRules } from '../../plugins/opc/scripts/lib/context.mjs';
 
 async function setup(t, { scenario = 'group-slow', config = F3_TEST_CONFIG, extra = {} } = {}) {
   const cwd = makeWorkspace(t); const env = testEnv(t, { scenario, extra }); writeGlobalConfig(env, config); return { cwd, env };
@@ -12,6 +13,18 @@ async function setup(t, { scenario = 'group-slow', config = F3_TEST_CONFIG, extr
 const created = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/api/session').map((r) => r.body);
 const prompts = (env) => fakeRequests(env).filter((r) => r.method === 'POST' && /\/prompt$/.test(r.path)).map((r) => r.body);
 const DENY_ALL = { action: '*', resource: '*', effect: 'deny' };
+const CARRIER_RULES = profileRules({ config: F3_TEST_CONFIG }, 'read-only', [{ action: 'subagent', resource: 'explore', effect: 'allow' }]);
+
+test('subagent --prompt-file resolves against --cwd instead of the process directory', async (t) => {
+  const { cwd, env } = await setup(t);
+  const launchCwd = makeWorkspace(t, { git: false, name: 'launcher' });
+  const prompt = 'Review the workspace prompt.\nPreserve this line.';
+  writeFileSync(join(cwd, 'prompt.md'), prompt);
+  writeFileSync(join(launchCwd, 'prompt.md'), 'Wrong process-directory prompt.');
+  const res = await runCli(['subagent', '--cwd', cwd, '--agent', 'general', '--model', 'fast', '--prompt-file', 'prompt.md', '--json'], { env, cwd: launchCwd });
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.deepEqual(readFakeState(env).f3.prompts.map((p) => p.text), [prompt]);
+});
 
 test('três membros: sessão própria, resultado e corpos corretos', async (t) => {
   const { cwd, env } = await setup(t);
@@ -103,7 +116,7 @@ test('usa subagent-tool e a filha herda modelo e permissões', async (t) => {
   assert.match(member.result.finalText, /^SUBAGENT explore via ses_/);
   const sent = prompts(env); assert.deepEqual(sent[0].agents, ['explore']);
   const carrier = created(env).find((body) => body.parentID && !body.agent);
-  assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  assert.deepEqual(carrier.permissions, CARRIER_RULES);
   const sessions = readFakeState(env).sessions;
   const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);
   assert.deepEqual(child.permissions, sessions[member.sessionID].permissions);
@@ -121,7 +134,7 @@ test('recusa de agente na criação aciona fallback automático e preserva a her
   assert.equal(bodies.filter((body) => body.agent === 'explore').length, 1);
   const carrier = bodies.find((body) => body.parentID && !body.agent);
   assert.ok(carrier);
-  assert.deepEqual(carrier.permissions.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  assert.deepEqual(carrier.permissions, CARRIER_RULES);
   assert.deepEqual(prompts(env)[0].agents, ['explore']);
   const sessions = readFakeState(env).sessions;
   const child = Object.values(sessions).find((session) => session.parentID === member.sessionID);

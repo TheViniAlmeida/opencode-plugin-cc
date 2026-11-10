@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import * as processLib from '../../plugins/opc/scripts/lib/process.mjs';
 
 import {
   getParentPid, getProcessIdentity, identityMatches, isPidAlive, resolveHookOwner, spawnDetached, terminateProcessGroup,
@@ -12,6 +13,88 @@ import { deadPid, makeTempDir, removeTempDir, waitFor } from '../helpers.mjs';
 const linuxOnly = { skip: process.platform !== 'linux' && 'process groups and /proc are validated on Linux only' };
 const IDLE = 'setInterval(() => {}, 1000)';
 const IGNORE_TERM = "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
+
+test('hasClaudeAncestor walks through node, script and shell parents', () => {
+  const tree = {
+    50: { ppid: 40, cmdline: ['node', 'opc'] },
+    40: { ppid: 30, cmdline: ['script', '-qec'] },
+    30: { ppid: 20, cmdline: ['bash'] },
+    20: { ppid: 1, cmdline: ['claude'] },
+  };
+  const deps = { parentOf: (pid) => tree[pid]?.ppid, identityOf: (pid) => tree[pid] };
+  assert.equal(processLib.hasClaudeAncestor(50, deps), true);
+  delete tree[20];
+  tree[30].ppid = 1;
+  assert.equal(processLib.hasClaudeAncestor(50, deps), false);
+});
+
+const CLAUDE_CMDLINE_CASES = [
+  { cmdline: ['code', '/home/u/claude-notes'], expected: false },
+  { cmdline: ['vim', '/home/u/claude-notes/x'], expected: false },
+  { cmdline: ['node', '/home/u/work/claude-tools/run.js'], expected: false },
+  { cmdline: ['bash', '-c', 'cd /srv/claude-proxy && x; pwd -P >| /tmp/claude-1000-cwd'], expected: false },
+  { cmdline: ['/home/u/.claude/remote/ccd-cli/2.1.293-abc', '--output-format', 'stream-json'], expected: true },
+  { cmdline: ['claude'], expected: true },
+  { cmdline: ['/usr/local/bin/claude', '-p'], expected: true },
+  { cmdline: ['node', '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['/home/u/.local/share/claude/versions/2.1.0'], expected: true },
+  { cmdline: ['bun', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['/usr/bin/nodejs', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['deno', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '/opt/tools/claude/cli.js'], expected: false },
+  { cmdline: ['claude-helper'], expected: false },
+  { cmdline: ['code', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
+  { cmdline: ['node', 'opc', '/x/@anthropic-ai/claude-code/cli.js'], expected: false },
+  { cmdline: ['node'], expected: false },
+  { cmdline: ['node', '--max-old-space-size=4096', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '-r', 'x', '/x/@anthropic-ai/claude-code/cli.js'], expected: true },
+  { cmdline: ['node', '--inspect', '/home/u/claude-notes/a.js'], expected: false },
+  ...['node', 'nodejs', 'bun', 'deno'].flatMap((runtime) => ['--require', '-r', '--import', '--loader'].map((flag) => (
+    { cmdline: [runtime, flag, 'x', '--inspect', '/x/@anthropic-ai/claude-code/cli.js'], expected: true }
+  ))),
+  { cmdline: ['node', '-r', '/x/@anthropic-ai/claude-code/cli.js', '/home/u/claude-notes/a.js'], expected: false },
+  { cmdline: ['node', '--inspect'], expected: false },
+  { cmdline: [], expected: false },
+];
+
+for (const { cmdline, expected } of CLAUDE_CMDLINE_CASES) {
+  test(`isClaudeCmdline classifies ${JSON.stringify(cmdline)} as ${expected}`, () => {
+    assert.equal(processLib.isClaudeCmdline(cmdline), expected);
+  });
+}
+
+test('hasClaudeAncestor classifies only executable and runtime script entrypoints', () => {
+  for (const { cmdline, expected } of CLAUDE_CMDLINE_CASES) {
+    assert.equal(processLib.hasClaudeAncestor(50, {
+      parentOf: (pid) => pid === 50 ? 20 : 1, identityOf: () => ({ cmdline }),
+    }), expected, JSON.stringify(cmdline));
+  }
+});
+
+test('hasClaudeAncestor stops at init, missing parents, cycles and the depth limit', () => {
+  for (const parent of [1, 0, -1, undefined, null, NaN]) {
+    assert.equal(processLib.hasClaudeAncestor(50, {
+      parentOf: () => parent, identityOf: () => assert.fail('invalid parent must not be inspected'),
+    }), false);
+  }
+  assert.equal(processLib.hasClaudeAncestor(50, {
+    parentOf: (pid) => pid === 50 ? 40 : 1, identityOf: () => null,
+  }), false);
+  let reads = 0;
+  assert.equal(processLib.hasClaudeAncestor(50, {
+    parentOf: (pid) => pid === 50 ? 40 : 50,
+    identityOf: () => { reads += 1; return null; },
+  }), false);
+  assert.ok(reads <= 2, 'a cycle must stop without repeated traversal');
+  const deps = { parentOf: (pid) => pid - 1, identityOf: (pid) => ({ cmdline: [pid === 18 ? 'claude' : 'bash'] }) };
+  assert.equal(processLib.hasClaudeAncestor(50, deps), true, 'the 32nd ancestor is inspected');
+  assert.equal(processLib.hasClaudeAncestor(51, deps), false, 'the default limit is 32 ancestors');
+  assert.equal(processLib.hasClaudeAncestor(50, { ...deps, maxDepth: 1 }), false);
+  assert.equal(processLib.hasClaudeAncestor(50, { ...deps, maxDepth: 0 }), false);
+  assert.equal(processLib.hasClaudeAncestor(1, {
+    parentOf: () => assert.fail('init has no ancestor to inspect'),
+  }), false);
+});
 
 function killHard(pid) {
   try {

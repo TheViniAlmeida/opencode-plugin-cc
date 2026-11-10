@@ -1,21 +1,240 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statSync, readFileSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { chmodSync, existsSync, readdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACTIVE_STATUSES, MAX_TERMINAL_JOBS, appendJobLog, cancelJob, clearJobRequests, createJob, findResumeCandidate, groupStatus, jobLogPath,
   listJobs, newJobId, readJob, readJobProgress, resolveJobRef, updateJob, waitForJob, workerMatcher, acquireSessionLock,
-  assertNotInsideServer, workerLogPath,
+  assertNotInsideServer, workerLogPath, serverContext, liveActiveJobs,
 } from '../../plugins/opc/scripts/lib/jobs.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
 import { identityMatches, spawnDetached } from '../../plugins/opc/scripts/lib/process.mjs';
 import { ACTIVE_JOB_STATUSES } from '../../plugins/opc/scripts/lib/state.mjs';
 import { makeTempDir, trackTempDir, waitFor } from '../helpers.mjs';
+import { run as runStatus } from '../../plugins/opc/scripts/commands/status.mjs';
+import { run as runResult } from '../../plugins/opc/scripts/commands/result.mjs';
+import { run as runCancel } from '../../plugins/opc/scripts/commands/cancel.mjs';
+import { run as runTask } from '../../plugins/opc/scripts/commands/task.mjs';
+import { list as listPermissions } from '../../plugins/opc/scripts/commands/permissions.mjs';
+import { run as runReap } from '../../plugins/opc/scripts/commands/reap.mjs';
 
 function stateDir(t) {
   return trackTempDir(t, makeTempDir('opc-jobs-'));
 }
 const base = (over = {}) => ({ kind: 'task', title: 'opc task', summary: 's', workspaceRoot: '/ws', claudeSessionId: 'c1', permissionProfile: 'read-only', ...over });
+
+for (const [name, run, expectedCode] of [
+  ['cancel', (ctx) => runCancel(ctx, ['--json']), 'NO_ACTIVE_JOB'],
+  ['task resume by id', (ctx) => runTask(ctx, ['--resume', 'task-abc123-abcdef', '--json']), 'NOT_FOUND'],
+  ['task resume last', (ctx) => runTask(ctx, ['--resume', '--json']), 'NOTHING_TO_RESUME'],
+  ['permissions list', (ctx) => listPermissions(ctx, { json: true }, () => null), null],
+  ['reap', (ctx) => runReap(ctx, ['--session', 'c1', '--reason', 'clear']), null],
+]) {
+  test(`${name} surfaces a corrupt job warning from its listing`, async (t) => {
+    const dir = stateDir(t);
+    const job = await createJob(dir, base());
+    await updateJob(dir, job.id, { status: 'completed' });
+    const id = 'task-abc123-abcdef';
+    writeFileSync(join(dir, 'jobs', `${id}.json`), '');
+    let stderr = '';
+    const ctx = { stateDir: dir, claudeSessionId: 'c1', env: {}, stdin: { isTTY: true }, err: (warning) => { stderr += warning; }, json() {}, out() {} };
+    if (expectedCode) await assert.rejects(run(ctx), { code: expectedCode });
+    else assert.equal(await run(ctx), 0);
+    assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+    assert.ok(stderr.includes(`job ${id} ilegível (INVALID_JSON); movido para `));
+  });
+}
+
+for (const [name, run] of [['status', runStatus], ['result', runResult]]) {
+  for (const explicit of [false, true]) {
+    test(`${name} surfaces corrupt job warnings on stderr with ${explicit ? 'an explicit id' : 'no id'}`, async (t) => {
+      const dir = stateDir(t);
+      const healthy = await createJob(dir, base());
+      await updateJob(dir, healthy.id, { status: 'completed', result: { finalText: 'ok' } });
+      const id = 'task-abc123-abcdef';
+      writeFileSync(join(dir, 'jobs', `${id}.json`), '');
+      let stderr = '';
+      let output;
+      const ctx = { stateDir: dir, err: (w) => { stderr += w; }, json: (value) => { output = value; } };
+      assert.equal(await run(ctx, [...(explicit ? [healthy.id] : []), '--json']), 0);
+      assert.ok(output);
+      assert.match(stderr, new RegExp(`^\\[opc\\] aviso: job ${id} ilegível \\(INVALID_JSON\\); movido para .*${id}\\.json\\.corrupt-\\d+\\n$`));
+      assert.equal((stderr.match(/\[opc\] aviso:/g) ?? []).length, 1);
+    });
+  }
+}
+
+test('listJobs quarantines corrupt records, warns once and leaves healthy jobs visible; createJob still works', async (t) => {
+  const dir = stateDir(t);
+  const healthy = await createJob(dir, base());
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  const warnings = [];
+  const before = Date.now();
+  writeFileSync(file, '', { mode: 0o644 });
+  assert.deepEqual(listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) }).map((job) => job.id), [healthy.id]);
+  assert.equal(existsSync(file), false);
+  const quarantined = readdirSync(join(dir, 'jobs')).filter((name) => name.startsWith(`${id}.json.corrupt-`));
+  assert.equal(quarantined.length, 1);
+  const timestamp = Number(quarantined[0].split('.corrupt-')[1]);
+  assert.ok(timestamp >= before && timestamp <= Date.now());
+  assert.equal(statSync(join(dir, 'jobs', quarantined[0])).mode & 0o777, 0o600);
+  assert.equal(readFileSync(join(dir, 'jobs', quarantined[0]), 'utf8'), '');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], new RegExp(id));
+  assert.match(warnings[0], /INVALID_JSON/);
+  listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) });
+  assert.equal(warnings.length, 1);
+
+  writeFileSync(file, '{invalid');
+  const created = await createJob(dir, base());
+  assert.ok(listJobs(dir, { all: true }).some((job) => job.id === created.id));
+  assert.equal(existsSync(file), false);
+});
+
+test('listJobs preserves unreadable job records and warns without changing their mode', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX file modes required');
+  const dir = stateDir(t);
+  const healthy = await createJob(dir, base());
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(file, '{"synthetic":"preserved"}');
+  chmodSync(file, 0o000);
+  const warnings = [];
+  assert.deepEqual(listJobs(dir, { all: true, onWarning: (warning) => warnings.push(warning) }).map((job) => job.id), [healthy.id]);
+  assert.equal(existsSync(file), true);
+  assert.equal(statSync(file).mode & 0o777, 0);
+  chmodSync(file, 0o600);
+  assert.equal(readFileSync(file, 'utf8'), '{"synthetic":"preserved"}');
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0], `job ${id} ilegível (EACCES); ignorado nesta listagem`);
+});
+
+function failFsOperation(t, operation, file, code) {
+  const original = fs[operation];
+  t.mock.method(fs, operation, function (target, ...args) {
+    if (target === file) throw Object.assign(new Error('synthetic filesystem failure'), { code });
+    return original.call(this, target, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+}
+
+for (const code of ['EMFILE', 'EIO', 'EACCES', 'EPERM', 'EISDIR']) {
+  test(`listJobs skips ${code} read failures and preserves the healthy file`, async (t) => {
+    const dir = stateDir(t);
+    const healthy = await createJob(dir, base());
+    const file = join(dir, 'jobs', `${healthy.id}.json`);
+    const content = readFileSync(file, 'utf8');
+    failFsOperation(t, 'readFileSync', file, code);
+    const warnings = [];
+    assert.deepEqual(listJobs(dir, { all: true, onWarning: (w) => warnings.push(w) }), []);
+    assert.equal(existsSync(file), true);
+    assert.equal(warnings[0], `job ${healthy.id} ilegível (${code}); ignorado nesta listagem`);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    assert.equal(readFileSync(file, 'utf8'), content);
+  });
+}
+
+for (const operation of ['chmodSync', 'renameSync']) {
+  for (const code of ['EPERM', 'EACCES']) {
+    test(`listJobs preserves corrupt records when ${operation} fails with ${code}`, async (t) => {
+      const dir = stateDir(t);
+      await createJob(dir, base());
+      const id = 'task-abc123-abcdef';
+      const file = join(dir, 'jobs', `${id}.json`);
+      writeFileSync(file, '{');
+      failFsOperation(t, operation, file, code);
+      const warnings = [];
+      assert.equal(listJobs(dir, { all: true, onWarning: (w) => warnings.push(w) }).length, 1);
+      assert.equal(readFileSync(file, 'utf8'), '{');
+      assert.equal(warnings[0], `job ${id} ilegível (${code}); ignorado nesta listagem`);
+    });
+  }
+}
+
+test('listJobs preview preserves invalid JSON and createJob forwards quarantine warnings', async (t) => {
+  const dir = stateDir(t);
+  await createJob(dir, base());
+  const id = 'task-abc123-abcdef';
+  const file = join(dir, 'jobs', `${id}.json`);
+  writeFileSync(file, '{');
+  const warnings = [];
+  listJobs(dir, { all: true, quarantine: false, onWarning: (w) => warnings.push(w) });
+  assert.equal(existsSync(file), true);
+  assert.equal(warnings[0], `job ${id} ilegível (INVALID_JSON); ignorado nesta listagem`);
+  await createJob(dir, base(), { onWarning: (w) => warnings.push(w) });
+  assert.match(warnings[1], new RegExp(`^job ${id} ilegível \\(INVALID_JSON\\); movido para .*${id}\\.json\\.corrupt-\\d+$`));
+});
+
+test('serverContext treats unreadable jobs as potentially active and surfaces only one warning', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base());
+  chmodSync(join(dir, 'jobs', `${job.id}.json`), 0o000);
+  let stderr = '';
+  const ctx = { stateDir: dir, env: {}, err: (w) => { stderr += w; } };
+  const server = serverContext(ctx);
+  assert.equal(server.hasActiveJobs(), true);
+  assert.equal(server.hasActiveJobs(), true);
+  assert.equal(server.getUnreadableJobCount(), 1);
+  assert.equal(stderr, `[opc] aviso: job ${job.id} ilegível (EACCES); ignorado nesta listagem\n`);
+  chmodSync(join(dir, 'jobs', `${job.id}.json`), 0o600);
+  await updateJob(dir, job.id, { status: 'completed' });
+  assert.equal(server.hasActiveJobs(), false);
+  assert.equal(server.getUnreadableJobCount(), 0);
+});
+
+test('createJob prunes only quarantined job files older than 30 days by quarantine timestamp', async (t) => {
+  const dir = stateDir(t);
+  await createJob(dir, base());
+  const now = Date.now();
+  const old = join(dir, 'jobs', `task-abc123-abcdef.json.corrupt-${now - 31 * 86400000}`);
+  const recent = join(dir, 'jobs', `task-abc123-abcdef.json.corrupt-${now - 29 * 86400000}`);
+  const unrelated = join(dir, 'jobs', `notes.json.corrupt-${now - 31 * 86400000}`);
+  for (const file of [old, recent, unrelated]) writeFileSync(file, '');
+  await createJob(dir, base());
+  assert.equal(existsSync(old), false);
+  assert.equal(existsSync(recent), true);
+  assert.equal(existsSync(unrelated), true);
+});
+
+for (const code of ['EACCES', 'EPERM']) {
+  test(`createJob continues pruning when a quarantined file cannot be removed (${code})`, async (t) => {
+    const dir = stateDir(t);
+    await createJob(dir, base());
+    const timestamp = Date.now() - 31 * 86400000;
+    const blocked = join(dir, 'jobs', `task-abc123-abcdef.json.corrupt-${timestamp}`);
+    const removable = join(dir, 'jobs', `task-def456-abcdef.json.corrupt-${timestamp}`);
+    writeFileSync(blocked, '');
+    writeFileSync(removable, '');
+    failFsOperation(t, 'unlinkSync', blocked, code);
+    const job = await createJob(dir, base());
+    assert.equal(readJob(dir, job.id).id, job.id);
+    assert.equal(existsSync(blocked), true);
+    assert.equal(existsSync(removable), false);
+  });
+}
+
+test('liveActiveJobs keeps unreadable jobs across session filters and forwards warnings', async (t) => {
+  const dir = stateDir(t);
+  const job = await createJob(dir, base());
+  const terminal = await createJob(dir, base());
+  await updateJob(dir, terminal.id, { status: 'completed' });
+  chmodSync(join(dir, 'jobs', `${job.id}.json`), 0o000);
+  const corrupt = 'task-abc123-abcdef';
+  writeFileSync(join(dir, 'jobs', `${corrupt}.json`), '');
+  const warnings = [];
+  const live = liveActiveJobs(dir, { claudeSessionId: 'another-session', onWarning: (warning) => warnings.push(warning) });
+  assert.deepEqual(live.map((entry) => entry.id), [job.id]);
+  assert.equal(live[0].unreadable, true);
+  assert.equal(live[0].status, 'unknown');
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.some((warning) => warning.includes('EACCES')));
+  assert.ok(warnings.some((warning) => warning.includes('INVALID_JSON')));
+});
 
 function killHard(pid) {
   try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }

@@ -2,9 +2,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runCli, readFakeState, writeGlobalConfig } from '../helpers.mjs';
+import { jobsIn, runCli, readFakeState, writeGlobalConfig } from '../helpers.mjs';
 import { setupConclave, conclave, requestsBySchema, fakeRequests, textOf, sessionOfRequest, DS, QW, KM, TRIO } from './_conclave-helpers.mjs';
 const Q = 'Should the storage layer add a write-ahead log?';
+for (const question of ['x'.repeat(16 * 1024 + 1), 'é'.repeat(8 * 1024 + 1)]) {
+  test(`review rejects a ${Buffer.byteLength(question)}-byte question before queuing`, async (t) => {
+    const { env, cwd } = setupConclave(t, { scenario: 'conclave-review' });
+    const res = await runCli(['conclave', '--raw-args-stdin'], { env, cwd,
+      stdin: `--mode review --models ${DS},${QW} --background --json ${question}\n` });
+    assert.equal(res.code, 2, res.stderr || res.stdout);
+    assert.match(res.stderr, /USAGE.*16 KB/);
+    assert.deepEqual(jobsIn(env, cwd), []);
+    assert.deepEqual(fakeRequests(env), []);
+  });
+}
+test('policy denies the implicit build agent before any conclave session is created', async (t) => {
+  const { env, cwd } = setupConclave(t, { scenario: 'conclave-opinion', config: { policy: { agents: { deny: ['build'] } } } });
+  const res = await conclave(['--models', TRIO, '--json', Q], { env, cwd });
+  assert.equal(res.code, 4, res.stderr || res.stdout);
+  assert.match(res.stderr, /POLICY_DENIED.*build/);
+  assert.equal(fakeRequests(env).filter((r) => r.method === 'POST' && r.path === '/api/session').length, 0);
+});
 test('opinion: three members answer blind in read-only sessions; --json returns the full package', async (t) => {
  const {env,cwd}=setupConclave(t,{scenario:'conclave-opinion'}); const res=await conclave(['--models',TRIO,'--json',Q],{env,cwd}); assert.equal(res.code,0,res.stderr); const pkg=res.json; assert.match(pkg.jobId,/^conc-/); assert.equal(pkg.status,'completed'); assert.equal(pkg.mode,'opinion'); assert.deepEqual(pkg.rounds,{requested:1,completed:1}); assert.equal(pkg.final.responses.length,3); assert.deepEqual(pkg.failures,[]); assert.equal(Object.keys(pkg).at(-1),'composition'); assert.deepEqual(pkg.composition.map(c=>c.label),['A','B','C']); assert.deepEqual(new Set(pkg.composition.map(c=>c.model)),new Set([DS,QW,KM])); assert.deepEqual(pkg.judge,{type:'claude',status:'pending'}); const members=requestsBySchema(env,'ConclaveMember'); assert.equal(members.length,3); assert.ok(members.every(r=>!r.body.format&&textOf(r.body).includes(Q)&&textOf(r.body).includes('ConclaveMember'))); const state=readFakeState(env); assert.equal(new Set(members.map(r=>state.sessions[sessionOfRequest(r)].model.id)).size,3); const created=state.requests.filter(r=>r.method==='POST'&&r.path==='/api/session'); assert.equal(created.length,3); for(const s of created){assert.match(s.body.title,/^OPC: conclave: /); assert.deepEqual(s.body.permissions[0],{action:'*',resource:'*',effect:'deny'}); assert.ok(!s.body.permissions.some(rule=>rule.action==='shell'&&rule.effect==='allow'));}
 });

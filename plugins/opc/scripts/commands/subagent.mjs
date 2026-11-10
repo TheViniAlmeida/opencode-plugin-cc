@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { openApi, loadDiscovery, requireAgent, resolveModel, profileRules } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import {
   createGroup, spawnWorker, waitForJob, readJob, updateJob, appendJobLog, listGroupMembers, refreshGroup,
-  runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES,
+  runWithConcurrency, assertNotInsideServer, withServerLock, ACTIVE_STATUSES, jobWarningHandler,
 } from '../lib/jobs.mjs';
-import { dispatchSubagent, SUBAGENT_MECHANISMS } from '../lib/runner.mjs';
+import { DEFAULT_AGENT, dispatchSubagent, SUBAGENT_MECHANISMS } from '../lib/runner.mjs';
 import { renderGroupStatus, renderGroupResult } from '../lib/render.mjs';
 import { getProcessIdentity } from '../lib/process.mjs';
 import { exitCodeForJob } from './task.mjs';
@@ -63,7 +65,7 @@ export async function run(ctx, argv) {
   if (raw.text && positionals.length) throw new UsageError('CONFLICT', 'use o texto do stdin (--raw-args-stdin) ou argumentos posicionais, não os dois');
   let prompt;
   if (flags['prompt-file']) {
-    try { prompt = readFileSync(flags['prompt-file'], 'utf8'); }
+    try { prompt = readFileSync(resolvePath(ctx.cwd, flags['prompt-file']), 'utf8'); }
     catch (err) {
       const pathPreview = `${String(flags['prompt-file']).slice(0, 12)}…`;
       throw new UsageError('PROMPT_FILE', `não foi possível ler --prompt-file ${pathPreview}: ${err.code ?? 'erro de leitura'}`);
@@ -85,8 +87,12 @@ export async function run(ctx, argv) {
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
   let discovery;
-  try { discovery = await loadDiscovery(conn.api); } finally { conn.close(); }
+  try {
+    assertCanCreateSessions(conn.server);
+    discovery = await loadDiscovery(conn.api);
+  } finally { conn.close(); }
   const policy = ctx.config.policy ?? {};
+  requireAgent(discovery, DEFAULT_AGENT, policy, { implicit: true });
   const profile = flags.write ? 'write' : 'read-only';
   const summary = summaryOf(prompt);
   const specs = pairs.map((pair, i) => {
@@ -102,7 +108,7 @@ export async function run(ctx, argv) {
     kind: 'sub', title: `OPC: subagents: ${summary}`, summary, workspaceRoot: ctx.workspaceRoot,
     claudeSessionId: ctx.claudeSessionId, permissionProfile: profile, request,
   }, buildMemberFields(specs, summary, profile),
-  { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:sub' });
+  { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: 'register-job:sub' });
   await spawnWorker(ctx, group.id);
   if (flags.background) {
     const current = readJob(ctx.stateDir, group.id) ?? group;
@@ -134,6 +140,27 @@ export async function runWorker(ctx, groupJob, request, {
   if (req.mechanism === 'subtask') appendJobLog(stateDir, groupJob.id, '[opc] aviso: mecanismo subtask foi renomeado para subagent-tool');
   const memberIds = groupJob.memberIds ?? [];
   const now = () => new Date().toISOString();
+  const isGroupCancelled = () => {
+    const group = readJob(stateDir, groupJob.id);
+    return Boolean(group?.cancelRequestedAt) || group?.status === 'cancelled';
+  };
+  const markCancelled = async (id) => {
+    if (!ACTIVE_STATUSES.includes(readJob(stateDir, id)?.status)) return;
+    await updateJob(stateDir, id, { status: 'cancelled', phase: 'cancelled', completedAt: now(), attemptInFlight: false,
+      errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' });
+  };
+  const warnOrphan = (sessionID) => appendJobLog(stateDir, groupJob.id, `[opc] aviso: sessão órfã ${sessionID} após falha ou cancelamento.`);
+  let parentSessionID;
+  const finishCancelledGroup = async () => {
+    appendJobLog(stateDir, groupJob.id, '[opc] coordenador cancelado antes de iniciar os membros.');
+    if (parentSessionID) {
+      await updateJob(stateDir, groupJob.id, { sessionID: parentSessionID });
+      try { await conn.api.interrupt(parentSessionID); } catch { /* Best effort: no prompt was sent. */ }
+    }
+    for (const id of memberIds) await markCancelled(id);
+    return exitCodeForJob(await refreshGroup(stateDir, groupJob.id, { final: true,
+      decorate: (group, members) => ({ rendered: renderGroupResult(group, members) }) }));
+  };
   let chain = Promise.resolve();
   const refresh = () => {
     chain = chain.then(() => refreshGroup(stateDir, groupJob.id)).catch((err) => appendJobLog(stateDir, groupJob.id, `[opc] falha ao atualizar grupo: ${safeOutputText(err.message)}`));
@@ -143,21 +170,35 @@ export async function runWorker(ctx, groupJob, request, {
   try {
     conn = await makeConnection(ctx, { withHub: true, respawn: false });
     const { api, hub } = conn;
+    const policy = ctx.config.policy ?? {};
+    requireAgent({ agents: await api.agents() }, DEFAULT_AGENT, policy, { implicit: true });
     const firstModel = req.members[0];
+    if (isGroupCancelled()) return await finishCancelledGroup();
     const parent = await api.createSession({ title: groupJob.title, permissions: req.rules,
       model: { providerID: firstModel.model.providerID, id: firstModel.model.modelID, ...(firstModel.variant ? { variant: firstModel.variant } : {}) } });
+    parentSessionID = parent.id;
+    if (isGroupCancelled()) return await finishCancelledGroup();
     const coordinator = { pid: process.pid, pidStartTime: getProcessIdentity(process.pid)?.startTime ?? null };
     await updateJob(stateDir, groupJob.id, { status: 'running', startedAt: now(), sessionID: parent.id });
     for (const id of memberIds) await updateJob(stateDir, id, { parentSessionID: parent.id, pid: coordinator.pid, pidStartTime: coordinator.pidStartTime });
-    const policy = ctx.config.policy ?? {};
+    const ruleInputs = { profile: req.profile, policy, permissionProfiles: ctx.config.permissionProfiles ?? {},
+      deniedAgentGlobs: policy.agents?.deny ?? [] };
     const outcomes = await runWithConcurrency(memberIds, req.maxParallel ?? 4, async (memberId, index) => {
       const spec = req.members[index];
       const tag = `[#${index + 1} ${spec.agent}]`;
+      const isCancelled = () => {
+        const member = readJob(stateDir, memberId);
+        const group = readJob(stateDir, groupJob.id);
+        return Boolean(member?.cancelRequestedAt) || member?.status === 'cancelled'
+          || Boolean(group?.cancelRequestedAt) || group?.status === 'cancelled';
+      };
       let bridge;
       let updater;
+      const sessionIDs = new Set();
       try {
-        if (readJob(stateDir, groupJob.id)?.status === 'cancelled' || readJob(stateDir, memberId)?.status !== 'queued') return;
-        await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now() });
+        if (isCancelled()) { await markCancelled(memberId); return; }
+        if (readJob(stateDir, memberId)?.status !== 'queued') return;
+        await updateJob(stateDir, memberId, { status: 'running', phase: 'starting', startedAt: now(), attemptInFlight: true });
         appendJobLog(stateDir, groupJob.id, `${tag} iniciando (${spec.full})`);
         await refresh();
         updater = createSerialUpdater(stateDir, memberId);
@@ -166,9 +207,9 @@ export async function runWorker(ctx, groupJob, request, {
           log: (line) => appendJobLog(stateDir, groupJob.id, `${tag} ${line}`) });
         let res;
         try {
-          res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules,
-            mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg,
-            onSession: async (sessionID) => { const job = await updateJob(stateDir, memberId, { sessionID }); if (job?.status === 'cancelled') await api.interrupt(sessionID).catch(() => {}); },
+          res = await dispatch({ api, hub, parentSessionID: parent.id, member: spec, prompt: req.prompt, rules: req.rules, ruleInputs, policy,
+            mechanism, timeoutMs: req.timeoutMs, fallbackCfg: req.fallbackCfg, isCancelled,
+            onSession: async (sessionID) => { sessionIDs.add(sessionID); await updateJob(stateDir, memberId, { sessionID }); },
             onProgress: (p) => { const phase = typeof p === 'string' ? p : p?.phase; if (!phase) return; appendJobLog(stateDir, groupJob.id, `${tag} ${phase}`); updateJob(stateDir, memberId, { phase }).catch(() => {}); },
             onPermission: (request) => bridge.onPermission(request), onQuestion: (request) => bridge.onQuestion(request),
             onRequestResolved: (event) => bridge.onResolved(event) });
@@ -177,9 +218,10 @@ export async function runWorker(ctx, groupJob, request, {
         }
         await updater.flush();
         const latest = readJob(stateDir, memberId);
-        const wasCancelled = Boolean(latest?.cancelRequestedAt) || latest?.status === 'cancelled';
+        const wasCancelled = isCancelled();
         const status = wasCancelled ? 'cancelled' : res.status;
-        await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), sessionID: res.sessionID ?? latest?.sessionID ?? null,
+        for (const sessionID of [res.sessionID, res.carrierSessionID, ...(res.childSessionIDs ?? [])]) if (sessionID) sessionIDs.add(sessionID);
+        await updateJob(stateDir, memberId, { status, phase: status, completedAt: now(), attemptInFlight: false, sessionID: res.sessionID ?? latest?.sessionID ?? null,
           ...(wasCancelled ? { errorCode: 'cancelled', errorClass: 'fatal', errorType: 'Cancelled', errorMessage: 'Cancelada pelo usuário.' } : {
             errorClass: res.errorClass ?? null, errorType: res.errorType ?? null, errorMessage: res.errorMessage ? safeOutputText(res.errorMessage) : null,
           }),
@@ -189,14 +231,17 @@ export async function runWorker(ctx, groupJob, request, {
         const errorMessage = safeOutputText(err instanceof Error ? err.message : String(err));
         const latest = readJob(stateDir, memberId);
         if (latest && ['queued', 'running', 'waiting_permission'].includes(latest.status)) {
-          const wasCancelled = Boolean(latest.cancelRequestedAt);
-          await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(),
+          const wasCancelled = isCancelled();
+          await updateJob(stateDir, memberId, { status: wasCancelled ? 'cancelled' : 'failed', phase: wasCancelled ? 'cancelled' : 'failed', completedAt: now(), attemptInFlight: false,
             errorCode: wasCancelled ? 'cancelled' : err.code ?? 'member_setup_failed', errorClass: 'fatal',
             errorType: wasCancelled ? 'Cancelled' : err.code ?? err.name ?? 'Error',
             errorMessage: wasCancelled ? 'Cancelada pelo usuário.' : errorMessage });
         }
         appendJobLog(stateDir, groupJob.id, `${tag} falhou: ${errorMessage}`);
-      } finally { bridge?.dispose(); }
+      } finally {
+        if (readJob(stateDir, memberId)?.status !== 'completed') for (const sessionID of sessionIDs) warnOrphan(sessionID);
+        bridge?.dispose();
+      }
       await refresh();
     });
     for (const [index, outcome] of outcomes.entries()) {
@@ -227,5 +272,8 @@ export async function runWorker(ctx, groupJob, request, {
     const g = readJob(stateDir, groupJob.id);
     if (g && g.status !== 'cancelled') await updateJob(stateDir, groupJob.id, { status: 'failed', errorCode: 'coordinator_error', errorMessage, completedAt: now() });
     return ExitCode.JOB_FAILED;
-  } finally { conn?.close(); }
+  } finally {
+    if (parentSessionID && readJob(stateDir, groupJob.id)?.status !== 'completed') warnOrphan(parentSessionID);
+    conn?.close();
+  }
 }

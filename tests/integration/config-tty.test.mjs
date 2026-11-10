@@ -2,21 +2,48 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { hasClaudeAncestor } from '../../plugins/opc/scripts/lib/process.mjs';
 import {
-  makeWorkspace, testEnv, runCli, stopAllServers, writeGlobalConfig, readGlobalConfig, runInProcess, scriptedTTY,
+  makeWorkspace, testEnv, runCli, runProcess, writeGlobalConfig, readGlobalConfig, runInProcess, scriptedTTY,
 } from '../helpers.mjs';
 
 const MV = 'omniroute-personal';
 const EQ = 'omniroute-work';
 
+test('--tty-confirm refuses CLAUDECODE even with matching TTY input and preserves config', async (t) => {
+  const { ws, env } = setup(t, { config: { policy: { approver: 'user' } }, git: false });
+  env.CLAUDECODE = '1';
+  const file = path.join(env.OPC_DATA_DIR, 'config.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const script = `
+    import { PassThrough } from 'node:stream';
+    import { main } from ${JSON.stringify(new URL('../../plugins/opc/scripts/opc-companion.mjs', import.meta.url).href)};
+    const stdin = new PassThrough();
+    stdin.isTTY = true;
+    stdin.end('policy.approver\\n');
+    process.exitCode = await main(['config', 'set', 'policy.approver', 'claude', '--tty-confirm'], { stdin });
+  `;
+  const r = await runProcess(process.execPath, ['--input-type=module', '-e', script], { env, cwd: ws });
+  assert.equal(r.code, 4);
+  assert.match(r.stderr, /LOCKED_KEY/);
+  assert.match(r.stderr, /Claude Code.*terminal próprio/);
+  assert.match(r.stderr, /\(CLAUDECODE definido\)/);
+  assert.doesNotMatch(r.stderr, /Digite/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(ws, '.opc.json')), false);
+  assert.equal(fs.existsSync(env.FAKE_OPENCODE_STATE), false);
+});
+
 function setup(t, { config = null, git = true } = {}) {
   const ws = makeWorkspace(t, { git });
   const env = testEnv(t); // servers stopped by the F0 per-test cleanup
+  delete env.CLAUDECODE;
   if (config) writeGlobalConfig(env, config);
   return { ws, env };
 }
 
 test('--tty-confirm on a TTY: typed key confirms; mismatch refuses (exit 4)', async (t) => {
+  if (hasClaudeAncestor()) return t.skip('rodando sob Claude Code: a barreira recusa por design');
   const { ws, env } = setup(t, { config: { defaultProvider: MV }, git: false });
   const wrong = await runInProcess('config', ['set', 'policy.approver', 'claude', '--tty-confirm'], { env, cwd: ws, stdin: scriptedTTY(['policy.aprover']) });
   assert.equal(wrong.code, 4);

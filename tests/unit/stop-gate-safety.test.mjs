@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { parseStopGateOutput, run as runStopHook } from '../../plugins/opc/scripts/commands/hook-stop.mjs';
 import { makeTempDir, trackTempDir } from '../helpers.mjs';
 import { registerSecret } from '../../plugins/opc/scripts/lib/redact.mjs';
+import { createJob } from '../../plugins/opc/scripts/lib/jobs.mjs';
 
 async function hookContext(t) {
   const cwd = trackTempDir(t, makeTempDir('opc-stop-hook-'));
@@ -26,6 +27,21 @@ async function hookContext(t) {
   };
   return { ctx, output };
 }
+
+test('Stop hook labels unreadable active job records without an undefined kind', async (t) => {
+  const { ctx, output } = await hookContext(t);
+  ctx.config.stopGate.enabled = false;
+  const job = await createJob(ctx.stateDir, { kind: 'task' });
+  const file = path.join(ctx.stateDir, 'jobs', `${job.id}.json`);
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    if (target === file) throw Object.assign(new Error('synthetic read failure'), { code: 'EIO' });
+    return read.call(this, target, ...args);
+  });
+  assert.equal(await runStopHook(ctx), 0);
+  assert.match(output.stderr, new RegExp(`a tarefa ${job.id} \\(ilegível\\) ainda está em execução`));
+  assert.doesNotMatch(output.stderr, /\(undefined\)/);
+});
 
 test('Stop hook masks model-produced secrets in a block reason', async (t) => {
   const { ctx, output } = await hookContext(t);

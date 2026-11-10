@@ -2,6 +2,7 @@ import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
 import { collectReviewContext, diffSizeEstimate, resolveReviewTarget } from '../lib/git.mjs';
 import { connectApi } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
 import { resolveTurnModel, routingFields } from '../lib/routing.mjs';
 import { assertNotInsideServer, submitTurnJob, turnJobRequest, waitForJob } from '../lib/jobs.mjs';
 import { fillTemplate, loadPrompt, loadSchema, projectContextBlock, sessionTitle, summarize } from '../lib/prompts.mjs';
@@ -73,7 +74,11 @@ export function emitReviewResult(ctx, job, { json }) {
     const structured = job.result?.structured ?? null;
     ctx.json({ jobId: job.id, status: job.status, attempts: job.attempts ?? [], review: structured, schemaValid: structured ? validateReviewOutput(structured) === null : false, errorType: job.result?.errorType ?? job.errorType ?? null, rendered: renderReviewJob(job) });
   } else ctx.out(`${renderReviewJob(job)}${renderAttempts(job.attempts)}`);
-  // OpenCode 2 has no structured output: a completed turn whose text is not a valid review JSON degrades to the raw text and exits 7.
+  return reviewExitCode(job);
+}
+
+export function reviewExitCode(job) {
+  // A completed turn without valid review JSON degrades to raw text and exits 7.
   const structured = job.result?.structured ?? null;
   if (job.status === 'completed' && (structured === null || validateReviewOutput(structured) !== null)) return ExitCode.JOB_FAILED;
   return exitCodeForJob(job);
@@ -106,7 +111,8 @@ export async function runReviewCommand(ctx, argv, { variant }) {
     return ExitCode.OK;
   }
   if (context.truncated) writeLog(ctx, `[opc] diff tem ${context.diffBytes} bytes; enviando estatísticas e ${context.includedFiles.length} de ${context.files.length} diffs de arquivos (menores primeiro).`);
-  const { api } = await connectApi(ctx);
+  const { api, server } = await connectApi(ctx);
+  assertCanCreateSessions(server);
   const resolved = await resolveTurnModel({ api, kind: 'review', flags: { model: flags.model, variant: flags.variant ?? flags.effort }, config: ctx.config });
   for (const warning of resolved.warnings) writeLog(ctx, `[opc] aviso: ${warning}`);
   const title = sessionTitle(variant === 'review' ? 'review' : 'adversarial-review', summarize(focus ? `${target.label} — ${focus}` : target.label));

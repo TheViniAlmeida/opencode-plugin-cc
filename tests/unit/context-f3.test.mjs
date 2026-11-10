@@ -44,14 +44,30 @@ test('resolveModel: alias, default and policy denial', () => {
   assert.throws(() => resolveModel(ctx, discovery, 'task', F3_MODELS.denied), (e) => e.exitCode === 4);
 });
 
-test('resolveModel checks the variant through F2a validateSelection (F1 validateVariant)', () => {
+test('resolveModel checks the variant through F1 validateVariant', () => {
   assert.equal(resolveModel(ctx, discovery, 'task', 'fast').variant, null);
   assert.throws(() => resolveModel(ctx, discovery, 'task', 'fast', { variant: 'no-such-variant' }), (e) => e.exitCode === 2 && e.code === 'UNKNOWN_VARIANT');
 });
 
-test('profileRules: read-only starts with deny-all; extra rules go last', () => {
+test('profileRules: read-only starts with deny-all; extra allows precede invariants', () => {
   const rules = profileRules(ctx, 'read-only', [{ action: 'subagent', resource: 'explore', effect: 'allow' }]);
   assert.deepEqual(rules[0], { action: '*', resource: '*', effect: 'deny' });
-  assert.deepEqual(rules.at(-1), { action: 'subagent', resource: 'explore', effect: 'allow' });
+  assert.deepEqual(rules[5], { action: 'subagent', resource: 'explore', effect: 'allow' });
+  const denied = profileRules({ config: { policy: { tools: { deny: ['subagent'] } } } }, 'read-only',
+    [{ action: 'subagent', resource: 'explore', effect: 'allow' }]);
+  assert.ok(denied.findIndex((rule) => rule.action === 'subagent' && rule.effect === 'allow')
+    < denied.findIndex((rule) => rule.action === 'subagent' && rule.effect === 'deny'));
   assert.ok(profileRules(ctx, 'write').some((r) => r.action === 'external_directory' && r.effect === 'deny'));
+});
+
+test('model resolution does not select the implicit agent for an explicit command or subagent', () => {
+  const config = { ...ctx.config, policy: { ...policy, agents: { deny: ['build'] } } };
+  assert.equal(resolveModel({ ...ctx, config }, discovery, 'task', 'fast').full, F3_MODELS.deepseek);
+});
+
+test('requireAgent supports policy checks for an implicit build absent from discovery', () => {
+  assert.equal(requireAgent({ agents: [] }, 'build', {}, { implicit: true }).name, 'build');
+  assert.throws(() => requireAgent({ agents: [] }, 'build', { agents: { deny: ['build'] } }, { implicit: true }),
+    (error) => error.name === 'PolicyError');
+  assert.throws(() => requireAgent({ agents: [] }, 'build', {}), (error) => error.code === 'UNKNOWN_AGENT');
 });

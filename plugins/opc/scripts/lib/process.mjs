@@ -72,6 +72,37 @@ export function getParentPid(pid) {
   return Number(psField(pid, 'ppid')) || null;
 }
 
+const CLAUDE_RUNTIMES = new Set(['node', 'nodejs', 'bun', 'deno']);
+
+export function isClaudeCmdline(cmdline) {
+  const argv0 = cmdline[0] ?? '';
+  const isClaudeEntrypoint = (entrypoint) => path.basename(entrypoint) === 'claude'
+    || entrypoint.includes('/claude/versions/')
+    || entrypoint.includes('/.claude/remote/ccd-cli/')
+    || entrypoint.includes('@anthropic-ai/claude-code');
+  if (isClaudeEntrypoint(argv0)) return true;
+  if (!CLAUDE_RUNTIMES.has(path.basename(argv0))) return false;
+  for (let index = 1; index < cmdline.length; index += 1) {
+    const arg = cmdline[index];
+    if (['--require', '-r', '--import', '--loader'].includes(arg)) { index += 1; continue; }
+    if (arg.startsWith('-')) continue;
+    return isClaudeEntrypoint(arg);
+  }
+  return false;
+}
+
+export function hasClaudeAncestor(pid = process.pid, { parentOf = getParentPid, identityOf = getProcessIdentity, maxDepth = 32 } = {}) {
+  const seen = new Set([pid]);
+  for (let depth = 0; Number.isInteger(pid) && pid > 1 && depth < maxDepth; depth += 1) {
+    pid = parentOf(pid);
+    if (!Number.isInteger(pid) || pid <= 1 || seen.has(pid)) return false;
+    seen.add(pid);
+    const cmdline = identityOf(pid)?.cmdline ?? [];
+    if (isClaudeCmdline(cmdline)) return true;
+  }
+  return false;
+}
+
 const HOOK_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ash', 'ksh']);
 
 // Claude Code runs hook commands through a transient `sh -c`, so a hook's ppid dies right after the hook

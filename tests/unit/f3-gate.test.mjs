@@ -45,7 +45,7 @@ async function workerFixture(t, dispatch) {
   const stateDir = trackTempDir(t, makeTempDir('opc-gate-worker-'));
   const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: teste' }, [{ title: 'membro' }]);
   const ctx = { stateDir, config: {}, json: () => {} };
-  const api = { createSession: async () => ({ id: 'ses_parent' }), interrupt: async () => { throw new Error('cancelamento recusado'); } };
+  const api = { agents: async () => [], createSession: async () => ({ id: 'ses_parent' }), interrupt: async () => { throw new Error('cancelamento recusado'); } };
   const request = { members: [{ agent: 'general', full: 'p/model', model: { providerID: 'p', modelID: 'model' } }], mechanism: 'child-session', rules: [{ action: '*', resource: '*', effect: 'deny' }], prompt: 'teste' };
   await runWorker(ctx, group, request, {
     openApi: async () => ({ api, close() {} }),
@@ -54,6 +54,25 @@ async function workerFixture(t, dispatch) {
   });
   return { ctx, group: readJob(stateDir, group.id), member: readJob(stateDir, members[0].id) };
 }
+
+test('subagent coordinator checks the implicit build before creating its parent session', async (t) => {
+  const stateDir = trackTempDir(t, makeTempDir('opc-gate-implicit-'));
+  const { group, members } = await createGroup(stateDir, { kind: 'sub', title: 'OPC: test' }, [{ title: 'member' }]);
+  const bodies = [];
+  const api = { agents: async () => [{ name: 'build', mode: 'primary' }],
+    createSession: async (body) => { bodies.push(body); return { id: 'ses_denied' }; } };
+  const ctx = { stateDir, config: { policy: { agents: { deny: ['build'] } } } };
+  await runWorker(ctx, group, { profile: 'read-only', rules: [], mechanism: 'child-session',
+    members: [{ agent: 'general', model: { providerID: 'p', modelID: 'm' } }] }, {
+    openApi: async () => ({ api, close() {} }),
+    dispatch: async () => ({ status: 'completed', finalText: 'unused' }),
+    createBridge: () => ({ dispose() {} }),
+  });
+  assert.equal(bodies.length, 0);
+  assert.equal(readJob(stateDir, group.id).status, 'failed');
+  assert.equal(readJob(stateDir, members[0].id).status, 'failed');
+  assert.match(readJob(stateDir, group.id).errorMessage, /build.*policy\.agents\.deny/);
+});
 
 test('C2: erro fake de provedor não persiste no membro/grupo nem em result/status JSON', async (t) => {
   const token = pattern();

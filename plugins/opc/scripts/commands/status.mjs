@@ -2,7 +2,7 @@
 // Adapted from openai/codex-plugin-cc (Apache-2.0); modified.
 import { parseArgs } from '../lib/args.mjs';
 import { ExitCode, UsageError } from '../lib/opc-error.mjs';
-import { GROUP_ROLE, isActive, listJobs, listGroupMembers, readJobProgress, reconcileJob, resolveJobRef, topLevelJobs, waitForJob } from '../lib/jobs.mjs';
+import { GROUP_ROLE, isActive, jobWarningHandler, listJobs, listGroupMembers, readJobProgress, reconcileJob, resolveJobRef, topLevelJobs, waitForJob } from '../lib/jobs.mjs';
 import { renderGroupStatus, renderJobStatus, renderStatusList } from '../lib/render.mjs';
 import { exitCodeForJob, followJob } from './task.mjs';
 
@@ -23,8 +23,9 @@ export async function run(ctx, argv) {
   }
   const ref = positionals[0] ?? null;
   if (flags.wait && !ref) throw new UsageError('USAGE', '`status --wait` exige um identificador de tarefa');
+  const onWarning = jobWarningHandler(ctx);
   if (ref) {
-    const job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref));
+    const job = await reconcileJob(ctx.stateDir, resolveJobRef(ctx.stateDir, ref, { onWarning }));
     const groupExit = await statusForGroup(ctx, job, flags);
     if (groupExit !== null) return groupExit;
     if (flags.wait) {
@@ -42,7 +43,7 @@ export async function run(ctx, argv) {
     return ExitCode.OK;
   }
   const jobs = [];
-  for (const job of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null, all: flags.all })) {
+  for (const job of listJobs(ctx.stateDir, { claudeSessionId: ctx.claudeSessionId ?? null, all: flags.all, onWarning })) {
     jobs.push(await reconcileJob(ctx.stateDir, job));
   }
   const visibleJobs = topLevelJobs(jobs);

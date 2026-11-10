@@ -58,13 +58,27 @@ test('a scheduled retry further away than maxRetryWaitSec aborts the session', a
   assert.equal(requestsTo(env, 'POST', /^\/api\/session\/[^/]+\/interrupt$/).length, 1);
 });
 
-test('retries below the cap are left to OpenCode (no client abort)', async (t) => {
+test('retries below the cap exhaust in OpenCode before the client confirms the final abort', async (t) => {
   const { env, ws } = setup(t, { maxProviderRetries: 20, maxRetryWaitSec: 3600 }, { FAKE_RETRY_MAX_TICKS: '5' });
   const r = await runCli(['ask', '--model', M.fast, 'Summarise the repository'], { env, cwd: ws });
   assert.equal(r.code, 7, `${r.stdout}\n${r.stderr}`);
-  assert.equal(requestsTo(env, 'POST', /\/interrupt$/).length, 0);
+  assert.equal(requestsTo(env, 'POST', /\/interrupt$/).length, 1);
   const [job] = jobsIn(env, ws);
   // OpenCode exhausts its own retries and ends the execution with the provider error.
   assert.equal(job.errorType, 'provider.transport');
   assert.equal(job.errorClass, 'recoverable');
+  assert.equal(job.result.abortConfirmed, true);
+  assert.match(jobLog(env, ws, job), /Nova tentativa \(5\)/);
+});
+
+test('a successful retry below the cap completes without any client interrupt', async (t) => {
+  const env = testEnv(t, { scenario: 'retry-status' });
+  const ws = makeWorkspace(t);
+  writeGlobalConfig(env, config({}));
+  const result = await runCli(['ask', '--model', M.fast, 'Summarise the repository'], { env, cwd: ws });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.equal(requestsTo(env, 'POST', /\/interrupt$/).length, 0);
+  const [job] = jobsIn(env, ws);
+  assert.equal(job.status, 'completed');
+  assert.match(job.result.finalText, /recovered after retry/);
 });

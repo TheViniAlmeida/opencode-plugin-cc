@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,10 +37,91 @@ test('globToRegExp: * matches any sequence including slashes', () => {
   assert.ok(globToRegExp('work-*').test('work-deploy'));
 });
 
+test('globToRegExp: adversarial stars and directory globs finish within 50 ms', () => {
+  const script = `
+    import { globToRegExp, matchesAny } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/models.mjs', import.meta.url).href)};
+    const start = performance.now();
+    const results = [
+      globToRegExp('*'.repeat(64) + 'x').test('.env'),
+      globToRegExp('*a'.repeat(64) + 'x').test('a'.repeat(128)),
+      globToRegExp('**/a/'.repeat(64) + 'x').test('a/'.repeat(128)),
+      matchesAny('.env', ['*'.repeat(64) + 'env']),
+    ];
+    console.log(JSON.stringify({ results, elapsed: performance.now() - start }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 }));
+  assert.deepEqual(result.results, [false, false, false, true]);
+  assert.ok(result.elapsed < 50, `${result.elapsed} ms`);
+});
+
+test('globToRegExp: interior stars preserve suffix and optional directory matching', () => {
+  for (const [glob, value, expected] of [
+    ['*a*b', 'aab', true], ['*a*a', 'aa', true], ['*a*a', 'ab', false],
+    ['**/a/**/b', 'a/a/b', true], ['**/a/**/b', 'a/x/b', true],
+    ['**/a*b', 'dir/aab', true], ['**/a*b', 'xaaab', false],
+    ['**/b*/*', 'b?/b??aa?', true], ['**/a*/*', 'a/a', true],
+    ['**/*a', 'xa', true], ['a/**/**/b', 'a/b', true], ['a/**/**/b', 'a/x/y/b', true],
+    ['*?[]', 'x?[]', true], ['*?[]', 'xab', false],
+  ]) assert.equal(globToRegExp(glob).test(value), expected, `${glob}: ${value}`);
+  assert.ok(globToRegExp('*a*b') instanceof RegExp);
+});
+
 test('matchesAny: empty list never matches', () => {
   assert.equal(matchesAny('x', []), false);
   assert.equal(matchesAny('x', undefined), false);
   assert.equal(matchesAny('work-reviewer', ['build', 'work-*']), true);
+});
+
+test('matchesAny: repeated matching remains correct after more than 512 distinct globs', () => {
+  for (let i = 0; i < 600; i += 1) {
+    const globs = [`synthetic-${i}/*`];
+    assert.equal(matchesAny(`synthetic-${i}/model`, globs), true);
+    assert.equal(matchesAny('other/model', globs), false);
+  }
+  for (let i = 0; i < 2; i += 1) {
+    assert.equal(matchesAny('synthetic-0/model', ['synthetic-0/*']), true);
+    assert.equal(matchesAny('other/model', ['synthetic-0/*']), false);
+    assert.equal(matchesAny('id_rsa', ['**/id_rsa*']), true);
+    assert.equal(matchesAny('src/main.js', ['**/id_rsa*']), false);
+  }
+});
+
+test('globToRegExp: LRU retains recently used entries and evicts at 4096 globs', () => {
+  const hot = globToRegExp('synthetic-lru-hot/*');
+  const cold = globToRegExp('synthetic-lru-cold/*');
+  for (let i = 0; i < 4094; i += 1) globToRegExp(`synthetic-lru-${i}/*`);
+  assert.equal(globToRegExp('synthetic-lru-hot/*'), hot);
+  globToRegExp('synthetic-lru-overflow/*');
+  assert.equal(globToRegExp('synthetic-lru-hot/*'), hot);
+  assert.notEqual(globToRegExp('synthetic-lru-cold/*'), cold);
+  assert.equal(matchesAny('synthetic-lru-cold/model', ['synthetic-lru-cold/*']), true);
+});
+
+test('matchesAny: 600 distinct globs across 2000 words finish within one second', (t) => {
+  const script = `
+    import { matchesAny } from ${JSON.stringify(new URL('../../plugins/opc/scripts/lib/models.mjs', import.meta.url).href)};
+    const globs = Array.from({ length: 600 }, (_, i) => 'synthetic-perf-' + i + '/*');
+    const start = performance.now();
+    let matched = 0;
+    for (let i = 0; i < 2000; i += 1) matched += Number(matchesAny('other/word-' + i, globs));
+    console.log(JSON.stringify({ matched, elapsed: performance.now() - start }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 }));
+  assert.equal(result.matched, 0);
+  assert.ok(result.elapsed < 1000, `${result.elapsed} ms`);
+  t.diagnostic(`${result.elapsed} ms for 600 globs across 2000 words`);
+});
+
+test('globToRegExp: optional **/ directories require a path boundary', () => {
+  for (const value of ['b', 'a/b', 'a/nested/b']) assert.ok(globToRegExp('**/b').test(value), value);
+  for (const value of ['a/b', 'a/nested/b']) assert.ok(globToRegExp('a/**/b').test(value), value);
+  assert.ok(!globToRegExp('a**/b').test('ab'));
+  assert.ok(!globToRegExp('a**/b').test('aXYZb'));
+  assert.ok(globToRegExp('a**/b').test('a/b'));
+  assert.ok(globToRegExp('a**/b').test('aXYZ/b'));
+  assert.ok(!globToRegExp('a**/b**/c').test('abc'));
+  assert.ok(globToRegExp('**/**/b').test('b'));
+  assert.ok(globToRegExp('a/**/**/b').test('a/b'));
 });
 
 test('parseFullId: first segment is provider, rest (with slashes) is model', () => {

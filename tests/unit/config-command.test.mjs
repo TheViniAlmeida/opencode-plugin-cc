@@ -1,12 +1,60 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import * as configCommand from '../../plugins/opc/scripts/commands/config.mjs';
 import { run } from '../../plugins/opc/scripts/commands/config.mjs';
 import { main } from '../../plugins/opc/scripts/opc-companion.mjs';
 import { loadConfig } from '../../plugins/opc/scripts/lib/config.mjs';
 import {
   makeTempDir, trackTempDir, writeGlobalConfig, scriptedTTY, captureStream, pipedStdin,
 } from '../helpers.mjs';
+
+for (const source of ['ancestor', 'environment']) {
+  test(`--tty-confirm refuses Claude Code ${source} before creating a prompter`, async () => {
+    const stderr = captureStream();
+    const ctx = {
+      env: source === 'environment' ? { CLAUDECODE: 'synthetic-env-value' } : {},
+      stdin: scriptedTTY(['policy.approver']), stderr, err: (text) => stderr.write(text),
+    };
+    await assert.rejects(configCommand.confirmLocked(ctx, { 'tty-confirm': true }, {
+      op: 'set', key: 'policy.approver', raw: 'synthetic-value', scope: 'global',
+    }, {
+      hasClaudeAncestor: () => {
+        assert.equal(source, 'ancestor', 'CLAUDECODE must short-circuit ancestor detection');
+        return true;
+      },
+      createPrompter: () => assert.fail('Claude Code must be refused before prompting'),
+    }), (err) => {
+      assert.equal(err.code, 'LOCKED_KEY');
+      assert.equal(err.exitCode, 4);
+      assert.match(err.message, /Claude Code.*terminal próprio/);
+      assert.ok(err.message.includes(source === 'environment'
+        ? '(CLAUDECODE definido)' : '(processo ancestral do Claude Code)'));
+      assert.equal(err.details.command, "opc config set policy.approver '<valor>' --tty-confirm");
+      assert.equal(JSON.stringify(err).includes('synthetic-value'), false);
+      assert.equal(JSON.stringify(err).includes('synthetic-env-value'), false);
+      return true;
+    });
+    assert.equal(stderr.text(), '');
+  });
+}
+
+test('--tty-confirm still requires the exact key in a standalone terminal', async () => {
+  for (const [typed, accepted] of [['policy.approver', true], ['wrong.setting', false]]) {
+    let closed = false;
+    const ctx = { env: {}, stdin: { isTTY: true }, err: () => {} };
+    const deps = {
+      hasClaudeAncestor: () => false,
+      createPrompter: () => ({ text: async () => typed, close: () => { closed = true; } }),
+    };
+    const result = configCommand.confirmLocked(ctx, { 'tty-confirm': true }, {
+      op: 'unset', key: 'policy.approver', scope: 'global',
+    }, deps);
+    if (accepted) await result;
+    else await assert.rejects(result, (err) => err.code === 'LOCKED_KEY');
+    assert.equal(closed, true);
+  }
+});
 
 test('locked-key JSON output never contains the raw value without a TTY', async (t) => {
   const dataDir = trackTempDir(t, makeTempDir('opc-config-command-'));
@@ -33,12 +81,12 @@ test('offline policy edit reaches POLICY_DENIED and preserves both config files'
   const before = fs.readFileSync(file, 'utf8');
   const stderr = captureStream();
   const ctx = {
-    dataDir, workspaceRoot, stdin: scriptedTTY(['policy.providers.deny']), stderr,
+    dataDir, workspaceRoot, env: {}, stdin: scriptedTTY(['policy.providers.deny']), stderr,
     err: (text) => stderr.write(text),
   };
   Object.defineProperty(ctx, 'config', { get() { assert.fail('offline edit must not connect to a server'); } });
 
-  await assert.rejects(run(ctx, ['add', 'policy.providers.deny', 'blocked', '--workspace', '--tty-confirm']), (err) => {
+  await assert.rejects(run(ctx, ['add', 'policy.providers.deny', 'blocked', '--workspace', '--tty-confirm'], { hasClaudeAncestor: () => false }), (err) => {
     assert.equal(err.exitCode, 4);
     assert.equal(err.code, 'POLICY_DENIED');
     assert.match(err.message, /policy\.providers\.deny: blocked/);

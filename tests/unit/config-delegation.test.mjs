@@ -1,7 +1,53 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { delegationAutoEnabled, mergeConfig } from '../../plugins/opc/scripts/lib/config.mjs';
+import * as configModule from '../../plugins/opc/scripts/lib/config.mjs';
+import { DEFAULT_CONFIG, delegationAutoEnabled, getPath, mergeConfig, setPath } from '../../plugins/opc/scripts/lib/config.mjs';
 import { delegationReminder, DELEGATION_COMMANDS } from '../../plugins/opc/scripts/lib/render.mjs';
+
+const numericLimits = [
+  ['routing.fallback.maxAttempts', 2, 1, 10],
+  ['routing.fallback.maxProviderRetries', 2, 0, 10],
+  ['routing.fallback.maxRetryWaitSec', 30, 0, 120],
+  ['conclave.rounds', 2, 1, 3],
+  ['conclave.memberTimeoutSec', 600, 300, 1200],
+  ['orchestrate.maxSubtasks', 4, 2, 10],
+];
+
+test('WORKSPACE_TIGHTEN_ONLY exports exactly the six numeric limits', () => {
+  assert.deepEqual(configModule.WORKSPACE_TIGHTEN_ONLY, numericLimits.map(([key]) => key));
+});
+
+for (const [key, globalValue, tighter, wider] of numericLimits) {
+  test(`workspace can only tighten ${key} against global or default`, () => {
+    for (const global of [{}, setPath({}, key, globalValue)]) {
+      const baseline = getPath(global, key) ?? getPath(DEFAULT_CONFIG, key);
+      for (const value of [tighter, baseline, wider]) {
+        const { config, warnings } = mergeConfig(global, setPath({}, key, value));
+        assert.equal(getPath(config, key), Math.min(baseline, value));
+        if (value > baseline) {
+          assert.ok(warnings.some((w) => w.path === key && w.message === `"${key}": o workspace só pode apertar (global/padrão = ${baseline}); valor do workspace ignorado.`));
+        } else assert.deepEqual(warnings, []);
+      }
+      const invalid = mergeConfig(global, setPath({}, key, 'invalid'));
+      assert.equal(getPath(invalid.config, key), baseline);
+      assert.ok(invalid.warnings.some((w) => w.path === key));
+      assert.equal(getPath(mergeConfig(global, {}).config, key), baseline);
+    }
+  });
+}
+
+test('workspace tightening preserves other routing and delegation preferences', () => {
+  const { config, warnings } = mergeConfig(
+    { routing: { fallback: { maxAttempts: 2 } }, delegation: { auto: true } },
+    { routing: { tasks: { ask: ['p/m'] }, fallback: { maxAttempts: 10, enabled: false } }, conclave: { rounds: 1 }, delegation: { auto: false } },
+  );
+  assert.equal(config.routing.fallback.maxAttempts, 2);
+  assert.equal(config.routing.fallback.enabled, false);
+  assert.deepEqual(config.routing.tasks.ask, ['p/m']);
+  assert.equal(config.conclave.rounds, 1);
+  assert.equal(config.delegation.auto, false);
+  assert.ok(warnings.some((w) => w.path === 'routing.fallback.maxAttempts' && /apertar/.test(w.message)));
+});
 
 test('delegationAutoEnabled: somente a configuração global pode ativar', () => {
   assert.equal(delegationAutoEnabled({ global: { delegation: { auto: true } }, workspace: null }), true);

@@ -1,10 +1,12 @@
 // `opc orchestrate`: a group job with one coordinator worker.
 import { parseArgs, readRawArgs } from '../lib/args.mjs';
 import { ExitCode, OpcError, UsageError } from '../lib/opc-error.mjs';
-import { openApi, loadDiscovery, profileRules } from '../lib/context.mjs';
+import { openApi, loadDiscovery, profileRules, requireAgent } from '../lib/context.mjs';
+import { assertCanCreateSessions } from '../lib/server.mjs';
+import { DEFAULT_AGENT } from '../lib/policy.mjs';
 import { resolveCandidates, runWithFallback, attemptRequest, describeStop, backoffFromEnv } from '../lib/routing.mjs';
 import { runTurn, newMessageId } from '../lib/runner.mjs';
-import { updateJob, spawnWorker, waitForJob, appendJobLog, assertNotInsideServer, withServerLock, createGroup, addGroupMember, listGroupMembers, recordAttempt, readJob, refreshGroup } from '../lib/jobs.mjs';
+import { updateJob, spawnWorker, waitForJob, appendJobLog, assertNotInsideServer, withServerLock, createGroup, addGroupMember, listGroupMembers, recordAttempt, readJob, refreshGroup, jobWarningHandler } from '../lib/jobs.mjs';
 import { ACTIVE_JOB_STATUSES } from '../lib/state.mjs';
 import { sessionTitle, summarize } from '../lib/prompts.mjs';
 import { runOrchestration, coordinatorError, resolveSubtaskCandidates, MIN_SUBTASKS, MAX_SUBTASKS_CAP } from '../lib/orchestrator.mjs';
@@ -39,7 +41,7 @@ export async function createOrchestrationGroup(ctx, request, plannerRoute, synth
     kind: 'orch', title: sessionTitle('orchestrate', summarize(request.task)), summary: summarize(request.task, 200),
     workspaceRoot: ctx.workspaceRoot, claudeSessionId: ctx.claudeSessionId ?? null, status: 'queued', phase: 'queued',
     permissionProfile: request.write ? 'write' : 'read-only', request: input,
-  }, [], { maxActive: ctx.config?.jobs?.maxActive ?? 8 }), { purpose: 'register-job:orch' });
+  }, [], { maxActive: ctx.config?.jobs?.maxActive ?? 8, onWarning: jobWarningHandler(ctx) }), { purpose: 'register-job:orch' });
   return group;
 }
 function present(ctx, job, asJson) {
@@ -57,7 +59,9 @@ export async function run(ctx, argv) {
   const request = normalizeRequest(ctx.config ?? {}, flags, raw.text != null ? [raw.text] : positionals);
   assertNotInsideServer(ctx.env);
   const conn = await openApi(ctx);
+  assertCanCreateSessions(conn.server);
   const discovery = await loadDiscovery(conn.api);
+  requireAgent(discovery, DEFAULT_AGENT, ctx.config.policy, { implicit: true });
   const plannerRoute = resolveRoute(ctx, discovery, 'planner', request.planner);
   const synthRoute = request.synthesizer === 'model' ? resolveRoute(ctx, discovery, 'synthesizer', request.synthesizerModel) : null;
   for (const warning of [...plannerRoute.warnings, ...(synthRoute?.warnings ?? [])]) ctx.err(`[opc] aviso: ${warning}\n`);
@@ -93,7 +97,7 @@ export function coordinatorDeps({ ctx, job, request, conn, discovery, agentsInde
     return group.status === 'waiting_permission' ? { status: 'running', phase: 'running', pendingRequest: null } : { pendingRequest: null };
   }).then(() => refresh());
   const members = {
-    async start(role, fields) { const m = await addGroupMember(ctx.stateDir, job.id, { kind: 'orch', role, title: fields.title, summary: fields.title, workspaceRoot: ctx.workspaceRoot, claudeSessionId: job.claudeSessionId ?? null, status: 'running', startedAt: now(), pid: null, model: fields.model ?? null, request: { type: 'orchestrate-member', subtaskId: fields.subtaskId ?? null } }); return m.id; },
+    async start(role, fields) { const m = await addGroupMember(ctx.stateDir, job.id, { kind: 'orch', role, title: fields.title, summary: fields.title, workspaceRoot: ctx.workspaceRoot, claudeSessionId: job.claudeSessionId ?? null, status: 'running', startedAt: now(), pid: null, model: fields.model ?? null, request: { type: 'orchestrate-member', subtaskId: fields.subtaskId ?? null } }, { onWarning: jobWarningHandler(ctx) }); return m.id; },
     async update(id, patch) { return persist(() => updaterFor(id).update(patch)); },
     async finish(id, patch) { await persist(() => updaterFor(id).update({ ...patch, pendingRequest: null, completedAt: now() })); await persist(() => updaterFor(id).flush()); memberUpdates.delete(id); await persist(syncGroupPending); },
   };
@@ -101,6 +105,7 @@ export function coordinatorDeps({ ctx, job, request, conn, discovery, agentsInde
   const isCancelled = (memberId) => Boolean(readJob(ctx.stateDir, job.id)?.cancelRequestedAt || (memberId && readJob(ctx.stateDir, memberId)?.cancelRequestedAt));
   const bridgeUpdate = (memberId) => memberId ? async (patch) => { const v = await members.update(memberId, patch); await persist(syncGroupPending); return v; } : (patch) => persist(() => groupUpdates.update(patch));
   const runTurnForSpec = async (spec) => {
+    requireAgent({ agents: discovery.agents ?? [] }, spec.agent ?? DEFAULT_AGENT, config.policy, { implicit: spec.agent == null });
     const label = spec.subtaskId ? `subtask ${spec.subtaskId}` : spec.role; const turnSignal = spec.signal ?? signal; const rules = profileRules(ctx, spec.profile);
     const bridge = createBridge({ update: bridgeUpdate(spec.memberId), jobId: spec.memberId ?? job.id, stateDir: ctx.stateDir, api: conn.api, profileKind: spec.profile, policy: config.policy ?? {}, timeoutMs, log: (line) => log(`${label}: ${line}`) });
     const base = { newSession: { title: spec.title, permission: rules }, childPermission: spec.profile === 'read-only' ? null : rules, parts: [{ type: 'text', text: spec.prompt }], agent: spec.agent ?? null, format: spec.format ?? null, textJson: spec.textJson ?? null, timeoutMs: (request.timeoutSec ?? DEFAULT_TURN_TIMEOUT_SEC) * 1000, fallbackCfg };

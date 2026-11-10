@@ -2,6 +2,8 @@
 import { PolicyError, UsageError } from './opc-error.mjs';
 import { matchesAny, parseFullId } from './models.mjs';
 
+export const DEFAULT_AGENT = 'build';
+
 const SECTION = { provider: 'providers', model: 'models', agent: 'agents', tool: 'tools' };
 const LABEL = { provider: 'provider', model: 'modelo', agent: 'agente', tool: 'ferramenta' };
 
@@ -117,9 +119,11 @@ export const READ_ONLY_ALLOW = Object.freeze(['read', 'glob', 'skill', 'question
 export const SENSITIVE_PATH_PERMISSIONS = Object.freeze(['read', 'grep', 'glob']);
 export const DEFAULT_SENSITIVE_PATHS = Object.freeze([
   '*.env', '*.env.*', '**/.ssh/**', '*.pem', '*.key', '**/id_rsa*', '**/id_ed25519*', '**/secrets.env',
+  '**/.npmrc', '**/.netrc', '**/.git-credentials', '**/.aws/credentials', '**/kubeconfig', '**/.kube/config',
 ]);
 export const PATCH_PERMISSION_MODE = 'replace';
 const RULE_ACTIONS = new Set(['allow', 'deny', 'ask']);
+const USER_FREE_PERMISSIONS = new Set(['read', 'glob', 'grep', 'list', 'edit', 'skill', 'question', 'todowrite', 'task']);
 const r = (action, resource, effect) => ({ action, resource, effect });
 
 export function displayValue(value) {
@@ -159,17 +163,17 @@ export function invariantRules(profile, { policy = {}, deniedAgentGlobs = [], br
   const withDestructive = bridged ?? kind === 'write';
   const rules = [r('external_directory', '*', 'deny')];
   if (kind !== 'write') rules.push(r('grep', '*', 'deny'));
+  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(r('shell', pattern, 'ask'));
   for (const pattern of sensitivePathsOf(policy)) {
     for (const permission of SENSITIVE_PATH_PERMISSIONS) rules.push(r(permission, pattern, 'deny'));
   }
   for (const glob of deniedAgentGlobs) rules.push(r('subagent', glob, 'deny'));
   for (const tool of policy.tools?.deny ?? []) rules.push(r(tool, '*', 'deny'));
-  if (withDestructive) for (const pattern of destructiveBashOf(policy)) rules.push(r('shell', pattern, 'ask'));
   rules.push(r('browser', '*', 'deny'));
   return rules;
 }
 
-export function buildPermissionRules(profile, { policy = {}, permissionProfiles = {}, deniedAgentGlobs = [] } = {}) {
+export function buildPermissionRules(profile, { policy = {}, permissionProfiles = {}, deniedAgentGlobs = [], extraAllow = [] } = {}) {
   const { kind, name } = parseProfile(profile);
   const rules = [];
   let bridged = kind === 'write';
@@ -182,7 +186,7 @@ export function buildPermissionRules(profile, { policy = {}, permissionProfiles 
     rules.push(...custom);
     bridged = custom.some((entry) => entry.action === 'shell' && entry.effect !== 'deny');
   }
-  rules.push(...invariantRules(profile, { policy, deniedAgentGlobs, bridged }));
+  rules.push(...extraAllow, ...invariantRules(profile, { policy, deniedAgentGlobs, bridged }));
   return rules;
 }
 
@@ -192,17 +196,19 @@ export function bridgeModeOf(profile) {
 
 export function requiresUser(request, policy = {}) {
   if (!request || typeof request.permission !== 'string') return true;
-  const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
   if (request.permission === 'external_directory') return true;
   if (request.permission === 'shell') {
-    const commands = [request.metadata?.command ?? patterns[0]].filter((command) => typeof command === 'string');
+    const commands = [...new Set([request.metadata?.command, ...(Array.isArray(request.patterns) ? request.patterns : [])]
+      .filter((command) => typeof command === 'string'))];
     const destructive = destructiveBashOf(policy);
-    return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive));
+    const sensitive = sensitivePathsOf(policy);
+    return commands.length === 0 || commands.some((command) => bashRequiresUser(command, destructive, 0, sensitive));
   }
-  if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || request.permission === 'edit') {
+  const patterns = Array.isArray(request.patterns) ? request.patterns.map(String) : [];
+  if (SENSITIVE_PATH_PERMISSIONS.includes(request.permission) || ['list', 'edit'].includes(request.permission)) {
     return patterns.some((pattern) => matchesAny(pattern, sensitivePathsOf(policy)));
   }
-  return false;
+  return !USER_FREE_PERMISSIONS.has(request.permission);
 }
 
 function bashSegments(command) {
@@ -215,6 +221,11 @@ function bashSegments(command) {
     for (let i = 0; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") {
         if (source[i + 1] === '`') {
           const end = source.indexOf('\\`', i + 2);
@@ -247,6 +258,7 @@ function bashSegments(command) {
         }
         continue;
       }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === '`') {
         const end = findBacktick(source, i + 1);
@@ -270,6 +282,10 @@ function bashSegments(command) {
         const close = char === '(' ? ')' : '}';
         const end = findGroup(source, i, char, close);
         if (end < 0) return null;
+        // A brace inside a word (or a comma expression) is expansion, not a script group.
+        if (char === '{' && ((i > start && !/[\s;|&]/.test(source[i - 1])) || source.slice(i + 1, end).includes(','))) {
+          i = end; continue;
+        }
         const nested = scan(source.slice(i + 1, end), depth + 1);
         if (nested === null) return null;
         parts.push(...nested);
@@ -310,9 +326,15 @@ function bashSegments(command) {
     for (let i = open; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") { escaped = true; continue; }
       if (quote === "'") { if (char === "'") quote = null; continue; }
       if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === '$' && source[i + 1] === '(') { depth += 1; i += 1; continue; }
       if (char === '(') depth += 1;
@@ -328,9 +350,15 @@ function bashSegments(command) {
     for (let i = open; i < source.length; i += 1) {
       const char = source[i];
       if (escaped) { escaped = false; continue; }
+      if (quote === 'ansi') {
+        if (char === '\\') i += 1;
+        else if (char === "'") quote = null;
+        continue;
+      }
       if (char === '\\' && quote !== "'") { escaped = true; continue; }
       if (quote === "'") { if (char === "'") quote = null; continue; }
       if (quote === '"') { if (char === '"') quote = null; continue; }
+      if (char === '$' && source[i + 1] === "'") { quote = 'ansi'; i += 1; continue; }
       if (char === "'" || char === '"') { quote = char; continue; }
       if (char === opening) depth += 1;
       else if (char === closing && --depth === 0) return i;
@@ -352,7 +380,14 @@ function shellWords(source) {
   };
   for (let i = 0; i < source.length; i += 1) {
     const char = source[i];
-    if (char === '\\' && quote !== "'") {
+    if (quote === 'ansi') {
+      if (char === "'") quote = null;
+      else if (char === '\\') {
+        const escape = ansiEscape(source, i);
+        if (!escape) return null;
+        value += escape.value; i = escape.end;
+      } else value += char;
+    } else if (char === '\\' && quote !== "'") {
       if (++i >= source.length) return null;
       const next = source[i];
       // In double quotes, only these escapes are interpreted by the shell.
@@ -365,12 +400,14 @@ function shellWords(source) {
         value += char;
         if (quote === '"' && (char === '$' || char === '`')) dynamic = true;
       }
+    } else if (char === '$' && source[i + 1] === "'") {
+      quote = 'ansi'; active = true; i += 1;
     } else if (char === "'" || char === '"') {
       quote = char; active = true;
     } else if (/\s/.test(char)) push();
     else {
       value += char; active = true;
-      if ('$`*?[]'.includes(char)) dynamic = true;
+      if ('$`*?[]{}'.includes(char)) dynamic = true;
     }
   }
   if (quote) return null;
@@ -378,7 +415,30 @@ function shellWords(source) {
   return words;
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
+function ansiEscape(source, offset) {
+  const next = source[offset + 1];
+  if (next === undefined) return null;
+  const escapes = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+  if (Object.hasOwn(escapes, next)) return { value: escapes[next], end: offset + 1 };
+  const numeric = /^(?:x[\da-fA-F]{1,2}|u[\da-fA-F]{1,4}|U[\da-fA-F]{1,8}|[0-7]{1,3})/.exec(source.slice(offset + 1))?.[0];
+  if (numeric) {
+    const code = /^[0-7]/.test(numeric) ? parseInt(numeric, 8) & 0xff : parseInt(numeric.slice(1), 16);
+    if (code === 0 || code > 0x10ffff) return null;
+    return { value: String.fromCodePoint(code), end: offset + numeric.length };
+  }
+  if (next === 'c') {
+    const control = source[offset + 2];
+    if (!control) return null;
+    const code = control === '?' ? 127 : control.toUpperCase().charCodeAt(0) & 31;
+    if (code === 0) return null;
+    return { value: String.fromCharCode(code), end: offset + 2 };
+  }
+  return { value: `\\${next}`, end: offset + 1 };
+}
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'rbash', 'hush', 'mksh', 'yash', 'posh', 'fish', 'csh', 'tcsh']);
+const DYNAMIC_SHELL_COMMANDS = new Set(['eval', 'trap', 'source', '.', 'enable', 'alias',
+  'setopt', 'unsetopt', 'emulate', 'setenv', 'unsetenv']);
 const UNSUPPORTED_SHELL_WORDS = new Set(['.', 'source', 'if', 'then', 'else', 'elif', 'fi', 'for', 'select', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '!', 'coproc']);
 const WRAPPER_OPTIONS = {
   exec: { flags: ['-c', '-l'], values: ['-a'] },
@@ -391,43 +451,365 @@ const WRAPPER_OPTIONS = {
   nice: { flags: [], values: ['-n', '--adjustment'] },
   command: { flags: ['-p', '-v', '-V'], values: [] },
   builtin: { flags: [], values: [] },
+  timeout: { flags: ['--preserve-status', '--foreground', '-v', '--verbose'], values: ['-s', '--signal', '-k', '--kill-after'], positionals: 1 },
+  setsid: { flags: ['-f', '--fork', '-w', '--wait', '-c', '--ctty'], values: [] },
+  stdbuf: { flags: [], values: ['-i', '--input', '-o', '--output', '-e', '--error'] },
+  ionice: { flags: ['-t', '--ignore'], values: ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'] },
+  flock: { flags: ['-s', '--shared', '-x', '--exclusive', '-u', '--unlock', '-n', '--nonblock', '-o', '--close', '-F', '--no-fork', '--verbose', '--fcntl'],
+    values: ['-w', '--wait', '--timeout', '-E', '--conflict-exit-code', '--start', '--length', '-c', '--command'], positionals: 1, scripts: ['-c', '--command'] },
+  watch: { flags: ['-b', '--beep', '-c', '--color', '-C', '--no-color', '-d', '--differences', '-e', '--errexit', '-g', '--chgexit', '-p', '--precise', '-t', '--no-title', '-w', '--no-wrap', '-x', '--exec'],
+    values: ['-n', '--interval', '-q', '--equexit'], shell: true },
+  busybox: { flags: [], values: [] },
+  taskset: { flags: ['-a', '--all-tasks', '-p', '--pid'], values: ['-c', '--cpu-list'], positionals: 1, replacesPositional: ['-c', '--cpu-list'] },
+  unshare: { flags: ['-m', '--mount', '-u', '--uts', '-i', '--ipc', '-n', '--net', '-p', '--pid', '-U', '--user', '-C', '--cgroup', '-T', '--time',
+    '-f', '--fork', '-r', '--map-root-user', '-c', '--map-current-user', '--map-auto', '--mount-proc', '--kill-child'],
+    values: ['-R', '--root', '-w', '--wd', '-S', '--setuid', '-G', '--setgid', '--map-user', '--map-group', '--map-users', '--map-groups', '--propagation', '--setgroups', '--monotonic', '--boottime'] },
+  chroot: { flags: ['--skip-chdir'], values: ['--userspec', '--groups'], positionals: 1 },
+  su: { flags: ['-', '-l', '--login', '-m', '-p', '--preserve-environment'], values: ['-c', '--command', '-s', '--shell', '-g', '--group', '-G', '--supp-group'],
+    scripts: ['-c', '--command'], positionals: 1, optionalPositional: true },
+  ssh: { flags: ['-4', '-6', '-A', '-a', '-C', '-f', '-G', '-g', '-K', '-k', '-M', '-N', '-n', '-q', '-s', '-T', '-t', '-V', '-v', '-X', '-x', '-Y', '-y'],
+    values: ['-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w'], positionals: 1, shell: true },
 };
 
-function bashRequiresUser(source, destructive, depth = 0) {
+const SHELL_DECLARATIONS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const GIT_ENVIRONMENT = new Set(['PAGER', 'EDITOR', 'VISUAL', 'SSH_ASKPASS', 'HOME', 'XDG_CONFIG_HOME']);
+const EXECUTION_ENVIRONMENT = new Set(['BASH_ENV', 'ENV', 'PATH', 'PROMPT_COMMAND', 'PS4', 'SHELLOPTS', 'BASHOPTS']);
+const unsafeExecutionEnvironment = (name) => name.startsWith('LD_') || EXECUTION_ENVIRONMENT.has(name);
+const unsafeGitEnvironment = (name) => GIT_ENVIRONMENT.has(name)
+  || (name.startsWith('GIT_') && name !== 'GIT_TERMINAL_PROMPT' && !name.startsWith('GIT_TRACE'));
+
+function declaredEnvironment(words) {
+  const offset = words?.findIndex((word) => !ASSIGNMENT.test(word.value)) ?? -1;
+  if (offset < 0) return (words ?? []).map((word) => ASSIGNMENT.exec(word.value)[1]);
+  if (!SHELL_DECLARATIONS.has(words[offset].value)) return [];
+  return words.slice(offset + 1).filter((word) => !word.value.startsWith('-'))
+    .filter((word) => word.value.includes('=') || !unsafeExecutionEnvironment(word.value))
+    .map((word) => word.value.split('=')[0]);
+}
+
+const SAFE_SET_OPTIONS = ['pipefail', 'errexit', 'nounset', 'xtrace', 'noglob'];
+const SAFE_SHOPT_OPTIONS = new Set(['nullglob', 'globstar', 'extglob', 'dotglob', 'failglob', 'nocaseglob']);
+
+function allowedShellOption(word, next, flags, names) {
+  const letters = /^[+-]([a-zA-Z]+)$/.exec(word.value)?.[1];
+  if (word.dynamic || !letters || [...letters].some((letter) => !flags.includes(letter) && letter !== 'o')) return false;
+  if (!letters.includes('o')) return true;
+  return letters.indexOf('o') === letters.lastIndexOf('o') && !!next && !next.dynamic && names.includes(next.value);
+}
+
+function unsafeShellSettings(words) {
+  if (!words) return false;
+  let offset = 0;
+  while (ASSIGNMENT.test(words[offset]?.value ?? '')) offset += 1;
+  const executable = words[offset]?.value.split('/').at(-1);
+  if (DYNAMIC_SHELL_COMMANDS.has(executable)) return true;
+  const args = words.slice(offset + 1);
+  if (['declare', 'typeset', 'local', 'readonly'].includes(executable)) {
+    const end = args.findIndex((word) => word.value === '--');
+    return args.slice(0, end < 0 ? args.length : end).some((word) => /^[+-].*n/.test(word.value));
+  }
+  if (!['set', 'shopt'].includes(executable)) return false;
+  if (args.some((word) => word.dynamic)) return true;
+  if (executable === 'shopt') return args.some(({ value }) => !['-s', '-u'].includes(value) && !SAFE_SHOPT_OPTIONS.has(value));
+  for (let i = 0; i < args.length; i += 1) {
+    // Literal positional parameters after -- cannot change shell options.
+    if (args[i].value === '--') return false;
+    const names = args[i].value.startsWith('+') ? ['pipefail'] : SAFE_SET_OPTIONS;
+    if (!allowedShellOption(args[i], args[i + 1], 'euxf', names)) return true;
+    if (args[i].value.includes('o')) i += 1;
+  }
+  return false;
+}
+
+function bashRequiresUser(source, destructive, depth = 0, sensitivePaths = [], environment = [], unsafeShellOptions = false,
+  shellEffects = { unsafeSettings: false, git: false }, allowDynamicHead = false) {
   if (depth > 32 || source.includes('<<')) return true;
   const segments = bashSegments(source);
   if (!segments?.length) return true;
-  return segments.some((segment) => inspectWords(shellWords(segment), destructive, depth));
+  const commands = segments.map(shellWords);
+  const declared = commands.flatMap(declaredEnvironment);
+  const required = commands.some((words) => inspectWords(words, destructive, depth, sensitivePaths,
+    [...environment, ...declared], unsafeShellOptions, shellEffects, allowDynamicHead));
+  return required || (shellEffects.unsafeSettings && shellEffects.git);
 }
 
-function inspectWords(words, destructive, depth) {
+function shellTouchesSensitive(words, sensitivePaths) {
+  const samples = [
+    '.env', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc', '.git-credentials', 'secrets.env',
+    '.aws/credentials', '.kube/config', 'kubeconfig', 'x.pem', 'x.key', ...sensitivePaths.filter((path) => !/[*?\[]/.test(path)),
+  ].filter((path) => matchesAny(path, sensitivePaths));
+  const normalizeDirectory = (path) => path.split('/').filter((part) => part && part !== '.' && part !== '~').join('/');
+  const directories = sensitivePaths.filter((path) => path.includes('/'))
+    .map((path) => normalizeDirectory(path.slice(0, path.lastIndexOf('/'))))
+    .filter((path) => /[^/*?\[\]]/.test(path));
+  return words.some(({ value, dynamic }) => {
+    const candidates = value.startsWith('-') ? [] : [value];
+    if (value.startsWith('-') && value.includes('=')) candidates.push(value.slice(value.indexOf('=') + 1));
+    if (/^-[^-]/.test(value) && value.length > 2) candidates.push(value.slice(2));
+    return candidates.some((candidate) => {
+      const expanded = expandShellBraces(candidate);
+      if (!expanded) return true;
+      return expanded.some((path) => {
+        const basename = path.split('/').at(-1);
+        if (matchesAny(path, sensitivePaths) || matchesAny(basename, sensitivePaths)) return true;
+        const expansion = dynamic ? path.search(/[$`]/) : -1;
+        const prefix = expansion < 0 ? null : path.slice(0, expansion);
+        const patterns = /[*?\[]/.test(path) ? [path, basename] : [];
+        if (prefix) {
+          const directory = prefix.includes('/') ? normalizeDirectory(prefix.slice(0, prefix.lastIndexOf('/'))) : '';
+          if (directory && matchesAny(directory, directories)) return true;
+          patterns.push(`${prefix}*`);
+          const basePrefix = prefix.split('/').at(-1);
+          if (basePrefix) patterns.push(`${basePrefix}*`);
+        }
+        return patterns.some((pattern) => {
+          const match = shellGlobMatcher(pattern);
+          return samples.some((sample) => match(sample) || match(sample.split('/').at(-1)));
+        });
+      });
+    });
+  });
+}
+
+function expandShellBraces(word) {
+  const pending = [word], result = [];
+  while (pending.length) {
+    const path = pending.pop();
+    const braces = [...path.matchAll(/\{([^{}]*,[^{}]*)\}/g)].find((match) => path[match.index - 1] !== '$');
+    if (!braces) { result.push(path); continue; }
+    const alternatives = braces[1].split(',');
+    if (result.length + pending.length + alternatives.length > 64) return null;
+    for (const alternative of alternatives) {
+      pending.push(path.slice(0, braces.index) + alternative + path.slice(braces.index + braces[0].length));
+    }
+  }
+  return result;
+}
+
+function shellGlobMatcher(glob) {
+  const tokens = [];
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char === '*') { if (tokens.at(-1) !== '*') tokens.push('*'); }
+    else if (char === '?') tokens.push(() => true);
+    else if (char === '[' && glob.indexOf(']', i + 1) > i + 1) {
+      const end = glob.indexOf(']', i + 1);
+      const content = glob.slice(i + 1, end).replace(/^!/, '^');
+      let expression;
+      try { expression = new RegExp(`^[${content.replaceAll('\\', '\\\\')}]$`); }
+      catch { return () => true; } // Uninspectable classes fail closed; each valid class matches one character.
+      tokens.push((value) => expression.test(value));
+      i = end;
+    } else tokens.push((value) => value === char);
+  }
+  // Greedy two-pointer matching retries only the latest star, never a tree of alternatives.
+  return (value) => {
+    let token = 0, offset = 0, star = -1, retry = 0;
+    while (offset < value.length) {
+      if (tokens[token] === '*') { star = token++; retry = offset; }
+      else if (tokens[token]?.(value[offset])) { token += 1; offset += 1; }
+      else if (star >= 0) { token = star + 1; offset = ++retry; }
+      else return false;
+    }
+    while (tokens[token] === '*') token += 1;
+    return token === tokens.length;
+  };
+}
+
+function harmlessGitConfig(value) {
+  const key = value.slice(0, value.indexOf('=')).toLowerCase();
+  return value.includes('=') && (/^(color|advice)\.[a-z0-9.-]+$/.test(key)
+    || ['user.name', 'user.email', 'core.quotepath', 'init.defaultbranch'].includes(key));
+}
+
+function normalizeGitWords(words) {
+  const flags = ['--no-pager', '-p', '-P', '--paginate', '--bare', '--no-replace-objects', '--literal-pathspecs', '--exec-path',
+    '--no-optional-locks', '--version', '--help', '--no-lazy-fetch', '--no-advice'];
+  const values = ['-C', '-c', '--config-env', '--git-dir', '--work-tree', '--namespace'];
+  let i = 1;
+  while (i < words.length) {
+    const word = words[i];
+    if (word.dynamic) return null;
+    if (!word.value.startsWith('-')) break;
+    if (flags.includes(word.value)) { i += 1; continue; }
+    if (values.includes(word.value)) {
+      if (!words[i + 1] || words[i + 1].dynamic) return null;
+      if (['-c', '--config-env'].includes(word.value) && !harmlessGitConfig(words[i + 1].value)) return null;
+      i += 2; continue;
+    }
+    if (word.value.startsWith('-c') && !word.value.startsWith('--')) {
+      if (!harmlessGitConfig(word.value.slice(2))) return null;
+      i += 1; continue;
+    }
+    if (values.filter((option) => option.startsWith('--')).some((option) => word.value.startsWith(`${option}=`))) {
+      if (word.value.startsWith('--config-env=') && !harmlessGitConfig(word.value.slice('--config-env='.length))) return null;
+      i += 1; continue;
+    }
+    return null;
+  }
+  return [words[0], ...words.slice(i)];
+}
+
+const GIT_VALUE_OPTIONS = {
+  config: ['-f', '--file', '--blob', '-t', '--type', '--default'],
+  log: ['--grep', '--author', '--committer', '--format', '--pretty', '--date', '--output', '-n', '--max-count', '--skip'],
+  diff: ['--output'],
+  push: ['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules'],
+  reset: ['--pathspec-from-file'],
+  clean: ['-e', '--exclude'],
+  branch: ['-u', '--set-upstream-to', '--format', '--sort'],
+  tag: ['-m', '--message', '-F', '--file', '-u', '--local-user', '--cleanup', '--format', '--sort'],
+  checkout: ['-b', '-B', '--orphan', '--conflict', '--pathspec-from-file'],
+  switch: ['-c', '-C', '--create', '--force-create', '--orphan', '--conflict'],
+  restore: ['-s', '--source', '--conflict', '--pathspec-from-file'],
+  stash: ['-m', '--message', '--pathspec-from-file'],
+  'update-ref': ['-m', '--message'],
+  rm: ['--pathspec-from-file'],
+  rebase: ['-x', '--exec', '--onto', '--strategy', '-s', '--strategy-option', '-X'],
+  fetch: ['--upload-pack', '-u', '--receive-pack', '--depth', '--shallow-since', '--shallow-exclude', '--refmap', '-j', '--jobs'],
+  pull: ['--upload-pack', '-u', '--receive-pack', '--depth', '--strategy', '-s', '--strategy-option', '-X'],
+  clone: ['--upload-pack', '-u', '--receive-pack', '--template', '-o', '--origin', '-b', '--branch', '--depth', '--reference', '--separate-git-dir', '-j', '--jobs'],
+  'ls-remote': ['--upload-pack', '-u', '--receive-pack'],
+  archive: ['--upload-pack', '-u', '--receive-pack', '--format', '--prefix', '-o', '--output', '--remote', '--exec'],
+  difftool: ['-x', '--extcmd', '-t', '--tool'],
+  worktree: ['-b', '-B', '--reason', '--expire'],
+  submodule: ['-b', '--branch', '--name', '--reference', '--depth', '-j', '--jobs'],
+};
+
+function gitOptions(args, subcommand) {
+  const short = new Set();
+  const long = [];
+  const operands = [];
+  const values = GIT_VALUE_OPTIONS[subcommand] ?? [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') { operands.push(...args.slice(i)); break; }
+    if (arg.startsWith('--')) {
+      const option = arg.split('=')[0];
+      long.push(option);
+      if (!arg.includes('=') && values.some((name) => name.startsWith('--') && name.startsWith(option))) i += 1;
+    } else if (arg.startsWith('-')) {
+      for (let j = 1; j < arg.length; j += 1) {
+        const letter = arg[j];
+        short.add(letter);
+        if (values.includes(`-${letter}`)) {
+          if (j === arg.length - 1) i += 1;
+          break;
+        }
+      }
+    } else operands.push(arg);
+  }
+  // A prefix that could select a destructive option also needs the user when ambiguous.
+  const hasLong = (...names) => long.some((option) => names.some((name) => name.startsWith(option)));
+  return { short, long, hasLong, operands };
+}
+
+function inspectWords(words, destructive, depth, sensitivePaths, environment = [], unsafeShellOptions = false,
+  shellEffects = { unsafeSettings: false, git: false }, allowDynamicHead = false) {
   if (!words || depth > 32) return true;
-  // Literal environment assignments do not change the executable, but a later $CMD does.
+  if (shellTouchesSensitive(words, sensitivePaths)) return true;
+  // Carry assignments through wrappers/scripts so git configuration cannot hide in env.
   let offset = 0;
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[offset]?.value ?? '')) offset += 1;
+  environment = [...environment];
+  while (ASSIGNMENT.test(words[offset]?.value ?? '')) {
+    environment.push(ASSIGNMENT.exec(words[offset].value)[1]); offset += 1;
+  }
+  if (environment.some(unsafeExecutionEnvironment)) return true;
   words = words.slice(offset);
   if (!words.length) return false;
   const [head, ...args] = words;
-  if (head.dynamic || !head.value || /[(){}<>]/.test(head.value)) return true;
+  if (head.dynamic) return !(allowDynamicHead && words.length === 1);
+  if (!head.value || /[(){}<>]/.test(head.value)) return true;
   const executable = head.value.split('/').at(-1);
+  // Resolve wrappers through the same inspection path and share effects across all segments.
+  shellEffects.unsafeSettings ||= unsafeShellSettings(words);
   if (UNSUPPORTED_SHELL_WORDS.has(executable)) return true;
+  if (SHELL_DECLARATIONS.has(executable)) {
+    if (args.some((word) => word.dynamic && /[$`*?\[\]{}]/.test(word.value.split('=')[0]))) return true;
+    if (declaredEnvironment(words).some((name) => name.startsWith('GIT_') || unsafeExecutionEnvironment(name))) return true;
+  }
+  if (executable === 'git') {
+    shellEffects.git = true;
+    if (unsafeShellOptions || shellEffects.unsafeSettings || environment.some(unsafeGitEnvironment)) return true;
+    const normalized = normalizeGitWords(words);
+    if (!normalized) return true;
+    const [, subcommand, ...rest] = normalized.map((word) => word.value);
+    if (['push', 'reset', 'clean', 'branch', 'tag', 'checkout', 'switch', 'restore', 'stash', 'update-ref', 'rm'].includes(subcommand)
+      && normalized.slice(2).some((word) => word.dynamic)) return true;
+    const { short, long, hasLong, operands } = gitOptions(rest, subcommand);
+    if (hasLong('--output')) return true;
+    if (subcommand === 'config') {
+      if (short.has('e') || hasLong('--edit')) return true;
+      const query = short.has('l') || hasLong('--list')
+        || long.some((option) => option.startsWith('--get') || option.startsWith('--show-'));
+      const write = hasLong('--add', '--replace-all', '--unset', '--unset-all');
+      const entries = operands[0] === '--' ? operands.slice(1) : operands;
+      if ((write || (!query && entries.length > 1)) && !harmlessGitConfig(`${entries[0]}=`)) return true;
+    }
+    const force = short.has('f') || hasLong('--force');
+    const dryRun = subcommand === 'clean' && (short.has('n') || hasLong('--dry-run'));
+    if (subcommand === 'push' && (force || short.has('d') || hasLong('--force-with-lease', '--delete', '--mirror', '--prune')
+      || operands.some((arg) => arg.startsWith('+') || arg.startsWith(':')))) return true;
+    if (subcommand === 'reset' && hasLong('--hard', '--merge', '--keep')) return true;
+    if (subcommand === 'clean' && !dryRun && (force || short.has('x') || short.has('X'))) return true;
+    if (subcommand === 'branch' && (short.has('D') || force)) return true;
+    if (subcommand === 'tag' && (short.has('d') || hasLong('--delete') || force)) return true;
+    if (subcommand === 'checkout' && (force || short.has('B') || operands.includes('.') || (operands.includes('--') && operands.indexOf('--') < operands.length - 1))) return true;
+    if (subcommand === 'switch' && (force || short.has('C') || hasLong('--discard-changes', '--force-create'))) return true;
+    if (subcommand === 'restore') {
+      const staged = short.has('S') || long.some((option) => '--staged'.startsWith(option) && !'--source'.startsWith(option));
+      if (!hasLong('--help') && !short.has('h') && (short.has('W') || hasLong('--worktree') || !staged)) return true;
+    }
+    if (subcommand === 'stash' && operands.some((arg) => ['drop', 'clear'].includes(arg))) return true;
+    if (['filter-branch', 'filter-repo'].includes(subcommand) || (subcommand === 'update-ref' && (short.has('d') || hasLong('--delete')))) return true;
+    if (subcommand === 'rm' && (force || ((short.has('r') || hasLong('--recursive')) && operands.includes('.')))) return true;
+    if (subcommand === 'reflog' && ['expire', 'delete'].includes(operands[0])) return true;
+    if (subcommand === 'gc' && rest.some((arg) => /^--prune=(now|all)$/.test(arg))) return true;
+    if (subcommand === 'worktree' && operands[0] === 'remove' && force) return true;
+    if (subcommand === 'submodule' && ((operands[0] === 'deinit' && force) || operands[0] === 'foreach')) return true;
+    if (subcommand === 'bisect' && operands[0] === 'run') return true;
+    if (subcommand === 'rebase' && (short.has('x') || hasLong('--exec'))) return true;
+    if (subcommand === 'difftool' && (short.has('x') || hasLong('--extcmd'))) return true;
+    if (['push', 'fetch', 'pull', 'clone', 'ls-remote', 'archive'].includes(subcommand)
+      && (hasLong('--upload-pack', '--receive-pack', '--exec') || (subcommand !== 'push' && short.has('u')))) return true;
+    const patterns = dryRun ? destructive.filter((pattern, i) => i >= BUILTIN_DESTRUCTIVE_BASH.length || !pattern.startsWith('git clean ')) : destructive;
+    return matchesAny(['git', subcommand, ...rest].join(' '), patterns)
+      || matchesAny(['git', ...args.map((word) => word.value)].join(' '), patterns);
+  }
   if (matchesAny([executable, ...args.map((word) => word.value)].join(' '), destructive)) return true;
   if (SHELLS.has(executable)) {
     // A shell script, stdin shell, or expansion in the script cannot be inspected here.
+    let commandMode = false;
     for (let i = 0; i < args.length; i += 1) {
       const option = args[i];
       if (option.dynamic) return true;
-      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value)) {
-        const script = args[i + 1];
-        return !script || script.dynamic || bashRequiresUser(script.value, destructive, depth + 1);
+      if (option.value === '--' || !/^[+-]/.test(option.value)) {
+        const script = option.value === '--' ? args[i + 1] : option;
+        return !commandMode || !script || script.dynamic
+          || bashRequiresUser(script.value, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
       }
-      if (!['-l', '-e', '-u', '-x', '-f', '--noprofile', '--norc'].includes(option.value)) return true;
+      const allowed = ['--norc', '--noprofile', '--posix'].includes(option.value)
+        || allowedShellOption(option, args[i + 1], 'ceuxlf', ['pipefail']);
+      unsafeShellOptions ||= !allowed;
+      if (/^[+-][a-zA-Z]*o[a-zA-Z]*$/.test(option.value) || ['--rcfile', '--init-file'].includes(option.value)) {
+        if (!args[i + 1] || args[i + 1].dynamic) return true;
+        i += 1;
+      }
+      commandMode ||= /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option.value);
     }
     return true;
   }
   if (executable === 'eval') {
-    return !args.length || args.some((word) => word.dynamic)
-      || bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1);
+    // Substitutions are already scanned; an expanded eval command alone needs no git gate.
+    return args.length > 0 && bashRequiresUser(args.map((word) => word.value).join(' '), destructive, depth + 1,
+      sensitivePaths, environment, unsafeShellOptions, shellEffects, args.some((word) => word.dynamic));
+  }
+  if (executable === 'trap') {
+    const action = args[args[0]?.value === '--' ? 1 : 0];
+    if (!action || action.value === '-' || action.value === '') return false;
+    return action.dynamic || bashRequiresUser(action.value, destructive, depth + 1, sensitivePaths,
+      environment, unsafeShellOptions, shellEffects);
   }
   if (executable === 'find') {
     for (let i = 0; i < args.length; i += 1) {
@@ -435,7 +817,7 @@ function inspectWords(words, destructive, depth) {
       if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].value)) {
         const end = args.findIndex((word, j) => j > i && [';', '+'].includes(word.value));
         const command = args.slice(i + 1, end).map((word) => ({ ...word, dynamic: word.dynamic || word.value.includes('{}') }));
-        if (end < 0 || inspectWords(command, destructive, depth + 1)) return true;
+        if (end < 0 || inspectWords(command, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects)) return true;
         i = end;
       }
     }
@@ -444,25 +826,46 @@ function inspectWords(words, destructive, depth) {
   if (!Object.hasOwn(WRAPPER_OPTIONS, executable)) return false;
   const options = WRAPPER_OPTIONS[executable];
   let i = 0;
+  let positionals = options.positionals ?? 0;
+  let script = null;
   while (i < args.length) {
     const word = args[i];
     if (word.dynamic) return true;
     const option = word.value;
     if (option === '--') { i += 1; break; }
-    if (executable === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(option)) { i += 1; continue; }
-    if (!option.startsWith('-')) break;
+    if (executable === 'env' && ASSIGNMENT.test(option)) { environment.push(ASSIGNMENT.exec(option)[1]); i += 1; continue; }
+    if (!option.startsWith('-')) {
+      if (positionals > 0) { positionals -= 1; i += 1; continue; }
+      break;
+    }
     if (options.flags.includes(option)) { i += 1; continue; }
     if (options.values.includes(option)) {
       if (!args[i + 1] || args[i + 1].dynamic) return true;
+      if (options.scripts?.includes(option)) script = args[i + 1].value;
+      if (options.replacesPositional?.includes(option)) positionals = 0;
       i += 2; continue;
     }
     if (options.values.some((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name) && option.length > name.length)) {
+      const scriptOption = options.scripts?.find((name) => name.startsWith('--') ? option.startsWith(`${name}=`) : option.startsWith(name));
+      if (scriptOption) script = option.slice(scriptOption.length + (scriptOption.startsWith('--') ? 1 : 0));
+      if (options.replacesPositional?.some((name) => option.startsWith(name))) positionals = 0;
       i += 1; continue;
     }
     return true;
   }
+  // -- ends wrapper options but still leaves its required duration/lock positional.
+  while (positionals > 0) {
+    if (options.optionalPositional && !args[i]) break;
+    if (!args[i] || args[i].dynamic) return true;
+    positionals -= 1; i += 1;
+  }
+  if (script !== null) return bashRequiresUser(script, destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
   if (i === args.length) return true;
-  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1);
+  if (options.shell) {
+    return args.slice(i).some((word) => word.dynamic)
+      || bashRequiresUser(args.slice(i).map((word) => word.value).join(' '), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
+  }
+  const nestedRequiresUser = inspectWords(args.slice(i), destructive, depth + 1, sensitivePaths, environment, unsafeShellOptions, shellEffects);
   // Unknown stdin may add destructive options or replace executable/script text.
   return nestedRequiresUser || executable === 'xargs';
 }

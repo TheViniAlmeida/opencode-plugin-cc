@@ -69,15 +69,46 @@ O portão ao vivo registrou o primeiro setup em cerca de 42 s; não foi publicad
 
 - Porta divergente ou `EADDRINUSE`: a tentativa é encerrada e outra porta é testada, até três vezes.
 - `AUTH_FAILED` (401): encerre o servidor do workspace com `/opc:setup --stop-server` e execute o setup novamente. Em attach, confira `OPC_SERVER_PASSWORD`.
-- Processo vivo sem resposta a `/api/info` em 2 s: o próximo comando o substitui. Registro morto é descartado sem sinalizar processos não pertencentes ao opc.
+- Processo vivo sem resposta a `/api/info` em 2 s: só é substituído se não houver jobs ativos
+  ou potencialmente ativos. Com jobs, tenta até três health checks de 5 s antes de
+  `SERVER_UNRESPONSIVE`. Registro morto é descartado sem sinalizar processos não pertencentes ao opc.
+
+### `SERVER_UNRESPONSIVE` com jobs ativos
+
+O servidor gerenciado não respondeu, mas há jobs ativos ou ilegíveis (`READ_FAILED`).
+O opc preserva o processo para não interromper edições. Consulte `/opc:status --all` e
+`/opc:cancel <id>`; se houver arquivos ilegíveis, corrija suas permissões no diretório de jobs
+indicado pelo erro. Para encerrar mesmo assim, use `/opc:setup --stop-server --force` com
+confirmação explícita: isso derruba os jobs do servidor. Exit 5 indica a conexão sem resposta.
 
 ### Servidor órfão e encerramento
 
 O opc só sinaliza uma identidade que corresponda a `opencode serve --port <porta>` e ao start time registrado. Servidores iniciados manualmente não são tocados. Use `/opc:setup --stop-server`; com jobs ativos, `--force` exige confirmação explícita do usuário. A sequência é SIGTERM e, após 3 s, SIGKILL no grupo.
 
-### Sessões bloqueadas (`share-auto`)
+### Sessões bloqueadas (`SHARE_AUTO`)
 
-Se o setup retornar exit 4 e sessões bloqueadas, configure `{"server":{"configOverride":{"share":"disabled"}}}` no opc, ou `share: "manual"` no OpenCode.
+`share: "auto"`, configuração ilegível ou mundo ausente bloqueiam `createSession` e `fork`
+com `SHARE_AUTO` (exit 4 na guarda). Configure
+`{"server":{"configOverride":{"share":"disabled"}}}` no opc gerenciado, ou `share: "manual"`
+no OpenCode. O cliente usa `x-opencode-directory` também na checagem de mundo.
+
+Task nova, command, subagent, conclave, orchestrate, transfer e review/adversarial em
+background recusam antes de criar sessão; os comandos com jobs recusam antes de enfileirar.
+Resume de sessão existente e consultas continuam possíveis. No checkout atual, review
+`--wait` ainda enfileira e falha no worker (exit 7), sem criar sessão. O hook-stop informa
+`SHARE_AUTO` como falha de infraestrutura e permite encerrar.
+
+### Redirecionamento recusado (`UNEXPECTED_REDIRECT`)
+
+HTTP e SSE não seguem 3xx: `redirect: 'manual'` permite tratar o status e retornar
+`UNEXPECTED_REDIRECT` (exit 5). A reconexão SSE preserva esse código. Configure a URL final,
+inclusive `https://` quando um proxy redireciona `http://`; não dependa do redirect.
+
+### Carrier negado (`SUBAGENT_DENIED`)
+
+`policy.tools.deny` negou `subagent`, ou `policy.agents.deny` negou o agente. O mecanismo
+`subagent-tool` é recusado antes de criar o carrier (exit 4 na política), sem fallback
+silencioso. Confira a política e, se autorizado, escolha `--mechanism child-session`.
 
 ## Locks
 
@@ -104,7 +135,28 @@ O `SessionEnd` tem orçamento curto; o opc dispara `opc reap` destacado. Cada de
 - `keep:active-jobs`: há jobs ativos; o próximo fim de sessão ou `/opc:setup --stop-server` encerra.
 - `stop`: encerrou após carência de 60 s.
 
+Jobs `READ_FAILED` contam como potencialmente ativos mesmo com filtro por sessão: a sessão
+dona não pode ser conhecida. Eles bloqueiam reuso/substituição que exigiria servidor ocioso,
+parada sem força e o reaper até corrigir permissões ou `/opc:setup --stop-server --force`.
+O hook-stop lista o status desconhecido como `(ilegível)`.
+
 Variáveis de diagnóstico: `OPC_REAP_GRACE_MS` (padrão 60000), `OPC_REAP_CANCEL_CAP_MS` (padrão 15000) e `OPC_STOP_GATE_WAIT_MS` (padrão 840000).
+
+## Jobs ilegíveis e quarentena (`*.corrupt-*`)
+
+Um job individual defeituoso não derruba a listagem dos demais. Erros `READ_FAILED`
+(por exemplo, `EACCES`/`EPERM`) avisam no stderr e **não são movidos** nem têm seu modo
+alterado; permanecem potencialmente ativos. Corrija permissões antes de repetir a operação.
+
+Conteúdo lido mas inválido (`INVALID_JSON`) vai para quarentena privada como
+`*.json.corrupt-<ms>`. Esses arquivos deixam a listagem normal e são removidos após 30 dias
+da quarentena na poda acionada pela criação de jobs. Falhas de chmod/rename preservam o
+arquivo com aviso; falhas de remoção não impedem podar os demais. A prévia de `opc gc`
+não move os arquivos; a limpeza confirmada preserva estados com jobs ilegíveis e ainda
+coleta inputs de jobs terminais legíveis.
+
+A escrita de jobs não faz `fsync`; existe uma janela TOCTOU entre leitura e rename da
+quarentena. Essas limitações não foram eliminadas na F11.
 
 ## Gate permite por falha de infraestrutura
 
@@ -144,6 +196,14 @@ Erro 402, como `This model requires an opencode API key`, vem do provider/creden
 ## Roteamento e fallback
 
 Somente erros recuperáveis avançam para o próximo candidato de uma rota em lista: `APIError` recuperável, 404, timeout, teto de retries do provider e alguns casos de saída estruturada ou contexto. As respostas 400 e 402 são fatais e não acionam fallback. O `AbortUnconfirmed` também bloqueia fallback, pois a sessão anterior não foi confirmada como encerrada.
+
+### `ABORT_UNCONFIRMED`
+
+Timeout ou cancelamento tentou interromper a sessão e suas filhas, mas o interrupt falhou
+ou a ociosidade não foi confirmada. O resultado é fatal (`AbortUnconfirmed`, código
+`ABORT_UNCONFIRMED`, job falho/exit 7); nenhum próximo candidato é iniciado e `toolsRan`
+preserva o que foi observado. Consulte status/resultado e confirme o estado no servidor antes
+de repetir. Se a conexão caiu durante a confirmação, o erro é perda do servidor.
 
 Para investigar uma rota ao vivo, use `OPC_LIVE_FAILING_MODEL` com o probe da fase. A sonda disponível não encontrou rota com falha recuperável: modelos inexistentes foram recusados antes do job, e as respostas observadas 400/402 foram fatais. Portanto, fallback ao vivo permanece **NÃO VALIDADO**; os cenários recuperáveis são cobertos pelo servidor falso de teste.
 

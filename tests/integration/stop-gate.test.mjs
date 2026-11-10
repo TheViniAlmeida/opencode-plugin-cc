@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { makeTempDir, trackTempDir, registerStopper, runCli, testEnv } from '../helpers.mjs';
+import { makeTempDir, trackTempDir, registerStopper, requestsTo, runCli, testEnv } from '../helpers.mjs';
 import { fixtureModelIds, hookInput, makeFailingOpencodeBin, makeMainRepo, promptBodies, promptText, sessionCreateBodies, stateDirFor, writeFile, writeGlobalConfig } from '../f2b-helpers.mjs';
 import { stopServer } from '../../plugins/opc/scripts/lib/server.mjs';
 import { DEFAULT_CONFIG } from '../../plugins/opc/scripts/lib/config.mjs';
@@ -19,6 +19,14 @@ function stop(env, cwd, fields = {}) {
   return runCli(['hook-stop'], { env, cwd, stdin: hookInput(cwd, { session_id: 'gate-session', hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'I added divide() to math.js. GATE_MESSAGE_MARKER', ...fields }) });
 }
 function parseStdout(result) { return result.stdout.trim() ? JSON.parse(result.stdout) : null; }
+
+test('Stop gate with share auto never posts a session and reports the guarded failure', async (t) => {
+  const { cwd, env } = setup(t, { scenario: 'share-auto' });
+  const result = await stop(env, cwd);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(parseStdout(result).systemMessage, /SHARE_AUTO/);
+  assert.equal(requestsTo(env, 'POST', '/api/session').length, 0);
+});
 
 test('a disabled gate allows without calling OpenCode', async (t) => {
   const { cwd, env } = setup(t, { gate: false });

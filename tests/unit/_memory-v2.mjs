@@ -12,6 +12,7 @@ export function memoryV2({ promptFailsOnce, createFailsOnce } = {}) {
     calls: [], promptCalls: [], messageReadsBeforeEnd: 0,
     created: new Promise((resolve) => { resolveCreated = resolve; }),
     promptSettled: new Promise((resolve) => { resolvePrompt = resolve; }),
+    async agents() { return [{ name: 'build', mode: 'primary' }]; },
     async createSession(body) {
       createAttempt++;
       if (createFailsOnce && createAttempt === 1) throw createFailsOnce;

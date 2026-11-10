@@ -51,6 +51,34 @@ function groupFixture(t) {
   return { root, stateDir };
 }
 
+for (const role of ['planner', 'synthesizer', 'worker']) {
+  test(`${role} refuses the implicit build agent before running a turn`, async (t) => {
+    const { root, stateDir } = groupFixture(t);
+    const { group } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, []);
+    const ctx = { stateDir, workspaceRoot: root, env: {}, config: { policy: { agents: { deny: ['build'] } } } };
+    let turns = 0;
+    const deps = coordinatorDeps({ ctx, job: group, request: {}, conn: { api: {}, hub: {} }, discovery: { agents: [] }, agentsIndex: new Map(),
+      fallbackRunner: async () => { turns++; return { result: { status: 'completed' }, attempts: [] }; },
+    });
+    await assert.rejects(deps.runTurn({ role, agent: null, profile: 'read-only', title: 'test', prompt: 'test' }),
+      (err) => err.code === 'POLICY_DENIED' && err.details?.value === 'build');
+    assert.equal(turns, 0);
+  });
+}
+
+test('worker validates an explicit subtask agent before running a turn', async (t) => {
+  const { root, stateDir } = groupFixture(t);
+  const { group } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, []);
+  const ctx = { stateDir, workspaceRoot: root, env: {}, config: { policy: { agents: { deny: ['plan'] } } } };
+  let turns = 0;
+  const deps = coordinatorDeps({ ctx, job: group, request: {}, conn: { api: {}, hub: {} }, discovery: { agents: [{ name: 'plan', mode: 'primary' }] }, agentsIndex: new Map(),
+    fallbackRunner: async () => { turns++; return { result: { status: 'completed' }, attempts: [] }; },
+  });
+  await assert.rejects(deps.runTurn({ role: 'worker', agent: 'plan', profile: 'read-only', title: 'test', prompt: 'test' }),
+    (err) => err.code === 'POLICY_DENIED' && err.details?.value === 'plan');
+  assert.equal(turns, 0);
+});
+
 test('resolved member requests refresh the group pending state', async (t) => {
   const { root, stateDir } = groupFixture(t);
   const { group, members } = await createGroup(stateDir, { kind: 'orch', status: 'running' }, [{ status: 'running', title: 'member' }]);
